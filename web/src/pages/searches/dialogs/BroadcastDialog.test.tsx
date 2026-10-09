@@ -29,7 +29,7 @@ describe("BroadcastDialog", () => {
     vi.spyOn(api, "fetchAskStatus").mockResolvedValue({ ask: null })
     const send = vi
       .spyOn(api, "sendAsk")
-      .mockResolvedValue({ status: "uploaded", ask: { ask_id: "a1", question: "Q?", candidates: [] } })
+      .mockResolvedValue({ status: "sent", ask: { ask_id: "a1", question: "Q?", candidates: [] } })
     const onToast = vi.fn()
 
     render(<BroadcastDialog runId="run-1" title="Backend Engineer" pinned={2} onToast={onToast} />)
@@ -43,6 +43,6 @@ describe("BroadcastDialog", () => {
     await waitFor(() =>
       expect(send).toHaveBeenCalledWith("run-1", "Would you recommend them, and would you intro?"),
     )
-    await waitFor(() => expect(onToast).toHaveBeenCalledWith({ message: "Asked 0 candidates." }))
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith({ message: "Asked about 0 candidates." }))
   })
 })

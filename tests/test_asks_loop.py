@@ -1,7 +1,7 @@
 """Check Ask the Set delivery using synthetic files and local JetStream.
 
 Changelog:
-- 2026-10-08: cover device identity, auth, retry, tasks, answers and presence.
+- 2026-10-08: cover device identity, auth, retry, the inbox (asks answered once) and presence.
 """
 from __future__ import annotations
 
@@ -167,8 +167,8 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                          "asks": f"{prefix}.ask.", "presence": f"{prefix}.presence",
                          "inbox": f"op.{self.operator_id}"}
         self.connection = {"url": "nats://localhost:4222", "token": "", "subjects": self.subjects}
-        self.worker = self.enterContext(patch.object(asks_loop.ask_worker, "run", return_value=[]))
-        self.status = self.enterContext(patch.object(asks_loop.ask_status, "run", return_value={}))
+        self.worker = Mock(return_value={})
+        self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"ask": self.worker}))
         self.inbox = self.enterContext(patch.object(asks_loop.agent_inbox, "pull", return_value=[]))
         self.enterContext(patch.object(asks_loop, "HEARTBEAT_SECONDS", 0.05))
         self.loop = None
@@ -177,7 +177,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
     async def cleanup_loop(self):
         await self.stop_loop()
         try:
-            await self.js.delete_consumer("asks", self.device_id)
+            await self.js.delete_consumer("asks", self.device_id + "-inbox")
         except NotFoundError:
             pass
 
@@ -198,16 +198,16 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                     self.loop.result()
                 await asyncio.sleep(0.01)
 
-    def write_ask(self, directory):
-        run_dir = self.root / ".powerpacks" / directory / "synthetic-run"
-        run_dir.mkdir(parents=True)
-        ask_id = str(uuid4())
-        (run_dir / "ask.json").write_text(json.dumps({"ask_id": ask_id, "candidates": [],
-                                                     "question": "Can Jordan Bravo help?"}))
-        return run_dir, ask_id
+    def write_message(self, kind: str, **fields) -> dict:
+        message = {"id": str(uuid4()), "kind": kind, "created_at": "2026-10-08T00:00:00Z",
+                   "from": {"operator_id": "op-asker", "name": "Casey Delta"},
+                   "payload": {"ask_id": "ask-1", "question": "Can Jordan Bravo help?", "candidates": []}, **fields}
+        inbox = self.root / ".powerpacks" / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        (inbox / f"{message['id']}.json").write_text(json.dumps(message))
+        return message
 
-    async def test_tasks_answers_presence_and_new_asks(self):
-        run_dir, ask_id = self.write_ask("deep-search")
+    async def test_presence_and_connected_state(self):
         presence = await self.nc.subscribe(self.subjects["presence"])
         await self.nc.flush()
         self.start_loop()
@@ -217,37 +217,39 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(heartbeat["device_id"], self.device_id)
         self.assertIsNotNone(datetime.fromisoformat(heartbeat["at"]).tzinfo)
         self.assertEqual(asks_loop.STATUS["state"], "connected")
-        await self.until(lambda: self.worker.call_count == 1)
-        await self.js.publish(self.subjects["tasks"], json.dumps({
-            "kind": "tasks", "ask_id": ask_id, "task_ids": [str(uuid4())],
-        }).encode())
-        await self.until(lambda: self.worker.call_count == 2)
-        self.worker.assert_called_with(repo_root=self.root, env_file=self.env_file, device_id=self.device_id)
-        await self.js.publish(self.subjects["asks"] + ask_id, b'{"kind":"answer"}')
-        await self.until(lambda: self.status.call_count == 1)
-        self.status.assert_called_with(run_dir, env_file=self.env_file)
+        info = await self.js.consumer_info("asks", self.device_id + "-inbox")
+        self.assertEqual(info.config.filter_subject, self.subjects["inbox"])
 
-        new_run, new_ask = self.write_ask("search")
-        # Each heartbeat follows discovery, including a run uploaded after startup.
-        await presence.next_msg(timeout=5)
-        await presence.next_msg(timeout=5)
-        await self.js.publish(self.subjects["asks"] + new_ask, b'{"kind":"answer"}')
-        await self.until(lambda: self.status.call_count == 2)
-        self.status.assert_called_with(new_run, env_file=self.env_file)
-        info = await self.js.consumer_info("asks", self.device_id)
-        self.assertEqual(info.config.durable_name, self.device_id)
-        self.assertEqual(info.config.filter_subject, self.subjects["tasks"])
-
-    async def test_durable_replays_tasks_sent_while_laptop_is_asleep(self):
+    async def test_ask_in_the_inbox_is_answered_once(self):
+        ask = self.write_message("ask")
+        self.write_message("set_invite")
         self.start_loop()
         await self.until(lambda: self.worker.call_count == 1)
+        self.assertEqual(self.worker.call_args.args[0]["id"], ask["id"])
+        await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m2"}).encode())
+        await self.until(lambda: self.inbox.call_count == 2)
+        self.assertEqual(self.worker.call_count, 1)
+        saved = json.loads((self.root / ".powerpacks" / "inbox" / f"{ask['id']}.json").read_text())
+        self.assertIn("answered_at", saved)
+
+    async def test_a_failed_answer_is_logged_and_tried_on_the_next_pull(self):
+        self.write_message("ask")
+        self.worker.side_effect = [RuntimeError("relay down"), {}]
+        with self.assertLogs(asks_loop.__name__, level="WARNING"):
+            self.start_loop()
+            await self.until(lambda: self.worker.call_count == 1)
+        await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m2"}).encode())
+        await self.until(lambda: self.worker.call_count == 2)
+
+    async def test_durable_replays_a_nudge_sent_while_laptop_is_asleep(self):
+        self.start_loop()
+        await self.until(lambda: self.inbox.call_count == 1)
         await self.stop_loop()
-        await self.js.publish(self.subjects["tasks"], b'{"kind":"tasks","task_ids":[]}')
-        self.worker.reset_mock()
+        await self.js.publish(self.subjects["inbox"], json.dumps({"kind": "message", "message_id": "m1"}).encode())
+        self.inbox.reset_mock()
         self.start_loop()
-        # Startup sweep plus replay of the offline task message.
-        await self.until(lambda: self.worker.call_count == 2)
-        self.worker.assert_called_with(repo_root=self.root, env_file=self.env_file, device_id=self.device_id)
+        # The pull on connect plus the replayed nudge.
+        await self.until(lambda: self.inbox.call_count == 2)
 
     async def test_inbox_nudge_pulls_agent_messages(self):
         with patch.object(asks_loop, "_connection", return_value=self.connection):
@@ -259,7 +261,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
             self.inbox.assert_called_with(repo_root=self.root, env_file=self.env_file)
             await self.stop_loop()
 
-    async def test_closed_connection_reconnects_and_runs_worker(self):
+    async def test_closed_connection_reconnects_and_pulls_again(self):
         clients = []
         connect = nats.connect
 
@@ -273,9 +275,9 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLogs(asks_loop.__name__, level="WARNING"):
             self.loop = asyncio.create_task(asks_loop._run(
                 repo_root=self.root, env_file=self.env_file, device_id=self.device_id))
-            await self.until(lambda: self.worker.call_count == 1)
+            await self.until(lambda: self.inbox.call_count == 1)
             await clients[0].close()
-            await self.until(lambda: self.worker.call_count == 2)
+            await self.until(lambda: self.inbox.call_count == 2)
             self.assertEqual(len(clients), 2)
             await self.stop_loop()
 

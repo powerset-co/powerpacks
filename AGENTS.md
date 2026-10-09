@@ -73,6 +73,7 @@ Paths below are relative to the installed checkout.
 | Sales Navigator leads | `packs/sales-nav/skills/sales-nav-search/SKILL.md` |
 | Apollo outbound | `packs/apollo/skills/build-outbound/SKILL.md` |
 | Send requested product feedback | `packs/powerset/skills/feedback/SKILL.md` |
+| Instructions to or from a teammate's agent ("check steer", "steer Jake's agent") | `packs/powerset/skills/steer/SKILL.md` |
 
 ## Setup and recovery
 

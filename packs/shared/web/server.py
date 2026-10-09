@@ -93,7 +93,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     share = share_routes(conn, data_root)
     store_lock = threading.Lock()
     searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
-    searches_json = search_api(searches)
+    searches_json = search_api(searches, share.sets, store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
     threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},

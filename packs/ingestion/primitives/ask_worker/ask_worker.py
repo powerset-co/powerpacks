@@ -1,11 +1,11 @@
-"""Lease Ask the Set tasks, answer from local family evidence, post, and audit.
+"""Answer an Ask the Set message from local family evidence, send the answer back, and audit.
 
 Changelog:
+  2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
   2026-10-08: add the owner's answer worker and run CLI.
 """
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import re
@@ -15,7 +15,6 @@ import urllib.request
 from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import UUID
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,7 +24,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
-from packs.ingestion.primitives.common.jsonio import emit, now_iso, write_json
+from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe, queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, Verdict
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
@@ -39,6 +38,8 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as aut
 _EMAIL = re.compile(r"[^\s@\"<>]+@[^\s@\"<>]+\.[^\s@\"<>]+")
 _PROMPT = Path(__file__).with_name("prompts") / "answer.txt"
 _HTTP_TIMEOUT = 30
+MESSAGES_PATH = "/v2/agent-messages"
+ANSWER = "ask_answer"
 
 
 class _Answer(BaseModel):
@@ -113,54 +114,38 @@ async def _answer(task: dict, evidence: dict) -> dict:
     return answer
 
 
-def _request(base: str, path: str, headers: dict, body: dict | None = None) -> dict:
-    request = urllib.request.Request(base + path, headers=headers,
-                                     data=json.dumps(body).encode("utf-8") if body is not None else None)
-    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-        return json.load(response)
-
-
-def run(*, repo_root: Path, env_file: Path, device_id: str) -> list[dict]:
-    """Post answers for this device's leased tasks; leave failed tasks to expire and retry."""
-    headers = {"Authorization": f"Bearer {auth.bearer_token(env_file)}", "X-Device-Id": device_id,
-               "Content-Type": "application/json", "Accept": "application/json"}
-    base = auth.api_base(env_file)
-    tasks = _request(base, "/v2/ask-tasks?limit=20", headers)["tasks"]
+def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
+    """Answer one `ask` message from local family evidence and send one `ask_answer` back to the asker."""
     load_dotenv(env_file, override=False)
     data_root = repo_root / ".powerpacks"
-    posted = []
-    for task in tasks:
-        slug = task["candidate"]["public_identifier"]
-        try:
-            task_id = str(UUID(task["task_id"]))
-            with closing(open_store(store_path(data_root))) as conn:
-                found = _evidence(conn, data_root, slug)
-            if found is None:
-                answer = {"declined": True, "reason": "not_in_store"}
-            else:
-                evidence, used = found
-                answer = asyncio.run(_answer(task, evidence))
-            _request(base, f"/v2/ask-tasks/{task_id}/answer", headers, answer)
-            if found is not None:
-                write_json(data_root / "asks" / f"{task_id}.json",
-                           {"task": task, "evidence_used": used, "answer": answer, "answered_at": now_iso()})
-            posted.append(answer)
-            print(f"ask-worker: {slug} {answer.get('verdict', 'declined')}", file=sys.stderr)
-        except Exception as exc:
-            # Exception text can contain model output or HTTP bodies; log only the exception type.
-            print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)
-    return posted
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["run"])
-    parser.add_argument("--env-file", type=Path, default=_REPO_ROOT / ".env")
-    args = parser.parse_args(argv)
-    device_id = (_REPO_ROOT / ".powerpacks" / "device-id").read_text(encoding="utf-8").strip()
-    emit(run(repo_root=_REPO_ROOT, env_file=args.env_file, device_id=device_id))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    payload = message["payload"]
+    answers = []
+    for candidate in payload["candidates"]:
+        slug = candidate["public_identifier"]
+        with closing(open_store(store_path(data_root))) as conn:
+            found = _evidence(conn, data_root, slug)
+        if found is None:
+            answer: dict = {"declined": True, "reason": "not_in_store"}
+        else:
+            evidence, used = found
+            try:
+                answer = asyncio.run(_answer({"question": payload["question"], "candidate": candidate}, evidence))
+            except Exception as exc:
+                # Exception text can carry model output; log only its type. The asker sees "couldn't answer".
+                print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)
+                answers.append({"public_identifier": slug, "answer": {"declined": True, "reason": "failed"}})
+                continue
+            write_json(data_root / "asks" / f"{message['id']}-{slug}.json",
+                       {"message": message, "candidate": candidate, "evidence_used": used, "answer": answer,
+                        "answered_at": now_iso()})
+        answers.append({"public_identifier": slug, "answer": answer})
+        print(f"ask-worker: {slug} {answer.get('verdict', 'declined')}", file=sys.stderr)
+    reply = {"to": message["from"]["operator_id"], "kind": ANSWER,
+             "payload": {"ask_id": payload["ask_id"], "answers": answers}}
+    request = urllib.request.Request(
+        auth.api_base(env_file) + MESSAGES_PATH, data=json.dumps(reply).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {auth.bearer_token(env_file)}", "Content-Type": "application/json",
+                 "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
+        json.load(response)
+    return {"ask_id": payload["ask_id"], "answers": answers}

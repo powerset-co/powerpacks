@@ -112,6 +112,10 @@ class Sets:
         except urllib.error.URLError as error:
             raise CloudError(f"Couldn't reach Powerset: {error.reason}") from error
 
+    def message(self, to: str, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """One agent message over the relay; the relay holds it until the recipient's laptop pulls it."""
+        return self._call("POST", MESSAGES_PATH, {"to": to, "kind": kind, "payload": payload})
+
     def me(self) -> Member:
         """This machine's signed-in operator, asked once per server."""
         if self._me is None:
@@ -222,6 +226,22 @@ class Sets:
 
     # ---- the shared network
 
+    def shared_by(self, person_ids: list[str]) -> dict[str, tuple[str, ...]]:
+        """Per person id, the operators who shared that person into share_v1 (asked fresh, not cached)."""
+        try:
+            response = self._client().namespace(share_namespace("summaries")).query(
+                filters=("id", "In", person_ids), top_k=len(person_ids),
+                include_attributes=["allowed_operator_ids"])
+        except turbopuffer.NotFoundError:
+            return {}
+        return {str(row.id): tuple(getattr(row, "allowed_operator_ids", None) or ()) for row in response.rows or []}
+
+    def _client(self) -> turbopuffer.Turbopuffer:
+        if self._turbopuffer is None:
+            self._turbopuffer = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
+                                                        region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
+        return self._turbopuffer
+
     def people(self, operator_ids: list[str]) -> int:
         """People shared by any of these operators: share_v1 summaries documents, one per person, counted
         at most once per COUNT_SECONDS for the same operators."""
@@ -229,11 +249,8 @@ class Sets:
         held = self._counts.get(key)
         if held is not None and time.monotonic() - held[0] < COUNT_SECONDS:
             return held[1]
-        if self._turbopuffer is None:
-            self._turbopuffer = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
-                                                        region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
         try:
-            response = self._turbopuffer.namespace(share_namespace("summaries")).query(
+            response = self._client().namespace(share_namespace("summaries")).query(
                 filters=("allowed_operator_ids", "ContainsAny", operator_ids), aggregate_by={"people": ("Count",)})
             count = int(response.aggregations["people"])
         except turbopuffer.NotFoundError:
