@@ -226,10 +226,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path == "/api/relay/connect":
-                asks_loop.WAKE.set()
-                self._relay()
-                return
             if app.post(self, parsed):
                 return
             _load_project_packages(root)
