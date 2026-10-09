@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.22.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.2...powerpacks-v3.22.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* **searches:** the ask dialog shows the question under Question, not Answers ([#791](https://github.com/powerset-co/powerpacks/issues/791)) ([cc28021](https://github.com/powerset-co/powerpacks/commit/cc28021735d9a0639959e2c1fe3e525ae2611777))
+
 ## [3.22.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.1...powerpacks-v3.22.2) (2026-10-09)
 
 
