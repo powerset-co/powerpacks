@@ -57,8 +57,7 @@ class InstallController:
         try:
             response = {"status": "started"}
             if path == "/api/install/permissions":
-                if (InstallStatus(self.root).read().get("action") or {}).get("kind") != "permission":
-                    raise ValueError("No permission is needed right now")
+                # Asked for before setup starts (the desktop app's first screen) or when it waits.
                 subprocess.run(["open", PERMISSION_URL], check=True)
                 app = permission_app()
                 if app:
