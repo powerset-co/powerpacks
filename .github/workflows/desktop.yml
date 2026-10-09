@@ -52,14 +52,34 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: scripts/bundle-runtime.sh ${{ matrix.triple }}
         shell: bash
-      - run: pnpm tauri build --bundles ${{ matrix.bundles }}
+      # With the Apple secrets set (desktop/README.md "Signing"), the macOS build is signed with
+      # the Developer ID certificate and notarized, so it opens without a Gatekeeper warning.
+      # Without them it is signed ad hoc (tauri.conf.json) and needs "Open Anyway" once.
+      - run: |
+          config=()
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
+            export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+            config=(--config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$APPLE_SIGNING_IDENTITY\"}}}")
+          fi
+          pnpm tauri build --bundles "$BUNDLES" "${config[@]}"
+        shell: bash
         env:
+          BUNDLES: ${{ matrix.bundles }}
           # Test builds carry the debug menu (page jumps, skip setup).
           POWERPACKS_DEBUG_MENU: "1"
           # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
           # Cloud project as search.powerset.dev), baked into the app; unset builds skip Gmail.
           POWERPACKS_GOOGLE_CLIENT_ID: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_ID }}
           POWERPACKS_GOOGLE_CLIENT_SECRET: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_SECRET }}
+          # Developer ID signing (Tauri imports the certificate into a temporary keychain).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Notarization through an App Store Connect API key.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

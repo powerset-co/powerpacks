@@ -55,3 +55,19 @@ pnpm tauri build --bundles app,dmg
 The app is ad-hoc signed, not notarized. On first open, macOS asks to confirm an app from an
 unidentified developer: right-click the app, choose Open, then Open again. Notarizing needs an
 Apple Developer ID.
+
+## Signing
+
+An unsigned or ad hoc signed app is blocked by Gatekeeper on first open ("Apple could not
+verify…"). Builds are signed ad hoc (`tauri.conf.json` `signingIdentity: "-"`) until these
+repository secrets exist; with them, CI signs with the Developer ID certificate and notarizes
+the app, and it opens like any other download. All come from an Apple Developer Program account.
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | The "Developer ID Application" certificate exported from Keychain Access as a `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE_PASSWORD` | The password given when exporting the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | The certificate's name, e.g. `Developer ID Application: Powerset Inc (TEAMID1234)` |
+| `APPLE_API_ISSUER` | App Store Connect → Users and Access → Integrations → App Store Connect API: the Issuer ID |
+| `APPLE_API_KEY` | That API key's Key ID (a key with the Developer role) |
+| `APPLE_API_KEY_CONTENT` | The contents of the downloaded `AuthKey_<KEY>.p8` |
