@@ -210,7 +210,8 @@ export const SETS = {
   shared: (count: number) => `${count.toLocaleString()} shared`,
   confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
   invites: "Invites",
-  invitedYou: (from: string) => `${from} invited you`,
+  invitedYou: (from: string, email: string) =>
+    email ? `${from} (${email}) invited you` : `${from} invited you`,
   accept: "Accept",
   decline: "Decline",
   invite: "Invite",

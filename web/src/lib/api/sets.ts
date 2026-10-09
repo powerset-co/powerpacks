@@ -26,6 +26,8 @@ export interface ReceivedInvite {
   id: string
   set_name: string
   from: string
+  /** The inviter's email, carried in the invite; "" on an invite from an older build. */
+  from_email: string
   created_at: string
 }
 

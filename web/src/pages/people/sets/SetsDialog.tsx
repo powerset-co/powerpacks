@@ -101,7 +101,7 @@ function InviteRow({
       <CloudIcon className="set-icon" />
       <span className="set-invite-text">
         <span className="set-name">{invite.set_name}</span>
-        <span className="set-count">{SETS.invitedYou(invite.from)}</span>
+        <span className="set-count">{SETS.invitedYou(invite.from, invite.from_email)}</span>
       </span>
       <span className="set-invite-actions">
         <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAnswer(false)}>

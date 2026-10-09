@@ -94,7 +94,9 @@ class RelayInviteTests(unittest.TestCase):
                     "from": {"operator_id": sender[0], "name": sender[1]}, "created_at": "2026-10-08T00:00:00Z"})
 
     def test_invite_accept_round_trip(self) -> None:
-        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):
+        with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)), \
+                mock.patch("packs.ingestion.primitives.share.web.sets.bearer_token", return_value="token"), \
+                mock.patch("packs.ingestion.primitives.share.web.sets._decode_jwt_email", return_value="jordan@example.com"):
             self.jordan.refresh()
             self.jordan.invite("s1", "casey@example.com")
             self.assertEqual(self.sent[0]["to"], "casey@example.com")
@@ -103,7 +105,8 @@ class RelayInviteTests(unittest.TestCase):
 
             self.deliver(self.casey, ("op-jordan", "Jordan Bravo"))
             theirs = payload([], 0, "", received=self.casey.received())
-            self.assertEqual(theirs["invites"][0]["from"], "Jordan Bravo")
+            self.assertEqual((theirs["invites"][0]["from"], theirs["invites"][0]["from_email"]),
+                             ("Jordan Bravo", "jordan@example.com"))
             self.casey.answer("m1", accepted=True)
             self.assertEqual((self.sent[1]["to"], self.sent[1]["payload"]), ("op-jordan", {"invite_id": "m1", "answer": "accepted"}))
             theirs = payload([], 0, "", received=self.casey.received(), seen={"op-jordan": "2026-10-08T01:00:00Z"})

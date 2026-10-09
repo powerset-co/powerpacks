@@ -29,6 +29,7 @@ from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import SetRow
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
+from packs.powerset.primitives.auth.auth import _decode_jwt_email
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
 
 SETS_PATH = "/v2/sets"
@@ -132,8 +133,10 @@ class Sets:
     def invite(self, set_id: str, email: str) -> None:
         """Send the invite to an email; the relay holds it until that email has an account."""
         name = next((view.name for view in self.kept() if view.set_id == set_id), "")
+        # The relay names the sender but not their email; the invite carries it so the invitee sees who.
+        sender = _decode_jwt_email(bearer_token(self.env_file)) or ""
         sent = self._call("POST", MESSAGES_PATH, {"to": email, "kind": INVITE,
-                                                  "payload": {"set_id": set_id, "set_name": name}})
+                                                  "payload": {"set_id": set_id, "set_name": name, "from_email": sender}})
         write_json(self.data_root / "invites" / f"{sent['id']}.json",
                    {"id": sent["id"], "set_id": set_id, "set_name": name, "email": email, "sent_at": now_iso()})
 
@@ -206,10 +209,12 @@ def payload(sets: list[SetView], shared: int, default_set_id: str, *, received: 
     for invite in received:
         if invite.get("answer") != ACCEPTED or any(item["set_id"] == invite["payload"]["set_id"] for item in items):
             continue
-        inviter = Member(invite["from"]["name"], "", "owner", invite["from"]["operator_id"])
+        inviter = Member(invite["from"]["name"], invite["payload"].get("from_email", ""), "owner",
+                         invite["from"]["operator_id"])
         items.append({"set_id": invite["payload"]["set_id"], "name": invite["payload"]["set_name"], "role": "member",
                       "is_personal": False, "member_count": 1, "person_count": 0, "members": [_member(inviter, seen)],
                       "invited": [], "refreshed_at": invite["answered_at"]})
     invites = [{"id": invite["id"], "set_name": invite["payload"]["set_name"], "from": invite["from"]["name"],
+                "from_email": invite["payload"].get("from_email", ""),
                 "created_at": invite["created_at"]} for invite in received if "answer" not in invite]
     return {"sets": items, "invites": invites, "shared": shared, "default_set_id": default_set_id}
