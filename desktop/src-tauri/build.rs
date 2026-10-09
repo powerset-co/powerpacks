@@ -16,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "linkedin_read",
     "app_focus",
     "open_external",
+    "update_check",
     "onboard_continue",
     "permission_messages",
     "debug_state",

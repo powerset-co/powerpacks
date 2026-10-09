@@ -39,6 +39,8 @@
     --error: #f87171;
     /* rhythm */
     --topbar-height: 52px;
+    /* the side nav's background; its badges ring themselves with it */
+    --sidebar-bg: color-mix(in srgb, var(--card) 55%, var(--background));
     --drawer-w: 440px;
     --radius-s: 6px;
     --radius-m: 10px;
@@ -264,4 +266,8 @@ html[data-desktop="mac"] header.topbar {
 html[data-desktop="mac"] [data-sidebar-brand] {
   padding-top: 28px;
   height: calc(var(--topbar-height) + 28px);
+}
+/* The icon rail stacks the mark and the collapse toggle, so its brand row grows to fit. */
+html[data-desktop="mac"] [data-collapsed="true"] [data-sidebar-brand] {
+  height: auto;
 }

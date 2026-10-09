@@ -14,6 +14,7 @@ mod onboard;
 mod paths;
 mod signin;
 mod source;
+mod update;
 
 use std::sync::Arc;
 
@@ -107,6 +108,12 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     app.opener()
         .open_url(parsed.as_str(), None::<&str>)
         .map_err(|error| error.to_string())
+}
+
+/// The latest Powerpacks release against this app's version, for the side nav's update pane.
+#[tauri::command]
+async fn update_check(app: AppHandle) -> Result<update::Update, String> {
+    update::check(&app.package_info().version.to_string()).await
 }
 
 #[tauri::command]
@@ -362,6 +369,7 @@ pub fn run() {
             linkedin_read,
             app_focus,
             open_external,
+            update_check,
             onboard_continue,
             permission_messages,
             debug_state,
