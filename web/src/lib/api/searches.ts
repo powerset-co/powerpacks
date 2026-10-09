@@ -90,10 +90,7 @@ export async function fetchAskStatus(runId: string): Promise<AskStatus> {
   return body<AskStatus>(response)
 }
 
-export async function sendAsk(
-  runId: string,
-  question: string,
-): Promise<{ status: "sent"; ask: SentAsk }> {
+export async function sendAsk(runId: string, question: string): Promise<{ status: "sent"; ask: SentAsk }> {
   const response = await fetch(`${API}/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
