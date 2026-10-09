@@ -1,4 +1,4 @@
-"""Open the v2 store. Creates it empty; upgrades a store one version behind; refuses anything else.
+"""Open the v2 store. Creates it empty; upgrades an older store in place; refuses a newer one.
 
 Created: 2026-10-06
 
@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, SCHEMA_VERSION, SHARE_TABLES_DDL, SHARE_VIEWS_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SHARE_TABLES_DDL, SHARE_VIEWS_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -49,6 +49,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 2:
         _migrate_2_to_3(conn)
         version = 3
+    if version == 3:
+        _migrate_3_to_4(conn)
+        version = 4
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -60,3 +63,10 @@ def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
     with conn:
         conn.executescript(SHARE_TABLES_DDL + SHARE_VIEWS_DDL)
         conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'")
+
+
+def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
+    """Schema 4 is schema 3 plus the review queue; no row changes."""
+    with conn:
+        conn.executescript(REVIEW_QUEUE_DDL)
+        conn.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")

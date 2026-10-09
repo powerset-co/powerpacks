@@ -45,6 +45,7 @@ from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLo
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.review.commit import commit_review
 from packs.ingestion.primitives.share.share_list import Share
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
@@ -243,10 +244,13 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
 
 
 def finish(data_root: Path, operator_id: str) -> int:
-    """After the review: people.csv and the index again (cached, so about free). The review server stays up;
-    the agent runs `stop` once the user is done with the page."""
+    """After the review: the queued decisions onto the ledgers, then people.csv and the index again (cached, so
+    about free). The review server stays up; the agent runs `stop` once the user is done with the page."""
     operator_id = resolve_operator_id(operator_id)
     wait_for_index(data_root)  # a first build still reading people.csv finishes before realize rewrites it
+    conn: sqlite3.Connection = open_store(store_path(data_root))
+    print(f"commit: {commit_review(conn, data_root)} review decision(s) applied", flush=True)
+    conn.close()
     people_csv: Path = realize(data_root)
     command: list[str] = index_command(data_root, people_csv)
     print("index: " + " ".join(command), flush=True)
