@@ -12,7 +12,7 @@ import { resumes, type UploadView } from "@/lib/people/upload"
 import { cn } from "@/lib/utils"
 
 import { UploadDone, UploadProgress } from "./UploadProgress"
-import { UploadSummary } from "./UploadSummary"
+import { UploadSummary, UploadSummarySkeleton } from "./UploadSummary"
 import type { Upload } from "./useUpload"
 
 function title({ view, status }: Upload): string {
@@ -39,6 +39,7 @@ export function UploadDialog({ upload }: { upload: Upload }) {
         </DialogDescription>
       </DialogHeader>
       {plan && <UploadSummary plan={plan} />}
+      {(view.phase === "idle" || view.phase === "checking") && <UploadSummarySkeleton />}
       {running && <UploadProgress status={status} reconnecting={upload.reconnecting} />}
       {last && <UploadDone last={last} />}
       <DialogFooter>
@@ -59,21 +60,11 @@ function Actions({ upload }: { upload: Upload }) {
       return null
     case "ready":
       return (
-        <>
-          <Button variant="ghost" onClick={upload.check}>
-            {UPLOAD.checkAgain}
-          </Button>
-          <Button variant="primary" onClick={upload.confirm}>
-            {resumes(upload.status) ? UPLOAD.resume : UPLOAD.confirm}
-          </Button>
-        </>
-      )
-    case "idle":
-      return (
-        <Button variant="primary" onClick={upload.check}>
-          {UPLOAD.check}
+        <Button variant="primary" onClick={upload.confirm}>
+          {resumes(upload.status) ? UPLOAD.resume : UPLOAD.confirm}
         </Button>
       )
+    case "idle":
     case "completed":
       return null
     case "check-failed":
@@ -81,7 +72,7 @@ function Actions({ upload }: { upload: Upload }) {
     case "interrupted":
     case "refused":
       return (
-        <Button variant="primary" onClick={upload.check}>
+        <Button variant="primary" onClick={upload.retry}>
           {UPLOAD.checkAgain}
         </Button>
       )

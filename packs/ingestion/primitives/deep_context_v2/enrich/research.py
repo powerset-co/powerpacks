@@ -61,6 +61,7 @@ class ResearchSubject:
     parent_id: str
     handle: str
     dossier: str
+    guidance: str = ""   # the reviewer's words about the right person; '' for the pipeline's own research
 
 
 def dossier(family: Family) -> str:
@@ -74,6 +75,16 @@ def handle(facts: SynthesizedFacts) -> str:
     payload: str = json.dumps({"facts": facts.to_payload(), "prompt": PROMPT_VERSION},
                               ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def guided_subject(parent_id: str, facts: SynthesizedFacts, guidance: str) -> ResearchSubject:
+    """The review page's re-research: the same question with the reviewer's words beside the dossier. Its
+    handle covers the guidance too, so the family's own research card is untouched and the review page can
+    reuse a stored answer to the same words."""
+    payload: str = json.dumps({"facts": facts.to_payload(), "guidance": guidance, "prompt": PROMPT_VERSION},
+                              ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return ResearchSubject(parent_id, hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                           json.dumps(facts.to_payload(), ensure_ascii=False, sort_keys=True), guidance)
 
 
 def subjects(families: list[Family], matches: PreMatch, done: dict[str, Research]) -> list[ResearchSubject]:
@@ -157,8 +168,10 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
     group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)
     inputs: list[RunInputParam] = []
     for subject in todo:
-        inputs.append({"input": {"dossier": subject.dossier}, "metadata": {"handle": subject.handle},
-                       "processor": PARALLEL_PROCESSOR})
+        run_input: dict[str, object] = {"dossier": subject.dossier}
+        if subject.guidance:
+            run_input["guidance"] = subject.guidance
+        inputs.append({"input": run_input, "metadata": {"handle": subject.handle}, "processor": PARALLEL_PROCESSOR})
     for start in range(0, len(inputs), PARALLEL_BATCH_SIZE):
         client.task_group.add_runs(group_id, inputs=inputs[start:start + PARALLEL_BATCH_SIZE], default_task_spec=PARALLEL_TASK_SPEC)
     counts: dict[str, int] = {"research_submitted": len(todo), "complete": 0, "no_match": 0, "failed": 0}

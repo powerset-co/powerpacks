@@ -110,9 +110,10 @@ export function eventDate(value: string | null | undefined): string {
 // The share dialog and its trigger.
 export const UPLOAD = {
   share: "Share network",
-  shareChanges: "Share changes",
-  view: "View upload",
-  check: "Check network",
+  upToDateNote: "Shared, nothing to update",
+  pendingNote: "Changes to share: open to upload them",
+  runningNote: "Upload running",
+  checkingNote: "Checking your network",
   checkAgain: "Check again",
   confirm: "Confirm sharing",
   resume: "Resume sharing",
@@ -181,6 +182,64 @@ export function sharedToast(count: number): string {
 }
 
 // The Build and View logbook actions on the bar and in the drawer, the reader, and the toasts.
+/** The share menu and the sets dialog (pages/people/sets). */
+/** Heartbeats come every 30 s; three missed and the member reads as last seen. */
+const CONNECTED_SECONDS = 90
+const SETS_CONNECTED = "Connected"
+
+export const SETS = {
+  title: "Sets",
+  lead: "Sets live on this computer. Members see each other's shared networks; invites go through the Powerset relay.",
+  choose: "Choose a set",
+  shareTo: "Share to",
+  manage: "Manage sets…",
+  personalNetwork: "Personal network",
+  personalNote: "Your shared network, on this machine.",
+  local: "Local",
+  sharedWith: "Your sets",
+  none: "Create one, or accept an invite from a teammate.",
+  noneTitle: "No sets yet",
+  loading: "Loading sets…",
+  cancel: "Cancel",
+  leave: "Leave set",
+  confirmLeave: (name: string) => `Leave “${name}”? Its owner is told.`,
+  youOwn: "You own this set",
+  youJoined: "You joined this set",
+  memberHead: "Member",
+  roleHead: "Role",
+  statusHead: "Status",
+  sharesHead: "Shares",
+  neverSeen: "Not seen yet",
+  newSet: "New set",
+  namePlaceholder: "Set name",
+  create: "Create",
+  delete: "Delete set",
+  keep: "Keep",
+  signInNeeded: "Sign in to Powerset to see your sets.",
+  signIn: "Sign in",
+  members: (count: number) => plural(count, "member"),
+  people: (count: number) => plural(count, "person"),
+  shared: (count: number) => `${count.toLocaleString()} shared`,
+  confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
+  invites: "Invites",
+  invitedYou: (from: string, email: string) =>
+    email ? `${from} (${email}) invited you` : `${from} invited you`,
+  accept: "Accept",
+  decline: "Decline",
+  invite: "Invite",
+  invitePlaceholder: "Invite by email",
+  invited: "Invited",
+  connected: SETS_CONNECTED,
+  declined: "Declined",
+  seen: (value: string, now: number = Date.now()) => {
+    const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))
+    if (seconds < CONNECTED_SECONDS) return SETS_CONNECTED
+    if (seconds < 3600) return `Seen ${Math.max(1, Math.floor(seconds / 60))}m ago`
+    if (seconds < 86_400) return `Seen ${Math.floor(seconds / 3600)}h ago`
+    return `Seen ${Math.floor(seconds / 86_400)}d ago`
+  },
+} as const
+
 export const LOGBOOK = {
   build: "Build logbook",
   building: "Building logbook…",

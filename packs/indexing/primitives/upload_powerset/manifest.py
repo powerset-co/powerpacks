@@ -37,10 +37,6 @@ UPLOAD_FAILED = "Upload failed. Check again to resume."
 CHECK_FAILED = "Could not check your network. Check again."
 
 
-class CheckChanged(RuntimeError):
-    """The share table, plan or target differ from the completed check; nothing was written."""
-
-
 @dataclass(frozen=True)
 class UploadManifest:
     status: str = "idle"
@@ -52,7 +48,6 @@ class UploadManifest:
         "total": 0, "uploaded": 0, "skipped": 0, "namespaces": {},
     })
     plan: dict[str, Any] | None = None
-    checked_target: dict[str, Any] | None = None
     share_digest: str | None = None
     last_upload: dict[str, Any] | None = None
     target: dict[str, Any] | None = None

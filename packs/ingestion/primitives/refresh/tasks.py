@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The scheduled refresh task: install it into Codex or Claude, list its runs.
 
-Both harnesses run the same prompt (run `refresh_sources.py run`, report),
+Both harnesses run the same prompt (refresh sources, answer asks, report),
 defaulting to daily at 06:00. Both support weekdays and weekly schedules:
 
     codex   install creates and verifies a persisted chat through app-server,
@@ -20,6 +20,7 @@ defaulting to daily at 06:00. Both support weekdays and weekly schedules:
             ~/.claude/projects/<repo slug>/ whose first prompt carries the marker.
 
 Changelog:
+  2026-10-08: run the ask worker after the scheduled source refresh.
   2026-09-28: created for the local Scheduled tasks page; Codex install uses the
     PR #365 template, now quiet unless a source needs attention.
 """
@@ -60,7 +61,8 @@ REFRESH_COMMAND = "uv run --project . python packs/ingestion/primitives/refresh/
 ATTENTION = "NEEDS ATTENTION"
 PROMPT = (
     f"Task: {TASK_ID}\n"
-    f"From the repository root, run exactly this command and nothing else:\n\n{REFRESH_COMMAND}\n\n"
+    f"From the repository root, run exactly this command:\n\n{REFRESH_COMMAND}\n\n"
+    "After the refresh, run `uv run --no-sync --project . python packs/ingestion/primitives/ask_worker/ask_worker.py run`. "
     "Then reply in at most four lines: the run's status, then one line per source with its outcome "
     "and note from the JSON. Do not retry, fix, sign in, or open anything. "
     f"If the command exits non-zero or any source is failed or needs_you, make your first line {ATTENTION}."

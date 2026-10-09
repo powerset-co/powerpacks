@@ -7,6 +7,7 @@ the repo's `web/dist/` (see `web/README.md`). POST `/api/profile-image/sign/batc
 LinkedIn CDN URLs server-side for the gateway's saved images. Everything else falls through.
 
 Changelog:
+  2026-10-08: /sets is an app page.
   2026-10-02: the shell answers /install before project dependencies are ready.
   2026-09-26: created; replaces share/web's People page and /people/assets.
   2026-09-26: the shell also answers /searches and /searches/run (the Searches page).
@@ -28,7 +29,7 @@ WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
 # The paths the React router owns; the server answers each with the shell page.
-PAGE_PATHS = frozenset({"/", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/accounts", "/tasks"})
+PAGE_PATHS = frozenset({"/", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks"})
 ASSETS = {
     "app.js": (WEB_DIST / "app.js", "text/javascript; charset=utf-8"),
     "app.css": (WEB_DIST / "app.css", "text/css; charset=utf-8"),

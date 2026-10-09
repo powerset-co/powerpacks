@@ -79,6 +79,16 @@ class ResearchCard:
     result_json: str
 
 
+@dataclass(frozen=True)
+class Queued:
+    """One family's decision, waiting in the review queue."""
+
+    parent_id: str
+    decision: str
+    key: str
+    guidance: str
+
+
 def _marks(values: list[str]) -> str:
     """One `?` per value, for an IN list."""
     return ", ".join(["?"] * len(values))
@@ -232,8 +242,31 @@ def insert_parent(conn: sqlite3.Connection, candidate_id: str, parent_id: str, r
     )
 
 
+def review_queue(conn: sqlite3.Connection) -> dict[str, Queued]:
+    """parent_id -> its queued decision."""
+    queued: dict[str, Queued] = {}
+    for row in conn.execute("SELECT parent_id, decision, key, guidance FROM review_queue"):
+        queued[row["parent_id"]] = Queued(row["parent_id"], row["decision"], row["key"], row["guidance"])
+    return queued
+
+
+def upsert_queued(conn: sqlite3.Connection, queued: Queued, now: str) -> None:
+    """The family's decision, replacing an earlier one."""
+    conn.execute(
+        "INSERT INTO review_queue (parent_id, decision, key, guidance, updated_at) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT (parent_id) DO UPDATE SET decision = excluded.decision, key = excluded.key, "
+        "guidance = excluded.guidance, updated_at = excluded.updated_at",
+        (queued.parent_id, queued.decision, queued.key, queued.guidance, now),
+    )
+
+
+def delete_queued(conn: sqlite3.Connection, parent_id: str) -> None:
+    """The row finish has dealt with."""
+    conn.execute("DELETE FROM review_queue WHERE parent_id = ?", (parent_id,))
+
+
 def insert_worth(conn: sqlite3.Connection, candidate_id: str, worth: str, reason: str, now: str) -> None:
-    """One human worth decision, including undoing a Skip."""
+    """One human worth decision."""
     conn.execute(
         "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
         "VALUES (?, ?, ?, ?, NULL, NULL, ?)",

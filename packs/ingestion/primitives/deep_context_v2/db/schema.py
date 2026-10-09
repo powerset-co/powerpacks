@@ -47,7 +47,7 @@ from enum import StrEnum
 
 from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -111,9 +111,41 @@ class ResearchStatus(StrEnum):
     FAILED = "failed"
 
 
+class ReviewDecision(StrEnum):
+    """What the reviewer said about a family, held in the review queue until finish applies it."""
+    KEEP = "keep"      # Yes to the pending profile named by key
+    DETACH = "detach"  # Skip
+    FIX = "fix"        # Retarget: to the pasted URL in key, or from the reviewer's words in guidance
+
+
 def _in(enum: type[StrEnum]) -> str:
     return "(" + ", ".join(f"'{member.value}'" for member in enum) + ")"
 
+
+# Schema 4 added the review queue; a schema-3 store gains it in place (store.py).
+REVIEW_QUEUE_DDL = f"""
+-- The review queue: one row per family the reviewer has decided, edited in place until `finish`
+-- applies it to the ledgers below and deletes it. The ledgers never carry an undone decision.
+CREATE TABLE review_queue (
+  parent_id TEXT NOT NULL PRIMARY KEY,
+  decision TEXT NOT NULL CHECK (decision IN {_in(ReviewDecision)}),
+  key TEXT NOT NULL,       -- keep: the pending key; fix: the pasted URL, or '' with guidance; detach: ''
+  guidance TEXT NOT NULL,  -- fix from a description: the reviewer's words; else ''
+  updated_at TEXT NOT NULL
+);
+"""
+
+# Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page
+# shows them without a round trip and the next sync starts from what was last seen.
+SETS_DDL = """
+CREATE TABLE sets (
+  set_id TEXT NOT NULL PRIMARY KEY,   -- made here by its owner; an invite carries it to members
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,                 -- this machine's role in it: owner or member
+  members_json TEXT NOT NULL CHECK (json_valid(members_json)),  -- [{name, email, role, operator_id}]
+  created_at TEXT NOT NULL
+);
+"""
 
 # Schema 3 added the share stage; a schema-2 store gains these in place (store.py).
 SHARE_TABLES_DDL = f"""
@@ -288,6 +320,8 @@ CREATE TABLE research (
 CREATE INDEX research_by_parent ON research(parent_id);
 
 {SHARE_TABLES_DDL}
+{REVIEW_QUEUE_DDL}
+{SETS_DDL}
 CREATE VIEW current_parent AS
   SELECT candidate_id, parent_id, reason, seq FROM (
     SELECT m.*, row_number() OVER (PARTITION BY candidate_id ORDER BY seq DESC) AS rn

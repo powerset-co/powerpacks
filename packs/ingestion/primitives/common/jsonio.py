@@ -26,6 +26,8 @@ copies it replaces:
   pass their historical length so existing digests are unchanged.
 
 Changelog:
+  2026-10-08: `write_json` writes a sibling file and swaps it in, so a concurrent reader never sees
+    a half-written file (the relay loop writes inbox and presence files while requests read them).
   2026-07-24 (dedup): `parse_last_json` absorbed the divergent copy that lived
     in discover/messages/whatsapp_wacli.py. That copy's scan-forward recovery
     (on a decode error, jump to the next `{` instead of stopping) is now the
@@ -52,7 +54,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
+import threading
 from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,9 +99,12 @@ def parse_json_object(value: str | None) -> dict[str, Any]:
 
 
 def write_json(path: Path, payload: Any) -> None:
-    """Write `payload` as key-sorted JSON (indent 2, trailing newline), mkdir-ing parents."""
+    """Write `payload` as key-sorted JSON (indent 2, trailing newline), mkdir-ing parents. The file is
+    written beside the target and swapped in, so a reader in another thread never sees half of it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    partial = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    partial.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(partial, path)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
