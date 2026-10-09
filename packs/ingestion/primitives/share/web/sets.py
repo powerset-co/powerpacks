@@ -14,13 +14,14 @@ whose allowed_operator_ids hold any member's operator id.
 Created: 2026-10-08
 Changelog:
 - 2026-10-08: local sets; no /v2/sets. Invites over the relay, joined sets stored on accept, each member's
-  last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace.
+  last heartbeat, and the set's people (and each member's) counted in the share_v1 namespace, cached a minute.
 """
 from __future__ import annotations
 
 import json
 import os
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -47,6 +48,8 @@ OWNER = "owner"
 MEMBER = "member"
 PERSONAL_ID = "personal"
 TIMEOUT_SECONDS = 30
+# A count moves only when someone shares; the page asks every 10 s, so it reads this cache.
+COUNT_SECONDS = 60
 
 
 class NeedsSignIn(Exception):
@@ -79,6 +82,8 @@ class Sets:
         self.env_file = env_file
         self.data_root = env_file.parent / ".powerpacks"
         self._me: Member | None = None
+        self._turbopuffer: turbopuffer.Turbopuffer | None = None
+        self._counts: dict[frozenset[str], tuple[float, int]] = {}  # operator ids -> (counted at, people)
 
     # ---- the relay
 
@@ -178,15 +183,23 @@ class Sets:
     # ---- the shared network
 
     def people(self, operator_ids: list[str]) -> int:
-        """People shared by any of these operators: share_v1 summaries documents, one per person."""
-        client = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
-                                         region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
+        """People shared by any of these operators: share_v1 summaries documents, one per person, counted
+        at most once per COUNT_SECONDS for the same operators."""
+        key = frozenset(operator_ids)
+        held = self._counts.get(key)
+        if held is not None and time.monotonic() - held[0] < COUNT_SECONDS:
+            return held[1]
+        if self._turbopuffer is None:
+            self._turbopuffer = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
+                                                        region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
         try:
-            response = client.namespace(share_namespace("summaries")).query(
+            response = self._turbopuffer.namespace(share_namespace("summaries")).query(
                 filters=("allowed_operator_ids", "ContainsAny", operator_ids), aggregate_by={"people": ("Count",)})
+            count = int(response.aggregations["people"])
         except turbopuffer.NotFoundError:
-            return 0  # nobody has shared into share_v1 yet
-        return int(response.aggregations["people"])
+            count = 0  # nobody has shared into share_v1 yet
+        self._counts[key] = (time.monotonic(), count)
+        return count
 
 
 def _member(member: Member, seen: dict[str, str], shared: dict[str, int]) -> dict[str, Any]:
