@@ -6,6 +6,7 @@
 //! Links that leave the local page open in the system browser, where Google, ChatGPT and
 //! LinkedIn allow sign-in.
 
+mod auto_reply;
 mod boot;
 mod children;
 mod codex;
@@ -127,6 +128,16 @@ async fn codex_open_thread(
     codex
         .open_thread(&app, &boot::require_root(&boot)?, &thread_id)
         .await
+}
+
+/// Read the recipient preference, or persist their explicit toggle.
+#[tauri::command]
+fn codex_auto_reply(boot: State<'_, Arc<Boot>>, enabled: Option<bool>) -> Result<bool, String> {
+    let root = boot::require_root(&boot)?;
+    match enabled {
+        Some(value) => auto_reply::save(&root, value),
+        None => auto_reply::enabled(&root),
+    }
 }
 
 /// Explicit recipient click: answer a pending shared question in an isolated read-only thread.
@@ -362,6 +373,7 @@ pub fn run() {
             codex_open_thread,
             codex_threads,
             codex_answer_question,
+            codex_auto_reply,
             codex_call,
             codex_respond,
             signin_open,
@@ -382,6 +394,7 @@ pub fn run() {
             quit_on_signal(app.handle().clone());
             main_window(app.handle())?;
             boot::launch(app.handle().clone());
+            auto_reply::launch(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())

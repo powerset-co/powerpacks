@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import type { CodexStatus } from "@/types/agent"
 
+import { AutoReply } from "./AutoReply"
+
 function summary(status: CodexStatus | undefined): { name: string; plan: string; connected: boolean } {
   if (!status?.installed) return { name: "Missing from this app", plan: "—", connected: false }
   const account = status.account
@@ -52,6 +54,7 @@ export function CodexCard() {
           <dd className="m-0 text-sm capitalize">{plan}</dd>
         </div>
       </dl>
+      <AutoReply connected={connected} />
     </li>
   )
 }

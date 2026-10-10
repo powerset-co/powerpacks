@@ -41,6 +41,10 @@ struct Question {
 }
 
 impl Question {
+    fn is_new(&self) -> bool {
+        self.thread_id.is_none() && self.answer.is_none() && self.error.is_none()
+    }
+
     fn saved_result(&self) -> Option<Result<String, String>> {
         self.answer
             .as_ref()
@@ -232,7 +236,34 @@ async fn post(
     Ok(())
 }
 
+async fn pending_questions(client: &reqwest::Client) -> Result<PendingQuestions, String> {
+    client
+        .get(boot::page_url("/api/collaboration/pending"))
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| format!("Could not load pending questions: {error}"))?
+        .json::<PendingQuestions>()
+        .await
+        .map_err(|error| format!("Invalid pending questions: {error}"))
+}
+
 impl Codex {
+    pub async fn auto_reply(&self, app: &AppHandle, cwd: &Path) -> Result<(), String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let pending = pending_questions(&client).await?;
+        // Interrupted and failed questions stay available for manual recovery; never loop inference.
+        if let Some(question) = pending.questions.iter().find(|question| question.is_new()) {
+            if crate::auto_reply::enabled(cwd)? {
+                self.answer_question(app, cwd, &question.id).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn answer_question(
         &self,
         app: &AppHandle,
@@ -244,15 +275,7 @@ impl Codex {
             .timeout(Duration::from_secs(15))
             .build()
             .map_err(|error| error.to_string())?;
-        let pending: PendingQuestions = client
-            .get(boot::page_url("/api/collaboration/pending"))
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|error| format!("Could not load pending questions: {error}"))?
-            .json()
-            .await
-            .map_err(|error| format!("Invalid pending questions: {error}"))?;
+        let pending = pending_questions(&client).await?;
         let question = pending
             .questions
             .into_iter()
@@ -493,6 +516,7 @@ mod tests {
                 raw[field] = json!(value);
                 let question: Question = serde_json::from_value(raw).unwrap();
                 assert_eq!(question.saved_result(), Some(expected));
+                assert!(!question.is_new());
             }
         }
     }
@@ -505,5 +529,14 @@ mod tests {
         .unwrap();
         assert_eq!(question.saved_result(), None);
         assert_eq!(question.query.as_deref(), Some("Search brief"));
+        assert!(question.is_new());
+    }
+    #[test]
+    fn auto_reply_leaves_interrupted_threads_for_manual_recovery() {
+        let question: Question = serde_json::from_value(json!({"id": "question", "set_id": "set",
+            "conversation_id": "conversation", "from_name": "Sender", "question": "Question?",
+            "thread_id": "existing-thread"}))
+        .unwrap();
+        assert!(!question.is_new());
     }
 }
