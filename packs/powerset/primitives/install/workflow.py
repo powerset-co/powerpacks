@@ -356,6 +356,11 @@ class SourceOnboarding:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
             self._write("sources.selected")
+            # Under the desktop app, Full Disk Access is asked for on the Setup screen and is
+            # optional: without it, iMessage is skipped.
+            if (DESKTOP and Source.IMESSAGE in self.sources
+                    and IMessageExtractor().check(strict=True)["status"] != "ok"):
+                self.skip_sources = (*self.skip_sources, Source.IMESSAGE)
             for source in self.sources:
                 for step in _SOURCE_STEPS[source]:
                     if source in self.skip_sources:
@@ -371,10 +376,6 @@ class SourceOnboarding:
                     return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
                 self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
-            # Under the desktop app, Full Disk Access is asked for on the preflight screen and is
-            # optional: without it, setup leaves iMessage out.
-            if DESKTOP and Source.IMESSAGE in active and IMessageExtractor().check(strict=True)["status"] != "ok":
-                active.remove(Source.IMESSAGE)
             # Tools first (Homebrew can take minutes), then every login back to back while
             # the user is here, then the syncs and imports run without them.
             for source in active:
@@ -385,8 +386,6 @@ class SourceOnboarding:
             logins = {Source.LINKEDIN: self._linkedin_login, Source.GMAIL: self._gmail_connect,
                       Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
             for source in active:
-                if DESKTOP and source is Source.IMESSAGE:
-                    continue
                 if not logins[source]():
                     return self.status.read()
             for source in active:

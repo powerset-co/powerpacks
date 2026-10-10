@@ -26,7 +26,6 @@ const OFFLINE = {
 // The status line and the note under it hold this many lines, so the page never jumps
 // (status_prose.py keeps every line and note within them).
 const MESSAGE_LINES = { wide: 3, narrow: 5 }
-const NOTE_LINES = { wide: 4, narrow: 6 }
 const DONE = new Set(["completed", "skipped"])
 const VISIBLE_COMPLETED = 5
 
@@ -205,26 +204,17 @@ export function InstallPage() {
             {welcome ? (
               <p className="install-message">Start fresh, or bring over what you already have on this Mac.</p>
             ) : (
-              <ReservedLines
-                className="install-message"
-                lines={MESSAGE_LINES.wide}
-                narrowLines={MESSAGE_LINES.narrow}
-              >
+              // One fixed block: the status line, then how long it has run or the note.
+              <ReservedLines className="install-message" lines={MESSAGE_LINES.wide} narrowLines={MESSAGE_LINES.narrow}>
                 {/* A new line fades in over the old one's slot. */}
                 <span key={message} className="fade-swap">
                   {message}
                 </span>
-              </ReservedLines>
-            )}
-            {/* A clock ticks every second: kept out of the live region's announcements. */}
-            {welcome ? null : (
-              <p className="install-elapsed" aria-hidden="true">
-                {elapsed ? word("running.elapsed").replace("{elapsed}", elapsed) : ""}
-              </p>
-            )}
-            {welcome ? null : (
-              <ReservedLines className="install-note" lines={NOTE_LINES.wide} narrowLines={NOTE_LINES.narrow}>
-                {note}
+                {/* A clock ticks every second: kept out of the live region's announcements. */}
+                <span className="install-elapsed" aria-hidden="true">
+                  {elapsed ? word("running.elapsed").replace("{elapsed}", elapsed) : ""}
+                </span>
+                <span className="install-note">{note}</span>
               </ReservedLines>
             )}
           </EmptyPanel>

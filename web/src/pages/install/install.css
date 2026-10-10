@@ -8,10 +8,10 @@
   padding: 40px 0 32px;
 }
 .install-page .empty-state {
-  min-height: 260px;
+  min-height: 0;
   border: 0;
   background: transparent;
-  padding: 24px 0;
+  padding: 16px 0 0;
 }
 .install-page .empty-state h2 {
   font-size: 20px;
@@ -20,13 +20,17 @@
   color: var(--foreground);
   font-size: 14px;
 }
+.install-page .empty-state .install-message > span {
+  display: block;
+}
 .install-page .empty-state .install-note {
   font-size: 13px;
+  color: var(--muted);
 }
 .install-page .install-steps {
   display: grid;
   gap: 0;
-  padding: 20px 0;
+  padding: 12px 0;
   margin: 0;
   list-style: none;
   font-size: 13px;
@@ -84,13 +88,9 @@
   font-size: 12px;
   color: var(--muted);
 }
-/* The live clock under a running step keeps its slot, so the page never jumps when it starts. */
 .install-page .empty-state .install-elapsed {
-  min-height: 18px;
-  margin: 0;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-  text-align: center;
   color: var(--muted);
 }
 .install-page .install-action {
