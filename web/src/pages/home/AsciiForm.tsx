@@ -29,21 +29,26 @@ export function AsciiForm({
     const depth = new Float32Array(COLS * ROWS)
     const light = new Float32Array(COLS * ROWS)
     const pointer = { x: 0, y: 0 }
+    const target = { x: 0, y: 0 }
     let frame = 0
     let last = -Infinity
     const move = (event: PointerEvent) => {
       const rect = element.getBoundingClientRect()
-      pointer.x = (event.clientX - rect.left) / rect.width - 0.5
-      pointer.y = (event.clientY - rect.top) / rect.height - 0.5
+      target.x = (event.clientX - rect.left) / rect.width - 0.5
+      target.y = (event.clientY - rect.top) / rect.height - 0.5
     }
     const leave = () => {
-      pointer.x = 0
-      pointer.y = 0
+      target.x = 0
+      target.y = 0
     }
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw)
       if (document.hidden || now - last < 33 || ((motion.matches || paused) && last !== -Infinity)) return
-      elapsed.current += last === -Infinity ? 0 : Math.min(now - last, 50) / 1000
+      const delta = last === -Infinity ? 0 : Math.min(now - last, 50)
+      elapsed.current += delta / 1000
+      const blend = 1 - Math.exp(-delta / 160)
+      pointer.x += (target.x - pointer.x) * blend
+      pointer.y += (target.y - pointer.y) * blend
       last = now
       const t = elapsed.current * speed
       depth.fill(-Infinity)
