@@ -26,6 +26,12 @@ meaning, geography, seniority, company properties, set, and requested caps.
 Resolve company IDs through the existing company resolver when needed. An alias
 must identify the same company. Empty current-company results do not authorize a
 past-company search or a broader seniority search. Broaden only when requested.
+`company_queries` resolves a bounded employer set for network and roster
+retrieval, rather than an exact Sales Navigator employer filter; the matching
+employer still requires semantic review.
+Explicit company IDs, names and URLs are hard constraints across sources.
+An unmapped geography does not send an unverified Sales Navigator filter:
+retained raw location evidence is checked, and unproven membership stays unknown.
 
 For an exact-person introduction request, preserve the supplied LinkedIn URL
 as the target. Do not turn it into an employer search. Known introductions need
@@ -80,8 +86,10 @@ and headcount. A positive budget reviews at most `2 × max_semantic_calls`
 uncached roles in their current order. Unreviewed roles stay unknown with partial
 semantic coverage. A later refinement can reuse decisions and review the remainder.
 Select `semantic_model` explicitly or use the configured `GTM_SCORING_MODEL`;
-there is no implicit model. Cached semantic decisions can be reused. Report the
-returned semantic coverage, calls, cache hits, model, input/output tokens,
+there is no implicit model. Cached semantic decisions can be reused.
+For an authorized paid semantic phase in this workflow, explicitly use
+`"semantic_model": "gpt-6.1-sol"`; keep the free-phase example's zero budget.
+Report returned semantic coverage, calls, cache hits, model, input/output tokens,
 output-token cap, and errors.
 An unknown semantic requirement remains unknown when there is no supporting
 cached decision or authorized scoring budget.
