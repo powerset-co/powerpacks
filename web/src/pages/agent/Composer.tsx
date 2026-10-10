@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
+import { isDesktop } from "@/lib/desktop"
+import { AutoReply } from "./AutoReply"
+import { ComposerToggle } from "./ComposerToggle"
+
 import { Button } from "@/components/ui/button"
 
 import { SendIcon, StopIcon } from "./icons"
@@ -90,25 +94,18 @@ export function Composer({
           className="max-h-[240px] min-h-[52px] resize-none border-0 bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-[1.5] text-foreground outline-none placeholder:text-faint focus-visible:outline-none"
         />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
-          {footer ?? (
-            <button
-              type="button"
-              aria-pressed={fullAccess}
-              onClick={() => onFullAccess?.(!fullAccess)}
-              title={fullAccess ? "Commands run without asking" : "Codex asks before running commands"}
-              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-fast ease-out ${
-                fullAccess
-                  ? "border-[color-mix(in_srgb,var(--warn)_50%,transparent)] text-foreground"
-                  : "border-line text-faint hover:text-muted-foreground"
-              }`}
-            >
-              <span
-                aria-hidden
-                className={`size-1.5 rounded-full ${fullAccess ? "bg-warn" : "bg-line-strong"}`}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {footer}
+            {onFullAccess && (
+              <ComposerToggle
+                label="Full Access"
+                enabled={fullAccess}
+                onChange={() => onFullAccess(!fullAccess)}
+                description="Lets your Codex run commands without asking. Does not change permissions for shared replies."
               />
-              Full access
-            </button>
-          )}
+            )}
+            {isDesktop() && <AutoReply />}
+          </div>
           {running ? (
             <Button type="button" size="icon" shape="pill" onClick={onStop} aria-label="Stop">
               <StopIcon className="!size-3" />

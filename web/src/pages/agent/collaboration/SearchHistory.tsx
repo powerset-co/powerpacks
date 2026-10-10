@@ -376,24 +376,10 @@ export function SearchHistory({
                 {" "}
                 @{" "}
               </Button>
-              {selected ? (
+              {selected && (
                 <Chip pressed removable onClick={() => setRecipient("")}>
                   {selected.name} · {set?.name}
                 </Chip>
-              ) : (
-                <span className="truncate text-[11px] text-faint">
-                  {replyTo ? "Shared with this set" : "Only @questions are shared"}
-                </span>
-              )}
-              {composer?.onFullAccess && !selected && !replyTo && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-pressed={composer.fullAccess}
-                  onClick={() => composer.onFullAccess?.(!composer.fullAccess)}
-                >
-                  Full access
-                </Button>
               )}
             </div>
           }
