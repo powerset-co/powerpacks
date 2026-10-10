@@ -33,7 +33,10 @@ export function SearchHistory({
   composer,
   onPrivateSend,
 }: Props) {
-  const conversations = c.data?.conversations.filter((item) => item.search_id === searchId) ?? []
+  const conversations = useMemo(
+    () => c.data?.conversations.filter((item) => item.search_id === searchId) ?? [],
+    [c.data?.conversations, searchId],
+  )
   const [chosenSet, updateSet] = useState(
     () =>
       readStored("session", `search-set:${searchId}`, (value) =>
@@ -46,8 +49,11 @@ export function SearchHistory({
   }
   const set =
     c.data?.sets.find((item) => item.set_id === (chosenSet || conversations[0]?.set_id)) ?? c.data?.sets[0]
-  const conversation = conversations.find((item) => item.set_id === set?.set_id)
-  const messages = useMemo(() => conversation?.messages ?? [], [conversation?.messages])
+  const messages = useMemo(
+    () =>
+      conversations.flatMap((item) => item.messages).sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    [conversations],
+  )
   const members = set?.members ?? []
   const [recipient, updateRecipient] = useState(
     () =>
@@ -86,11 +92,13 @@ export function SearchHistory({
   const [atBottom, setAtBottom] = useState(true)
   const selected = members.find((member) => member.operator_id === recipient)
   const mention = /(?:^|\s)@([^@\n]*)$/.exec(draft)?.[1]
-  const people = members.filter(
-    (member) =>
-      member.operator_id !== c.data?.me.operator_id &&
-      (mention === undefined || member.name.toLowerCase().includes(mention.toLowerCase())),
-  )
+  const people = (c.data?.sets ?? [])
+    .flatMap((group) => group.members.map((member) => ({ ...member, set: group })))
+    .filter(
+      (member) =>
+        member.operator_id !== c.data?.me.operator_id &&
+        (mention === undefined || member.name.toLowerCase().includes(mention.toLowerCase())),
+    )
   const rows = useMemo<Row[]>(() => {
     const replies = new Map<string, SharedMessage[]>()
     for (const message of messages) {
@@ -115,8 +123,7 @@ export function SearchHistory({
 
   const send = async (text: string) => {
     setSendError("")
-    const named = members.find((member) => text.toLowerCase().startsWith(`@${member.name.toLowerCase()} `))
-    const to = replyTo?.recipient_id ?? (recipient || named?.operator_id)
+    const to = replyTo?.recipient_id ?? recipient
     if (!to) {
       if (text.includes("@")) {
         setSendError("Choose a member from the @ menu before sending.")
@@ -130,9 +137,12 @@ export function SearchHistory({
       return false
     }
     if (!set) return false
+    const conversation = conversations.find((item) =>
+      replyTo ? item.messages.some((message) => message.id === replyTo.id) : item.set_id === set.set_id,
+    )
     const saved = conversation ?? (await c.create(set.set_id, searchId, title))
     if (!saved) return false
-    const question = named ? text.slice(named.name.length + 2).trim() : text
+    const question = text.trim()
     if (!question) return false
     const sent = await c.send(saved.id, question, to, replyTo?.id)
     if (!sent) return false
@@ -143,7 +153,9 @@ export function SearchHistory({
   }
 
   const renderMessage = (message: SharedMessage) => {
-    const owner = members.find((member) => member.operator_id === message.recipient_id)
+    const conversation = conversations.find((item) => item.messages.some((held) => held.id === message.id))
+    const group = c.data?.sets.find((item) => item.set_id === conversation?.set_id)
+    const owner = group?.members.find((member) => member.operator_id === message.recipient_id)
     const pending = c.pending.find((item) => item.id === message.request_id)
     const replies = messages.filter((item) => item.reply_to === message.id)
     return (
@@ -154,7 +166,7 @@ export function SearchHistory({
         <div className="flex items-center gap-2 text-xs">
           <Avatar name={message.author_name} />
           <strong>{message.author_name}</strong>
-          <span className="text-faint">{set?.name}</span>
+          <span className="text-faint">{group?.name}</span>
         </div>
         {owner && <p className="mb-1 mt-2 text-xs text-info">@{owner.name}</p>}
         <p className="m-0 whitespace-pre-wrap break-words">{message.text}</p>
@@ -246,30 +258,6 @@ export function SearchHistory({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-5 py-2 text-xs">
-        <label htmlFor="search-question-set" className="text-faint">
-          Ask people in
-        </label>
-        <select
-          id="search-question-set"
-          aria-label="Question set"
-          value={set?.set_id ?? ""}
-          disabled={c.busy || !!replyTo}
-          onChange={(event) => {
-            setChosenSet(event.target.value)
-            setRecipient("")
-            setPicking(false)
-          }}
-          className="min-w-0 rounded border border-line bg-card px-2 py-1 text-foreground"
-        >
-          {c.data?.sets.map((item) => (
-            <option key={item.set_id} value={item.set_id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-        {!set && <span className="text-faint">Join a set to mention someone.</span>}
-      </div>
       {rows.length ? (
         <VirtualRows
           aria-label="Search history"
@@ -332,7 +320,7 @@ export function SearchHistory({
           <p className="m-0 px-3 py-2 text-xs text-faint">Ask a member’s assistant</p>
           <VirtualRows
             items={people}
-            getKey={(member) => member.operator_id}
+            getKey={(member) => `${member.set.set_id}:${member.operator_id}`}
             rowHeight={44}
             overscan={3}
             className="w-64 overflow-y-auto"
@@ -342,13 +330,15 @@ export function SearchHistory({
                 variant="ghost"
                 className="h-11 w-full justify-start"
                 onClick={() => {
+                  setChosenSet(member.set.set_id)
                   setRecipient(member.operator_id)
                   setDraft(draft.replace(/(?:^|\s)@[^@\n]*$/, "").trimEnd())
                   setPicking(false)
                 }}
               >
                 <Avatar name={member.name} />
-                {member.name}
+                <span className="min-w-0 truncate">{member.name}</span>
+                <span className="ml-auto truncate text-xs text-faint">{member.set.name}</span>
               </Button>
             )}
           />
@@ -388,7 +378,7 @@ export function SearchHistory({
               </Button>
               {selected ? (
                 <Chip pressed removable onClick={() => setRecipient("")}>
-                  {selected.name}
+                  {selected.name} · {set?.name}
                 </Chip>
               ) : (
                 <span className="truncate text-[11px] text-faint">

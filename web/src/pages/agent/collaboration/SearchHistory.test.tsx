@@ -87,7 +87,7 @@ function setup() {
 it("routes an @mention to the member and keeps follow-ups attached to its question", async () => {
   const { privateSend } = setup()
   fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "@jor" } })
-  fireEvent.click(await screen.findByRole("button", { name: "Jordan Bravo" }))
+  fireEvent.click(await screen.findByRole("button", { name: /Jordan Bravo.*Sail/ }))
   fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
     target: { value: "Who has tuned Kubernetes?" },
   })
@@ -109,7 +109,7 @@ it("routes an @mention to the member and keeps follow-ups attached to its questi
 it("keeps the selected recipient with a draft across navigation", async () => {
   const first = setup()
   fireEvent.click(screen.getByRole("button", { name: "Mention a member" }))
-  fireEvent.click(await screen.findByRole("button", { name: "Jordan Bravo" }))
+  fireEvent.click(await screen.findByRole("button", { name: /Jordan Bravo.*Sail/ }))
   fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Saved question" } })
   first.unmount()
   const second = setup()
@@ -117,4 +117,41 @@ it("keeps the selected recipient with a draft across navigation", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Send" }))
   await screen.findByText("Saved question")
   expect(second.privateSend).not.toHaveBeenCalled()
+})
+it("takes the set from the @ choice without sending the question to private Codex", async () => {
+  const privateSend = vi.fn()
+  const data = demoCollaboration()
+  const create = vi.fn().mockResolvedValue({ id: "founders-search" })
+  const send = vi.fn().mockResolvedValue(true)
+  render(
+    <SearchHistory
+      searchId="backend-demo"
+      title="Backend engineers"
+      onPrivateSend={privateSend}
+      collaboration={{
+        data,
+        create,
+        send,
+        busy: false,
+        answering: null,
+        pending: [],
+        loading: false,
+        error: undefined,
+        answer: vi.fn(),
+        resend: vi.fn(),
+      }}
+    />,
+  )
+  expect(screen.queryByRole("combobox")).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "Mention a member" }))
+  fireEvent.click(await screen.findByRole("button", { name: /Jordan Bravo.*Founders/ }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Message" }), {
+    target: { value: "Who do you know?" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Send" }))
+  await waitFor(() =>
+    expect(send).toHaveBeenCalledWith("founders-search", "Who do you know?", "jordan", undefined),
+  )
+  expect(create).toHaveBeenCalledWith("founders-demo", "backend-demo", "Backend engineers")
+  expect(privateSend).not.toHaveBeenCalled()
 })
