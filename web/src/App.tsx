@@ -2,6 +2,7 @@ import { useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
 import { DebugMenu, Sidebar, SignInModal } from "@/components/shared"
+import { isDesktop } from "@/lib/desktop"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
@@ -33,11 +34,23 @@ function Shell() {
 // review flow at / stands outside the shell: it is the user's entry point, with its own top
 // bar. Any other client-side path lands on HOME.
 export function App() {
+  // The desktop app has no browser bar to leave the review by: there it keeps the side nav.
+  const desktop = isDesktop()
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<ReviewPage />} />
+        {desktop ? null : <Route path="/" element={<ReviewPage />} />}
         <Route element={<Shell />}>
+          {desktop ? (
+            <Route
+              path="/"
+              element={
+                <div className="min-h-0 overflow-y-auto">
+                  <ReviewPage />
+                </div>
+              }
+            />
+          ) : null}
           <Route path="/install" element={<InstallPage />} />
           <Route path="/agent" element={<AgentPage />} />
           <Route path="/people" element={<PeoplePage />}>

@@ -267,17 +267,6 @@ export function InstallPage() {
         ) : null}
         {data && !error && isDesktop() ? <DesktopSetup data={data} /> : null}
         {data && !welcome ? (
-          <div className="install-account">
-            {data.account_email ? <p>{data.account_email}</p> : null}
-            {data.network_name ? (
-              <p>
-                {data.network_name}
-                {data.person_count != null ? ` · ${data.person_count.toLocaleString()} people` : ""}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        {data && !welcome ? (
           <>
             {/* The button keeps its slot even with nothing folded, so the list never moves. */}
             <button

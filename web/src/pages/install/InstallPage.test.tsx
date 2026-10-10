@@ -459,9 +459,9 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("casey@example.com")
-    expect(screen.getByText("Personal Network · 0 people")).toBeTruthy()
-    expect(screen.getByText("Installing Powerpacks")).toBeTruthy()
+    await screen.findByText("Installing Powerpacks")
+    // The account and network show in the sidebar footer, not here.
+    expect(screen.queryByText("casey@example.com")).toBeNull()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
 
     status = {
@@ -473,7 +473,7 @@ describe("installation progress", () => {
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Powerpacks is ready" })
-    expect(screen.getByText("Personal Network · 4 people")).toBeTruthy()
+    expect(screen.queryByText("Personal Network · 4 people")).toBeNull()
     expect(screen.getByText(status.message)).toBeTruthy()
     expect(container.querySelector(".enrich-orbit")).toBeNull()
   })

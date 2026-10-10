@@ -59,14 +59,6 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.install-page .install-account {
-  font-size: 13px;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-.install-page .install-account p {
-  margin: 4px 0;
-}
 .install-page .install-steps li {
   display: grid;
   grid-template-rows: 1fr;
