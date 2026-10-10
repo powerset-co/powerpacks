@@ -63,8 +63,8 @@ export function AsciiForm({
           const ry = y * cx - rz * sx
           const zz = y * sx + rz * cx
           const scale = 1 / (5 - zz)
-          const col = Math.floor(COLS / 2 + rx * scale * 82)
-          const row = Math.floor(ROWS / 2 + ry * scale * 54)
+          const col = Math.floor(COLS / 2 + rx * scale * 68)
+          const row = Math.floor(ROWS / 2 + ry * scale * 44)
           if (col < 0 || col >= COLS || row < 0 || row >= ROWS) continue
           const cell = row * COLS + col
           if (zz <= (depth[cell] ?? -Infinity)) continue
