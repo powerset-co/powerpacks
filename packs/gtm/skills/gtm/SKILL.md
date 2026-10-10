@@ -115,6 +115,12 @@ business-operations leadership (COO or Head/VP/Director of Ops/BizOps). Exclude
 specialized revenue, sales, GTM, clinical, product, engineering, IT, people,
 facilities and workplace operations unless the user requests that department.
 
+Industry exclusions may need `semantic_traits` as well as literal
+`excluded_company_terms`: `finance` does not match `financial`. For "exclude
+accounting and finance firms", require evidence that the matching employer is
+neither an accounting nor a financial-services firm; missing industry evidence
+stays unknown. Do not infer the employer's industry from the person's job title.
+
 For "all employees at a company", require current staff employment; pure
 investor, adviser/advisor and board associations do not establish employment.
 Express that eligibility in the predicates, using title exclusions where they
