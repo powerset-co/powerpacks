@@ -1,7 +1,7 @@
 //! The Codex agent: one `codex app-server` child speaking JSON-RPC (JSONL, no "jsonrpc" field)
-//! over stdio. Sign-in is Codex's own ChatGPT device-code flow: `account/login/start` returns a
-//! short code and the ChatGPT device page to enter it on; Codex polls for the approval and
-//! `account/login/completed` arrives when it lands.
+//! over stdio. Sign-in is Codex's own ChatGPT browser flow: `account/login/start` returns the
+//! sign-in URL; Codex listens on localhost for ChatGPT's redirect and `account/login/completed`
+//! arrives when it lands. Unlike device-code sign-in, no account setting has to allow it.
 //!
 //! Requests the page may send are allowlisted in `PAGE_METHODS`. Server notifications go to the
 //! page as `codex://notification`; server requests (approvals) as `codex://request`, answered
@@ -254,14 +254,14 @@ impl Codex {
         )
     }
 
-    /// Start ChatGPT device-code sign-in: `{loginId, userCode, verificationUrl}`. The page shows
-    /// the code and opens the URL in the system browser; `account/login/completed` ends it.
+    /// Start ChatGPT sign-in: `{loginId, authUrl}`. The page opens the URL in the system
+    /// browser; `account/login/completed` ends it.
     pub async fn login(&self, app: &AppHandle, cwd: Option<&Path>) -> Reply {
         self.call(
             app,
             cwd,
             "account/login/start",
-            json!({ "type": "chatgptDeviceCode" }),
+            json!({ "type": "chatgpt" }),
         )
         .await
     }

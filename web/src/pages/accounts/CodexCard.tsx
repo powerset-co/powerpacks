@@ -1,4 +1,4 @@
-import { DeviceCode } from "@/components/shared"
+import { ChatGptSignIn } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
@@ -37,7 +37,7 @@ export function CodexCard() {
       </div>
       {codex.login ? (
         <div className="mb-3 mt-3">
-          <DeviceCode codex={codex} compact />
+          <ChatGptSignIn codex={codex} compact />
         </div>
       ) : (
         <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">

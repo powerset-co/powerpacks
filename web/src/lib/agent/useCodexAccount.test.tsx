@@ -9,8 +9,7 @@ import { useCodexAccount } from "./useCodexAccount"
 
 const LOGIN = {
   loginId: "l1",
-  userCode: "ABCD-EFGH",
-  verificationUrl: "https://auth.openai.com/codex/device",
+  authUrl: "https://auth.openai.com/oauth/authorize?client_id=x",
 }
 
 // The agent-event handler the hook registered, for the test to feed a sign-in completion.
@@ -49,7 +48,7 @@ afterEach(() => {
 })
 
 describe("useCodexAccount", () => {
-  it("shows the device code and opens the browser, then clears it when the sign-in lands", async () => {
+  it("opens the sign-in page in the browser, then clears it when the sign-in lands", async () => {
     codexApi.fetchCodexStatus.mockResolvedValue({ installed: true, account: null })
     codexApi.startCodexLogin.mockResolvedValue(LOGIN)
     installApi.openExternal.mockResolvedValue(undefined)
@@ -59,7 +58,7 @@ describe("useCodexAccount", () => {
 
     act(() => result.current.connect())
     await waitFor(() => expect(result.current.login).toEqual(LOGIN))
-    expect(installApi.openExternal).toHaveBeenCalledWith(LOGIN.verificationUrl)
+    expect(installApi.openExternal).toHaveBeenCalledWith(LOGIN.authUrl)
 
     codexApi.fetchCodexStatus.mockResolvedValue({
       installed: true,
@@ -74,7 +73,7 @@ describe("useCodexAccount", () => {
     )
   })
 
-  it("cancel ends the sign-in with Codex and drops the code", async () => {
+  it("cancel ends the sign-in with Codex and drops it", async () => {
     codexApi.fetchCodexStatus.mockResolvedValue({ installed: true, account: null })
     codexApi.startCodexLogin.mockResolvedValue(LOGIN)
     codexApi.cancelCodexLogin.mockResolvedValue(undefined)

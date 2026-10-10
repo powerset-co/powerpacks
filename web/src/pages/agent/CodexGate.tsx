@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { DeviceCode, EmptyState, PowersetMark } from "@/components/shared"
+import { ChatGptSignIn, EmptyState, PowersetMark } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { CodexAccountState } from "@/lib/agent/useCodexAccount"
 
@@ -46,7 +46,7 @@ export function CodexGate({ codex }: { codex: CodexAccountState }) {
   return (
     <Panel title="Connect your ChatGPT account">
       {codex.login ? (
-        <DeviceCode codex={codex} />
+        <ChatGptSignIn codex={codex} />
       ) : (
         <>
           <p className="m-0 text-muted-foreground">

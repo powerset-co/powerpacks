@@ -32,26 +32,19 @@ export async function fetchCodexStatus(): Promise<CodexStatus> {
   return decodeStatus(await invoke("codex_status"))
 }
 
-/** A ChatGPT device-code sign-in in progress (account/login/start, type chatgptDeviceCode). */
+/** A ChatGPT sign-in in progress (account/login/start, type chatgpt). */
 export interface CodexLogin {
   loginId: string
-  /** The one-time code the user types on the device page. */
-  userCode: string
-  /** ChatGPT's device page, opened in the system browser. */
-  verificationUrl: string
+  /** ChatGPT's sign-in page, opened in the system browser. */
+  authUrl: string
 }
 
-/** Starts ChatGPT device-code sign-in; Codex polls for the approval and reports it done. */
+/** Starts ChatGPT sign-in; Codex catches the browser's redirect and reports it done. */
 export async function startCodexLogin(): Promise<CodexLogin> {
   const login = await invoke("codex_login")
-  if (
-    !isRecord(login) ||
-    typeof login.loginId !== "string" ||
-    typeof login.userCode !== "string" ||
-    typeof login.verificationUrl !== "string"
-  )
-    throw new Error("Codex returned no sign-in code.")
-  return { loginId: login.loginId, userCode: login.userCode, verificationUrl: login.verificationUrl }
+  if (!isRecord(login) || typeof login.loginId !== "string" || typeof login.authUrl !== "string")
+    throw new Error("Codex returned no sign-in page.")
+  return { loginId: login.loginId, authUrl: login.authUrl }
 }
 
 export async function cancelCodexLogin(loginId: string): Promise<void> {

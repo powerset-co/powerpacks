@@ -49,7 +49,7 @@ async fn codex_status(
     codex.status(&app, boot.root().as_deref()).await
 }
 
-/// Starts ChatGPT device-code sign-in; the page shows `userCode` and opens `verificationUrl`.
+/// Starts ChatGPT sign-in; the page opens `authUrl` in the system browser.
 #[tauri::command]
 async fn codex_login(
     app: AppHandle,

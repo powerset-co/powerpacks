@@ -1,6 +1,5 @@
-// The Codex account: who is signed in, and ChatGPT device-code sign-in: the app shows a code,
-// the user enters it on ChatGPT's device page in the system browser, and Codex reports the
-// sign-in done. Shared by the Agent page's gate and the Accounts page's Codex card.
+// The Codex account: who is signed in, and ChatGPT sign-in: the app opens ChatGPT's sign-in
+// page in the system browser and Codex reports the sign-in done. Shared by the Agent page's gate and the Accounts page's Codex card.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useState } from "react"
@@ -22,11 +21,11 @@ const CODEX_KEY = ["codex"] as const
 export interface CodexAccountState {
   status: CodexStatus | undefined
   loading: boolean
-  /** The sign-in in progress: its code and device page; null when none. */
+  /** The sign-in in progress; null when none. */
   login: CodexLogin | null
   error: string | null
   connect: () => void
-  /** Open the device page in the system browser (again). */
+  /** Open the sign-in page in the system browser (again). */
   openBrowser: () => void
   cancel: () => void
   signOut: () => void
@@ -73,12 +72,12 @@ export function useCodexAccount(): CodexAccountState {
       startCodexLogin()
         .then((started) => {
           setLogin(started)
-          return openExternal(started.verificationUrl)
+          return openExternal(started.authUrl)
         })
         .catch(failed)
     },
     openBrowser: () => {
-      if (login) openExternal(login.verificationUrl).catch(failed)
+      if (login) openExternal(login.authUrl).catch(failed)
     },
     cancel: () => {
       if (login) run(cancelCodexLogin(login.loginId))
