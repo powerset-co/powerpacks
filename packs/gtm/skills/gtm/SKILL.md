@@ -66,17 +66,19 @@ provider. Stored profile hydration also remains free. `sales_nav` retrieves
 authorized extended LinkedIn leads from cache by default; a cache miss needs
 `allow_provider_calls` and a positive `max_provider_calls` budget before a
 Sales Navigator provider request. Authorized missing-profile hydration may use
-RapidAPI or Unipile within that same provider-call cap. Include `sales_nav` when
+RapidAPI or Unipile within that same provider-call cap, with at most four profile
+lookups in flight. Sales Navigator pages remain sequential. Include `sales_nav` when
 extended-network retrieval is requested. Cached and authorized provider phases use the same
 predicates in separate bounded requests. Within each source request,
 `max_pages` is shared across its accounts or companies. A cursor resumes the
 chosen account/company; it does not reset the criteria or selected candidates.
 
 Semantic scoring has a separate `max_semantic_calls` budget, defaulting to zero,
-with at most two profiles per call. A positive budget reviews at most
-`2 × max_semantic_calls` uncached eligible people in their current order;
-remaining people stay unknown with partial semantic coverage. A later refinement
-can reuse cached decisions and review the remaining people.
+with at most two matching roles per call. A person with multiple eligible roles
+is checked against each role; the winning role supplies the displayed employer
+and headcount. A positive budget reviews at most `2 × max_semantic_calls`
+uncached roles in their current order. Unreviewed roles stay unknown with partial
+semantic coverage. A later refinement can reuse decisions and review the remainder.
 Select `semantic_model` explicitly or use the configured `GTM_SCORING_MODEL`;
 there is no implicit model. Cached semantic decisions can be reused. Report the
 returned semantic coverage, calls, cache hits, model, input/output tokens,
