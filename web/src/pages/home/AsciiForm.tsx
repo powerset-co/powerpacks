@@ -1,14 +1,25 @@
 import { useEffect, useRef } from "react"
 
+import { KNOT, type Form } from "./forms"
+
 const WIDTH = 960
 const HEIGHT = 580
 const COLS = 120
 const ROWS = 58
-const GLYPHS = ".:+=*ox%#@"
+const GLYPHS = "powerset%$"
 
 /** A sampled torus knot, projected into a character grid with a depth buffer. */
-export function AsciiForm() {
+export function AsciiForm({
+  form = KNOT,
+  paused = false,
+  speed = 1,
+}: {
+  form?: Form
+  paused?: boolean
+  speed?: number
+}) {
   const canvas = useRef<HTMLCanvasElement>(null)
+  const elapsed = useRef(0)
   useEffect(() => {
     const element = canvas.current
     if (!element) return
@@ -20,7 +31,6 @@ export function AsciiForm() {
     const pointer = { x: 0, y: 0 }
     let frame = 0
     let last = -Infinity
-    let elapsed = 0
     const move = (event: PointerEvent) => {
       const rect = element.getBoundingClientRect()
       pointer.x = (event.clientX - rect.left) / rect.width - 0.5
@@ -32,10 +42,10 @@ export function AsciiForm() {
     }
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw)
-      if (document.hidden || now - last < 33 || (motion.matches && last !== -Infinity)) return
-      elapsed += last === -Infinity ? 0 : Math.min(now - last, 50) / 1000
+      if (document.hidden || now - last < 33 || ((motion.matches || paused) && last !== -Infinity)) return
+      elapsed.current += last === -Infinity ? 0 : Math.min(now - last, 50) / 1000
       last = now
-      const t = elapsed
+      const t = elapsed.current * speed
       depth.fill(-Infinity)
       const yaw = t * 0.38 + pointer.x * 1.1
       const pitch = 0.55 + Math.sin(t * 0.37) * 0.4 + pointer.y * 0.8
@@ -45,14 +55,9 @@ export function AsciiForm() {
         sx = Math.sin(pitch)
       for (let i = 0; i < 260; i++) {
         const u = (i / 260) * Math.PI * 2
-        const radial = 1.65 + 0.55 * Math.cos(3 * u + t * 0.65)
-        const tube = 0.32 + 0.1 * Math.sin(4 * u - t * 1.4)
         for (let j = 0; j < 22; j++) {
           const v = (j / 22) * Math.PI * 2
-          const r = radial + tube * Math.cos(v)
-          const x = r * Math.cos(2 * u)
-          const y = r * Math.sin(2 * u)
-          const z = 0.65 * Math.sin(3 * u + t * 0.65) + tube * Math.sin(v)
+          const [x, y, z] = form.point(u, v, t)
           const rx = x * cy + z * sy
           const rz = z * cy - x * sy
           const ry = y * cx - rz * sx
@@ -80,7 +85,7 @@ export function AsciiForm() {
           brightness > 0.82
             ? `rgba(255,220,185,${brightness})`
             : `rgba(242,80,42,${0.22 + brightness * 0.78})`
-        context.fillText(GLYPHS.charAt(Math.floor(brightness * (GLYPHS.length - 1))), x, y)
+        context.fillText(GLYPHS.charAt((cell % COLS) % GLYPHS.length), x, y)
       }
     }
     const changeMotion = () => {
@@ -96,7 +101,7 @@ export function AsciiForm() {
       element.removeEventListener("pointerleave", leave)
       motion.removeEventListener("change", changeMotion)
     }
-  }, [])
+  }, [form, paused, speed])
   return (
     <canvas
       ref={canvas}

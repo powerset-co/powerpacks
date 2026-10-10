@@ -30,7 +30,7 @@ WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
 # The paths the React router owns; the server answers each with the shell page.
-PAGE_PATHS = frozenset({"/", "/home", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks", "/agent"})
+PAGE_PATHS = frozenset({"/", "/home", "/home/variations", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks", "/agent"})
 ASSETS = {
     "app.js": (WEB_DIST / "app.js", "text/javascript; charset=utf-8"),
     "app.css": (WEB_DIST / "app.css", "text/css; charset=utf-8"),
