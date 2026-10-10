@@ -110,10 +110,19 @@ For "partners who explicitly practice litigation", plan both role and specialty:
 person/role evidence; the firm's litigation practice does not establish theirs.
 
 For company-wide "Head of Operations", `role_function: "operations"` alone is
-too broad. Add a semantic requirement for current company-wide operations or
-business-operations leadership (COO or Head/VP/Director of Ops/BizOps). Exclude
+too broad. Require explicit leadership-title alternatives AND the operations
+function, then semantic evidence of company-wide leadership. Do not infer
+leadership from early-employee or founding-BizOps language. Exclude
 specialized revenue, sales, GTM, clinical, product, engineering, IT, people,
 facilities and workplace operations unless the user requests that department.
+For the requested Bay Area, VC-backed, no-founder query with accounting/finance
+employer exclusions, preserve those predicates:
+
+```json
+{"titles": ["Head", "Director", "VP", "Vice President", "COO", "Chief Operating Officer"], "role_function": "operations", "is_current": true, "cities": ["San Francisco Bay Area"],
+ "company_entity_types": ["venture_backed_startup"], "excluded_titles": ["founder"], "excluded_company_terms": ["accounting", "finance", "financial", "wealth management"],
+ "semantic_traits": ["Current company-wide operations or business-operations leadership; exclude specialized departmental operations", "The matching employer is not an accounting, financial-services or wealth-management firm; missing industry evidence is unknown"]}
+```
 
 Industry exclusions may need `semantic_traits` as well as literal
 `excluded_company_terms`: `finance` does not match `financial`. For "exclude
