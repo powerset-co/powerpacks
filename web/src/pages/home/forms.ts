@@ -12,7 +12,12 @@ export const KNOT: Form = {
   description: "The original knot, breathing and twisting through itself.",
   point(u, v, t) {
     const r = 1.65 + 0.55 * cos(3 * u + t * 0.65) + (0.32 + 0.1 * sin(4 * u - t * 1.4)) * cos(v)
-    return [r * cos(2 * u), r * sin(2 * u), 0.65 * sin(3 * u + t * 0.65) + 0.35 * sin(v)]
+    const bend = 0.1 * sin(2 * u + t * 0.35)
+    return [
+      r * cos(2 * u) * (1 + 0.035 * sin(t * 0.4)),
+      r * sin(2 * u) + bend,
+      0.65 * sin(3 * u + t * 0.65) + 0.35 * sin(v) + bend,
+    ]
   },
 }
 export const CODEX_FORMS: Form[] = [

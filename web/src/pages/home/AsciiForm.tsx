@@ -50,7 +50,7 @@ export function AsciiForm({
       pointer.x += (target.x - pointer.x) * blend
       pointer.y += (target.y - pointer.y) * blend
       last = now
-      const t = elapsed.current * speed
+      const t = elapsed.current * speed * 0.7
       depth.fill(-Infinity)
       const yaw = t * 0.38 + pointer.x * 1.1
       const pitch = 0.55 + Math.sin(t * 0.37) * 0.4 + pointer.y * 0.8
