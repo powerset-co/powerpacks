@@ -20,6 +20,13 @@ Use this for any people search request:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
+For explicit combined/warm+cold GTM prospecting or `$gtm`, follow
+`packs/gtm/skills/gtm/SKILL.md` and stop here. An exact-person "who can intro me"
+request in an extended or combined network uses GTM before the profile lookup
+below. Ordinary named-person lookups remain read-only dossier lookups.
+Explicit local/offline and network-only requests retain this skill's backend
+and population scope.
+
 For a named person's profile, dossier, or "tell me everything about <person>",
 follow `packs/search/skills/search/person-lookup.md` and stop here. This read-only
 lookup skips search preparation, scoring, and `decision.json`. Requests for

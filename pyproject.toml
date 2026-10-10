@@ -36,6 +36,7 @@ dev = [
 [tool.mypy]
 python_version = "3.12"
 files = [
+    "packs/gtm/primitives/discover",
     "packs/ingestion/primitives/deep_context_v2",
     "packs/ingestion/primitives/share",
     "packs/indexing/primitives/upload_powerset",
