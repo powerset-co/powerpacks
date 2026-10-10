@@ -92,8 +92,9 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.share.web.server import share_routes
     from packs.ingestion.primitives.share.web.sets import CloudError
     from packs.search.primitives.deep_search.results_web.api import search_api
-    from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, _send_json, search_routes
+    from packs.search.primitives.deep_search.results_web.server import _send_json, search_routes
     from packs.shared.web import asks_loop
+    from packs.shared.web.collaboration import Collaboration, CollaborationRoutes
 
     load_env()
     data_root: Path = root / ".powerpacks"
@@ -102,12 +103,14 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     # written for one request at a time. It opens on the first request after the store appears.
     store_lock = threading.Lock()
     network: dict[str, tuple[ReviewApi, Any]] = {}
+    collaboration: dict[str, CollaborationRoutes] = {}
 
     def network_routes() -> tuple[ReviewApi, Any] | None:
         """Called under the store lock. The Ask the Set daemon starts with the store too."""
         if "routes" not in network and (root / STORE).is_file():
             conn = open_store(root / STORE, shared=True)
             network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
+            collaboration["routes"] = CollaborationRoutes(Collaboration(network["routes"][1].sets, searches))
             threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
                              name="asks", daemon=True).start()
         return network.get("routes")
@@ -120,7 +123,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 raise CloudError(NO_NETWORK["error"])
             return getattr(routes[1].sets, name)
 
-    searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
+    searches = search_routes(data_root / "deep-search", base="/searches")
     searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
@@ -150,7 +153,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 routes = network_routes()
                 if routes is None:
                     _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
-                elif not routes[1].get(self, parsed):
+                elif not collaboration["routes"].get(self, parsed) and not routes[1].get(self, parsed):
                     routes[0].get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
@@ -165,7 +168,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 routes = network_routes()
                 if routes is None:
                     _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
-                elif not routes[1].post(self, parsed):
+                elif not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
                     routes[0].post(self, parsed)
 
         def log_message(self, fmt: str, *args: object) -> None:

@@ -5,6 +5,7 @@ import { CLOSE_MARK } from "@/components/shared"
 import { groupThreads } from "@/lib/agent/groups"
 import { newChat, openChat, openSearch, useAgent } from "@/lib/agent/store"
 import { THREADS_KEY, useThreads } from "@/lib/agent/useThreads"
+import type { Conversation } from "@/lib/api/collaboration"
 import { archiveThread } from "@/lib/api/codex"
 import { runDate } from "@/lib/searches/copy"
 import { cn } from "@/lib/utils"
@@ -13,12 +14,13 @@ import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { ComposeIcon } from "./icons"
 
 interface ChatSidebarProps {
+  sharedSearches: Conversation[]
   open: boolean
   onClose: () => void
 }
 
 /** New chat and the past chats by date. A column on wide windows, a drawer on narrow ones. */
-export function ChatSidebar({ open, onClose }: ChatSidebarProps) {
+export function ChatSidebar({ open, onClose, sharedSearches }: ChatSidebarProps) {
   const agent = useAgent()
   const client = useQueryClient()
   const threads = useThreads()
@@ -93,6 +95,22 @@ export function ChatSidebar({ open, onClose }: ChatSidebarProps) {
             </ul>
           </section>
         ))}
+        {sharedSearches
+          .filter(
+            (item, index) =>
+              !searches.data?.some((card) => card.run_id === item.search_id) &&
+              sharedSearches.findIndex((other) => other.search_id === item.search_id) === index,
+          )
+          .map((item) => (
+            <button
+              key={item.search_id}
+              type="button"
+              onClick={() => pick(() => openSearch(item.search_id))}
+              className="block w-full truncate rounded-[var(--radius-s)] border-0 bg-transparent px-3 py-2 text-left text-[13px] hover:bg-secondary"
+            >
+              {item.title}
+            </button>
+          ))}
         {searches.data?.length ? (
           <section className="mb-2">
             <h2 className="m-0 px-3 pb-1 pt-3 text-[11px] font-semibold text-faint">Searches</h2>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
 
@@ -6,17 +6,36 @@ import { SendIcon, StopIcon } from "./icons"
 
 const MAX_HEIGHT_PX = 240
 
-interface ComposerProps {
+export interface ComposerProps {
   running: boolean
-  fullAccess: boolean
-  onSend: (text: string) => void
-  onStop: () => void
-  onFullAccess: (on: boolean) => void
+  fullAccess?: boolean
+  onSend: ((text: string) => void) | ((text: string) => Promise<boolean>)
+  onStop?: () => void
+  onFullAccess?: (on: boolean) => void
+  footer?: ReactNode
+  placeholder?: string
+  draft?: string
+  initialText?: string
+  onDraftChange?: (text: string) => void
+  disabled?: boolean
 }
 
 /** The message box: Enter sends, Shift+Enter breaks the line; Stop interrupts a running turn. */
-export function Composer({ running, fullAccess, onSend, onStop, onFullAccess }: ComposerProps) {
-  const [text, setText] = useState("")
+export function Composer({
+  running,
+  fullAccess = false,
+  onSend,
+  onStop,
+  onFullAccess,
+  footer,
+  placeholder,
+  initialText = "",
+  draft,
+  onDraftChange,
+  disabled = false,
+}: ComposerProps) {
+  const [localText, setText] = useState(initialText)
+  const text = draft ?? localText
   const box = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -28,17 +47,20 @@ export function Composer({ running, fullAccess, onSend, onStop, onFullAccess }: 
 
   useEffect(() => box.current?.focus(), [])
 
-  const submit = () => {
+  const submit = async () => {
     const message = text.trim()
-    if (!message || running) return
-    onSend(message)
+    if (!message || running || disabled) return
+    const sent = await onSend(message)
+    if (sent === false) return
     setText("")
+    onDraftChange?.("")
+    box.current?.focus()
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
-      submit()
+      void submit()
     }
   }
 
@@ -47,7 +69,7 @@ export function Composer({ running, fullAccess, onSend, onStop, onFullAccess }: 
       className="mx-auto w-full max-w-[760px] px-5 pb-5 max-[680px]:px-3 max-[680px]:pb-3"
       onSubmit={(event) => {
         event.preventDefault()
-        submit()
+        void submit()
       }}
     >
       <div className="flex flex-col rounded-[20px] border border-line-strong bg-card shadow-[var(--shadow-2)] transition-colors duration-fast ease-out focus-within:border-[color-mix(in_srgb,var(--primary)_45%,var(--line-strong))]">
@@ -59,29 +81,34 @@ export function Composer({ running, fullAccess, onSend, onStop, onFullAccess }: 
           ref={box}
           rows={1}
           value={text}
-          placeholder="Ask about anyone in your network…"
-          onChange={(event) => setText(event.target.value)}
+          placeholder={placeholder ?? "Ask about anyone in your network…"}
+          onChange={(event) => {
+            setText(event.target.value)
+            onDraftChange?.(event.target.value)
+          }}
           onKeyDown={onKeyDown}
           className="max-h-[240px] min-h-[52px] resize-none border-0 bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-[1.5] text-foreground outline-none placeholder:text-faint focus-visible:outline-none"
         />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
-          <button
-            type="button"
-            aria-pressed={fullAccess}
-            onClick={() => onFullAccess(!fullAccess)}
-            title={fullAccess ? "Commands run without asking" : "Codex asks before running commands"}
-            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-fast ease-out ${
-              fullAccess
-                ? "border-[color-mix(in_srgb,var(--warn)_50%,transparent)] text-foreground"
-                : "border-line text-faint hover:text-muted-foreground"
-            }`}
-          >
-            <span
-              aria-hidden
-              className={`size-1.5 rounded-full ${fullAccess ? "bg-warn" : "bg-line-strong"}`}
-            />
-            Full access
-          </button>
+          {footer ?? (
+            <button
+              type="button"
+              aria-pressed={fullAccess}
+              onClick={() => onFullAccess?.(!fullAccess)}
+              title={fullAccess ? "Commands run without asking" : "Codex asks before running commands"}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-fast ease-out ${
+                fullAccess
+                  ? "border-[color-mix(in_srgb,var(--warn)_50%,transparent)] text-foreground"
+                  : "border-line text-faint hover:text-muted-foreground"
+              }`}
+            >
+              <span
+                aria-hidden
+                className={`size-1.5 rounded-full ${fullAccess ? "bg-warn" : "bg-line-strong"}`}
+              />
+              Full access
+            </button>
+          )}
           {running ? (
             <Button type="button" size="icon" shape="pill" onClick={onStop} aria-label="Stop">
               <StopIcon className="!size-3" />
@@ -92,7 +119,7 @@ export function Composer({ running, fullAccess, onSend, onStop, onFullAccess }: 
               size="icon"
               shape="pill"
               variant="primary"
-              disabled={!text.trim()}
+              disabled={disabled || !text.trim()}
               aria-label="Send"
             >
               <SendIcon />

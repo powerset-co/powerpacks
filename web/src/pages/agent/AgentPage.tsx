@@ -19,6 +19,8 @@ import { Composer } from "./Composer"
 import { FullAccessTip } from "./FullAccessTip"
 import { ComposeIcon, SidebarIcon } from "./icons"
 import { Transcript } from "./Transcript"
+import { SearchHistory } from "./collaboration/SearchHistory"
+import { useCollaboration } from "./collaboration/useCollaboration"
 
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
@@ -88,7 +90,17 @@ function ChatHeader({ onToggle, runTitle }: { onToggle: () => void; runTitle: st
   )
 }
 
-function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: string | null }) {
+function Conversation({
+  onToggle,
+  runTitle,
+  runId,
+  collaboration,
+}: {
+  onToggle: () => void
+  runTitle: string | null
+  runId: string | null
+  collaboration: ReturnType<typeof useCollaboration>
+}) {
   const agent = useAgent()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -104,6 +116,44 @@ function Conversation({ onToggle, runTitle }: { onToggle: () => void; runTitle: 
     const element = scroller.current
     if (element && pinned.current) element.scrollTop = element.scrollHeight
   }, [agent.entries, agent.approvals, waiting])
+
+  if (runId)
+    return (
+      <section className="flex min-h-0 min-w-0 flex-col">
+        <ChatHeader onToggle={onToggle} runTitle={runTitle} />
+        <SearchHistory
+          key={runId}
+          searchId={runId}
+          title={runTitle ?? "Search"}
+          collaboration={collaboration}
+          onPrivateSend={send}
+          composer={{
+            running: agent.running,
+            fullAccess: agent.fullAccess,
+            onFullAccess: fullAccess,
+            onStop: () => void stop(),
+          }}
+        >
+          {agent.entries.length > 0 && <Transcript entries={agent.entries} />}
+          {tip.shown && agent.approvals.length > 0 && !agent.fullAccess && (
+            <FullAccessTip onEnable={() => fullAccess(true)} onDismiss={tip.dismiss} />
+          )}
+          {agent.approvals.map((approval) => (
+            <ApprovalCard
+              key={String(approval.requestId)}
+              approval={approval}
+              onAnswer={(choice) => void answer(approval, choice)}
+            />
+          ))}
+          {waiting && (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Spinner />
+              Working
+            </p>
+          )}
+        </SearchHistory>
+      </section>
+    )
 
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
@@ -179,12 +229,16 @@ function SignedInAgent() {
 /** The chats, the open chat, and the search it ran beside it (a quick search is one pond). */
 function Workspace() {
   const agent = useAgent()
+  const collaboration = useCollaboration()
   const catalog = useCatalog()
   const client = useQueryClient()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const listed = useMemo(() => new Set(catalog.data?.map(({ run_id }) => run_id)), [catalog.data])
   const runId = chatRun(agent.entries, listed) ?? agent.searchRun
-  const runTitle = catalog.data?.find((card) => card.run_id === runId)?.title ?? null
+  const runTitle =
+    catalog.data?.find((card) => card.run_id === runId)?.title ??
+    collaboration.data?.conversations.find((item) => item.search_id === runId)?.title ??
+    null
 
   // A search saves when its turn ends; look for it then.
   useEffect(() => {
@@ -195,14 +249,19 @@ function Workspace() {
   // column (the window goes down to 960px); the list and the header's buttons read `data-run`.
   return (
     <main
-      data-run={runId ? "" : undefined}
+      data-run={runId && listed.has(runId) ? "" : undefined}
       className={cn(
         "group/agent grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1",
         runId &&
+          listed.has(runId) &&
           "grid-cols-[260px_minmax(340px,420px)_minmax(0,1fr)] max-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]",
       )}
     >
-      <ChatSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <ChatSidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        sharedSearches={collaboration.data?.conversations ?? []}
+      />
       {sidebarOpen && (
         <button
           type="button"
@@ -211,8 +270,13 @@ function Workspace() {
           className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden group-data-[run]/agent:max-[1100px]:block"
         />
       )}
-      <Conversation onToggle={() => setSidebarOpen((open) => !open)} runTitle={runTitle} />
-      {runId && (
+      <Conversation
+        onToggle={() => setSidebarOpen((open) => !open)}
+        runTitle={runTitle}
+        runId={runId}
+        collaboration={collaboration}
+      />
+      {runId && listed.has(runId) && (
         <div className="searches-main border-l border-line" aria-label="Search results">
           <RunColumn runId={runId} />
         </div>

@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Literal, Union
 
+from packs.powerset.primitives.agent_inbox.collaboration_messages import SetChat, SetQuestion, SetQuestionReply
+
 MAX_TEXT = 500           # a question, a set name, an email
 MAX_CANDIDATES = 50      # pinned candidates in one ask
 MAX_MEMBERS = 50         # people in one set
@@ -276,11 +278,12 @@ class DebugResult:
 
 
 Payload = Union[SetInvite, SetInviteReply, SetDeleted, SetLeft, SetMembers, Ask, AskAnswer, DebugRequest,
-                DebugResult]
+                DebugResult, SetChat, SetQuestion, SetQuestionReply]
 KINDS: dict[str, type[Payload]] = {
     "set_invite": SetInvite, "set_invite_reply": SetInviteReply, "set_deleted": SetDeleted, "set_left": SetLeft,
     "set_members": SetMembers,
     "ask": Ask, "ask_answer": AskAnswer, "debug_request": DebugRequest, "debug_result": DebugResult,
+    "set_chat": SetChat, "set_question": SetQuestion, "set_question_reply": SetQuestionReply,
 }
 
 

@@ -129,6 +129,19 @@ async fn codex_open_thread(
         .await
 }
 
+/// Explicit recipient click: answer a pending shared question in an isolated read-only thread.
+#[tauri::command]
+async fn codex_answer_question(
+    app: AppHandle,
+    boot: State<'_, Arc<Boot>>,
+    codex: State<'_, Codex>,
+    question_id: String,
+) -> Result<Value, String> {
+    codex
+        .answer_question(&app, &boot::require_root(&boot)?, &question_id)
+        .await
+}
+
 #[tauri::command]
 async fn codex_threads(
     app: AppHandle,
@@ -348,6 +361,7 @@ pub fn run() {
             codex_start_thread,
             codex_open_thread,
             codex_threads,
+            codex_answer_question,
             codex_call,
             codex_respond,
             signin_open,

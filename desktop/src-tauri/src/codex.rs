@@ -21,6 +21,9 @@ use tokio::sync::oneshot;
 
 use crate::paths;
 
+mod questions;
+use questions::QuestionEvents;
+
 /// Where this app keeps Codex's sign-in, config and chat history, under the data folder.
 const CODEX_HOME: &str = ".powerpacks/desktop/codex";
 const CREDENTIALS_IN_FILE: &str = "cli_auth_credentials_store=file";
@@ -52,11 +55,16 @@ open a URL in a browser: the app already shows every Powerpacks page.";
 const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;
-type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Reply>>>>;
+struct Waiter {
+    reply: oneshot::Sender<Reply>,
+    question_thread: bool,
+}
+type Pending = Arc<Mutex<HashMap<i64, Waiter>>>;
 
 struct Connection {
     child: Child,
-    stdin: Mutex<ChildStdin>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    questions: Arc<QuestionEvents>,
     pending: Pending,
     next_id: AtomicI64,
     alive: Arc<AtomicBool>,
@@ -82,26 +90,36 @@ impl Connection {
         let mut child = command
             .spawn()
             .map_err(|error| format!("Could not start Codex: {error}"))?;
-        let stdin = child.stdin.take().ok_or("Codex has no stdin")?;
+        let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("Codex has no stdin")?));
+        let questions = Arc::new(QuestionEvents::default());
         let stdout = child.stdout.take().ok_or("Codex has no stdout")?;
         let pending: Pending = Arc::default();
         let alive = Arc::new(AtomicBool::new(true));
         let (reader_pending, reader_alive, app) = (pending.clone(), alive.clone(), app.clone());
+        let (reader_questions, reader_stdin) = (questions.clone(), stdin.clone());
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                    route(&app, &reader_pending, message);
+                    route(
+                        &app,
+                        &reader_pending,
+                        &reader_questions,
+                        &reader_stdin,
+                        message,
+                    );
                 }
             }
             reader_alive.store(false, Ordering::SeqCst);
             for (_, waiter) in reader_pending.lock().expect("pending").drain() {
-                let _ = waiter.send(Err("Codex stopped.".into()));
+                let _ = waiter.reply.send(Err("Codex stopped.".into()));
             }
+            reader_questions.stopped();
             let _ = app.emit(EXIT_EVENT, ());
         });
         Ok(Self {
             child,
-            stdin: Mutex::new(stdin),
+            stdin,
+            questions,
             pending,
             next_id: AtomicI64::new(1),
             alive,
@@ -116,10 +134,23 @@ impl Connection {
     }
 
     async fn request(&self, method: &str, params: Value) -> Reply {
+        self.request_inner(method, params, false).await
+    }
+
+    async fn request_inner(&self, method: &str, params: Value, question_thread: bool) -> Reply {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
-        self.pending.lock().expect("pending").insert(id, sender);
-        self.write(&json!({ "id": id, "method": method, "params": params }))?;
+        self.pending.lock().expect("pending").insert(
+            id,
+            Waiter {
+                reply: sender,
+                question_thread,
+            },
+        );
+        if let Err(error) = self.write(&json!({ "id": id, "method": method, "params": params })) {
+            self.pending.lock().expect("pending").remove(&id);
+            return Err(error);
+        }
         match tokio::time::timeout(REQUEST_TIMEOUT, receiver).await {
             Ok(Ok(reply)) => reply,
             Ok(Err(_)) => Err("Codex stopped.".into()),
@@ -138,7 +169,19 @@ impl Drop for Connection {
 }
 
 /// A response settles its request; anything with a method goes to the page.
-fn route(app: &AppHandle, pending: &Pending, message: Value) {
+fn route(
+    app: &AppHandle,
+    pending: &Pending,
+    questions: &QuestionEvents,
+    stdin: &Mutex<ChildStdin>,
+    message: Value,
+) {
+    if questions.route(&message, |reply| {
+        let mut stdin = stdin.lock().expect("codex stdin");
+        let _ = writeln!(stdin, "{reply}").and_then(|()| stdin.flush());
+    }) {
+        return;
+    }
     let method = message
         .get("method")
         .and_then(Value::as_str)
@@ -174,7 +217,14 @@ fn route(app: &AppHandle, pending: &Pending, message: Value) {
                     .to_owned()),
                 None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
             };
-            let _ = waiter.send(reply);
+            if waiter.question_thread {
+                if let Ok(reply) = &reply {
+                    if let Some(thread_id) = reply.pointer("/thread/id").and_then(Value::as_str) {
+                        questions.register(thread_id);
+                    }
+                }
+            }
+            let _ = waiter.reply.send(reply);
         }
         (None, None) => {}
     }
@@ -184,6 +234,7 @@ fn route(app: &AppHandle, pending: &Pending, message: Value) {
 #[derive(Default)]
 pub struct Codex {
     connection: tokio::sync::Mutex<Option<Arc<Connection>>>,
+    answering: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Codex {

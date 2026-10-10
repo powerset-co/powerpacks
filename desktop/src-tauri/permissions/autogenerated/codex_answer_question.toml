@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-codex-answer-question"
+description = "Enables the codex_answer_question command without any pre-configured scope."
+commands.allow = ["codex_answer_question"]
+
+[[permission]]
+identifier = "deny-codex-answer-question"
+description = "Denies the codex_answer_question command without any pre-configured scope."
+commands.deny = ["codex_answer_question"]

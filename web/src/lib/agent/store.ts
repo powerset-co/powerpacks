@@ -14,6 +14,7 @@ import {
   startTurn,
 } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
+import { readStored, writeStored } from "@/lib/storage"
 import type { AgentEvent, Approval, ApprovalChoice, Entry } from "@/types/agent"
 
 export interface AgentState {
@@ -168,6 +169,7 @@ export async function send(message: string): Promise<void> {
     const threadId = state.threadId ?? (await startThread())
     set({ ...state, threadId })
     remember(OPEN_CHAT_KEY, threadId)
+    if (state.searchRun) writeStored("local", `search-thread:${state.searchRun}`, threadId)
     await startTurn(threadId, text, state.fullAccess)
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
@@ -206,13 +208,17 @@ export function newChat(): void {
 export function openSearch(runId: string): void {
   set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, searchRun: runId })
   remember(OPEN_CHAT_KEY, "")
+  const saved = readStored("local", `search-thread:${runId}`, (value) =>
+    typeof value === "string" ? value : null,
+  )
+  if (saved) void openChat(saved, runId)
 }
 
 /** Opens a past chat with its history; later messages continue it. */
-export async function openChat(threadId: string): Promise<void> {
+export async function openChat(threadId: string, searchRun: string | null = null): Promise<void> {
   if (threadId === state.threadId) return
   wire()
-  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, threadId, loading: true })
+  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, threadId, searchRun, loading: true })
   remember(OPEN_CHAT_KEY, threadId)
   try {
     const entries = await openThread(threadId)

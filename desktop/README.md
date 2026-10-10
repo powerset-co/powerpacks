@@ -40,6 +40,24 @@ the app comes forward again when it lands. ChatGPT (Codex) uses its device-code 
 shows a short code and opens `auth.openai.com/codex/device` in the browser; Codex polls for the
 approval and the app comes forward when `account/login/completed` arrives.
 
+## Search questions POC
+
+The existing native Searches view (`/agent`) keeps `@member` questions in the search's
+history. Select the audience set, mention a member, and their assistant's answer appears
+under the question. **Reply in thread** keeps follow-ups attached to that root question.
+Only the question, search title/brief, and thread replies are shared; the private Codex
+transcript stays local. Received searches appear in the existing search sidebar.
+
+The recipient explicitly chooses **Answer with my Codex**. A dedicated Codex thread reads
+cached local evidence with writes/network access disabled. Delivery retries reuse saved
+answers. The older shortlist **Ask the Set** worker is unchanged. Live inference is untested.
+
+Build the web assets and commit them before bundling: the runtime archive uses `git archive
+HEAD`. Build with `scripts/bundle-runtime.sh` then `pnpm tauri build --bundles app` in
+`desktop/`. The installed app refreshes its code from that archive by commit ID; copying
+web assets into the runtime folder alone is not an app release. Existing `.powerpacks/`,
+`.env`, and `.venv/` are retained during that refresh.
+
 ## Build
 
 Needs Rust, Node 22 and pnpm. CI (`.github/workflows/desktop.yml`) builds the Apple Silicon
