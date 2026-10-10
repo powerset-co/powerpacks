@@ -23,6 +23,7 @@ const COLLAPSED_KEY = "sidebar.collapsed"
 const RAIL_ONLY_QUERY = "(max-width: 900px)"
 
 const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
+  home: SearchesIcon,
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
@@ -73,12 +74,18 @@ export function Sidebar() {
           rail ? "flex-col justify-center gap-1 px-0 pt-3 pb-1" : "h-topbar gap-2.5 pr-2 pl-4",
         )}
       >
-        <PowersetMark className="size-7 rounded-[7px] shadow-[var(--shadow-1)]" />
-        {!rail && (
-          <span className="min-w-0 flex-1 truncate text-[12px] font-extrabold tracking-[.14em] text-foreground">
-            POWER<span className="text-primary">PACKS</span>
-          </span>
-        )}
+        <NavLink
+          to="/home"
+          aria-label="Powerpacks home"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-s)]"
+        >
+          <PowersetMark className="size-7 rounded-[7px] shadow-[var(--shadow-1)]" />
+          {!rail && (
+            <span className="min-w-0 flex-1 truncate text-[12px] font-extrabold tracking-[.14em] text-foreground">
+              POWER<span className="text-primary">PACKS</span>
+            </span>
+          )}
+        </NavLink>
         <button
           type="button"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}

@@ -2,7 +2,7 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey = "agent" | "searches" | "people" | "sets" | "accounts" | "tasks" | "setup"
+export type PageKey = "home" | "agent" | "searches" | "people" | "sets" | "accounts" | "tasks" | "setup"
 
 export interface Page {
   key: PageKey
@@ -34,5 +34,6 @@ export const PAGES: readonly Page[] = isDesktop()
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
  *  which the router's catch-all redirects to. */
 export function pageAt(pathname: string): Page {
+  if (pathname === "/home") return { key: "home", label: "Home", href: "/home" }
   return PAGES.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`)) ?? HOME
 }

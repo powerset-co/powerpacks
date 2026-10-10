@@ -53,7 +53,7 @@ cached local evidence with writes/network access disabled. Delivery retries reus
 answers. The older shortlist **Ask the Set** worker is unchanged. Live inference is untested.
 
 Build the web assets and commit them before bundling: the runtime archive uses `git archive
-HEAD`. Build with `scripts/bundle-runtime.sh` then `pnpm tauri build --bundles app` in
+HEAD`. Build with `scripts/bundle-runtime.sh` then `POWERPACKS_DEBUG_MENU=1 pnpm tauri build --bundles app` in
 `desktop/`. The installed app refreshes its code from that archive by commit ID; copying
 web assets into the runtime folder alone is not an app release. Existing `.powerpacks/`,
 `.env`, and `.venv/` are retained during that refresh.
@@ -69,7 +69,7 @@ Powerpacks' Google OAuth client baked in: CI reads `POWERPACKS_GOOGLE_CLIENT_ID`
 cd desktop
 pnpm install
 scripts/bundle-runtime.sh          # uv, Codex, and this repo at HEAD
-pnpm tauri build --bundles app,dmg
+POWERPACKS_DEBUG_MENU=1 pnpm tauri build --bundles app,dmg
 ```
 
 The app is ad-hoc signed, not notarized. On first open, macOS asks to confirm an app from an

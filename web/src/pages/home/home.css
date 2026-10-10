@@ -1,0 +1,30 @@
+.home-network g {
+  transform-origin: 240px 200px;
+  animation: home-drift 9s ease-in-out infinite alternate;
+}
+.home-network path {
+  stroke-dasharray: 1;
+  animation: home-connect 1.2s ease-out both;
+}
+@keyframes home-connect {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes home-drift {
+  from {
+    transform: rotate(-2deg) scale(0.98);
+  }
+  to {
+    transform: rotate(2deg) scale(1.02);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-network g,
+  .home-network path {
+    animation: none;
+  }
+}

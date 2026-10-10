@@ -11,6 +11,7 @@ const DEBUG_KEY = ["desktop-debug"] as const
 
 // Every page the app shows, including the two outside the top bar.
 const PAGES = [
+  { label: "Home", href: "/home" },
   { label: "Setup", href: "/install" },
   { label: "LinkedIn review", href: "/" },
   { label: "Chat", href: "/agent" },
