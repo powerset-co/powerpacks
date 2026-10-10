@@ -103,11 +103,23 @@ For "partners who explicitly practice litigation", plan both role and specialty:
 
 ```json
 {"titles": ["Partner"], "is_current": true,
- "semantic_traits": ["Explicit litigation or disputes practice in the matching current role"]}
+ "semantic_traits": ["Substantive current litigation, trial, arbitration or disputes practice in the matching role, supported by the person's own practice description. Transactional advising, incidental litigation mentions or past-only litigation do not establish this practice; missing current evidence is unknown."]}
 ```
 
 `Partner` alone establishes the requested role. Litigation requires supporting
 person/role evidence; the firm's litigation practice does not establish theirs.
+
+For company-wide "Head of Operations", `role_function: "operations"` alone is
+too broad. Add a semantic requirement for current company-wide operations or
+business-operations leadership (COO or Head/VP/Director of Ops/BizOps). Exclude
+specialized revenue, sales, GTM, clinical, product, engineering, IT, people,
+facilities and workplace operations unless the user requests that department.
+
+For "all employees at a company", require current staff employment; pure
+investor, adviser/advisor and board associations do not establish employment.
+Express that eligibility in the predicates, using title exclusions where they
+preserve legitimate employee roles and semantic evidence when needed. An
+explicit investor/advisor/board query retains those requested roles.
 
 ## Run and inspect
 
