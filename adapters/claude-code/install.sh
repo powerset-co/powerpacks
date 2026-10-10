@@ -36,6 +36,7 @@ install_skill() {
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
+install_skill gtm "$REPO_ROOT/packs/gtm/skills/gtm/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
@@ -64,6 +65,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
+echo "  search gtm search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
 echo "  import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo
