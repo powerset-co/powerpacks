@@ -240,7 +240,7 @@ class WebSearch:
     id: str
     objective: str
     queries: tuple[str, ...]
-    max_results: int = 3
+    max_results: int = 10
 
 
 @dataclass(frozen=True)

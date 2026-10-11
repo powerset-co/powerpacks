@@ -187,10 +187,10 @@ uv run --project . python packs/gtm/primitives/discover/discover.py web \
 
 ```json
 [{"id": "mctigue", "objective": "Is Michael McTigue of Skadden a litigator?",
-  "queries": ["Michael McTigue Skadden partner practice"], "max_results": 3}]
+  "queries": ["Michael McTigue Skadden partner practice"]}]
 ```
 
-`response.json` lists each item's pages (`url`, `title`, `excerpt`). Read the
+`response.json` lists each item's pages (`url`, `title`, `excerpt`). One search returns up to 10 pages for the same charge; keep that default. Read the
 excerpts yourself; a page about someone with the same name at another employer
 is not evidence.
 
@@ -200,7 +200,7 @@ For "who else can I sell to" from a company URL:
 
 1. Find the customers with one `web` search: objective "Name the companies that
    are customers of <name> (<domain>)", queries `<name> customers`,
-   `<name> case study`, `<domain> customer story`, `max_results` 8. Customer
+   `<name> case study`, `<domain> customer story`. Customer
    pages, case studies and funding announcements name them; logo walls often
    don't. Case studies also name the buyer's title.
 2. State the ICP from those customers in a few lines: industry, size, geography,
