@@ -15,8 +15,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from pydantic import TypeAdapter, ValidationError
 
-from packs.gtm.primitives.discover.boundary import Operation, post, save_request
-from packs.gtm.primitives.discover.models import Artifacts, DiscoverRequest, Manifest, Result, SortRequest
+from packs.gtm.primitives.discover.boundary import Operation, post, post_web, save_request
+from packs.gtm.primitives.discover.models import Artifacts, DiscoverRequest, Manifest, Result, SortRequest, WebSearch
 from packs.ingestion.primitives.common.jsonio import emit
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
@@ -28,6 +28,8 @@ class GtmDiscovery:
         self.request_text = request_file.read_text(encoding="utf-8")
         if operation == "sort":
             TypeAdapter(SortRequest).validate_json(self.request_text)
+        elif operation == "web":
+            TypeAdapter(tuple[WebSearch, ...]).validate_json(self.request_text)
         else:
             TypeAdapter(DiscoverRequest).validate_json(self.request_text)
         self.operation = operation
@@ -42,6 +44,14 @@ class GtmDiscovery:
     def run(self) -> Manifest:
         token = auth.bearer_token(self.env_file)
         save_request(self.request_path, self.request_text)
+        if self.operation == "web":
+            findings = post_web(base=self.base, token=token, request_text=self.request_text, response_path=self.response_path)
+            manifest = Manifest(status="partial" if any(row.error for row in findings) else "complete", operation="web",
+                                query="", filters=None, count=sum(len(row.pages) for row in findings), qualified=0,
+                                sources=(), coverage=(), warnings=tuple(f"{row.id}: {row.error}" for row in findings if row.error),
+                                elapsed_ms=0, artifacts=Artifacts(str(self.request_path), str(self.response_path), str(self.candidates_path)))
+            write_stage_manifest(self.manifest_path, asdict(manifest))
+            return manifest
         result = post(base=self.base, token=token, operation=self.operation,
                       request_text=self.request_text, response_path=self.response_path,
                       candidates_path=self.candidates_path)
@@ -69,8 +79,8 @@ class GtmDiscovery:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", nargs="?", choices=["discover", "refine", "sort"], default="discover")
-    parser.add_argument("--request", type=Path, required=True, help="JSON request with explicit filters, sources, and caps")
+    parser.add_argument("operation", nargs="?", choices=["discover", "refine", "sort", "web"], default="discover")
+    parser.add_argument("--request", type=Path, required=True, help="JSON request with explicit filters, sources, and caps; for web, a list of {id, objective, queries, max_results}, one paid search each")
     parser.add_argument("--env-file", type=Path, default=_REPO_ROOT / ".env")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args(argv)

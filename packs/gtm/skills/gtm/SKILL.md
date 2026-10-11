@@ -94,6 +94,16 @@ output-token cap, and errors.
 An unknown semantic requirement remains unknown when there is no supporting
 cached decision or authorized scoring budget.
 
+`max_web_searches` (default zero) gives each person still unknown on a semantic
+requirement one Parallel web search (`name employer title` plus `web_terms`),
+then judges them once more with the pages found. It needs `semantic_model`. A
+search costs about $0.001; up to 1,000 people finish in under two minutes.
+Pages count only when they name the person at the matched employer; each page
+stays on the result as `web` evidence. Choose `web_terms` for the population:
+`["Chambers"]` for lawyers (firm bios and Chambers list practice areas),
+`["portfolio"]` for investors. Unknowns from missing employer data (industry,
+company type, geography) are not searched; report them as unknown.
+
 Seniority bands use canonical index values (`director`, `vice-president`,
 `c-suite`); preserve strict C-suite when requested.
 
@@ -164,6 +174,45 @@ Present the best-fit results with matched current role/company evidence and
 separate known, inferred, and unknown introduction evidence. An interaction
 count supports the operator's relationship to the introducer; it does not prove
 the introducer's relationship to the target.
+
+## Web search
+
+When the default search misses, or for any public fact the API lacks, run your
+own searches. The request is a list; each item is one paid search (about $0.001):
+
+```bash
+uv run --project . python packs/gtm/primitives/discover/discover.py web \
+  --request .powerpacks/gtm/web/request.json
+```
+
+```json
+[{"id": "mctigue", "objective": "Is Michael McTigue of Skadden a litigator?",
+  "queries": ["Michael McTigue Skadden partner practice"], "max_results": 3}]
+```
+
+`response.json` lists each item's pages (`url`, `title`, `excerpt`). Read the
+excerpts yourself; a page about someone with the same name at another employer
+is not evidence.
+
+## Customers → ICP → buyers
+
+For "who else can I sell to" from a company URL:
+
+1. Find the customers with one `web` search: objective "Name the companies that
+   are customers of <name> (<domain>)", queries `<name> customers`,
+   `<name> case study`, `<domain> customer story`, `max_results` 8. Customer
+   pages, case studies and funding announcements name them; logo walls often
+   don't. Case studies also name the buyer's title.
+2. State the ICP from those customers in a few lines: industry, size, geography,
+   and the buyer titles the case studies name. Let the user edit it.
+3. Find buyers at lookalike companies with `discover`: the ICP as
+   `company_queries`, the buyer titles as `titles`. The company index covers
+   venture-backed and tech companies well; for other industries (utilities,
+   home services, law firms) it returns few or wrong employers. Then ask `web`
+   to name lookalike companies ("US electric utilities like PG&E and Xcel
+   Energy"), and pass the names as `company_names` with `sales_nav`; resolving
+   a name to its Sales Navigator ID uses provider calls.
+4. Exclude the existing customers and the seller from the results.
 
 ## Follow-ups
 

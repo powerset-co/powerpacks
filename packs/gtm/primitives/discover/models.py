@@ -107,6 +107,8 @@ class DiscoverRequest:
     max_provider_calls: int = 0
     max_semantic_calls: int = 0
     semantic_model: str | None = None
+    max_web_searches: int = 0
+    web_terms: tuple[str, ...] = ()
     selection: tuple[Candidate, ...] = ()
     cursor: SourceCursor | None = None
 
@@ -121,7 +123,7 @@ class SalesNavQuery:
 
 @dataclass(frozen=True)
 class Coverage:
-    source: Source | Literal["semantic"]
+    source: Source | Literal["semantic", "web"]
     loaded: int = 0
     total: int | None = None
     total_is_exact: bool = True
@@ -218,7 +220,7 @@ class Artifacts:
 @dataclass(frozen=True)
 class Manifest:
     status: Literal["complete", "partial", "failed"]
-    operation: Literal["discover", "refine", "sort"]
+    operation: Literal["discover", "refine", "sort", "web"]
     query: str
     filters: Filters | None
     count: int
@@ -229,3 +231,27 @@ class Manifest:
     elapsed_ms: int
     artifacts: Artifacts
     stage_timings: tuple[StageTiming, ...] = ()
+
+
+@dataclass(frozen=True)
+class WebSearch:
+    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: str
+    objective: str
+    queries: tuple[str, ...]
+    max_results: int = 3
+
+
+@dataclass(frozen=True)
+class WebPage:
+    url: str
+    title: str
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class WebFinding:
+    id: str
+    pages: tuple[WebPage, ...] = ()
+    error: str | None = None

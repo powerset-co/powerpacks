@@ -122,6 +122,17 @@ class GtmCliTests(unittest.TestCase):
         self.assertEqual(json.loads(files["response.json"]), [candidate])
         self.assertEqual(json.loads(proc.stdout)["count"], 1)
 
+    def test_web_sends_each_search_and_keeps_every_page(self):
+        request = [{"id": "avoca", "objective": "Name Avoca's customers", "queries": ["Avoca AI customers"], "max_results": 8}]
+        response = [{"id": "avoca", "pages": [{"url": "https://www.avoca.ai/customers/stewart-plumbing", "title": "Stewart Plumbing",
+                                               "excerpt": "Stewart Plumbing case study"}], "error": None}]
+        proc, received, files = self._run(request, response, operation="web")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(received[0][0], "/v2/gtm/web")
+        self.assertEqual(received[0][2], request)
+        self.assertEqual(json.loads(files["response.json"]), response)
+        self.assertEqual(json.loads(proc.stdout)["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

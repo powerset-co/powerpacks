@@ -8,22 +8,34 @@ from typing import Literal
 
 from pydantic import TypeAdapter
 
-from packs.gtm.primitives.discover.models import RankedCandidate, Result
+from packs.gtm.primitives.discover.models import RankedCandidate, Result, WebFinding
 from packs.ingestion.primitives.common.jsonio import write_json, write_jsonl
 
-Operation = Literal["discover", "refine", "sort"]
+Operation = Literal["discover", "refine", "sort", "web"]
 HTTP_TIMEOUT_SECONDS = 180
 
 
-def post(*, base: str, token: str, operation: Operation, request_text: str,
-         response_path: Path, candidates_path: Path) -> Result | tuple[RankedCandidate, ...]:
+def _send(base: str, token: str, path: str, request_text: str) -> bytes:
     request = urllib.request.Request(
-        base + f"/v2/gtm/{operation}", data=request_text.encode("utf-8"), method="POST",
+        base + path, data=request_text.encode("utf-8"), method="POST",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
                  "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        response_text = response.read()
+        body: bytes = response.read()
+    return body
+
+
+def post_web(*, base: str, token: str, request_text: str, response_path: Path) -> tuple[WebFinding, ...]:
+    """Each search is one paid Parallel request; every page found is kept."""
+    response_text = _send(base, token, "/v2/gtm/web", request_text)
+    write_json(response_path, json.loads(response_text))
+    return TypeAdapter(tuple[WebFinding, ...]).validate_json(response_text)
+
+
+def post(*, base: str, token: str, operation: Operation, request_text: str,
+         response_path: Path, candidates_path: Path) -> Result | tuple[RankedCandidate, ...]:
+    response_text = _send(base, token, f"/v2/gtm/{operation}", request_text)
     result: Result | tuple[RankedCandidate, ...]
     if operation == "sort":
         result = TypeAdapter(tuple[RankedCandidate, ...]).validate_json(response_text)
