@@ -109,6 +109,12 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(feedback["metadata"]["backend"], "local")
         self.assertNotIn("/private/index.duckdb", json.dumps(exported))
 
+    def test_invalid_set_id_is_rejected_before_upload(self):
+        bad = copy.deepcopy(self.snapshot)
+        bad["search"]["set_id"] = "My Network"
+        with self.assertRaises(ValueError):
+            validate_snapshot(bad)
+
     def test_old_snapshots_do_not_acquire_the_current_default_set(self):
         from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request
         old = copy.deepcopy(self.snapshot)
