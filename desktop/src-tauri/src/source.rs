@@ -75,7 +75,7 @@ pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String>
     write_marker(root, version)
 }
 
-/// The command-line install's folder (`bin/bootstrap` puts Powerpacks at `~/powerpacks`).
+/// The default command-line install's folder; bootstrap also reuses `~/workspace/powerpacks`.
 const CLI_INSTALL: &str = "powerpacks";
 const DATA_DIR: &str = ".powerpacks";
 /// Deep Context's store, also initialized empty by the Sets page before import.
@@ -84,8 +84,29 @@ const NETWORK_STORE: &str = ".powerpacks/deep-context/deep-context-v2.sqlite";
 /// The command-line install with data on this machine, if any: the setup page offers to
 /// import it instead of starting over.
 pub fn cli_install(root: &Path) -> Option<PathBuf> {
-    let cli = dirs::home_dir()?.join(CLI_INSTALL);
-    (cli != root && cli.join(DATA_DIR).join("install").is_dir()).then_some(cli)
+    cli_install_in(&dirs::home_dir()?, root)
+}
+
+fn cli_install_in(home: &Path, root: &Path) -> Option<PathBuf> {
+    [CLI_INSTALL, "workspace/powerpacks"]
+        .into_iter()
+        .map(|path| home.join(path))
+        .find(|cli| {
+            let installer = cli.join("install.sh");
+            #[cfg(unix)]
+            let executable = {
+                use std::os::unix::fs::PermissionsExt;
+                installer.metadata().is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+            };
+            #[cfg(not(unix))]
+            let executable = installer.is_file();
+            cli != root
+                && executable
+                && cli.join("packs").is_dir()
+                && cli.join(DATA_DIR).join("install").is_dir()
+        })
 }
 
 /// Share that install's data folder (a link, so both see the same files: the network, imports,
@@ -254,6 +275,51 @@ fn top_level_entries(archive: &Path) -> Result<Vec<PathBuf>, String> {
 mod tests {
     use super::*;
     use crate::paths;
+
+    #[test]
+    fn finds_importable_supported_checkouts_in_order_without_the_runtime_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = std::env::temp_dir().join(format!(
+            "powerpacks-cli-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = home.join(".powerpacks/app");
+        let default = home.join("powerpacks");
+        let workspace = home.join("workspace/powerpacks");
+        let checkout = |path: &Path, with_data: bool| {
+            fs::create_dir_all(path.join("packs")).unwrap();
+            fs::write(path.join("install.sh"), "#!/bin/sh\n").unwrap();
+            fs::set_permissions(path.join("install.sh"), fs::Permissions::from_mode(0o755))
+                .unwrap();
+            if with_data {
+                fs::create_dir_all(path.join(DATA_DIR).join("install")).unwrap();
+            }
+        };
+
+        assert_eq!(cli_install_in(&home, &runtime), None);
+        checkout(&workspace, true);
+        assert_eq!(cli_install_in(&home, &runtime), Some(workspace.clone()));
+        checkout(&default, false);
+        assert_eq!(cli_install_in(&home, &runtime), Some(workspace.clone()));
+        checkout(&default, true);
+        assert_eq!(cli_install_in(&home, &runtime), Some(default.clone()));
+        assert_eq!(cli_install_in(&home, &default), Some(workspace.clone()));
+        fs::set_permissions(
+            default.join("install.sh"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert_eq!(cli_install_in(&home, &runtime), Some(workspace.clone()));
+        assert_eq!(cli_install_in(&home, &workspace), None);
+        checkout(&home.join("workspace/unrelated-worktree"), true);
+        assert_eq!(cli_install_in(&home, &workspace), None);
+        fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn import_accepts_empty_schema_but_preserves_candidates_and_sets() {
