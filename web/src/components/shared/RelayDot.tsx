@@ -16,7 +16,7 @@ function hoverText(status: RelayStatus | undefined, signingIn: boolean): string 
   return "Not connected to Powerset Relay · Click to retry"
 }
 
-// Green while the Ask the Set daemon holds its relay connection, grey otherwise. Grey is a
+// Green while the Ask the Set daemon can read its relay inbox, grey otherwise. Grey is a
 // button: sign in (when signed out) and wake the daemon so it reconnects at once. It sits on
 // the side nav's avatar as a presence badge; `tip` says which way its label opens.
 export function RelayDot({ tip }: { tip: "above" | "right" }) {

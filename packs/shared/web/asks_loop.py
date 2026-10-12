@@ -1,6 +1,7 @@
 """Pull this laptop's agent messages, answer teammate debug checks, and announce its presence.
 
 Changelog:
+- 2026-10-12: poll the authenticated HTTP inbox independently of NATS presence.
 - 2026-10-08: add the local NATS loop with durable task delivery.
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
 - 2026-10-08: ask for the default set's connection; the route refuses a bare call from a member of several sets.
@@ -86,9 +87,55 @@ def _connection(env_file: Path) -> dict:
         raise
 
 
+def _answer_pending(*, repo_root: Path, env_file: Path) -> None:
+    """Answer teammate debug requests; failed answers retry on the next pull."""
+    known = _set_members(repo_root, env_file)
+    for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
+        message = json.loads(path.read_text(encoding="utf-8"))
+        handler = ANSWERED_HERE.get(message["kind"])
+        if handler is None or "answered_at" in message:
+            continue
+        if message["from"]["operator_id"] not in known:
+            write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
+            continue
+        try:
+            handler(message, repo_root=repo_root, env_file=env_file)
+        except Exception as exc:
+            _LOG.warning("Answering %s: %s", message["kind"], type(exc).__name__)
+            continue
+        write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "answered_at": now_iso()})
+
+
+async def _poll(*, repo_root: Path, env_file: Path) -> None:
+    backoff = 1
+    while True:
+        WAKE.clear()
+        delay = HEARTBEAT_SECONDS
+        try:
+            await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
+        except (SystemExit, Exception) as exc:
+            if isinstance(exc, SystemExit) or (isinstance(exc, urllib.error.HTTPError)
+                                               and exc.code == HTTPStatus.UNAUTHORIZED):
+                STATUS["state"] = "signed_out"
+                delay = SIGNED_OUT_SECONDS
+                backoff = 1
+            else:
+                STATUS["state"] = "offline"
+                delay = backoff
+                backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+                _LOG.warning("Inbox: %s; retrying in %ss", type(exc).__name__, delay)
+        else:
+            STATUS["state"] = "connected"
+            backoff = 1
+            try:
+                await asyncio.to_thread(_answer_pending, repo_root=repo_root, env_file=env_file)
+            except (SystemExit, Exception) as exc:
+                _LOG.warning("Inbox debug checks: %s", type(exc).__name__)
+        await asyncio.to_thread(WAKE.wait, delay)
+
+
 async def _connected(connection: dict, *, repo_root: Path, env_file: Path, device_id: str) -> None:
     closed = asyncio.Event()
-    worker_lock = asyncio.Lock()
 
     async def on_close() -> None:
         closed.set()
@@ -96,31 +143,8 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
     async def on_error(exc: Exception) -> None:
         _LOG.warning("Ask NATS: %s", type(exc).__name__)
 
-    async def pull() -> None:
-        """Pull the inbox, then answer teammate debug requests, one
-        at a time. A failed answer stays unanswered and is tried again on the next pull."""
-        async with worker_lock:
-            await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
-            known = await asyncio.to_thread(_set_members, repo_root, env_file)
-            for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
-                message = json.loads(path.read_text(encoding="utf-8"))
-                handler = ANSWERED_HERE.get(message["kind"])
-                if handler is None or "answered_at" in message:
-                    continue
-                if message["from"]["operator_id"] not in known:
-                    # Not someone in a set with this owner: no answer, no model call, no checks.
-                    write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
-                    continue
-                try:
-                    await asyncio.to_thread(handler, message, repo_root=repo_root, env_file=env_file)
-                except Exception as exc:
-                    _LOG.warning("Answering %s: %s", message["kind"], type(exc).__name__)
-                    continue
-                write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "answered_at": now_iso()})
-
     async def inbox(message) -> None:
-        if json.loads(message.data)["kind"] == "message":
-            await pull()
+        WAKE.set()
         await message.ack()
 
     presence_file = repo_root / ".powerpacks" / "presence.json"
@@ -150,24 +174,16 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
                 continue
         raise ConnectionError("NATS connection closed")
 
-    watcher = None
     try:
         await nc.jetstream().subscribe(subjects["inbox"], stream="asks", durable=device_id + "-inbox",
                                        cb=inbox, manual_ack=True)
         await nc.subscribe(subjects["presence"], cb=heartbeat)
-        watcher = asyncio.create_task(watch())
-        STATUS["state"] = "connected"
-        await pull()
-        await watcher
+        await watch()
     finally:
-        if watcher is not None:
-            watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
-        STATUS["state"] = "offline"
         await nc.close()
 
 
-async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
+async def _presence(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     backoff = 1
     while True:
         started = time.monotonic()
@@ -175,18 +191,23 @@ async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
             connection = await asyncio.to_thread(_connection, env_file)
             await _connected(connection, repo_root=repo_root, env_file=env_file, device_id=device_id)
             backoff = 1  # a refresh: the watcher returned, reconnect at once with fresh credentials
-        except SystemExit:
-            STATUS["state"] = "signed_out"
-            WAKE.clear()
-            await asyncio.to_thread(WAKE.wait, SIGNED_OUT_SECONDS)
-            STATUS["state"] = "offline"
-            backoff = 1
-        except Exception as exc:
+        except (SystemExit, Exception) as exc:
+            if isinstance(exc, SystemExit):
+                await asyncio.sleep(SIGNED_OUT_SECONDS)
+                backoff = 1
+                continue
             if time.monotonic() - started > MAX_BACKOFF_SECONDS:
                 backoff = 1
             _LOG.warning("Ask loop: %s; retrying in %ss", type(exc).__name__, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
+
+
+async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
+    await asyncio.gather(
+        _poll(repo_root=repo_root, env_file=env_file),
+        _presence(repo_root=repo_root, env_file=env_file, device_id=device_id),
+    )
 
 
 def run(*, repo_root: Path, env_file: Path) -> None:
