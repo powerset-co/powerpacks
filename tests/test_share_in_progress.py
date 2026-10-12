@@ -23,9 +23,9 @@ class ShareInProgressTests(unittest.TestCase):
             root = Path(tmp)
             conn = open_store(root / "store.sqlite")
             self.addCleanup(conn.close)
-            queries.upsert_candidates(conn, [
-                ("c1", "Jordan Bravo", 0, '{"last_interaction": ""}', NOW),
-            ])
+            imported = {"full_name": "Jordan Bravo", "primary_email": "j@example.test", "primary_phone": "",
+                        "source_channels": "gmail_msgvault", "interaction_counts": "", "last_interaction": ""}
+            queries.upsert_candidates(conn, [("c1", "Jordan Bravo", 0, json.dumps(imported), NOW)])
             conn.execute("INSERT INTO candidate_identifiers VALUES ('c1', 'email', 'j@example.test', 'j@example.test')")
             conn.execute("INSERT INTO candidate_sources VALUES ('c1', 'gmail_msgvault')")
             facts = {

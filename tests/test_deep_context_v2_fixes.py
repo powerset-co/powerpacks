@@ -111,9 +111,10 @@ class OwnerCLITests(unittest.TestCase):
                 "fetched_at": NOW, "public_identifier": "jordan-owner",
                 "linkedin_url": "https://www.linkedin.com/in/jordan-owner", "raw_response": {},
                 "normalized_profile": {"success": True, "member_id": "synthetic-owner-1",
-                    "full_name": "Jordan Owner", "location_str": "Springfield",
+                    "full_name": "Jordan Owner", "headline": "", "location_str": "Springfield",
+                    "city": "", "state": "", "country": "",
                     "experiences": [{"company_name": "Example Labs", "title": "Founder",
-                                     "starts_at": {"year": 2020}}], "education": []},
+                                     "starts_at": {"year": 2020}, "ends_at": None}], "education": []},
             }))
             chat_db = data_root / "chat.db"
             with sqlite3.connect(chat_db) as chat:

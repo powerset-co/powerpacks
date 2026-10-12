@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -101,10 +101,10 @@ def build_request(facts: SynthesizedFacts, channels: ChannelSummary, owner: Owne
             break
     work: list[dict[str, str]] = []
     for job in owner.work:
-        work.append(asdict(job))
+        work.append(job.model_dump())
     education: list[dict[str, str]] = []
     for school in owner.education:
-        education.append(asdict(school))
+        education.append(school.model_dump())
     owner_state: dict[str, Any] = {"name": owner.name, "work": work, "education": education,
                                    "locations": list(owner.locations)}
     request: dict[str, Any] = share_request(
