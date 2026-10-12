@@ -91,7 +91,7 @@ fn cli_install_in(home: &Path, root: &Path) -> Option<PathBuf> {
     [CLI_INSTALL, "workspace/powerpacks"]
         .into_iter()
         .map(|path| home.join(path))
-        .find(|cli| {
+        .filter(|cli| {
             let installer = cli.join("install.sh");
             #[cfg(unix)]
             let executable = {
@@ -102,11 +102,12 @@ fn cli_install_in(home: &Path, root: &Path) -> Option<PathBuf> {
             };
             #[cfg(not(unix))]
             let executable = installer.is_file();
-            cli != root
+            cli.as_path() != root
                 && executable
                 && cli.join("packs").is_dir()
                 && cli.join(DATA_DIR).join("install").is_dir()
         })
+        .min_by_key(|cli| !cli.join(NETWORK_STORE).is_file())
 }
 
 /// Share that install's data folder (a link, so both see the same files: the network, imports,
@@ -309,6 +310,9 @@ mod tests {
         checkout(&default, true);
         assert_eq!(cli_install_in(&home, &runtime), Some(default.clone()));
         assert_eq!(cli_install_in(&home, &default), Some(workspace.clone()));
+        fs::create_dir_all(workspace.join(NETWORK_STORE).parent().unwrap()).unwrap();
+        fs::write(workspace.join(NETWORK_STORE), "synthetic").unwrap();
+        assert_eq!(cli_install_in(&home, &runtime), Some(workspace.clone()));
         fs::set_permissions(
             default.join("install.sh"),
             fs::Permissions::from_mode(0o644),
