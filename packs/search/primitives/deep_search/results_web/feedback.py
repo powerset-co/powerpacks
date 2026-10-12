@@ -30,7 +30,6 @@ ENV_FILE = Path(__file__).resolve().parents[5] / ".env"
 
 def build_feedback_request(search: SearchResult, comment: str,
                            candidate: Candidate | None = None,
-                           environ: dict[str, str] | None = None,
                            human_judgment: Mapping[str, Any] | None = None,
                            ) -> FeedbackRequest:
     return FeedbackRequest(**build_feedback_payload(search, comment, candidate, human_judgment))

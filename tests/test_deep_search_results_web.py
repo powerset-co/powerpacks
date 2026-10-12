@@ -360,7 +360,7 @@ class ResultsWebTest(unittest.TestCase):
             path.write_text(json.dumps(payload))
             search = load_searches(root)[0]
             detail = render_search_body(search)
-            metadata = build_feedback_request(search, "review", search.candidate(self.PERSON), {}).metadata
+            metadata = build_feedback_request(search, "review", search.candidate(self.PERSON)).metadata
         beta = detail
         self.assertNotIn("candidate-badges", detail)
         self.assertNotIn("CE score <b>", detail)
@@ -472,7 +472,7 @@ class ResultsWebTest(unittest.TestCase):
             candidate = replace(candidate, ponds=tuple(
                 replace(source, candidate=replace(source.candidate, cross_encoder_score=0))
                 for source in candidate.ponds))
-            request = build_feedback_request(search, "Reviewed", candidate, environ={},
+            request = build_feedback_request(search, "Reviewed", candidate,
                                              human_judgment={"score": 3, "scale": 5})
             self.assertEqual(request.metadata["cross_encoder_score"], 0)
             path = record_fit_label(root / "jordan-role", request)
@@ -508,7 +508,7 @@ class ResultsWebTest(unittest.TestCase):
             self.assertIn("aria-label='Score Casey Delta'", detail)
             self.assertNotIn("candidate-badges", detail)
             request = build_feedback_request(
-                search, "Strong platform experience", candidate, environ={},
+                search, "Strong platform experience", candidate,
                 human_judgment={"score": 4, "scale": 5})
             record_fit_label(root / search.run_id, request)
             restored = load_searches(root)[0].candidate(self.UNGRADED)
@@ -1304,7 +1304,7 @@ class ResultsWebTest(unittest.TestCase):
             search = load_searches(self._fixture(directory))[0]
         candidate = search.groups[0].candidates[0]
         body = build_feedback_request(
-            search, "Score should be lower", candidate, environ={},
+            search, "Score should be lower", candidate,
             human_judgment={"score": 4, "scale": 5}).body()
         self.assertEqual(body["metadata"], {
             "source": "powerpacks-deep-search-results",
@@ -1338,7 +1338,7 @@ class ResultsWebTest(unittest.TestCase):
             ],
         })
 
-        search_body = build_feedback_request(search, "Bad pond", environ={}).body()
+        search_body = build_feedback_request(search, "Bad pond").body()
         self.assertEqual(body["feedback_type"], "taste_score")
         self.assertEqual(search_body["feedback_type"], "bad_search")
         self.assertEqual(search_body["metadata"], {
@@ -1355,7 +1355,7 @@ class ResultsWebTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(directory)
             search = load_searches(root)[0]
-            request = build_feedback_request(search, "Broaden the query", environ={})
+            request = build_feedback_request(search, "Broaden the query")
             path = record_fit_label(root / search.run_id, request)
             row = json.loads(path.read_text())
             self.assertEqual(row["comment"], "Broaden the query")

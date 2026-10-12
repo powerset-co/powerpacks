@@ -5,12 +5,14 @@ import hashlib
 import html
 import importlib.util
 import json
+import os
 import tempfile
 import threading
 import unittest
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from packs.search.primitives.deep_search.results_web.model import load_searches
@@ -122,8 +124,9 @@ class SnapshotTest(unittest.TestCase):
             row.pop("backend", None)
             row.pop("set_id", None)
         model = _decode(SearchResult, validate_snapshot(old)["search"], "search")
-        request = build_feedback_request(model, "test", environ={
-            "POWERPACKS_DEFAULT_SET_ID": "22222222-2222-4222-8222-222222222222"})
+        with patch.dict(os.environ, {
+                "POWERPACKS_DEFAULT_SET_ID": "22222222-2222-4222-8222-222222222222"}):
+            request = build_feedback_request(model, "test")
         self.assertEqual(model.set_id, "")
         self.assertEqual(request.set_id, "")
 

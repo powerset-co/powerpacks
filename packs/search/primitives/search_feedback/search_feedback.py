@@ -37,7 +37,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.powerset.primitives.send_feedback.send_feedback import (  # noqa: E402
     FeedbackRequest,
     SendFeedback,
-    default_set_id,
 )
 
 EDIT_KINDS = ("filter_edit", "query_edit", "pond_edit", "result_feedback")
@@ -106,6 +105,26 @@ def send(run_dir: Path, *, dry_run: bool = False,
     decision_path = run_dir / "decision.json"
     if decision_path.is_file():
         decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    # Deep runs bind retrieval directly; fast runs record the resolved set in task state.
+    backend = (decision or {}).get("backend", "")
+    set_id = ""
+    results_path = run_dir / "results.json"
+    ledger_path = run_dir / "pipeline.ledger.json"
+    if results_path.is_file():
+        retrieval = json.loads(results_path.read_text(encoding="utf-8")).get("retrieval") or {}
+        backend = retrieval.get("backend", "")
+        set_id = retrieval.get("set_id", "")
+    elif ledger_path.is_file():
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        if ledger.get("mode") == "local_duckdb":
+            backend = "local"
+        elif ledger.get("state"):
+            state = json.loads(Path(ledger["state"]).read_text(encoding="utf-8"))
+            for step in reversed(state.get("steps", [])):
+                if step["id"] == "resolve_set_operators" and step["status"] == "completed":
+                    backend = "powerset"
+                    set_id = step["output"]["set_id"]
+                    break
     sent_rows: list[dict[str, Any]] = []
     bodies: list[dict[str, Any]] = []
     remaining = list(edits)
@@ -114,14 +133,14 @@ def send(run_dir: Path, *, dry_run: bool = False,
         if not batch:
             continue
         metadata: dict[str, Any] = {"source": FEEDBACK_SOURCE, "run": slug,
-                                    "kind": kind, "edits": batch}
+                                    "kind": kind, "edits": batch, "backend": backend, "set_id": set_id}
         if decision is not None:
             metadata["decision"] = decision
         request = FeedbackRequest(
             comment=_comment(slug, kind, len(batch)),
             feedback_type=KIND_TO_TYPE[kind],
             metadata=metadata,
-            set_id=default_set_id(),
+            set_id=set_id,
         )
         payload = SendFeedback(request, env_file=env_file, dry_run=dry_run).run()
         if dry_run:

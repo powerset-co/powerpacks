@@ -29,7 +29,7 @@ class HostedFeedbackTest(unittest.TestCase):
         candidate = search.candidate(fixtures.ResultsWebTest.PERSON)
         human = {"score": 3, "scale": 5}
         pure = build_feedback_payload(search, "Worth a conversation", candidate, human)
-        local = build_feedback_request(search, "Worth a conversation", candidate, {}, human)
+        local = build_feedback_request(search, "Worth a conversation", candidate, human)
         self.assertEqual(pure, local.body())
         self.assertEqual(pure["metadata"]["human_judgment"],
                          {"score": 3, "scale": 5, "note": "Worth a conversation"})

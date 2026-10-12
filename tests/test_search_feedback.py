@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +74,31 @@ class SendTests(unittest.TestCase):
                 self.assertEqual(row["metadata"]["decision"]["backend"], "local")
                 self.assertIn("pm-nyc", row["comment"])
             self.assertFalse((run_dir / SENT_FILE).is_file())
+
+    def test_feedback_uses_saved_scope_not_current_default(self) -> None:
+        saved_set = "11111111-1111-4111-8111-111111111111"
+        cases = [
+            ("deep-cloud", {"results.json": {"retrieval": {"backend": "powerset", "set_id": saved_set}}}, "powerset", saved_set),
+            ("deep-local", {"results.json": {"retrieval": {"backend": "local"}}}, "local", ""),
+            ("fast-cloud", {"pipeline.ledger.json": {"state": "STATE"}}, "powerset", saved_set),
+            ("fast-local", {"pipeline.ledger.json": {"mode": "local_duckdb"}}, "local", ""),
+            ("legacy", {}, "", ""),
+        ]
+        for name, artifacts, backend, set_id in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp)
+                state_path = run_dir / "task.json"
+                state_path.write_text(json.dumps({"steps": [{
+                    "id": "resolve_set_operators", "status": "completed",
+                    "output": {"set_id": saved_set}}]}))
+                for filename, payload in artifacts.items():
+                    (run_dir / filename).write_text(json.dumps(payload).replace("STATE", str(state_path)))
+                log_edit(run_dir, kind="filter_edit", note="broaden geography")
+                with patch.dict(os.environ, {"POWERPACKS_DEFAULT_SET_ID": "22222222-2222-4222-8222-222222222222"}):
+                    row = send(run_dir, dry_run=True)["rows"][0]
+                self.assertEqual(row.get("set_id", ""), set_id)
+                self.assertEqual(row["metadata"]["set_id"], set_id)
+                self.assertEqual(row["metadata"]["backend"], backend)
 
     def test_submit_sends_per_kind_and_rotates_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
