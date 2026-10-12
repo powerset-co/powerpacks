@@ -499,6 +499,53 @@ describe("installation progress", () => {
     await waitFor(() => expect(container.querySelector(".install-elapsed")?.textContent).toBe(""))
   })
 
+  it("keeps owner lookup busy and returns failures to the editable form", async () => {
+    let rejectLookup!: (error: Error) => void
+    const invoke = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectLookup = reject
+        }),
+    )
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke },
+      event: { listen: () => Promise.resolve(() => undefined) },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "deep_context",
+              status: "waiting",
+              action: { kind: "owner" },
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    const input = await screen.findByLabelText("Your LinkedIn profile")
+    fireEvent.change(input, { target: { value: "https://linkedin.com/in/jordan-example" } })
+    const button = screen.getByRole("button", { name: "Continue" })
+    fireEvent.click(button)
+    await waitFor(() => expect(button).toHaveProperty("disabled", true))
+    expect(input).toHaveProperty("disabled", true)
+    await act(async () => {
+      rejectLookup(new Error("Could not load that LinkedIn profile."))
+      await Promise.resolve()
+    })
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Could not load that LinkedIn profile.",
+    )
+    expect(input).toHaveProperty("disabled", false)
+    expect(input).toHaveProperty("value", "https://linkedin.com/in/jordan-example")
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it("waits for live Gmail authorization and only offers Continue when setup hands back control", async () => {
     const invoke = vi.fn(() => Promise.resolve(null))
     vi.stubGlobal("__TAURI__", {

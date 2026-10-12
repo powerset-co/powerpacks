@@ -243,8 +243,14 @@ async fn permission_messages(boot: State<'_, Arc<Boot>>) -> Result<bool, String>
 
 /// Resumes setup from the install page with what the user answered there.
 #[tauri::command]
-fn onboard_continue(boot: State<'_, Arc<Boot>>, answer: onboard::Answer) -> Result<(), String> {
-    onboard::start(&boot::require_root(&boot)?, answer)
+async fn onboard_continue(
+    boot: State<'_, Arc<Boot>>,
+    answer: onboard::Answer,
+) -> Result<(), String> {
+    let root = boot::require_root(&boot)?;
+    tauri::async_runtime::spawn_blocking(move || onboard::start(&root, answer))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

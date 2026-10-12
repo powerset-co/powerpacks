@@ -29,17 +29,19 @@ function Ask({
   label,
   placeholder,
   type,
+  busy,
   onAnswer,
 }: {
   label: string
   placeholder: string
   type: "email" | "url"
+  busy: boolean
   onAnswer: (value: string) => void
 }) {
   const [value, setValue] = useState("")
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (value.trim()) onAnswer(value.trim())
+    if (!busy && value.trim()) onAnswer(value.trim())
   }
   return (
     <form onSubmit={submit} className="mx-auto flex w-full max-w-[420px] flex-col gap-2 text-left">
@@ -51,12 +53,13 @@ function Ask({
           id="setup-answer"
           type={type}
           value={value}
+          disabled={busy}
           placeholder={placeholder}
           onChange={(event) => setValue(event.target.value)}
           className={INPUT}
         />
-        <Button type="submit" variant="primary" disabled={!value.trim()}>
-          Continue
+        <Button type="submit" variant="primary" disabled={busy || !value.trim()}>
+          {busy ? "Continuing…" : "Continue"}
         </Button>
       </div>
     </form>
@@ -139,6 +142,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         label="Gmail account"
         placeholder="you@gmail.com"
         type="email"
+        busy={busy}
         onAnswer={(email) => answer({ gmailEmail: email })}
       />
     )
@@ -148,6 +152,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
         label="Your LinkedIn profile"
         placeholder="https://www.linkedin.com/in/your-name"
         type="url"
+        busy={busy}
         onAnswer={(url) => answer({ linkedinUrl: url })}
       />
     )

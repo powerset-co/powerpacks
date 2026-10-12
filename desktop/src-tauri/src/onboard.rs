@@ -184,7 +184,6 @@ pub fn stop_running(root: &Path) {
 }
 
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
-    stop_running(root);
     let mut steps = Vec::new();
     if let Some(url) = answer.linkedin_url {
         if !url.contains("linkedin.com/in/") {
@@ -210,8 +209,7 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     let log = root.join(LOG);
     fs::create_dir_all(log.parent().expect("log has a parent"))
         .map_err(|error| error.to_string())?;
-    let mut children = Vec::new();
-    for mut step in steps {
+    for step in &mut steps {
         // The workflow's desktop behaviour: no browsers, hand sign-ins and waits back to the page.
         step.env(DESKTOP_FLAG, "1");
         let output = OpenOptions::new()
@@ -224,16 +222,24 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
             .stdin(Stdio::null())
             .stdout(output)
             .stderr(errors);
-        children.push(step);
     }
-    // In order, on a worker thread: the owner profile, if any, then setup.
-    std::thread::spawn(move || {
-        for mut step in children {
-            let ok = step.status().is_ok_and(|status| status.success());
-            if !ok {
-                break;
-            }
+    stop_running(root);
+    let mut onboard = steps.pop().expect("setup command");
+    for mut owner in steps {
+        let status = owner
+            .status()
+            .map_err(|error| format!("Could not check your LinkedIn profile: {error}"))?;
+        if !status.success() {
+            return Err(
+                "Could not load that LinkedIn profile. Check the URL and try again.".into(),
+            );
         }
+    }
+    let mut child = onboard
+        .spawn()
+        .map_err(|error| format!("Could not start setup: {error}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
     });
     Ok(())
 }
@@ -261,6 +267,27 @@ pub fn messages_readable(root: &Path) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_owner_lookup_returns_to_the_form_without_starting_setup() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("powerpacks-owner-error-{}", std::process::id()));
+        let python = paths::project_python(&root);
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, "#!/bin/sh\nif [ \"$2\" = packs.ingestion.primitives.deep_context_v2.owner ]; then exit 1; fi\ntouch setup-started\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = start(
+            &root,
+            Answer {
+                linkedin_url: Some("https://linkedin.com/in/jordan-example".into()),
+                gmail_email: None,
+            },
+        );
+        assert!(result.unwrap_err().contains("LinkedIn profile"));
+        assert!(!root.join("setup-started").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn pause_preserves_saved_source_gmail_and_window_choices() {
