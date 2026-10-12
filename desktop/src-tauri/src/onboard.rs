@@ -90,18 +90,25 @@ pub fn is_skipped(root: &Path) -> bool {
 /// Record the app's install on the setup page, as bootstrap does, then that setup waits for the
 /// user's click.
 pub fn record_install(root: &Path, python: &Path) -> Result<(), String> {
+    let retry_command = root.join("bin/onboard").to_string_lossy().into_owned();
     for event in INSTALLED_EVENTS {
-        write_event(root, python, event)?;
+        write_event(root, python, event, &retry_command)?;
     }
-    write_event(root, python, READY_EVENT)
+    write_event(root, python, READY_EVENT, &retry_command)
 }
 
 /// A run that died with the last app run waits for the user's click too.
 pub fn record_paused(root: &Path, python: &Path) -> Result<(), String> {
-    write_event(root, python, PAUSED_EVENT)
+    let text = fs::read_to_string(root.join(MANIFEST)).map_err(|error| error.to_string())?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let retry_command = manifest["retry_command"]
+        .as_str()
+        .ok_or("Setup has no retry command.")?;
+    write_event(root, python, PAUSED_EVENT, retry_command)
 }
 
-fn write_event(root: &Path, python: &Path, event: &str) -> Result<(), String> {
+fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> Result<(), String> {
     let status = Command::new(python)
         .args([
             "-m",
@@ -115,7 +122,7 @@ fn write_event(root: &Path, python: &Path, event: &str) -> Result<(), String> {
         .arg("--root")
         .arg(root)
         .arg("--retry-command")
-        .arg(root.join("bin/onboard"))
+        .arg(retry_command)
         .current_dir(root)
         .stdout(Stdio::null())
         .status()
@@ -249,4 +256,49 @@ pub fn messages_readable(root: &Path) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pause_preserves_saved_source_gmail_and_window_choices() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let python = paths::project_python(&repo).canonicalize().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "powerpacks-onboard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        std::os::unix::fs::symlink(
+            repo.join("packs").canonicalize().unwrap(),
+            root.join("packs"),
+        )
+        .unwrap();
+
+        record_install(&root, &python).unwrap();
+        let manifest_path = root.join(MANIFEST);
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let retry = "bin/onboard --source gmail --source whatsapp --skip-source whatsapp \
+            --gmail-email casey@example.com --sync-after 2025-01-01 \
+            --wacli-store '/tmp/synthetic whatsapp' --harness codex --port 8899";
+        manifest["retry_command"] = retry.into();
+        manifest["step"] = "gmail_sync".into();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        record_paused(&root, &python).unwrap();
+        let paused: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(paused["event"], PAUSED_EVENT);
+        assert_eq!(paused["installer_pid"], 0);
+        assert_eq!(paused["retry_command"], retry);
+        assert_eq!(paused["step"], "gmail_sync");
+    }
 }

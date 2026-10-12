@@ -109,7 +109,9 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
       await skipSource("whatsapp")
       await continueSetup({})
     })
-  const stopped = data.status === "failed" || (data.status === "waiting" && STOPPED.has(action?.kind ?? ""))
+  const stopped =
+    data.status === "failed" ||
+    (data.status === "waiting" && !data.installer_pid && STOPPED.has(action?.kind ?? ""))
   const skip =
     WHATSAPP_STEPS.has(data.step) && (action?.kind === "qr" || stopped) ? (
       <Button variant="default" disabled={busy} onClick={skipWhatsapp}>

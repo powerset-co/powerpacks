@@ -499,6 +499,36 @@ describe("installation progress", () => {
     await waitFor(() => expect(container.querySelector(".install-elapsed")?.textContent).toBe(""))
   })
 
+  it("waits for live Gmail authorization and only offers Continue when setup hands back control", async () => {
+    const invoke = vi.fn(() => Promise.resolve(null))
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke },
+      event: { listen: () => Promise.resolve(() => undefined) },
+    })
+    let status = {
+      ...INSTALL,
+      step: "gmail_login",
+      status: "waiting",
+      event: "gmail.connect.waiting",
+      installer_pid: 12345,
+      message: "Connect Gmail in your browser",
+      action: { kind: "gmail" },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    const { client } = mount()
+    await screen.findByText("Connect Gmail in your browser")
+    expect(screen.queryByRole("button", { name: "Continue setup" })).toBeNull()
+    expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
+
+    status = { ...status, installer_pid: 0 }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    fireEvent.click(await screen.findByRole("button", { name: "Continue setup" }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+  })
+
   it("in the desktop app, offers to skip WhatsApp at its QR and resumes setup without it", async () => {
     const invoke = vi.fn(() => Promise.resolve(null))
     vi.stubGlobal("__TAURI__", {

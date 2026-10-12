@@ -132,10 +132,11 @@ function status(item: { ok: boolean; install: PreflightInstall | null } | undefi
   return item.install?.status === "running" ? ("working" as const) : ("needed" as const)
 }
 
-/** The first screen: everything setup needs from this Mac, asked for before it starts. Turning on
+/** What a new setup needs from this Mac. Turning on
  *  Full Disk Access makes macOS quit and reopen the app, harmless here and a hang mid-setup. */
-function PreflightCheck({ onDone }: { onDone: () => void }) {
+function PreflightCheck({ onBack }: { onBack: () => void }) {
   const readable = useMessagesReadable()
+  const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { data } = useQuery({
     queryKey: ["install", "preflight"],
@@ -150,6 +151,14 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
     void installPreflight(item).catch((caught: unknown) => setError(errorText(caught)))
   // Full Disk Access is optional: without it setup leaves iMessage out.
   const ready = data?.browser.ok === true && data.gcloud.ok
+  const start = () => {
+    setStarting(true)
+    setError(null)
+    void continueSetup({}).catch((caught: unknown) => {
+      setError(errorText(caught))
+      setStarting(false)
+    })
+  }
   return (
     <div className="flex w-full flex-col gap-4">
       <ul className="m-0 flex list-none flex-col divide-y divide-line rounded-[var(--radius-m)] border border-line-strong bg-card p-0 text-left">
@@ -182,9 +191,11 @@ function PreflightCheck({ onDone }: { onDone: () => void }) {
         />
       </ul>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-faint">Everything runs and stays here on your computer.</span>
-        <Button variant="primary" disabled={!ready} onClick={onDone}>
-          Continue
+        <Button disabled={starting} onClick={onBack}>
+          Back
+        </Button>
+        <Button variant="primary" disabled={!ready || starting} onClick={start}>
+          {starting ? "Starting setup…" : "Continue"}
         </Button>
       </div>
       {error && (
@@ -201,11 +212,10 @@ function tilde(path: string): string {
   return path.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/, "~")
 }
 
-/** The second screen: set up from scratch, or import the command-line install's data. The clicked
- *  card spins until setup moves on (this unmounts) or the click fails. */
-function Choice({ onBack }: { onBack: () => void }) {
+/** Import existing data directly; only a new setup needs the prerequisite check. */
+function Choice({ onStart }: { onStart: () => void }) {
   const navigate = useNavigate()
-  const [clicked, setClicked] = useState<"start" | "import" | null>(null)
+  const [clicked, setClicked] = useState<"import" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const chosen = error ? null : clicked
   // undefined while the app looks; null when there is nothing to import.
@@ -219,9 +229,9 @@ function Choice({ onBack }: { onBack: () => void }) {
         fail(caught)
       })
   }, [fail])
-  const choose = (which: "start" | "import", task: () => Promise<void>) => {
+  const choose = (task: () => Promise<void>) => {
     setError(null)
-    setClicked(which)
+    setClicked("import")
     task().catch(fail)
   }
   return (
@@ -231,14 +241,12 @@ function Choice({ onBack }: { onBack: () => void }) {
           type="button"
           className={cn(CHOICE, chosen === "import" && "opacity-40")}
           disabled={chosen !== null}
-          onClick={() => choose("start", () => continueSetup({}))}
+          onClick={onStart}
         >
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-primary-soft text-primary">
-            {chosen === "start" ? <Spinner className="size-4" /> : <SparkIcon className="size-[18px]" />}
+            <SparkIcon className="size-[18px]" />
           </span>
-          <span className="text-[13.5px] font-bold">
-            {chosen === "start" ? "Starting setup…" : "Start setup"}
-          </span>
+          <span className="text-[13.5px] font-bold">Start setup</span>
           <span className="text-xs leading-snug text-muted-foreground">
             Sign in, import your contacts and build your network from scratch.
           </span>
@@ -248,11 +256,11 @@ function Choice({ onBack }: { onBack: () => void }) {
           className={cn(
             CHOICE,
             source && "border-[color-mix(in_srgb,var(--primary)_35%,var(--line-strong))]",
-            (chosen === "start" || !source) && "opacity-40",
+            !source && "opacity-40",
           )}
           disabled={chosen !== null || !source}
           onClick={() =>
-            choose("import", async () => {
+            choose(async () => {
               if (await importData()) await navigate(HOME.href)
             })
           }
@@ -273,14 +281,6 @@ function Choice({ onBack }: { onBack: () => void }) {
           </span>
         </button>
       </div>
-      <button
-        type="button"
-        onClick={onBack}
-        disabled={chosen !== null}
-        className="w-fit cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40"
-      >
-        ← Back
-      </button>
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
           {error}
@@ -290,7 +290,7 @@ function Choice({ onBack }: { onBack: () => void }) {
   )
 }
 
-/** The desktop app's setup before it starts: the preflight check, then install or import. The
+/** The desktop app's setup before it starts: import, or check prerequisites for a new setup. The
  *  third screen, the installation status, is the install page itself once setup runs. */
 export function DesktopWelcome() {
   const [stage, setStage] = useState<0 | 1>(0)
@@ -301,11 +301,11 @@ export function DesktopWelcome() {
           <h2 className="m-0 text-xl font-bold">Setup</h2>
           <p className="m-0 text-sm text-muted-foreground">
             {stage === 0
-              ? "A few things Powerpacks needs on this Mac before it starts."
-              : "Start fresh, or bring over what you already have on this Mac."}
+              ? "Start fresh, or bring over what you already have on this Mac."
+              : "A few things Powerpacks needs on this Mac before it starts."}
           </p>
         </header>
-        {stage === 0 ? <PreflightCheck onDone={() => setStage(1)} /> : <Choice onBack={() => setStage(0)} />}
+        {stage === 0 ? <Choice onStart={() => setStage(1)} /> : <PreflightCheck onBack={() => setStage(0)} />}
       </div>
     </div>
   )

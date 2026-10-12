@@ -30,6 +30,7 @@ export interface InstallProse {
 export interface InstallStatus {
   primitive: "powerpacks_install"
   status: InstallState
+  installer_pid?: number
   step: InstallStep
   event?: string
   message: string
