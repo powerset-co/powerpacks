@@ -1,4 +1,4 @@
-"""Pull this laptop's agent messages as they arrive, answer asks among them, and announce its presence.
+"""Pull this laptop's agent messages, answer teammate debug checks, and announce its presence.
 
 Changelog:
 - 2026-10-08: add the local NATS loop with durable task delivery.
@@ -28,7 +28,6 @@ from uuid import uuid4
 import nats
 from dotenv import dotenv_values
 
-from packs.ingestion.primitives.ask_worker import ask_worker
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.share.web.sets import Sets
@@ -42,9 +41,8 @@ SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 _LOG = logging.getLogger(__name__)
-# Message kinds this machine answers without a person, and only for someone in one of its sets: an ask,
-# a teammate's debug checks.
-ANSWERED_HERE = {"ask": ask_worker.answer_message, "debug_request": agent_debug.answer}
+# Only teammate debug checks run here. Questions are answered by the recipient's Codex harness.
+ANSWERED_HERE = {"debug_request": agent_debug.answer}
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
 STATUS = {"state": "offline"}
 WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
@@ -99,7 +97,7 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
         _LOG.warning("Ask NATS: %s", type(exc).__name__)
 
     async def pull() -> None:
-        """Pull the inbox, then answer what this machine answers by itself (asks, debug requests), one
+        """Pull the inbox, then answer teammate debug requests, one
         at a time. A failed answer stays unanswered and is tried again on the next pull."""
         async with worker_lock:
             await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)

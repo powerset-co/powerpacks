@@ -181,7 +181,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                          "inbox": f"op.{self.operator_id}"}
         self.connection = {"url": "nats://localhost:4222", "token": "", "subjects": self.subjects}
         self.worker = Mock(return_value={})
-        self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"ask": self.worker}))
+        self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"debug_request": self.worker}))
         self.enterContext(patch.object(asks_loop, "_set_members", return_value={"op-asker"}))
         self.inbox = self.enterContext(patch.object(asks_loop.agent_inbox, "pull", return_value=[]))
         self.enterContext(patch.object(asks_loop, "HEARTBEAT_SECONDS", 0.05))
@@ -234,8 +234,16 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         info = await self.js.consumer_info("asks", self.device_id + "-inbox")
         self.assertEqual(info.config.filter_subject, self.subjects["inbox"])
 
-    async def test_ask_in_the_inbox_is_answered_once(self):
+    async def test_ask_is_left_for_the_codex_recipient_loop(self):
         ask = self.write_message("ask")
+        self.start_loop()
+        await self.until(lambda: self.inbox.call_count == 1)
+        self.worker.assert_not_called()
+        saved = json.loads((self.root / ".powerpacks" / "inbox" / f"{ask['id']}.json").read_text())
+        self.assertNotIn("answered_at", saved)
+
+    async def test_debug_request_in_the_inbox_is_answered_once(self):
+        ask = self.write_message("debug_request")
         self.write_message("set_invite")
         self.start_loop()
         await self.until(lambda: self.worker.call_count == 1)
@@ -246,8 +254,8 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         saved = json.loads((self.root / ".powerpacks" / "inbox" / f"{ask['id']}.json").read_text())
         self.assertIn("answered_at", saved)
 
-    async def test_an_ask_from_outside_the_sets_is_refused_without_an_answer(self):
-        stranger = self.write_message("ask", **{"from": {"operator_id": "op-stranger", "name": "Someone"}})
+    async def test_debug_request_from_outside_the_sets_is_refused_without_an_answer(self):
+        stranger = self.write_message("debug_request", **{"from": {"operator_id": "op-stranger", "name": "Someone"}})
         self.start_loop()
         await self.until(lambda: self.inbox.call_count == 1)
         saved_path = self.root / ".powerpacks" / "inbox" / f"{stranger['id']}.json"
@@ -255,7 +263,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.worker.assert_not_called()
 
     async def test_a_failed_answer_is_logged_and_tried_on_the_next_pull(self):
-        self.write_message("ask")
+        self.write_message("debug_request")
         self.worker.side_effect = [RuntimeError("relay down"), {}]
         with self.assertLogs(asks_loop.__name__, level="WARNING"):
             self.start_loop()

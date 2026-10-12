@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import ValidationError
 
+from packs.ingestion.primitives.ask_worker.ask_worker import AskWorker
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.share.web.sets import CloudError, Member, NeedsSignIn, Sets
 from packs.powerset.primitives.agent_inbox.collaboration_messages import (
@@ -33,6 +34,7 @@ def _conversation_id(set_id: str, search_id: str) -> str:
 class Collaboration:
     def __init__(self, sets: Sets, searches: SearchRoutes | None = None) -> None:
         self.sets = sets
+        self.asks = AskWorker(sets)
         self.directory = sets.data_root / "conversations"
         self.searches = searches if searches is not None else search_routes(sets.data_root / "deep-search")
 
@@ -256,18 +258,19 @@ class Collaboration:
                         if root.answer is not None:
                             question += f"Original answer: {root.answer}\n"
                         question += f"Follow-up: {message.text}"
-                    questions.append({"id": message.id, "set_id": conversation.set_id, "conversation_id": conversation.id,
-                                      "search_id": conversation.search_id,
-                                      "from_name": message.author_name, "question": question,
-                                      **({"reply_to": message.reply_to} if message.reply_to else {}),
-                                      **({"query": conversation.query} if conversation.query else {}),
-                                      **({"answer": message.answer} if message.answer else {}),
+                    context = {"set_id": conversation.set_id, "conversation_id": conversation.id,
+                               "search_id": conversation.search_id,
+                               **({"reply_to": message.reply_to} if message.reply_to else {}),
+                               **({"query": conversation.query} if conversation.query else {})}
+                    questions.append({"id": message.id, "from_name": message.author_name, "question": question,
+                                      "context": context, "output_schema": Answer.model_json_schema(),
+                                      **({"answer": {"text": message.answer}} if message.answer else {}),
                                       **({"error": message.error} if message.error else {}),
                                       **({"thread_id": message.thread_id} if message.thread_id else {})})
+        questions.extend(self.asks.pending())
         return {"questions": questions}
 
     def _question(self, question_id: str) -> tuple[Conversation, ConversationMessage]:
-        self.settle()
         question_id = str(UUID(question_id))
         for conversation in self._all():
             message = next((held for held in conversation.messages if held.id == question_id), None)
@@ -280,7 +283,10 @@ class Collaboration:
             return conversation, message
         raise FileNotFoundError("question not found")
 
-    def thread(self, question_id: str, request: Thread) -> Conversation:
+    def thread(self, question_id: str, request: Thread) -> Conversation | dict[str, Any]:
+        self.settle()
+        if self.asks.get(question_id) is not None:
+            return self.asks.thread(question_id, request.thread_id)
         conversation, message = self._question(question_id)
         if (message.status in TERMINAL or message.answer is not None or message.error is not None
                 or (message.thread_id is not None and message.thread_id != request.thread_id)):
@@ -289,7 +295,14 @@ class Collaboration:
         # Working is local to the recipient; no inference is started by the relay daemon.
         return self._put(conversation, updated)
 
-    def finish(self, question_id: str, request: Answer | Failure) -> Conversation:
+    def finish(self, question_id: str, request: Answer | Failure | dict[str, Any]) -> Conversation | dict[str, Any]:
+        self.settle()
+        if isinstance(request, Answer):
+            request = request.model_dump()
+        if self.asks.get(question_id) is not None:
+            return self.asks.finish(question_id, request)
+        if isinstance(request, dict):
+            request = Answer.model_validate(request)
         conversation, message = self._question(question_id)
         if message.status in TERMINAL:
             return conversation
@@ -352,6 +365,7 @@ class CollaborationRoutes:
             if not 0 < length <= MAX_REQUEST_BYTES:
                 raise ValueError("invalid request size")
             body = json.loads(handler.rfile.read(length))
+            conversation: Conversation | dict[str, Any]
             if parsed.path == PREFIX + "/conversations":
                 conversation = self.collaboration.create(CreateConversation.model_validate(body))
             elif parsed.path == PREFIX + "/messages":
@@ -367,9 +381,9 @@ class CollaborationRoutes:
                 if parts[2] == "thread":
                     conversation = self.collaboration.thread(question_id, Thread.model_validate(body))
                 else:
-                    request = Answer.model_validate(body) if parts[2] == "answer" else Failure.model_validate(body)
+                    request = body if parts[2] == "answer" else Failure.model_validate(body)
                     conversation = self.collaboration.finish(question_id, request)
-            self._json(handler, conversation.model_dump(exclude_none=True))
+            self._json(handler, conversation.model_dump(exclude_none=True) if isinstance(conversation, Conversation) else conversation)
         except PermissionError as error:
             self._json(handler, {"error": str(error)}, HTTPStatus.FORBIDDEN)
         except FileNotFoundError:

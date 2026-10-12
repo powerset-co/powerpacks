@@ -37,13 +37,12 @@ export interface Collaboration {
 
 export interface PendingQuestion {
   id: string
-  set_id: string
-  conversation_id: string
   from_name: string
   question: string
+  context: Record<string, unknown>
+  output_schema: Record<string, unknown>
   thread_id?: string
-  query?: string
-  answer?: string
+  answer?: Record<string, unknown>
   error?: string
 }
 

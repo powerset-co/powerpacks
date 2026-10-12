@@ -1,45 +1,29 @@
-"""Answer an Ask the Set message from local family evidence, send the answer back, and audit.
-
-Changelog:
-  2026-10-09: use the shared relay message sender.
-  2026-10-09: reason and relationship are cut to the asker's limit (MAX_TEXT) instead of failing.
-  2026-10-09: the model sees the ask's role (title, company, job description).
-  2026-10-08: answer `ask` agent messages; the relay's leased ask tasks are gone.
-  2026-10-08: add the owner's answer worker and run CLI.
-"""
+"""Prepare local Ask the Set evidence and deliver validated Codex answers; never run inference."""
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import sqlite3
-import sys
 from contextlib import closing
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe, queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, Verdict
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import CACHE_RELATIVE_DIR, profile_from_record
-from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier
-from packs.powerset.primitives.agent_inbox import agent_inbox
-from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT
+from packs.ingestion.primitives.share.web.sets import Sets
+from packs.powerset.primitives.agent_inbox.collaboration_messages import Failure
+from packs.powerset.primitives.agent_inbox.messages import MAX_TEXT, parse
 
 _EMAIL = re.compile(r"[^\s@\"<>]+@[^\s@\"<>]+\.[^\s@\"<>]+")
-_PROMPT = Path(__file__).with_name("prompts") / "answer.txt"
 ANSWER = "ask_answer"
 
 
@@ -54,7 +38,7 @@ class _Answer(BaseModel):
     confidence: float = Field(ge=0, le=1)
 
 
-def _evidence(conn: sqlite3.Connection, data_root: Path, slug: str) -> tuple[dict, list[dict]] | None:
+def _evidence(conn: sqlite3.Connection, data_root: Path, slug: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
     parents = queries_dedupe.current_parents(conn)
     parent = None
     url = ""
@@ -100,52 +84,132 @@ def _evidence(conn: sqlite3.Connection, data_root: Path, slug: str) -> tuple[dic
     return {"facts": facts, "profile": profile, "channels": channels}, used
 
 
-async def _answer(task: dict, evidence: dict) -> dict:
-    config = OpenAIResponsesConfig.resolve(model=DEFAULT_SYNTHESIS_MODEL, effort="low", timeout=120, max_retries=0)
-    async with OpenAIResponsesCaller(config) as caller:
-        result = await caller.call(
-            system_prompt=_PROMPT.read_text(encoding="utf-8"),
-            user_prompt=json.dumps({**task, "evidence": evidence}, ensure_ascii=False),
-            schema=_Answer.model_json_schema(), schema_name="ask_answer", context="ask answer",
-        )
-    answer = _Answer.model_validate(result).model_dump()
-    # The asker's inbox rejects longer text (messages.Verdict): cut it rather than lose the whole answer.
-    answer["reason"], answer["relationship"] = answer["reason"][:MAX_TEXT], answer["relationship"][:MAX_TEXT]
-    if _EMAIL.search(json.dumps(answer, ensure_ascii=False)):
-        raise ValueError("answer contains an email address")
-    return answer
+class _CandidateAnswer(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    public_identifier: str
+    answer: _Answer
 
 
-def answer_message(message: dict, *, repo_root: Path, env_file: Path) -> dict:
-    """Answer one `ask` message from local family evidence and send one `ask_answer` back to the asker."""
-    load_dotenv(env_file, override=False)
-    data_root = repo_root / ".powerpacks"
-    payload = message["payload"]
-    answers = []
-    for candidate in payload["candidates"]:
-        slug = candidate["public_identifier"]
-        with closing(open_store(store_path(data_root))) as conn:
-            found = _evidence(conn, data_root, slug)
-        audit = data_root / "asks" / f"{message['id']}-{slug}.json"
-        if found is None:
-            answer: dict = {"declined": True, "reason": "not_in_store"}
-        elif audit.is_file():
-            # Answered before, but the reply did not reach the relay: send the same answer, no second model call.
-            answer = json.loads(audit.read_text(encoding="utf-8"))["answer"]
-        else:
-            evidence, used = found
+class _BatchAnswer(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    answers: list[_CandidateAnswer]
+
+
+class AskWorker:
+    def __init__(self, sets: Sets) -> None:
+        self.sets = sets
+        self.data_root = sets.data_root
+
+    def _path(self, question_id: str) -> Path:
+        return self.data_root / "inbox" / f"{UUID(question_id)}.json"
+
+    def get(self, question_id: str) -> dict[str, Any] | None:
+        path = self._path(question_id)
+        if not path.is_file():
+            return None
+        message: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        if message["kind"] != "ask":
+            return None
+        parse(message)
+        if message["from"]["operator_id"] not in self.sets.known_operators():
+            raise PermissionError("sender is not in a set with this operator")
+        return message
+
+    def _prepare(self, message: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+        candidates: list[dict[str, Any]] = []
+        answers: list[dict[str, Any]] = []
+        used: dict[str, list[dict[str, Any]]] = {}
+        with closing(open_store(store_path(self.data_root))) as conn:
+            for candidate in message["payload"]["candidates"]:
+                slug = candidate["public_identifier"]
+                audit = self.data_root / "asks" / f"{message['id']}-{slug}.json"
+                if audit.is_file():
+                    answers.append({"public_identifier": slug, "answer": json.loads(audit.read_text(encoding="utf-8"))["answer"]})
+                    continue
+                found = _evidence(conn, self.data_root, slug)
+                if found is None:
+                    answers.append({"public_identifier": slug, "answer": {"declined": True, "reason": "not_in_store"}})
+                else:
+                    candidates.append({**candidate, "evidence": found[0]})
+                    used[slug] = found[1]
+        return candidates, answers, used
+
+    def pending(self) -> list[dict[str, Any]]:
+        questions = []
+        for path in sorted((self.data_root / "inbox").glob("*.json")):
             try:
-                answer = asyncio.run(_answer({"question": payload["question"], "role": payload["role"], "candidate": candidate}, evidence))
-            except Exception as exc:
-                # Exception text can carry model output; log only its type. The asker sees "couldn't answer".
-                print(f"ask-worker: {slug} failed ({type(exc).__name__})", file=sys.stderr)
-                answers.append({"public_identifier": slug, "answer": {"declined": True, "reason": "failed"}})
+                message = self.get(path.stem)
+            except PermissionError:
                 continue
-            write_json(audit,
-                       {"message": message, "candidate": candidate, "evidence_used": used, "answer": answer,
-                        "answered_at": now_iso()})
-        answers.append({"public_identifier": slug, "answer": answer})
-        print(f"ask-worker: {slug} {answer.get('verdict', 'declined')}", file=sys.stderr)
-    agent_inbox.send(env_file, message["from"]["operator_id"], ANSWER,
-                     {"ask_id": payload["ask_id"], "answers": answers})
-    return {"ask_id": payload["ask_id"], "answers": answers}
+            if message is None or "answered_at" in message:
+                continue
+            candidates: list[dict[str, Any]] = []
+            answers: list[dict[str, Any]] = []
+            if "answer" not in message:
+                candidates, answers, _ = self._prepare(message)
+            question = {"id": message["id"], "from_name": message["from"]["name"],
+                        "question": message["payload"]["question"],
+                        "context": {"role": message["payload"]["role"], "candidates": candidates},
+                        "output_schema": _BatchAnswer.model_json_schema()}
+            if "answer" in message:
+                question["answer"] = message["answer"]
+            elif not candidates:
+                question["answer"] = {"answers": answers}
+            for field in ("thread_id", "error"):
+                if field in message:
+                    question[field] = message[field]
+            questions.append(question)
+        return questions
+
+    def thread(self, question_id: str, thread_id: str) -> dict[str, Any]:
+        message = self.get(question_id)
+        if message is None:
+            raise FileNotFoundError("ask not found")
+        if ("answered_at" in message or "answer" in message or "error" in message
+                or ("thread_id" in message and message["thread_id"] != thread_id)):
+            raise ValueError("question already has a thread or result")
+        message = {**message, "thread_id": thread_id}
+        write_json(self._path(question_id), message)
+        return message
+
+    def finish(self, question_id: str, request: dict[str, Any] | Failure) -> dict[str, Any]:
+        message = self.get(question_id)
+        if message is None:
+            raise FileNotFoundError("ask not found")
+        if "answered_at" in message:
+            return message
+        if "answer" not in message:
+            candidates, answers, used = self._prepare(message)
+            if isinstance(request, Failure):
+                message["error"] = request.error
+                answers.extend({"public_identifier": candidate["public_identifier"],
+                                "answer": {"declined": True, "reason": "failed"}} for candidate in candidates)
+            elif candidates:
+                if "thread_id" not in message:
+                    raise ValueError("record the Codex thread before answering")
+                batch = _BatchAnswer.model_validate(request).model_dump()
+                slugs = [item["public_identifier"] for item in batch["answers"]]
+                expected = {candidate["public_identifier"] for candidate in candidates}
+                if len(slugs) != len(expected) or set(slugs) != expected:
+                    raise ValueError("answer must match the requested candidates")
+                if _EMAIL.search(json.dumps(batch, ensure_ascii=False)):
+                    raise ValueError("answer contains an email address")
+                for item in batch["answers"]:
+                    answer = item["answer"]
+                    answer["reason"], answer["relationship"] = answer["reason"][:MAX_TEXT], answer["relationship"][:MAX_TEXT]
+                    slug = item["public_identifier"]
+                    candidate = next(candidate for candidate in message["payload"]["candidates"] if candidate["public_identifier"] == slug)
+                    write_json(self.data_root / "asks" / f"{message['id']}-{slug}.json",
+                               {"message": message, "candidate": candidate, "evidence_used": used[slug],
+                                "answer": answer, "answered_at": now_iso()})
+                answers.extend(batch["answers"])
+            by_slug = {item["public_identifier"]: item for item in answers}
+            message["answer"] = {"answers": [by_slug[candidate["public_identifier"]] for candidate in message["payload"]["candidates"]]}
+            write_json(self._path(question_id), message)
+        self.sets.message(message["from"]["operator_id"], ANSWER,
+                          {"ask_id": message["payload"]["ask_id"], **message["answer"]})
+        message["answered_at"] = now_iso()
+        write_json(self._path(question_id), message)
+        return message

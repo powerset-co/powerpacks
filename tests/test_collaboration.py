@@ -47,6 +47,9 @@ class LocalSets:
     def settle(self):
         pass
 
+    def known_operators(self):
+        return {member.operator_id for view in self.kept() for member in self.members(view)}
+
     def message(self, to, kind, payload):
         raw = {"id": str(uuid4()), "kind": kind, "payload": payload,
                "from": {"operator_id": self.identity.operator_id, "name": self.identity.name},
@@ -94,6 +97,35 @@ class CollaborationTests(unittest.TestCase):
         self.recipient.settle()
         return sent, sent.messages[0]
 
+    def test_chat_answer_strips_whitespace_and_rejects_empty_or_extra_fields(self):
+        self.assertEqual(Answer.model_validate({"text": "  Summary  "}).text, "Summary")
+        for payload in ({"text": "  "}, {"text": "x" * 20001}, {"text": "Summary", "private": "extra"}, {"text": 123}):
+            with self.subTest(payload=payload), self.assertRaises(ValidationError):
+                Answer.model_validate(payload)
+
+    def test_pending_contract_contains_chat_and_legacy_without_inference(self):
+        conversation, chat = self.question()
+        legacy_id = str(uuid4())
+        legacy = {"id": legacy_id, "kind": "ask", "created_at": now_iso(),
+                  "from": {"operator_id": self.members[0].operator_id, "name": self.members[0].name},
+                  "payload": {"ask_id": str(uuid4()), "question": "Would you intro?",
+                              "role": {"title": "Engineer", "company": "", "job_description": ""},
+                              "candidates": []}}
+        write_json(self.recipient.sets.data_root / "inbox" / f"{legacy_id}.json", legacy)
+        pending = {held["id"]: held for held in self.recipient.pending()["questions"]}
+        self.assertEqual(set(pending), {chat.id, legacy_id})
+        self.assertEqual(pending[chat.id]["context"]["conversation_id"], conversation.id)
+        self.assertEqual(pending[chat.id]["output_schema"], Answer.model_json_schema())
+        self.assertEqual(pending[legacy_id]["context"]["role"]["title"], "Engineer")
+        self.assertNotIn("set_id", pending[legacy_id]["context"])
+        self.assertEqual(pending[legacy_id]["answer"], {"answers": []})
+        self.assertEqual(self.recipient.sets.sent, [])
+        self.recipient.finish(legacy_id, {"answers": []})
+        self.assertEqual(self.recipient.sets.sent[0][1]["kind"], "ask_answer")
+        self.recipient.thread(chat.id, Thread(thread_id="chat-thread"))
+        self.recipient.finish(chat.id, {"text": "Safe summary"})
+        self.assertEqual(self.recipient.pending(), {"questions": []})
+
     def test_chat_broadcast_persisted_and_idempotent(self):
         conversation = self.conversation()
         sent = self.sender.send(SendMessage(conversation_id=conversation.id, text="Hello team"))
@@ -138,7 +170,7 @@ class CollaborationTests(unittest.TestCase):
         self.assertEqual(set(payload), {"set_id", "search_id", "title", "kind", "query", "conversation_id", "message"})
         self.assertNotIn("candidates", payload)
         self.assertNotIn("profiles", payload)
-        self.assertEqual(self.recipient.pending()["questions"][0]["query"], created.query)
+        self.assertEqual(self.recipient.pending()["questions"][0]["context"]["query"], created.query)
 
     def test_received_search_preserved_without_artifacts_unknown_local_search_rejected(self):
         conversation, _ = self.question()
@@ -159,7 +191,7 @@ class CollaborationTests(unittest.TestCase):
         followup = self.sender.send(SendMessage(conversation_id=conversation.id, text="Why Casey?", reply_to=root.id)).messages[-1]
         self.assertEqual((followup.reply_to, followup.recipient_id), (root.id, root.recipient_id))
         pending = self.recipient.pending()["questions"][0]
-        self.assertEqual((pending["id"], pending["reply_to"], pending["search_id"]), (followup.id, root.id, conversation.search_id))
+        self.assertEqual((pending["id"], pending["context"]["reply_to"], pending["context"]["search_id"]), (followup.id, root.id, conversation.search_id))
         self.assertEqual(pending["question"], "Original question: Who can help?\nOriginal answer: Casey can help.\nFollow-up: Why Casey?")
         self.recipient.thread(followup.id, Thread(thread_id="synthetic-followup-thread"))
         self.recipient.finish(followup.id, Answer(text="Casey has relevant experience."))
@@ -419,7 +451,7 @@ class CollaborationTests(unittest.TestCase):
                 client.request("GET", "/api/collaboration/pending")
                 response = client.getresponse()
                 pending = json.loads(response.read())["questions"][0]
-                self.assertEqual((pending["id"], pending["query"]), (question["id"], "Search queries:\nEngineer"))
+                self.assertEqual((pending["id"], pending["context"]["query"]), (question["id"], "Search queries:\nEngineer"))
                 client.request("POST", f"/api/collaboration/questions/{question['id']}/thread", json.dumps({"thread_id": "synthetic-http-thread"}))
                 response = client.getresponse()
                 working = next(held for held in json.loads(response.read())["messages"] if held["id"] == question["id"])
@@ -434,6 +466,51 @@ class CollaborationTests(unittest.TestCase):
                 self.assertEqual(json.loads(response.read())["conversations"][0]["messages"][-1]["status"], "answered")
                 client.close()
             finally:
+                server.shutdown()
+                thread.join()
+
+    def test_legacy_ask_uses_real_question_http_routes_and_validates_batch(self):
+        self.sender.sets.message(self.members[1].operator_id, "ask", {
+            "ask_id": str(uuid4()), "question": "Would you intro?",
+            "role": {"title": "Engineer", "company": "", "job_description": ""},
+            "candidates": [{"public_identifier": "jordan-bravo", "linkedin_url": "https://www.linkedin.com/in/jordan-bravo",
+                            "name": "Jordan Bravo"}]})
+        question_id = self.sender.sets.sent[-1][1]["id"]
+        routes = CollaborationRoutes(self.recipient)
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                routes.get(self, urllib.parse.urlparse(self.path))
+            def do_POST(self):
+                routes.post(self, urllib.parse.urlparse(self.path))
+            def log_message(self, *args):
+                pass
+        with patch("packs.ingestion.primitives.ask_worker.ask_worker._evidence", return_value=({"facts": {}}, [])), \
+                ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            client = http.client.HTTPConnection(*server.server_address)
+            try:
+                client.request("GET", "/api/collaboration/pending")
+                response = client.getresponse()
+                pending = json.loads(response.read())["questions"][0]
+                self.assertEqual((response.status, pending["id"]), (200, question_id))
+                self.assertIn("answers", pending["output_schema"]["properties"])
+                answer = {"answers": [{"public_identifier": "jordan-bravo", "answer": {
+                    "verdict": "unsure", "reason": "Thin evidence", "can_intro": False, "relationship": "Unknown",
+                    "last_contact": None, "confidence": 0.1}}]}
+                prefix = f"/api/collaboration/questions/{question_id}"
+                for action, body, status in (("answer", answer, 400), ("thread", {"thread_id": "legacy-thread"}, 200),
+                                             ("answer", {"answers": []}, 400), ("answer", answer, 200),
+                                             ("answer", answer, 200)):
+                    client.request("POST", f"{prefix}/{action}", json.dumps(body))
+                    response = client.getresponse()
+                    response.read()
+                    self.assertEqual(response.status, status)
+                self.assertEqual(len(self.recipient.sets.sent), 1)
+                self.assertEqual(self.recipient.sets.sent[0][1]["kind"], "ask_answer")
+                self.assertEqual(self.recipient.sets.sent[0][1]["payload"]["answers"], answer["answers"])
+            finally:
+                client.close()
                 server.shutdown()
                 thread.join()
 

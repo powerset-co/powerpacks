@@ -31,8 +31,8 @@ afterEach(() => {
 it("does not run pending live questions until the recipient explicitly answers", async () => {
   const question = {
     id: "question",
-    set_id: "set",
-    conversation_id: "chat",
+    context: { set_id: "set", conversation_id: "chat" },
+    output_schema: { type: "object" },
     from_name: "Casey Example",
     question: "Who do you know?",
   }

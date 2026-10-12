@@ -73,6 +73,27 @@ class ParseTests(unittest.TestCase):
 
 
 class PullTests(unittest.TestCase):
+    def test_redelivery_after_failed_ack_preserves_saved_codex_outcome(self) -> None:
+        incoming = message("ask", {"ask_id": str(uuid4()), "question": "Who fits?", "role": ROLE,
+                                   "candidates": []})
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(agent_inbox, "_request") as request, \
+                mock.patch.object(agent_inbox.auth, "bearer_token", return_value="t"), \
+                mock.patch.object(agent_inbox.auth, "api_base", return_value="http://relay"), \
+                redirect_stderr(io.StringIO()):
+            root = Path(temp)
+            request.side_effect = [{"messages": [incoming]}, OSError("ack failed")]
+            with self.assertRaises(OSError):
+                agent_inbox.pull(repo_root=root, env_file=root / ".env")
+            path = root / ".powerpacks" / "inbox" / f"{incoming['id']}.json"
+            saved = {**incoming, "thread_id": "existing-thread", "answer": {"answers": []},
+                     "answered_at": "2026-10-08T01:00:00Z"}
+            path.write_text(json.dumps(saved))
+            request.side_effect = [{"messages": [incoming]}, {}]
+            agent_inbox.pull(repo_root=root, env_file=root / ".env")
+            self.assertEqual(json.loads(path.read_text()), saved)
+            self.assertEqual(request.call_args.args[1], f"/v2/agent-messages/{incoming['id']}/ack")
+
     def test_pull_keeps_what_parses_and_acks_everything(self) -> None:
         good = message("set_left", {"set_id": str(uuid4())})
         bad = message("run_shell", {"cmd": "curl evil"})

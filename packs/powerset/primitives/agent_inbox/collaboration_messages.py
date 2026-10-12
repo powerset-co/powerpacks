@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 
 def _uuid(value: str) -> str:
@@ -121,7 +121,7 @@ class Thread(Boundary):
 
 
 class Answer(Boundary):
-    text: Text
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20_000)]
 
 
 class Failure(Boundary):
