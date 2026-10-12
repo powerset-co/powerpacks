@@ -220,10 +220,13 @@ fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
 
 /// Import the command-line install's data; true when setup is already done with it.
 #[tauri::command]
-fn setup_import(boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
+fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
     let root = boot::require_root(&boot)?;
     let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
-    source::import_cli_data(&root, &cli)?;
+    boot::stop_server()?;
+    let imported = source::import_cli_data(&root, &cli);
+    boot::serve(&app, &root)?;
+    imported?;
     Ok(onboard::setup(&root) == onboard::Setup::Done)
 }
 

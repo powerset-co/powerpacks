@@ -218,9 +218,8 @@ fn page_health() -> Option<serde_json::Value> {
     (identity.get("primitive")?.as_str()? == PAGE_PRIMITIVE).then_some(identity)
 }
 
-/// Run the page server as this app's own child, replacing any page an earlier run left on the
-/// port, so the window always talks to the code this app installed and nothing outlives it.
-pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
+/// Stop the page before its data folder changes, including the relay's store connection.
+pub fn stop_server() -> Result<(), String> {
     if let Some(stale) = page_health() {
         children::stop_pid(
             stale
@@ -232,7 +231,17 @@ pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
         while page_health().is_some() && Instant::now() < gone {
             thread::sleep(HEALTH_POLL);
         }
+        if page_health().is_some() {
+            return Err("The Powerpacks page did not stop; its data was kept.".into());
+        }
     }
+    Ok(())
+}
+
+/// Run the page server as this app's own child, replacing any page an earlier run left on the
+/// port, so the window always talks to the code this app installed and nothing outlives it.
+pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
+    stop_server()?;
     let log_path = root.join(SERVER_LOG);
     std::fs::create_dir_all(log_path.parent().expect("log dir"))
         .map_err(|error| error.to_string())?;

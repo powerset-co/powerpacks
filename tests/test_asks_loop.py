@@ -23,6 +23,7 @@ import nats
 from nats.js.errors import NotFoundError
 
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+from packs.ingestion.primitives.share.web.sets import Member, Sets
 from packs.shared.web import asks_loop, server
 
 
@@ -95,9 +96,15 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AskLoopServerTests(unittest.TestCase):
-    def test_first_store_request_starts_one_daemon(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+    def test_fresh_store_routes_start_one_daemon_and_keep_sets(self):
+        for method, path in (("GET", "/api/people/sets"), ("GET", "/api/relay"),
+                             ("POST", "/api/relay/connect"), ("GET", "/api/collaboration")):
+            with self.subTest(method=method, path=path), tempfile.TemporaryDirectory() as directory:
+                self.check_fresh_store_routes(Path(directory), method, path)
+
+    def check_fresh_store_routes(self, root, method, path):
+        with patch.object(Sets, "me", return_value=Member("Casey", "casey@example.com", "owner", "synthetic-owner")), \
+                patch.object(Sets, "people", return_value=0), patch.object(Sets, "message") as sent:
             started = threading.Event()
             daemon = []
 
@@ -113,26 +120,32 @@ class AskLoopServerTests(unittest.TestCase):
                 thread = threading.Thread(target=page.serve_forever, daemon=True)
                 thread.start()
 
-                def request():
+                def request(method="GET", path="/api/review/page", body=None):
                     client = http.client.HTTPConnection(*page.server_address, timeout=5)
-                    client.request("GET", "/api/review/page")
+                    client.request(method, path, json.dumps(body) if body is not None else None)
                     response = client.getresponse()
-                    response.read()
+                    payload = json.loads(response.read())
                     client.close()
-                    return response.status
+                    self.assertEqual(response.status, 200, payload)
+                    return payload
 
                 try:
                     loop.assert_not_called()
-                    self.assertEqual(request(), 503)
-                    loop.assert_not_called()
-                    conn = open_store(root / server.STORE, shared=True)
-                    with patch("packs.ingestion.primitives.deep_context_v2.db.store.open_store", return_value=conn):
-                        self.assertEqual(request(), 200)
-                        self.assertTrue(started.wait(2))
-                        self.assertEqual(request(), 200)
-                    conn.close()
+                    self.assertFalse((root / server.STORE).exists())
+                    request(method, path)
+                    self.assertTrue(started.wait(2))
+                    self.assertTrue((root / server.STORE).is_file())
+                    created = request("POST", "/api/people/sets", {"name": "Synthetic recruiting"})
+                    set_id = created["sets"][1]["set_id"]
+                    self.assertEqual(request("GET", "/api/people/sets")["sets"][1]["set_id"], set_id)
+                    self.assertEqual(request("GET", "/api/collaboration")["sets"][0]["set_id"], set_id)
+                    request()
+                    with open_store(root / server.STORE) as conn:
+                        self.assertEqual(conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 0)
+                        self.assertEqual(conn.execute("SELECT name FROM sets").fetchone()[0], "Synthetic recruiting")
                     loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
                     self.assertEqual(daemon, [True])
+                    sent.assert_not_called()
                 finally:
                     page.shutdown()
                     thread.join()

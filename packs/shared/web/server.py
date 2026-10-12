@@ -3,13 +3,14 @@ Searches, Accounts and Tasks, on one port.
 
 `start` detaches this server before the project's Python environment exists, so this module imports
 only the standard library and the install status modules at load; everything else mounts on the
-first request once <root>/.powerpacks/deep-context/deep-context-v2.sqlite exists. Until then `/`
+first request once the project packages import. Before the network is built, `/`
 goes to `/install` while setup runs, else to `/searches`. `serve` runs it in the foreground.
 
 The review routes are deep_context_v2's (review/api.py); the People page's are the share stage's
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
 - 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer;
   POST /api/account/signin starts the sign-in and answers its page's URL for the desktop app.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
@@ -78,21 +79,16 @@ def _load_project_packages(root: Path) -> None:
         site.addsitedir(str(packages))
 
 
-NO_NETWORK = {"error": "No network yet. Finish setup to build it.", "retry_command": "bin/deep-context-v2 run"}
-
-
 def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """The full server once the project packages import: the app, Accounts, Tasks and Searches, and
-    People and the review once the v2 store exists (they answer "no network yet" before that)."""
+    """The full server once the project packages import, with an empty store before import."""
     from packs.ingestion.primitives.accounts.api import AccountsApi
     from packs.ingestion.primitives.deep_context_v2.db.store import open_store
     from packs.ingestion.primitives.deep_context_v2.openai import load_env
     from packs.ingestion.primitives.deep_context_v2.review.api import ReviewApi
     from packs.ingestion.primitives.refresh.api import TasksApi
     from packs.ingestion.primitives.share.web.server import share_routes
-    from packs.ingestion.primitives.share.web.sets import CloudError
     from packs.search.primitives.deep_search.results_web.api import search_api
-    from packs.search.primitives.deep_search.results_web.server import _send_json, search_routes
+    from packs.search.primitives.deep_search.results_web.server import search_routes
     from packs.shared.web import asks_loop
     from packs.shared.web.collaboration import Collaboration, CollaborationRoutes
 
@@ -100,28 +96,25 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     data_root: Path = root / ".powerpacks"
     app = AppRoutes()
     # One connection for the review and the People page, one store request at a time: both were
-    # written for one request at a time. It opens on the first request after the store appears.
+    # written for one request at a time. It opens on the first store-backed request.
     store_lock = threading.Lock()
     network: dict[str, tuple[ReviewApi, Any]] = {}
     collaboration: dict[str, CollaborationRoutes] = {}
 
-    def network_routes() -> tuple[ReviewApi, Any] | None:
+    def network_routes() -> tuple[ReviewApi, Any]:
         """Called under the store lock. The Ask the Set daemon starts with the store too."""
-        if "routes" not in network and (root / STORE).is_file():
+        if "routes" not in network:
             conn = open_store(root / STORE, shared=True)
             network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
             collaboration["routes"] = CollaborationRoutes(Collaboration(network["routes"][1].sets, searches))
             threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
                              name="asks", daemon=True).start()
-        return network.get("routes")
+        return network["routes"]
 
     class LazySets:
-        """The sets once the store exists; before that an ask says there is no network yet."""
+        """Open the sets on the first ask; its routes hold the store lock already."""
         def __getattr__(self, name: str) -> Any:
-            routes = network_routes()  # the ask routes hold the store lock already
-            if routes is None:
-                raise CloudError(NO_NETWORK["error"])
-            return getattr(routes[1].sets, name)
+            return getattr(network_routes()[1].sets, name)
 
     searches = search_routes(data_root / "deep-search", base="/searches")
     searches_json = search_api(searches, LazySets(), store_lock)
@@ -151,14 +144,14 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             with store_lock:
                 routes = network_routes()
-                if routes is None:
-                    _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
-                elif not collaboration["routes"].get(self, parsed) and not routes[1].get(self, parsed):
+                if not collaboration["routes"].get(self, parsed) and not routes[1].get(self, parsed):
                     routes[0].get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/relay/connect":
+                with store_lock:
+                    network_routes()
                 asks_loop.WAKE.set()
                 self._relay()
                 return
@@ -166,9 +159,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             with store_lock:
                 routes = network_routes()
-                if routes is None:
-                    _send_json(self, NO_NETWORK, status=HTTPStatus.SERVICE_UNAVAILABLE)
-                elif not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
+                if not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
                     routes[0].post(self, parsed)
 
         def log_message(self, fmt: str, *args: object) -> None:
@@ -178,7 +169,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
 
 def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """Serve the built app and setup progress at once; mount the rest once the store exists."""
+    """Serve the built app and setup progress at once; mount the rest once its packages import."""
     app = AppRoutes()
     install = InstallController(root)
     sign_in = account.SignIn(root)

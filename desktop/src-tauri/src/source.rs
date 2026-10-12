@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::paths;
+
 pub const ARCHIVE_RESOURCE: &str = "powerpacks.tar.gz";
 /// The commit the archive was made from (scripts/bundle-runtime.sh); the folder refreshes when
 /// it changes, so every build counts, not only a new app version.
@@ -76,7 +78,7 @@ pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String>
 /// The command-line install's folder (`bin/bootstrap` puts Powerpacks at `~/powerpacks`).
 const CLI_INSTALL: &str = "powerpacks";
 const DATA_DIR: &str = ".powerpacks";
-/// Deep Context's store: the sign that a folder holds a built network.
+/// Deep Context's store, also initialized empty by the Sets page before import.
 const NETWORK_STORE: &str = ".powerpacks/deep-context/deep-context-v2.sqlite";
 
 /// The command-line install with data on this machine, if any: the setup page offers to
@@ -88,14 +90,50 @@ pub fn cli_install(root: &Path) -> Option<PathBuf> {
 
 /// Share that install's data folder (a link, so both see the same files: the network, imports,
 /// searches and account) and take over its `.env`. The app's own data folder, holding only
-/// what this launch recorded, makes way; one with a network of its own is kept.
+/// what this launch recorded, is backed up; one with a network or sets of its own is kept.
 pub fn import_cli_data(root: &Path, cli: &Path) -> Result<(), String> {
     if root.join(NETWORK_STORE).is_file() {
-        return Err("This app already has a network. Delete its data first (debug menu).".into());
+        const PROBE: &str = r#"
+import sqlite3, sys
+from pathlib import Path
+with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True) as conn:
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name <> 'meta' AND name NOT LIKE 'sqlite_%'").fetchall()
+    sys.exit(2 if any(conn.execute('SELECT 1 FROM "' + name.replace('"', '""') + '" LIMIT 1').fetchone() for (name,) in tables) else 0)
+"#;
+        let status = Command::new(paths::project_python(root))
+            .args(["-c", PROBE])
+            .arg(root.join(NETWORK_STORE))
+            .status()
+            .map_err(|error| format!("Could not inspect this app's data: {error}"))?;
+        match status.code() {
+            Some(0) => {}
+            Some(2) => {
+                return Err(
+                    "This app's existing network or set data was kept. Importing would replace it."
+                        .into(),
+                )
+            }
+            _ => return Err("Could not inspect this app's data; it was kept.".into()),
+        }
     }
     let data = root.join(DATA_DIR);
     let version = fs::read_to_string(root.join(MARKER)).ok();
-    remove_data(&data)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    if root.join(".env").is_file() && cli.join(".env").is_file() {
+        fs::copy(
+            root.join(".env"),
+            root.join(format!(".env.{timestamp}.bkup")),
+        )
+        .map_err(|error| format!("Could not keep .env: {error}"))?;
+    }
+    if data.exists() {
+        let backup = root.join(format!("{DATA_DIR}.{timestamp}.bkup"));
+        fs::rename(&data, &backup)
+            .map_err(|error| format!("Could not keep {}: {error}", data.display()))?;
+    }
     link_dir(&cli.join(DATA_DIR), &data)
         .map_err(|error| format!("Could not share {}: {error}", cli.join(DATA_DIR).display()))?;
     if let Some(version) = version {
@@ -210,4 +248,113 @@ fn top_level_entries(archive: &Path) -> Result<Vec<PathBuf>, String> {
     entries.sort();
     entries.dedup();
     Ok(entries)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::paths;
+
+    #[test]
+    fn import_accepts_empty_schema_but_preserves_candidates_and_sets() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let python = paths::project_python(&repo).canonicalize().unwrap();
+        let temporary = std::env::temp_dir().join(format!(
+            "powerpacks-import-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for fixture in ["empty", "candidates", "sets"] {
+            let root = temporary.join(fixture);
+            let cli = temporary.join(format!("cli-{fixture}"));
+            fs::create_dir_all(root.join(".venv/bin")).unwrap();
+            std::os::unix::fs::symlink(&python, paths::project_python(&root)).unwrap();
+            fs::create_dir_all(cli.join(DATA_DIR)).unwrap();
+            fs::write(cli.join(DATA_DIR).join("synthetic.txt"), "imported").unwrap();
+            fs::write(cli.join(".env"), "SYNTHETIC=imported\n").unwrap();
+            let held_env =
+                "SYNTHETIC=held\nPOWERPACKS_CREDENTIALS_PATH=/synthetic/native credentials.json\n";
+            fs::write(root.join(".env"), held_env).unwrap();
+            write_marker(&root, "synthetic-version").unwrap();
+            fs::create_dir_all(root.join(DATA_DIR).join("inbox")).unwrap();
+            let invite = "{\"kind\":\"set_invite\",\"id\":\"synthetic\"}";
+            fs::write(root.join(DATA_DIR).join("inbox/synthetic.json"), invite).unwrap();
+            let made = Command::new(&python)
+                .current_dir(&repo)
+                .args(["-c", r#"
+import sys
+from pathlib import Path
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+with open_store(Path(sys.argv[1])) as conn:
+    if sys.argv[2] == 'candidates':
+        conn.execute("INSERT INTO candidates VALUES ('synthetic', 'Casey', 0, '{}', '2026-10-12')")
+    if sys.argv[2] == 'sets':
+        conn.execute("INSERT INTO sets VALUES ('synthetic', 'Recruiting', 'owner', '[]', '2026-10-12')")
+"#])
+                .arg(root.join(NETWORK_STORE))
+                .arg(fixture)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            let stored = fs::read(root.join(NETWORK_STORE)).unwrap();
+            let result = import_cli_data(&root, &cli);
+            if fixture == "empty" {
+                result.unwrap();
+                assert!(fs::symlink_metadata(root.join(DATA_DIR))
+                    .unwrap()
+                    .is_symlink());
+                assert_eq!(
+                    fs::read_to_string(root.join(DATA_DIR).join("synthetic.txt")).unwrap(),
+                    "imported"
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join(".env")).unwrap(),
+                    "SYNTHETIC=imported\n"
+                );
+                assert_eq!(
+                    fs::read_to_string(root.join(MARKER)).unwrap(),
+                    "synthetic-version"
+                );
+                let backup = fs::read_dir(&root)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| path.is_dir() && path.to_string_lossy().ends_with(".bkup"))
+                    .unwrap();
+                let suffix = backup
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .strip_prefix(DATA_DIR)
+                    .unwrap();
+                assert_eq!(
+                    fs::read_to_string(root.join(format!(".env{suffix}"))).unwrap(),
+                    held_env
+                );
+                assert_eq!(
+                    fs::read_to_string(backup.join("inbox/synthetic.json")).unwrap(),
+                    invite
+                );
+                assert_eq!(
+                    fs::read(backup.join("deep-context/deep-context-v2.sqlite")).unwrap(),
+                    stored
+                );
+            } else {
+                assert!(result.is_err(), "{fixture} must be retained");
+                assert_eq!(fs::read(root.join(NETWORK_STORE)).unwrap(), stored);
+                assert_eq!(fs::read_to_string(root.join(".env")).unwrap(), held_env);
+                assert!(!fs::symlink_metadata(root.join(DATA_DIR))
+                    .unwrap()
+                    .is_symlink());
+                assert_eq!(
+                    fs::read_to_string(root.join(DATA_DIR).join("inbox/synthetic.json")).unwrap(),
+                    invite
+                );
+            }
+        }
+        fs::remove_dir_all(temporary).unwrap();
+    }
 }
