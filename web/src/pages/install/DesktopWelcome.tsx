@@ -11,7 +11,6 @@ import {
   ImportIcon,
   SparkIcon,
   Spinner,
-  WarningIcon,
 } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
@@ -36,8 +35,7 @@ const POLL_MS = 2_000
 const CHOICE =
   "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform,opacity] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
 
-/** One thing this Mac needs: what it is, why, and its status icon on the right. A needed item's
- *  warning is the button that gets it (its label shows on hover). */
+/** One setup prerequisite, with a labeled action when it needs attention. */
 function Check({
   icon,
   title,
@@ -50,7 +48,6 @@ function Check({
   title: string
   why: string
   state: "checking" | "working" | "ready" | "needed"
-  /** What clicking the warning does. */
   fix?: { label: string; onClick: () => void }
   note?: ReactNode
 }) {
@@ -66,19 +63,9 @@ function Check({
         {note}
       </div>
       {state === "needed" && fix ? (
-        <button
-          key={state}
-          type="button"
-          title={fix.label}
-          aria-label={fix.label}
-          onClick={fix.onClick}
-          className={cn(
-            mark,
-            "cursor-pointer border-0 bg-warn-soft text-warn transition-[transform,box-shadow] duration-fast ease-out hover:scale-110 hover:shadow-[0_0_0_3px_var(--warn-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-warn",
-          )}
-        >
-          <WarningIcon className="size-3.5" />
-        </button>
+        <Button key={state} size="sm" onClick={fix.onClick} className="shrink-0 self-center">
+          {fix.label}
+        </Button>
       ) : (
         <span
           key={state}
@@ -165,7 +152,7 @@ function PreflightCheck({ onBack }: { onBack: () => void }) {
         <Check
           icon={<MessagesIcon className="size-[18px]" />}
           title="Full Disk Access"
-          why="Enable if you want us to read iMessage and Contacts to find who you talk to. Nothing leaves your computer."
+          why="Optional. Read iMessage and Contacts to find the people you talk to."
           state={readable === null ? "checking" : readable ? "ready" : "needed"}
           fix={{
             label: "Open Settings",
@@ -176,17 +163,17 @@ function PreflightCheck({ onBack }: { onBack: () => void }) {
         <Check
           icon={<BrowserIcon className="size-[18px]" />}
           title="A browser for sign-ins"
-          why="Signs in to LinkedIn and Google in a browser window. Nothing leaves your computer."
+          why="Opens LinkedIn and Google sign-in pages. The browser download is about 150 MB."
           state={status(data?.browser)}
-          fix={{ label: "Install Chromium (about 150 MB)", onClick: () => install("chromium") }}
+          fix={{ label: "Install browser", onClick: () => install("chromium") }}
           note={data && !data.browser.ok ? <InstallLine install={data.browser.install} /> : null}
         />
         <Check
           icon={<CloudIcon className="size-[18px]" />}
-          title="Google Cloud CLI"
-          why="Connects Gmail through msgvault.io. Nothing leaves your computer."
+          title="Google tools"
+          why="Prepares Google access so Powerpacks can connect Gmail."
           state={status(data?.gcloud)}
-          fix={{ label: "Install the Google Cloud CLI", onClick: () => install("gcloud") }}
+          fix={{ label: "Install Google tools", onClick: () => install("gcloud") }}
           note={data && !data.gcloud.ok ? <InstallLine install={data.gcloud.install} /> : null}
         />
       </ul>
