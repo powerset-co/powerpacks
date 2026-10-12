@@ -90,3 +90,54 @@ describe("signIn in the desktop app", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("sign-in recovery", () => {
+  afterEach(() => {
+    vi.doUnmock("@/lib/desktop")
+    vi.doUnmock("@/lib/signin")
+  })
+
+  it.each([false, true])("returns to the existing Setup login, desktop=%s", async (desktop) => {
+    vi.resetModules()
+    vi.doMock("@/lib/desktop", () => ({ isDesktop: () => desktop }))
+    const assign = vi.fn()
+    vi.stubGlobal("location", { assign })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: "Finish signing in on Setup.", setup_url: "/install" }), {
+            status: 409,
+          }),
+        ),
+      ),
+    )
+    const { signIn } = await import("./feedback")
+    await expect(signIn()).rejects.toThrow("Finish signing in on Setup.")
+    expect(assign).toHaveBeenCalledWith("/install")
+  })
+
+  it("does not treat the callback as success when the token exchange failed", async () => {
+    vi.resetModules()
+    vi.doMock("@/lib/desktop", () => ({ isDesktop: () => true }))
+    vi.doMock("@/lib/signin", () => ({
+      POWERSET_CALLBACK: ["http://localhost:9876/callback"],
+      openSignIn: vi.fn(),
+      signInFinished: () => Promise.resolve(true),
+    }))
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          url.endsWith("/start")
+            ? new Response(JSON.stringify({ url: "https://auth.example/authorize" }))
+            : new Response(JSON.stringify({ error: "Sign-in did not complete. Try again." }), {
+                status: 401,
+              }),
+        ),
+      ),
+    )
+    const { signIn } = await import("./feedback")
+    await expect(signIn()).rejects.toThrow("Sign-in did not complete. Try again.")
+  })
+})

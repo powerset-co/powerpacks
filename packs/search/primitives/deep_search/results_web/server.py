@@ -27,10 +27,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.indexing.lib.io import write_json
+from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
+from packs.shared.web import account
 
 from . import RESULTS_CSS, RESULTS_JS
-from .feedback import ENV_FILE, build_feedback_request, record_fit_label, submit_results_feedback
+from .feedback import build_feedback_request, record_fit_label, submit_results_feedback
 from ..search_harness import ROOT
 from .model import FIT_LABELS_FILE, SearchCard, SearchResult, load_catalog, load_search, update_catalog_pins
 from .rendering import render_catalog, render_page, render_search_body
@@ -68,14 +70,16 @@ def _read_tagged(path: Path) -> dict[str, Any] | None:
 
 
 def _login(on_authorize_url: Callable[[str], None] | None = None) -> int:
-    from dotenv import load_dotenv
-
-    load_dotenv(ENV_FILE)
     from packs.powerset.primitives.auth.auth import main
 
+    values = account.config(ROOT)
+    args = ["login", "--auth0-domain", values.get("POWERPACKS_AUTH0_DOMAIN", ""),
+            "--client-id", values.get("POWERPACKS_AUTH0_CLIENT_ID", ""),
+            "--audience", values.get("POWERPACKS_AUTH0_AUDIENCE", ""),
+            "--credentials-path", str(account.credentials_path(ROOT))]
     if on_authorize_url is None:
-        return main(["login"])
-    return main(["login"], on_authorize_url=on_authorize_url)
+        return main(args)
+    return main(args, on_authorize_url=on_authorize_url)
 
 
 class AppLogin:
@@ -225,6 +229,12 @@ class SearchRoutes:
         if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
             _send(handler, b"cross-origin request rejected", "text/plain", status=403)
             return True
+        if path in {"/auth/login", "/auth/login/start"}:
+            action = InstallStatus(ROOT).read().get("action") or {}
+            if action.get("kind") == "signin":
+                _send_json(handler, {"status": "needs_auth", "error": "Finish signing in on Setup.",
+                                     "setup_url": "/install"}, status=HTTPStatus.CONFLICT)
+                return True
         if path == "/auth/login/start":
             # The desktop app shows the page itself; it posts /auth/login/finish for the outcome.
             url = self.app_login.start()

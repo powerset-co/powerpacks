@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState, type SVGProps } from "react"
+import { useState, type SVGProps } from "react"
 
-import { fetchAccount, startSignIn } from "@/lib/api/account"
-import { signIn as signInInBrowser } from "@/lib/api/feedback"
+import { fetchAccount } from "@/lib/api/account"
+import { signIn as authenticate } from "@/lib/api/feedback"
+import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
 import { openExternal } from "@/lib/api/install"
 import {
@@ -14,7 +15,7 @@ import {
   type Update,
 } from "@/lib/api/update"
 import { isDesktop } from "@/lib/desktop"
-import { POWERSET_CALLBACK, openSignIn, useSignIn } from "@/lib/signin"
+import { useSignIn } from "@/lib/signin"
 import { cn } from "@/lib/utils"
 
 import { Button } from "../ui/button"
@@ -113,21 +114,12 @@ function Profile({ rail }: { rail: boolean }) {
   })
   const signIn = useMutation({
     mutationFn: async () => {
-      if (isDesktop()) openSignIn({ title: "Powerset", url: await startSignIn(), finish: POWERSET_CALLBACK })
-      else await signInInBrowser()
+      await authenticate()
+      await connectRelay()
     },
     onSettled: () => client.invalidateQueries({ queryKey: ACCOUNT_KEY }),
   })
-  // The desktop pane closing is the sign-in finishing: read the account again.
   const pane = useSignIn()
-  const paneWasOpen = useRef(false)
-  useEffect(() => {
-    if (pane !== null) paneWasOpen.current = true
-    else if (paneWasOpen.current) {
-      paneWasOpen.current = false
-      void client.invalidateQueries({ queryKey: ACCOUNT_KEY })
-    }
-  }, [pane, client])
 
   const data = account.data
   const signedIn = data?.signed_in === true
@@ -138,39 +130,39 @@ function Profile({ rail }: { rail: boolean }) {
   const title = data === undefined ? "Checking who is signed in…" : signedIn ? name : "Not signed in"
   const detail = problem ?? email ?? (signedIn || data === undefined ? null : "Powerset")
 
-  // The relay dot is the avatar's sibling, never inside it: each keeps its own hover label.
+  const label = signedIn ? "Reconnect Powerset" : "Sign in to Powerset"
+  const avatar = (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={busy || data === undefined}
+      onClick={() => signIn.mutate()}
+      className="group relative block cursor-pointer rounded-full border-0 bg-transparent p-0 hover:[&>span]:border-foreground/60 hover:[&>span]:text-foreground disabled:cursor-default"
+    >
+      <Avatar name={name} />
+      <Tip side={rail ? "right" : "above"}>{problem ?? (busy ? "Signing in…" : label)}</Tip>
+    </button>
+  )
   const relay = <RelayDot tip={rail ? "right" : "above"} />
   if (rail) {
-    const tip = signedIn ? [title, email].filter((part) => part !== null).join(" · ") : `${title} · Sign in`
     return (
       <div className="flex justify-center border-t border-line py-2.5">
         <span className="relative">
-          {signedIn ? (
-            <span className="group relative block" aria-label={tip}>
-              <Avatar name={name} />
-              <Tip side="right">{tip}</Tip>
-            </span>
-          ) : (
-            <button
-              type="button"
-              aria-label={tip}
-              disabled={busy || data === undefined}
-              onClick={() => signIn.mutate()}
-              className="group relative block cursor-pointer rounded-full border-0 bg-transparent p-0 hover:[&>span]:border-foreground/60 hover:[&>span]:text-foreground disabled:cursor-default"
-            >
-              <Avatar name={null} />
-              <Tip side="right">{busy ? "Signing in…" : tip}</Tip>
-            </button>
-          )}
+          {avatar}
           {relay}
         </span>
+        {problem && (
+          <span role="alert" className="sr-only">
+            {problem}
+          </span>
+        )}
       </div>
     )
   }
   return (
     <div className="flex items-center gap-2.5 border-t border-line py-2.5 pr-2 pl-3">
       <span className="relative shrink-0">
-        <Avatar name={name} />
+        {avatar}
         {relay}
       </span>
       <div className="min-w-0 flex-1 leading-[1.25]">
@@ -179,6 +171,7 @@ function Profile({ rail }: { rail: boolean }) {
           <div
             className={cn("truncate text-[11px] text-muted-foreground", problem !== null && "text-bad")}
             title={detail}
+            role={problem ? "alert" : undefined}
           >
             {detail}
           </div>

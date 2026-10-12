@@ -27,11 +27,13 @@ export async function postFeedback(record: FeedbackRecord): Promise<FeedbackRepl
 export async function signIn(): Promise<void> {
   if (isDesktop()) return signInInApp()
   const response = await fetch(LOGIN, { method: "POST" })
+  if (response.status === 409) location.assign("/install")
   if (!response.ok) throw await failure(response, NOT_SIGNED_IN)
 }
 
 async function signInInApp(): Promise<void> {
   const started = await fetch(`${LOGIN}/start`, { method: "POST" })
+  if (started.status === 409) location.assign("/install")
   if (!started.ok) throw await failure(started, NOT_SIGNED_IN)
   const { url } = await body<{ url: string }>(started)
   openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })

@@ -113,21 +113,38 @@ class AccountRoutesTests(unittest.TestCase):
         self.credentials.write_text(json.dumps({"access_token": _token({"sub": "auth0|1"}), "email": "casey@example.com"}))
         self.assertEqual(self._json("/api/account")[1], {"signed_in": True, "email": "casey@example.com", "name": None})
 
-    def test_sign_in_answers_the_login_page_once_its_callback_listens(self) -> None:
-        def login(args, on_authorize_url=None):
-            on_authorize_url(f"https://{args.auth0_domain}/authorize?state=synthetic")
-            return 0
+    def test_login_uses_current_config_and_named_credentials(self) -> None:
+        from packs.search.primitives.deep_search.results_web import server
 
-        (self.root / ".env").write_text("POWERPACKS_AUTH0_DOMAIN=synthetic.auth0.example\n")
-        with patch.object(account.auth, "cmd_login", side_effect=login):
-            status, payload = self._json("/api/account/signin", "POST")
-        self.assertEqual((status, payload), (200, {"url": "https://synthetic.auth0.example/authorize?state=synthetic"}))
+        (self.root / ".env").write_text(
+            "POWERPACKS_AUTH0_DOMAIN=synthetic.auth0.example\n"
+            "POWERPACKS_AUTH0_CLIENT_ID=synthetic-client\n"
+            "POWERPACKS_AUTH0_AUDIENCE=https://synthetic.invalid\n")
+        with patch.object(server, "ROOT", self.root), patch.object(account.auth, "main", return_value=0) as login:
+            self.assertEqual(server._login(), 0)
+        self.assertEqual(login.call_args.args[0], [
+            "login", "--auth0-domain", "synthetic.auth0.example", "--client-id", "synthetic-client",
+            "--audience", "https://synthetic.invalid", "--credentials-path", str(self.credentials)])
 
-    def test_sign_in_that_cannot_start_is_an_error(self) -> None:
-        with patch.object(account.auth, "cmd_login", return_value=1):
-            status, payload = self._json("/api/account/signin", "POST")
-        self.assertEqual(status, HTTPStatus.SERVICE_UNAVAILABLE)
-        self.assertIn("could not start", payload["error"])
+    def test_login_routes_defer_to_setup_without_starting_another_login(self) -> None:
+        from packs.search.primitives.deep_search.results_web import server
+
+        http = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(self.root, lambda: ()))
+        threading.Thread(target=http.serve_forever, daemon=True).start()
+        self.addCleanup(http.server_close)
+        self.addCleanup(http.shutdown)
+        self.base = f"http://127.0.0.1:{http.server_address[1]}"
+        action = {"action": {"kind": "signin", "url": "https://synthetic.invalid"}}
+        with patch.object(server, "ROOT", self.root), \
+             patch("packs.powerset.primitives.install.status.InstallStatus.read", return_value=action), \
+             patch.object(server.AppLogin, "start") as start, patch.object(server, "_login") as login:
+            for path in ("/auth/login/start", "/auth/login"):
+                status, payload = self._json(path, "POST")
+                self.assertEqual(status, HTTPStatus.CONFLICT)
+                self.assertEqual(payload["setup_url"], "/install")
+            start.assert_not_called()
+            login.assert_not_called()
+
 
 
 if __name__ == "__main__":

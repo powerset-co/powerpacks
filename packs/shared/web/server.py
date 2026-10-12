@@ -11,8 +11,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 
 Changelog:
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
-- 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer;
-  POST /api/account/signin starts the sign-in and answers its page's URL for the desktop app.
+- 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
   and the review wait for it.
 - 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
@@ -172,7 +171,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     """Serve the built app and setup progress at once; mount the rest once its packages import."""
     app = AppRoutes()
     install = InstallController(root)
-    sign_in = account.SignIn(root)
     identity = {"primitive": PRIMITIVE, "repo_root": str(root), "pid": os.getpid()}
     mounted: dict[str, type[BaseHTTPRequestHandler]] = {}
     lock = threading.Lock()
@@ -257,12 +255,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path == "/api/account/signin":
-                try:
-                    self._json({"url": sign_in.start()})
-                except RuntimeError as error:
-                    self._json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
-                return
             if app.post(self, parsed):
                 return
             _load_project_packages(root)
