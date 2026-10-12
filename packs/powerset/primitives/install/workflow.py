@@ -111,8 +111,8 @@ class SourceOnboarding:
         if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
-        # Mailboxes msgvault already holds are reused; otherwise Gmail uses the
-        # Powerset login (in run()), and asks only without one.
+        # Reuse imported mailboxes or saved choices. Native setup asks before defaulting
+        # to the Powerset login; the CLI skill explains that default before setup.
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
             home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
             self.gmail_emails = tuple(sorted(
@@ -372,7 +372,7 @@ class SourceOnboarding:
             active = [source for source in self.sources if source not in self.skip_sources]
             if Source.GMAIL in active and not self.gmail_emails:
                 account = previous.get("account_email") or ""
-                if not account:
+                if not account or DESKTOP:
                     return self._write("gmail.which_accounts", handed_back=True)
                 self.gmail_emails = (account,)
                 self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])

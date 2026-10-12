@@ -163,7 +163,8 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.events, [])
         self.launch_page.assert_not_called()
 
-    def test_fresh_sources_use_new_powerset_account_and_save_gmail_choice_on_retry(self):
+    def test_native_sources_ask_for_gmail_and_preserve_the_selected_mailbox_on_retry(self):
+        self.enterContext(patch('packs.powerset.primitives.install.workflow.DESKTOP', True))
         self.sources.stop()  # Exercise SourceOnboarding.run after the account step writes its email.
         self.retry = f"{self.root}/bin/onboard --source gmail --harness pi --port 8899"
         self.status.write('step.waiting', step=InstallStep.ACCOUNT, pid=0,
@@ -180,16 +181,20 @@ class InstallCoordinatorTests(unittest.TestCase):
                  to_payload=lambda: {'status': 'completed'})), \
              patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
             code, output = self.run_command()
+            self.assertEqual(code, 10, output)
+            self.assertEqual(self.status.read()['event'], 'gmail.which_accounts')
+            health.assert_not_called()
+            code, output = self.run_command('--gmail-email', 'mailbox@gmail.com')
             self.assertEqual(code, 0, output)
-            self.assertEqual(health.call_args.args[1], ['new-powerset@example.com'])
+            self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
             retry = self.status.read()['retry_command']
-            self.assertIn('--gmail-email new-powerset@example.com', retry)
+            self.assertIn('--gmail-email mailbox@gmail.com', retry)
             self.assertIn('--harness pi --port 8899', retry)
             window = SourceOnboarding(self.root, sources=()).sync_after
             self.account_email = 'different-powerset@example.com'
             code, output = self.run_command()
             self.assertEqual(code, 0, output)
-            self.assertEqual(health.call_args.args[1], ['new-powerset@example.com'])
+            self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
             self.assertIn('--harness pi --port 8899', self.status.read()['retry_command'])
             self.assertEqual(SourceOnboarding(self.root, sources=()).sync_after, window)
 

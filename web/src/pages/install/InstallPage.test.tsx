@@ -546,6 +546,51 @@ describe("installation progress", () => {
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 
+  it.each(["gmail.which_accounts", "gmail.connect.failed"])(
+    "lets the user choose the Gmail mailbox at %s",
+    async (event) => {
+      const invoke = vi.fn(() => Promise.resolve(null))
+      vi.stubGlobal("__TAURI__", {
+        core: { invoke },
+        event: { listen: () => Promise.resolve(() => undefined) },
+      })
+      const choosing = event === "gmail.which_accounts"
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({
+                ...INSTALL,
+                step: "gmail_login",
+                status: choosing ? "waiting" : "failed",
+                event,
+                installer_pid: 0,
+                account_email: "powerset@example.com",
+                action: { kind: choosing ? "gmail" : "error" },
+              }),
+            ),
+          ),
+        ),
+      )
+      mount()
+      const input = await screen.findByLabelText("Gmail account")
+      expect(input).toHaveProperty("value", choosing ? "powerset@example.com" : "")
+      if (!choosing) {
+        fireEvent.click(screen.getByRole("button", { name: "Retry current account" }))
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+        await waitFor(() => expect(input).toHaveProperty("disabled", false))
+      }
+      fireEvent.change(input, { target: { value: "mailbox@gmail.com" } })
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }))
+      await waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith("onboard_continue", {
+          answer: { gmailEmail: "mailbox@gmail.com" },
+        }),
+      )
+    },
+  )
+
   it("waits for live Gmail authorization and only offers Continue when setup hands back control", async () => {
     const invoke = vi.fn(() => Promise.resolve(null))
     vi.stubGlobal("__TAURI__", {

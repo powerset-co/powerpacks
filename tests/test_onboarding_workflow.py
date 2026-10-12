@@ -185,11 +185,11 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertNotIn('--refresh', second['retry_command'])
         self.test_users.assert_not_called()
 
-    def test_powerset_gmail_choice_survives_other_mailboxes_added_before_rerun(self):
+    def test_selected_gmail_choice_survives_other_mailboxes_added_before_rerun(self):
         InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(),
                                        account_email='casey@example.com')
         with patch.object(SourceOnboarding, '_gmail_connect', return_value=False):
-            first = SourceOnboarding(self.root, sources=('gmail',))
+            first = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',))
             first.run()
         with patch.object(accounts, 'status_payload', return_value={'accounts': [
                 {'email': 'other@example.com'}, {'email': 'casey@example.com'}]}):
@@ -419,14 +419,26 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['message'], 'Gmail: 12 contacts · Messages: 8 contacts')
         self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
 
-    def test_gmail_defaults_to_the_powerset_login_without_asking(self):
+    def test_cli_gmail_uses_the_powerset_login_default(self):
         InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(), account_email='casey@example.com')
         seen = []
-        with patch.object(SourceOnboarding, '_gmail_connect', autospec=True,
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', False), \
+             patch.object(SourceOnboarding, '_gmail_connect', autospec=True,
                           side_effect=lambda flow: seen.append(flow.gmail_emails) or False):
             result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
         self.assertEqual(seen, [('casey@example.com',)])
         self.assertNotEqual(result['event'], 'gmail.which_accounts')
+
+    def test_gmail_asks_for_mailbox_before_using_the_powerset_login(self):
+        InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(), account_email='casey@example.com')
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch.object(SourceOnboarding, '_gmail_connect') as connect:
+            result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
+        connect.assert_not_called()
+        self.assertEqual(result['event'], 'gmail.which_accounts')
+        self.assertEqual(result['account_email'], 'casey@example.com')
+        self.assertEqual(result['installer_pid'], 0)
+        self.assertNotIn('--gmail-email', result['retry_command'])
 
     def test_fresh_gmail_creates_the_oauth_app_in_process_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={

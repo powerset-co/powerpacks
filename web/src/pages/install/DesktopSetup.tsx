@@ -29,16 +29,18 @@ function Ask({
   label,
   placeholder,
   type,
+  initialValue = "",
   busy,
   onAnswer,
 }: {
   label: string
   placeholder: string
   type: "email" | "url"
+  initialValue?: string
   busy: boolean
   onAnswer: (value: string) => void
 }) {
-  const [value, setValue] = useState("")
+  const [value, setValue] = useState(initialValue)
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!busy && value.trim()) onAnswer(value.trim())
@@ -133,18 +135,25 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   } else if (action?.kind === "qr") {
     control = skip
   } else if (
-    action?.kind === "gmail" &&
     data.step === "gmail_login" &&
-    data.event === "gmail.which_accounts"
+    (data.event === "gmail.which_accounts" || data.status === "failed")
   ) {
     control = (
-      <Ask
-        label="Gmail account"
-        placeholder="you@gmail.com"
-        type="email"
-        busy={busy}
-        onAnswer={(email) => answer({ gmailEmail: email })}
-      />
+      <>
+        <Ask
+          label="Gmail account"
+          placeholder="you@gmail.com"
+          type="email"
+          initialValue={data.event === "gmail.which_accounts" ? (data.account_email ?? "") : ""}
+          busy={busy}
+          onAnswer={(email) => answer({ gmailEmail: email })}
+        />
+        {data.status === "failed" && (
+          <Button disabled={busy} onClick={() => answer({})}>
+            Retry current account
+          </Button>
+        )}
+      </>
     )
   } else if (action?.kind === "owner") {
     control = (
