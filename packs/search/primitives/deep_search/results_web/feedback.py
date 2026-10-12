@@ -20,7 +20,6 @@ from typing import Any, Mapping
 from packs.powerset.primitives.send_feedback.send_feedback import (
     FeedbackRequest,
     SendFeedback,
-    default_set_id,
 )
 
 from .model import FIT_LABELS_FILE, Candidate, SearchResult
@@ -34,8 +33,7 @@ def build_feedback_request(search: SearchResult, comment: str,
                            environ: dict[str, str] | None = None,
                            human_judgment: Mapping[str, Any] | None = None,
                            ) -> FeedbackRequest:
-    return FeedbackRequest(**build_feedback_payload(search, comment, candidate, human_judgment),
-                           set_id=default_set_id(environ))
+    return FeedbackRequest(**build_feedback_payload(search, comment, candidate, human_judgment))
 
 
 def record_fit_label(run_dir: Path, request: FeedbackRequest) -> Path:

@@ -230,6 +230,13 @@ uv run --project . python \
   --run-dir <run> --env-file .env
 ```
 
+The upload preserves `results.json.retrieval.backend` and `retrieval.set_id`,
+including each source run in a combined search. Before uploading, verify these
+identify the corpus actually searched. Report that set ID with the result summary;
+never infer it from source operators or substitute the current default set when
+refreshing an older run. Local searches have no set ID; missing historical scope
+stays unknown.
+
 `uploaded` returns the private viewer URL; include it with the local viewer link.
 `needs_auth` is quiet and normal: keep the local viewer, without requesting login.
 On upload failure, keep the local results and report that hosting failed.

@@ -86,6 +86,41 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(saved["tags"]["assignments"], {fixtures.ResultsWebTest.PERSON: ["Discuss"]})
         self.assertEqual(model.candidate(fixtures.ResultsWebTest.PERSON).human_score, 5)
 
+    def test_snapshot_preserves_each_runs_recorded_scope(self):
+        from packs.search.primitives.deep_search.results_web.feedback_payload import build_feedback_payload
+        for directory, scope in ((self.run_dir, {"backend": "powerset", "set_id": "11111111-1111-4111-8111-111111111111"}),
+                                 (self.run_dir.parent / "jordan-role-prior", {"backend": "local", "db_path": "/private/index.duckdb"})):
+            path = directory / "results.json"
+            data = json.loads(path.read_text())
+            data["retrieval"] = scope
+            path.write_text(json.dumps(data))
+        exported = export_snapshot(self.run_dir)
+        model = _decode(SearchResult, validate_snapshot(exported)["search"], "search")
+        self.assertEqual(model.backend, "powerset")
+        self.assertEqual(model.set_id, "11111111-1111-4111-8111-111111111111")
+        pond = next(p for p in model.ponds if p.run_id == self.run_dir.name)
+        self.assertEqual((pond.backend, pond.set_id), (model.backend, model.set_id))
+        prior = next(p for p in model.ponds if p.run_id == "jordan-role-prior")
+        self.assertEqual((prior.backend, prior.set_id), ("local", ""))
+        self.assertEqual(build_feedback_payload(model, "test")["set_id"], model.set_id)
+        candidate = next(c for c in model.candidates if c.found_run == prior.run_id)
+        feedback = build_feedback_payload(model, "test", candidate)
+        self.assertNotIn("set_id", feedback)
+        self.assertEqual(feedback["metadata"]["backend"], "local")
+        self.assertNotIn("/private/index.duckdb", json.dumps(exported))
+
+    def test_old_snapshots_do_not_acquire_the_current_default_set(self):
+        from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request
+        old = copy.deepcopy(self.snapshot)
+        for row in [old["search"], *old["search"]["ponds"]]:
+            row.pop("backend", None)
+            row.pop("set_id", None)
+        model = _decode(SearchResult, validate_snapshot(old)["search"], "search")
+        request = build_feedback_request(model, "test", environ={
+            "POWERPACKS_DEFAULT_SET_ID": "22222222-2222-4222-8222-222222222222"})
+        self.assertEqual(model.set_id, "")
+        self.assertEqual(request.set_id, "")
+
     def test_export_has_no_raw_artifacts_or_generated_profile_fields(self):
         text = json.dumps(self.snapshot)
         for excluded in (self.directory.name, "dense_text", "Generated semantic", "profiles_path",
