@@ -2,7 +2,7 @@
 // page in the system browser and Codex reports the sign-in done. Shared by the Agent page's gate and the Accounts page's Codex card.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useEffect, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useState } from "react"
 
 import {
   cancelCodexLogin,
@@ -33,7 +33,16 @@ export interface CodexAccountState {
   retry: () => void
 }
 
+export const CodexAccountContext = createContext<CodexAccountState | null>(null)
+
 export function useCodexAccount(): CodexAccountState {
+  const account = useContext(CodexAccountContext)
+  if (!account) throw new Error("CodexAccountProvider is missing.")
+  return account
+}
+
+/** The native app owns sign-in, so changing pages cannot discard it. */
+export function useCodexAccountState(): CodexAccountState {
   const client = useQueryClient()
   const query = useQuery({ queryKey: CODEX_KEY, queryFn: fetchCodexStatus })
   const [login, setLogin] = useState<CodexLogin | null>(null)

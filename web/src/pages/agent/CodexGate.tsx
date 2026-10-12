@@ -50,8 +50,7 @@ export function CodexGate({ codex }: { codex: CodexAccountState }) {
       ) : (
         <>
           <p className="m-0 text-muted-foreground">
-            Chat runs on Codex with your ChatGPT plan. Sign in with a short code in your browser, and chat
-            starts as soon as you finish.
+            Chat runs on Codex with your ChatGPT plan. Sign in in your browser, then return here to start.
           </p>
           <Button variant="primary" onClick={codex.connect}>
             Connect ChatGPT

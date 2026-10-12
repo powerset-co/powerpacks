@@ -1,8 +1,9 @@
-import { useEffect } from "react"
+import { Fragment, useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
 import { DebugMenu, Sidebar, SignInModal } from "@/components/shared"
 import { isDesktop } from "@/lib/desktop"
+import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
@@ -38,41 +39,44 @@ function Shell() {
 export function App() {
   // The desktop app has no browser bar to leave the review by: there it keeps the side nav.
   const desktop = isDesktop()
+  const AccountProvider = desktop ? CodexAccountProvider : Fragment
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/home/variations" element={<VariationsPage />} />
-        {desktop ? null : <Route path="/" element={<ReviewPage />} />}
-        <Route element={<Shell />}>
-          {desktop ? (
-            <Route
-              path="/"
-              element={
-                <div className="min-h-0 overflow-y-auto">
-                  <ReviewPage />
-                </div>
-              }
-            />
-          ) : null}
-          <Route path="/home" element={<HomePage />} />
-          <Route path="/install" element={<InstallPage />} />
-          <Route path="/agent" element={<AgentPage />} />
-          <Route path="/people" element={<PeoplePage />}>
-            <Route index element={null} />
-            <Route path="logbook" element={<LogbookReader />} />
+      <AccountProvider>
+        <Routes>
+          <Route path="/home/variations" element={<VariationsPage />} />
+          {desktop ? null : <Route path="/" element={<ReviewPage />} />}
+          <Route element={<Shell />}>
+            {desktop ? (
+              <Route
+                path="/"
+                element={
+                  <div className="min-h-0 overflow-y-auto">
+                    <ReviewPage />
+                  </div>
+                }
+              />
+            ) : null}
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/install" element={<InstallPage />} />
+            <Route path="/agent" element={<AgentPage />} />
+            <Route path="/people" element={<PeoplePage />}>
+              <Route index element={null} />
+              <Route path="logbook" element={<LogbookReader />} />
+            </Route>
+            <Route path="/searches" element={<SearchesPage />}>
+              <Route index element={null} />
+              <Route path="run" element={null} />
+            </Route>
+            <Route path="/sets" element={<SetsPage />} />
+            <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="*" element={<Navigate to={HOME.href} replace />} />
           </Route>
-          <Route path="/searches" element={<SearchesPage />}>
-            <Route index element={null} />
-            <Route path="run" element={null} />
-          </Route>
-          <Route path="/sets" element={<SetsPage />} />
-          <Route path="/accounts" element={<AccountsPage />} />
-          <Route path="/tasks" element={<TasksPage />} />
-          <Route path="*" element={<Navigate to={HOME.href} replace />} />
-        </Route>
-      </Routes>
-      <SignInModal />
-      <DebugMenu />
+        </Routes>
+        <SignInModal />
+        <DebugMenu />
+      </AccountProvider>
     </BrowserRouter>
   )
 }

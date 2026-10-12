@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { AgentEvent } from "@/types/agent"
 
+import { CodexAccountProvider } from "./CodexAccountProvider"
 import { useCodexAccount } from "./useCodexAccount"
 
 const LOGIN = {
@@ -37,7 +38,9 @@ vi.mock("@/lib/api/install", () => installApi)
 function renderAccount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    <QueryClientProvider client={client}>
+      <CodexAccountProvider>{children}</CodexAccountProvider>
+    </QueryClientProvider>
   )
   return renderHook(() => useCodexAccount(), { wrapper })
 }
@@ -48,6 +51,35 @@ afterEach(() => {
 })
 
 describe("useCodexAccount", () => {
+  it("keeps a pending login across pages and receives completion with no account page open", async () => {
+    codexApi.fetchCodexStatus.mockResolvedValue({ installed: true, account: null })
+    codexApi.startCodexLogin.mockResolvedValue(LOGIN)
+    installApi.openExternal.mockResolvedValue(undefined)
+    installApi.focusApp.mockResolvedValue(undefined)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    function Account() {
+      const account = useCodexAccount()
+      return <button onClick={account.connect}>{account.login?.loginId ?? "Connect"}</button>
+    }
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <CodexAccountProvider>{children}</CodexAccountProvider>
+      </QueryClientProvider>
+    )
+    const view = render(<Account />, { wrapper })
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }))
+    await screen.findByRole("button", { name: "l1" })
+    view.rerender(<div>People</div>)
+    view.rerender(<Account />)
+    expect(screen.getByRole("button", { name: "l1" })).toBeTruthy()
+    view.rerender(<div>People</div>)
+    act(() => handler?.({ type: "loginCompleted", success: true, error: null }))
+    expect(installApi.focusApp).toHaveBeenCalledTimes(1)
+    view.rerender(<Account />)
+    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy()
+    expect(codexApi.startCodexLogin).toHaveBeenCalledTimes(1)
+  })
+
   it("opens the sign-in page in the browser, then clears it when the sign-in lands", async () => {
     codexApi.fetchCodexStatus.mockResolvedValue({ installed: true, account: null })
     codexApi.startCodexLogin.mockResolvedValue(LOGIN)

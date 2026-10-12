@@ -5,7 +5,8 @@ import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import type { CodexStatus } from "@/types/agent"
 
 function summary(status: CodexStatus | undefined): { name: string; plan: string; connected: boolean } {
-  if (!status?.installed) return { name: "Missing from this app", plan: "—", connected: false }
+  if (!status) return { name: "Could not connect to Codex", plan: "—", connected: false }
+  if (!status.installed) return { name: "Missing from this app", plan: "—", connected: false }
   const account = status.account
   if (account === null) return { name: "Not signed in", plan: "—", connected: false }
   if (account.kind === "chatgpt")
@@ -30,9 +31,11 @@ export function CodexCard() {
           &gt;_
         </span>
         <span className="text-sm font-semibold">Codex</span>
-        <span className="min-w-0 truncate text-xs text-muted-foreground">{name}</span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {codex.loading ? "Checking Codex…" : name}
+        </span>
         <Badge variant={connected ? "ok" : "muted"} className="ml-auto">
-          {connected ? "Connected" : "Not connected"}
+          {codex.loading ? "Checking" : connected ? "Connected" : "Not connected"}
         </Badge>
       </div>
       {codex.login ? (
@@ -41,7 +44,13 @@ export function CodexCard() {
         </div>
       ) : (
         <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
-          <p className="m-0 text-xs text-muted-foreground">Runs Chat on your ChatGPT plan.</p>
+          <p className="m-0 text-xs text-muted-foreground">
+            {codex.status?.installed && codex.status.account?.kind === "apiKey"
+              ? "Uses your API key. API usage is billed separately."
+              : connected
+                ? "Runs Chat with your connected account."
+                : "Connect ChatGPT to run Chat on your plan."}
+          </p>
           <CodexAction codex={codex} connected={connected} />
         </div>
       )}
@@ -63,7 +72,14 @@ function CodexAction({
   codex: ReturnType<typeof useCodexAccount>
   connected: boolean
 }) {
-  if (codex.loading || !codex.status?.installed) return null
+  if (codex.loading) return null
+  if (!codex.status)
+    return (
+      <Button size="sm" variant="ghost" onClick={codex.retry}>
+        Try again
+      </Button>
+    )
+  if (!codex.status.installed) return null
   return connected ? (
     <Button size="sm" variant="ghost" onClick={codex.signOut}>
       Sign out
