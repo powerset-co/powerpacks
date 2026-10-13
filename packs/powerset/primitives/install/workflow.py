@@ -103,7 +103,7 @@ class SourceOnboarding:
     def __init__(self, root: Path, *, sources: tuple[str, ...],
                  gmail_emails: tuple[str, ...] = (), sync_after: str = "",
                  wacli_store: Path | None = None, refresh: bool = False,
-                 skip_sources: tuple[str, ...] = (), record: str = "manifest") -> None:
+                 skip_sources: tuple[str, ...] = (), record: str = "manifest", linkedin_url: str = "") -> None:
         self.root = root.resolve()
         # `record`: "connect" for the Connect screen's runs, which leave setup's own record alone.
         self.status = InstallStatus(self.root, record)
@@ -128,6 +128,8 @@ class SourceOnboarding:
         wacli_store = wacli_store or saved.wacli_store
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
         self.refresh = refresh
+        # Processing's owner step reads it from the saved command when LinkedIn's sign-in is unused.
+        self.linkedin_url = linkedin_url or saved.linkedin_url
         self.step = InstallStep.SOURCES
         if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
@@ -153,6 +155,8 @@ class SourceOnboarding:
             args.append("--refresh")
         for source in self.skip_sources:
             args.extend(("--skip-source", source.value))
+        if self.linkedin_url:
+            args.extend(("--linkedin-url", self.linkedin_url))
         self.retry_command = shlex.join(args)
 
     def _write(self, event: str, *, step: InstallStep | None = None, action: dict | None = None,
@@ -456,4 +460,6 @@ def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--sync-after", default="")
     parser.add_argument("--wacli-store", type=Path)
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
+    parser.add_argument("--linkedin-url", default="",
+                        help="The owner's LinkedIn profile, for a setup without LinkedIn's sign-in")
     return parser

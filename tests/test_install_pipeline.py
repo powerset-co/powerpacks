@@ -361,6 +361,16 @@ class InstallPipelineTests(unittest.TestCase):
                          ("https://www.linkedin.com/in/casey-owner", ["casey@example.com"]))
         self.assertTrue(self.did("collect"))
 
+    def test_a_saved_profile_link_stands_in_for_the_linkedin_session(self):
+        # The Connect screen's link, looked up here once setup's credentials are in.
+        (self.root / ".powerpacks/deep-context/owner.json").unlink()
+        self.retry += " --linkedin-url https://www.linkedin.com/in/casey-owner"
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
+        self.run_pipeline()
+        owner = next(options for name, options in self.calls if name == "owner")
+        self.assertEqual(owner["url"], "https://www.linkedin.com/in/casey-owner")
+        self.assertTrue(self.did("collect"))
+
     def test_missing_owner_without_a_linkedin_session_hands_off(self):
         (self.root / ".powerpacks/deep-context/owner.json").unlink()
         result = self.run_pipeline()

@@ -19,7 +19,6 @@ pub const DESKTOP_FLAG: &str = "POWERPACKS_DESKTOP";
 /// The setup workflow and the owner-profile step, run with the project's Python (what
 /// `bin/onboard` and `bin/deep-context-v2 owner` wrap) so no shell is needed.
 const ONBOARD_MODULE: &str = "packs.powerset.primitives.install.onboard";
-const OWNER_MODULE: &str = "packs.ingestion.primitives.deep_context_v2.owner";
 /// What bootstrap records after installing; the app did the same work before setup starts.
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
 /// The page shows a Start/Continue button for these (status_prose.py: action `resume`).
@@ -184,57 +183,39 @@ pub fn stop_running(root: &Path) {
 }
 
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
-    let mut steps = Vec::new();
+    let mut onboard = Command::new(paths::project_python(root));
+    onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
     if let Some(url) = answer.linkedin_url {
         if !url.contains("linkedin.com/in/") {
             return Err("Paste your LinkedIn profile URL, like linkedin.com/in/your-name.".into());
         }
-        let mut owner = Command::new(paths::project_python(root));
-        owner.args(["-m", OWNER_MODULE, "--linkedin-url", &url]);
-        if let Some(email) = account_email(root) {
-            owner.args(["--email", &email]);
-        }
-        steps.push(owner);
+        // Setup's owner step looks the profile up once its credentials are in (pipeline.py).
+        onboard.args(["--linkedin-url", url.trim()]);
     }
-    let mut onboard = Command::new(paths::project_python(root));
-    onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
     if let Some(email) = answer.gmail_email {
         if !email.contains('@') {
             return Err("Enter a Gmail address.".into());
         }
         onboard.args(["--gmail-email", email.trim()]);
     }
-    steps.push(onboard);
 
     let log = root.join(LOG);
     fs::create_dir_all(log.parent().expect("log has a parent"))
         .map_err(|error| error.to_string())?;
-    for step in &mut steps {
-        // The workflow's desktop behaviour: no browsers, hand sign-ins and waits back to the page.
-        step.env(DESKTOP_FLAG, "1");
-        let output = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log)
-            .map_err(|error| error.to_string())?;
-        let errors = output.try_clone().map_err(|error| error.to_string())?;
-        step.current_dir(root)
-            .stdin(Stdio::null())
-            .stdout(output)
-            .stderr(errors);
-    }
+    let output = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+        .map_err(|error| error.to_string())?;
+    let errors = output.try_clone().map_err(|error| error.to_string())?;
+    // The workflow's desktop behaviour: no browsers, hand sign-ins and waits back to the page.
+    onboard
+        .env(DESKTOP_FLAG, "1")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(output)
+        .stderr(errors);
     stop_running(root);
-    let mut onboard = steps.pop().expect("setup command");
-    for mut owner in steps {
-        let status = owner
-            .status()
-            .map_err(|error| format!("Could not check your LinkedIn profile: {error}"))?;
-        if !status.success() {
-            return Err(
-                "Could not load that LinkedIn profile. Check the URL and try again.".into(),
-            );
-        }
-    }
     let mut child = onboard
         .spawn()
         .map_err(|error| format!("Could not start setup: {error}"))?;
@@ -244,11 +225,6 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     Ok(())
 }
 
-fn account_email(root: &Path) -> Option<String> {
-    let text = fs::read_to_string(root.join(MANIFEST)).ok()?;
-    let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
-    manifest.get("account_email")?.as_str().map(str::to_owned)
-}
 
 /// Whether this app may read Messages (Full Disk Access). Each check runs in a fresh child
 /// process: macOS answers a process once, so only a new one sees a permission granted since.
@@ -269,23 +245,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failed_owner_lookup_returns_to_the_form_without_starting_setup() {
+    fn a_profile_link_goes_to_setup_as_its_owner_choice() {
         use std::os::unix::fs::PermissionsExt;
         let root =
-            std::env::temp_dir().join(format!("powerpacks-owner-error-{}", std::process::id()));
+            std::env::temp_dir().join(format!("powerpacks-owner-link-{}", std::process::id()));
         let python = paths::project_python(&root);
         fs::create_dir_all(python.parent().unwrap()).unwrap();
-        fs::write(&python, "#!/bin/sh\nif [ \"$2\" = packs.ingestion.primitives.deep_context_v2.owner ]; then exit 1; fi\ntouch setup-started\n").unwrap();
+        fs::write(&python, "#!/bin/sh\necho \"$@\" > setup-args\n").unwrap();
         fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
-        let result = start(
-            &root,
-            Answer {
-                linkedin_url: Some("https://linkedin.com/in/jordan-example".into()),
-                gmail_email: None,
-            },
-        );
-        assert!(result.unwrap_err().contains("LinkedIn profile"));
-        assert!(!root.join("setup-started").exists());
+        let answer = |url: &str| Answer {
+            linkedin_url: Some(url.into()),
+            gmail_email: None,
+        };
+        assert!(start(&root, answer("https://example.com/jordan")).is_err());
+        assert!(!root.join("setup-args").exists());
+        start(&root, answer("https://linkedin.com/in/jordan-example")).unwrap();
+        let args = (0..50)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                fs::read_to_string(root.join("setup-args")).ok()
+            })
+            .expect("setup started");
+        assert!(args.contains("--linkedin-url https://linkedin.com/in/jordan-example"));
         fs::remove_dir_all(root).unwrap();
     }
 

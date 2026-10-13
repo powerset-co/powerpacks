@@ -168,10 +168,12 @@ class ProcessingOnboarding:
             self._run(shlex.join(command), lambda: self._modal(command), "discover.linkedin")
 
     def _owner(self) -> None:
-        """The owner profile, once: the LinkedIn scrape records the signed-in profile; the mailbox is the email."""
+        """The owner profile, once: the LinkedIn scrape records the signed-in profile, else setup's saved
+        profile link (`--linkedin-url`); the mailbox is the email."""
         if (self.data_root / "deep-context" / "owner.json").is_file():
             return
-        linkedin_url = (read_json(self.root / SCRAPE_RECORD, {}) or {}).get("owner_url", "")
+        linkedin_url = ((read_json(self.root / SCRAPE_RECORD, {}) or {}).get("owner_url", "")
+                        or self.saved.linkedin_url)
         email = next(iter(self.saved.gmail_email), "") or self.account_email
         if not (linkedin_url and email):
             command = f"bin/deep-context-v2 owner --linkedin-url <your LinkedIn URL> --email {email or '<your email>'}"

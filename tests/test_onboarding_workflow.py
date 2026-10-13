@@ -456,8 +456,9 @@ class SourceOnboardingTests(unittest.TestCase):
                          {'gmail_login': 'skipped', 'imessage_access': 'skipped', 'whatsapp_login': 'skipped'})
 
     def test_desktop_setup_takes_any_mix_of_connected_sources(self):
-        # Every subset of the four sources: the connected ones log in and sync, the rest are
-        # skipped, and setup ends ready (or installed, with none) without waiting on anyone.
+        # The sources phase over every subset of the four sources: the connected ones log in and
+        # sync, the rest are skipped and never asked to. Processing's owner without LinkedIn is
+        # test_install_pipeline's saved profile link.
         sources = ('linkedin', 'gmail', 'imessage', 'whatsapp')
         login_steps = {'linkedin': 'linkedin_login', 'gmail': 'gmail_login', 'imessage': 'imessage_access',
                        'whatsapp': 'whatsapp_login'}

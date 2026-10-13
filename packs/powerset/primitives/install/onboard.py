@@ -323,7 +323,7 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
     flow = SourceOnboarding(root, sources=tuple(args.source),
                             gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
                             wacli_store=args.wacli_store, refresh=args.refresh,
-                            skip_sources=tuple(args.skip_source))
+                            skip_sources=tuple(args.skip_source), linkedin_url=args.linkedin_url)
     flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
     flow.retry_command += f" --port {port}"
     try:
