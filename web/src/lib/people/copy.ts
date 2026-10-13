@@ -188,7 +188,7 @@ const SETS_CONNECTED = "Connected"
 
 export const SETS = {
   title: "Sets",
-  lead: "Sets live on this computer. Members see each other's shared networks; invites go through the Powerset relay.",
+  lead: "Members see each other's shared networks.",
   choose: "Choose a set",
   personalNote: "Your shared network, on this machine.",
   sharedWith: "Your sets",

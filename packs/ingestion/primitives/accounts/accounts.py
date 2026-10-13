@@ -181,7 +181,7 @@ def _imessage_account() -> Account:
         with sqlite3.connect(f"file:{DEFAULT_CHAT_DB}?mode=ro", uri=True) as conn:
             messages, latest = conn.execute("SELECT COUNT(*), MAX(date) FROM message").fetchone()
     except sqlite3.Error:
-        return Account("imessage", "iMessage", "error", "Full Disk Access is off for this terminal.",
+        return Account("imessage", "iMessage", "error", "Needs Full Disk Access.",
                        0, contacts, None, imported_at)
     health, note = _import_health(imported_at)
     return Account("imessage", "iMessage", health, note, messages, contacts,

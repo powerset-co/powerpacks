@@ -15,12 +15,7 @@ interface EmptyTextProps {
 }
 
 export function EmptyText({ hasPeople, filtered, tab, onClear }: EmptyTextProps) {
-  if (!hasPeople)
-    return (
-      <>
-        No people to review yet. Run <code>bin/deep-context-v2 share</code>, then reload.
-      </>
-    )
+  if (!hasPeople) return <>No people yet. Ask your agent to build your network.</>
   if (!filtered) return <>{NOBODY[tab]}</>
   return (
     <>
