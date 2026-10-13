@@ -83,8 +83,14 @@ it("lists every sign-in once, in setup's order", async () => {
   expect(titles).toEqual(["Powerset", "Codex", "Messages", "LinkedIn", "Gmail", "WhatsApp"])
 })
 
-it("starts setup only once Powerset is signed in", async () => {
+it("starts setup once Powerset is signed in and LinkedIn is connected", async () => {
   state.account = { signed_in: false, email: null, name: null, picture: null }
+  state.connect = {
+    ...NOTHING,
+    step: "sources",
+    status: "completed",
+    steps: { linkedin_login: { status: "completed" } },
+  }
   const { unmount } = mount()
   const setUp = await screen.findByRole("button", { name: "Set up" })
   await within(row("Powerset")).findByRole("button", { name: "Sign in" })
@@ -96,6 +102,24 @@ it("starts setup only once Powerset is signed in", async () => {
   await waitFor(() => expect(ready.hasAttribute("disabled")).toBe(false))
   fireEvent.click(ready)
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+})
+
+it("without LinkedIn's sign-in, setup starts from the profile link", async () => {
+  mount()
+  const setUp = await screen.findByRole("button", { name: "Set up" })
+  expect(await screen.findByText("Sign in to LinkedIn or add your profile link.")).toBeTruthy()
+  expect(setUp.hasAttribute("disabled")).toBe(true)
+  fireEvent.click(within(row("LinkedIn")).getByRole("button", { name: "Add your profile link" }))
+  const field = within(row("LinkedIn")).getByRole("textbox", { name: "LinkedIn profile link" })
+  fireEvent.change(field, { target: { value: "https://www.linkedin.com/in/casey" } })
+  fireEvent.submit(field)
+  await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
+  fireEvent.click(setUp)
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("onboard_continue", {
+      answer: { linkedinUrl: "https://www.linkedin.com/in/casey" },
+    }),
+  )
 })
 
 it("connects a source and follows its run to the check", async () => {

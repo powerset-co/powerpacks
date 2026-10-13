@@ -145,26 +145,68 @@ function useMessagesReadable(): boolean | null {
 const LINK =
   "cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline disabled:opacity-50"
 
-/** An address typed in place, saved on Enter or leaving the field; anything without an @ is dropped. */
-function AddressField({ initial, onDone }: { initial: string; onDone: (email: string | null) => void }) {
+/** A value typed in place, saved on Enter or leaving the field; one that is not `valid` is dropped. */
+function Field({
+  initial,
+  label,
+  placeholder,
+  type,
+  valid,
+  onDone,
+}: {
+  initial: string
+  label: string
+  placeholder: string
+  type: "email" | "url"
+  valid: (value: string) => boolean
+  onDone: (value: string | null) => void
+}) {
   const [value, setValue] = useState(initial)
   const save = (event: FormEvent) => {
     event.preventDefault()
-    onDone(value.includes("@") ? value.trim() : null)
+    onDone(valid(value.trim()) ? value.trim() : null)
   }
   return (
     <form onSubmit={save} className="flex gap-2">
       <input
-        type="email"
-        aria-label="Gmail address"
+        type={type}
+        aria-label={label}
         ref={(input) => input?.focus()}
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onBlur={save}
-        placeholder="you@gmail.com"
+        placeholder={placeholder}
         className="h-7 min-w-0 flex-1 rounded-[var(--radius-s)] border border-line-strong bg-card px-2 text-xs text-foreground outline-none focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
       />
     </form>
+  )
+}
+
+/** Who you are on LinkedIn, when setup goes without its sign-in: deep context starts from your own
+ *  profile (deep_context_v2/owner.py), which the sign-in otherwise reads. */
+function ProfileLink({ url, onChange }: { url: string | null; onChange: (url: string) => void }) {
+  const [typing, setTyping] = useState(false)
+  if (typing)
+    return (
+      <Field
+        initial={url ?? ""}
+        label="LinkedIn profile link"
+        placeholder="linkedin.com/in/you"
+        type="url"
+        valid={(value) => value.includes("linkedin.com/in/")}
+        onDone={(value) => {
+          setTyping(false)
+          if (value) onChange(value)
+        }}
+      />
+    )
+  return (
+    <span className="text-xs text-muted-foreground">
+      {url ? `Your profile: ${url.replace(/^(https?:\/\/)?(www\.)?/, "")} · ` : "Not signing in? "}
+      <button type="button" className={LINK} onClick={() => setTyping(true)}>
+        {url ? "Change" : "Add your profile link"}
+      </button>
+    </span>
   )
 }
 
@@ -186,8 +228,12 @@ function Mailboxes({
   const [typing, setTyping] = useState(false)
   if (typing)
     return (
-      <AddressField
+      <Field
         initial={connected.length ? "" : email}
+        label="Gmail address"
+        placeholder="you@gmail.com"
+        type="email"
+        valid={(value) => value.includes("@")}
         onDone={(value) => {
           setTyping(false)
           if (value) (connected.length ? onAdd : onChange)(value)
@@ -228,6 +274,8 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [mailbox, setMailbox] = useState<string | null>(null)
+  // Your LinkedIn profile, when setup goes without LinkedIn's sign-in.
+  const [profile, setProfile] = useState<string | null>(null)
   // The mailboxes Gmail's last connect asked for, so Try again asks for them again.
   const [asked, setAsked] = useState<string[] | null>(null)
   // A source waiting on its tools to install before its sign-in starts.
@@ -247,6 +295,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
     (record !== undefined &&
       (record.status === "running" || (record.status === "waiting" && (record.installer_pid ?? 0) > 0)))
   const email = mailbox ?? account.data?.email ?? ""
+  const linkedin = standing(record, "linkedin").state === "ready"
   // Gmail's mailboxes once it is connected, the app's owner first.
   const connected = standing(record, "gmail").state === "ready" ? (record?.mailboxes ?? []) : []
   const connectGmail = (emails: string[]) => {
@@ -277,7 +326,15 @@ export function Connect({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const source = (name: ConnectSource, title: string, icon: ReactNode, why: ReactNode, label: string) => {
+  const source = (
+    name: ConnectSource,
+    title: string,
+    icon: ReactNode,
+    why: ReactNode,
+    label: string,
+    // A line of the row's own under its run's.
+    extra?: ReactNode,
+  ) => {
     const at =
       queued === name
         ? { state: "working" as const, line: "Installing what it needs…" }
@@ -310,6 +367,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
             className="mt-1 size-40 rounded-[var(--radius-s)] bg-white p-2"
           />
         ) : null}
+        {extra}
       </Row>
     )
   }
@@ -362,6 +420,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
           <LinkedInIcon className="size-[18px]" />,
           "Your connections, after one sign-in.",
           "Sign in",
+          linkedin ? null : <ProfileLink url={profile} onChange={setProfile} />,
         )}
         {source(
           "gmail",
@@ -388,17 +447,24 @@ export function Connect({ onBack }: { onBack: () => void }) {
         <Button disabled={starting} onClick={onBack}>
           Back
         </Button>
-        <span className="text-xs text-muted-foreground">Anything left unconnected is skipped.</span>
+        <span className="text-xs text-muted-foreground">
+          {signedIn && !linkedin && profile === null
+            ? "Sign in to LinkedIn or add your profile link."
+            : "Anything left unconnected is skipped."}
+        </span>
         <Button
           variant="primary"
-          disabled={!signedIn || busy || starting}
+          disabled={!signedIn || (!linkedin && profile === null) || busy || starting}
           onClick={() => {
             setStarting(true)
             setError(null)
-            void continueSetup({}).catch((caught: unknown) => {
-              fail(caught)
-              setStarting(false)
-            })
+            // Without the sign-in, the app looks the profile up before setup starts (onboard.rs).
+            void continueSetup(linkedin || profile === null ? {} : { linkedinUrl: profile }).catch(
+              (caught: unknown) => {
+                fail(caught)
+                setStarting(false)
+              },
+            )
           }}
         >
           {starting ? "Starting setup…" : "Set up"}

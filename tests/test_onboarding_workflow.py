@@ -1,6 +1,7 @@
 """Local onboarding reuses source outputs, preserves gates, and stops on errors."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shlex
@@ -453,6 +454,42 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['event'], 'sources.ready')
         self.assertEqual({step: result['steps'][step]['status'] for step in ('gmail_login', 'imessage_access', 'whatsapp_login')},
                          {'gmail_login': 'skipped', 'imessage_access': 'skipped', 'whatsapp_login': 'skipped'})
+
+    def test_desktop_setup_takes_any_mix_of_connected_sources(self):
+        # Every subset of the four sources: the connected ones log in and sync, the rest are
+        # skipped, and setup ends ready (or installed, with none) without waiting on anyone.
+        sources = ('linkedin', 'gmail', 'imessage', 'whatsapp')
+        login_steps = {'linkedin': 'linkedin_login', 'gmail': 'gmail_login', 'imessage': 'imessage_access',
+                       'whatsapp': 'whatsapp_login'}
+        for size in range(len(sources) + 1):
+            for connected in itertools.combinations(sources, size):
+                with self.subTest(connected=connected):
+                    # Each mix starts fresh: no connect record, and no earlier run's logins.
+                    (self.root / '.powerpacks/install/connect.json').unlink(missing_ok=True)
+                    InstallStatus(self.root).write('install.preparing_mac', pid=os.getpid())
+                    if 'linkedin' in connected:
+                        InstallStatus(self.root, 'connect').write('linkedin.login.done', pid=0)
+                    calls = []
+                    vault = {'config': {'oauth_configured': True}, 'database': {'exists': True},
+                             'accounts': [{'email': 'casey@example.com'}] if 'gmail' in connected else []}
+                    with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+                         patch.object(accounts, 'status_payload', return_value=vault), \
+                         patch.object(IMessageExtractor, 'check',
+                                      return_value={'status': 'ok' if 'imessage' in connected else 'blocked_user_action'}), \
+                         patch.object(auth, 'auth_status',
+                                      return_value=SimpleNamespace(authenticated='whatsapp' in connected)), \
+                         patch.object(SourceOnboarding, '_linkedin_login', lambda flow: calls.append('linkedin') or True), \
+                         patch.object(SourceOnboarding, '_gmail_connect', lambda flow: calls.append('gmail') or True), \
+                         patch.object(SourceOnboarding, '_imessage_access', lambda flow: calls.append('imessage') or True), \
+                         patch.object(SourceOnboarding, '_whatsapp_link', lambda flow: calls.append('whatsapp') or True), \
+                         patch.object(SourceOnboarding, '_linkedin_sync', return_value=True), \
+                         patch.object(SourceOnboarding, '_gmail_sync', return_value=True), \
+                         patch.object(SourceOnboarding, '_messages_sync', return_value=True):
+                        result = SourceOnboarding(self.root, sources=sources).run()
+                    self.assertEqual(calls, list(connected))
+                    self.assertEqual(result['event'], 'sources.ready' if connected else 'sources.all_skipped')
+                    self.assertEqual({source for source in sources if result['steps'].get(login_steps[source], {}).get('status') == 'skipped'},
+                                     set(sources) - set(connected))
 
     def test_desktop_leaves_out_gmail_without_a_connected_mailbox(self):
         # The Connect screen connects Gmail; setup never asks for a mailbox under the desktop app.
