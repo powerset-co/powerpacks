@@ -54,7 +54,8 @@ describe("Refresh signals", () => {
     const { fetch, invalidate, done } = show()
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
     expect(fetch.mock.calls[0]?.[1]).toBeUndefined()
-    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    // The header button says which people it refreshes: here, the two selected.
+    fireEvent.click(screen.getByRole("button", { name: "Refresh signals 2 selected" }))
     await screen.findByText("2 people · under a minute")
     expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1)
     const pay = screen.getByRole("button", { name: "Refresh for <$0.01" })
@@ -70,7 +71,7 @@ describe("Refresh signals", () => {
 
   it("with no one selected, whoever needs it refreshes from saved answers without a cost confirmation", async () => {
     const { fetch } = show({ ...PLAN, cached: 2, new_requests: 0, estimated_cost_usd: 0 }, [])
-    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    fireEvent.click(screen.getByRole("button", { name: "Refresh signals All" }))
     await screen.findByText("Signals refreshed for 2 people.")
     expect(screen.queryByRole("button", { name: /Refresh for/ })).toBeNull()
     expect(fetch.mock.calls.at(-1)?.[1]?.body).toBe(JSON.stringify({ people: [] }))
@@ -78,7 +79,7 @@ describe("Refresh signals", () => {
 
   it("says how many Luna declined once the refresh is done", async () => {
     show({ ...PLAN, cached: 2, new_requests: 0, estimated_cost_usd: 0 }, [], 1)
-    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh signals/ }))
     expect(
       await screen.findByText(
         "Signals refreshed for 1 person. Luna declined 1 person; they keep their old signals.",
@@ -88,7 +89,7 @@ describe("Refresh signals", () => {
 
   it("says signals are up to date and starts nothing when no one needs them", async () => {
     const { fetch } = show({ ...PLAN, people: 0, cached: 0, new_requests: 0, estimated_cost_usd: 0 }, [])
-    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh signals/ }))
     await screen.findByText("Signals are up to date.")
     expect(
       fetch.mock.calls.filter(([url, init]) => url.endsWith("/signals") && init?.method === "POST"),
@@ -128,7 +129,7 @@ describe("Refresh signals", () => {
           : new Response(JSON.stringify(IDLE)),
       ),
     )
-    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh signals/ }))
     expect((await screen.findByRole("alert")).textContent).toBe("Saved evidence changed")
     fireEvent.click(screen.getByRole("button", { name: "Check again" }))
     await waitFor(() => expect(fetch.mock.calls.filter(([url]) => url.endsWith("/check"))).toHaveLength(2))

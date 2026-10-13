@@ -36,8 +36,9 @@ function duration(seconds: number): string {
 }
 
 interface RefreshSignalsProps {
-  // Empty: whoever needs it (new people, or signals from older questions). Else these people too,
-  // asked again even when their signals are current.
+  // Empty: whoever needs it (new people, or signals from older questions), and the header button
+  // reads All. Else these people too, asked again even when their signals are current, and the
+  // button reads how many are selected.
   people: readonly string[]
   // The drawer's round icon beside Close, instead of the header's button.
   icon?: boolean
@@ -138,13 +139,15 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
             {running ? <Spinner /> : <RefreshIcon className="size-[15px]" />}
           </button>
         ) : (
-          <Button
-            disabled={checking}
-            title={people.length ? `${TITLE} for ${people.length.toLocaleString()} selected` : undefined}
-            onClick={openOrCheck}
-          >
-            {running ? "Refreshing signals…" : TITLE}
-            {running && <Spinner />}
+          <Button disabled={checking} onClick={openOrCheck}>
+            {running ? "Refreshing signals…" : TITLE}{" "}
+            {running ? (
+              <Spinner />
+            ) : (
+              <span className="font-normal text-muted-foreground">
+                {people.length ? `${people.length.toLocaleString()} selected` : "All"}
+              </span>
+            )}
           </Button>
         )}
       </DialogTrigger>
