@@ -17,6 +17,21 @@ export async function installAction(action: string, values: object = {}): Promis
   if (!response.ok) throw await failure(response, "Couldn't continue setup")
 }
 
+/** The sources the Connect screen signs in to before setup (controller.py CONNECTABLE). */
+export type ConnectSource = "linkedin" | "gmail" | "whatsapp"
+
+/** The Connect screen's run: one source's tools and login at a time, in its own record. */
+export async function fetchConnection(signal: AbortSignal): Promise<InstallStatus> {
+  const response = await fetch("/api/install/connect", { signal, cache: "no-store" })
+  if (!response.ok) throw await failure(response, "Couldn't check your connections")
+  return body<InstallStatus>(response)
+}
+
+/** Sign in to one source before setup; Gmail's takes the mailbox. fetchConnection follows it. */
+export function connectSource(source: ConnectSource, email?: string): Promise<void> {
+  return installAction("connect", { source, email })
+}
+
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */
 export interface SetupAnswer {
   gmailEmail?: string
@@ -73,7 +88,7 @@ export interface Preflight {
   gcloud: { ok: boolean; install: PreflightInstall | null }
 }
 
-export async function fetchPreflight(signal: AbortSignal): Promise<Preflight> {
+export async function fetchPreflight(signal?: AbortSignal): Promise<Preflight> {
   const response = await fetch("/api/install/preflight", { signal, cache: "no-store" })
   if (!response.ok) throw await failure(response, "Couldn't check this Mac")
   return body<Preflight>(response)
