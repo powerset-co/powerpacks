@@ -9,9 +9,7 @@ export { DetailsSection } from "./DetailsSection"
 export { ChatGptSignIn } from "./ChatGptSignIn"
 export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
-export { FacetShell } from "./FacetShell"
 export { Fold } from "./Fold"
-export { FacetValue } from "./FacetValue"
 export {
   CLOSE_MARK,
   CheckIcon,

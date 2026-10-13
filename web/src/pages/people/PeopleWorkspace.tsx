@@ -26,7 +26,6 @@ import type { useLogbook } from "./hooks/useLogbook"
 import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
 import { PeopleShell } from "./PeopleShell"
 import { entriesQuery } from "./logbook/queries"
-import { FacetRail } from "./rail/FacetRail"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
 import { ShareUpload } from "./upload/ShareUpload"
@@ -52,7 +51,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const initialParams = reading ? new URLSearchParams() : params
   const filters = useFilters(rows, initialParams)
   const { view } = filters
-  const { matching, counts, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
+  const { matching, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
     const counts: Record<Decision, number> = { confirm: 0, yes: 0, no: 0 }
@@ -205,7 +204,6 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
   return (
     <PeopleShell
-      rail={<FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />}
       main={
         <>
           <DecisionTabs
