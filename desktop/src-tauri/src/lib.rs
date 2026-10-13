@@ -220,14 +220,18 @@ fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
 
 /// Import the command-line install's data; true when setup is already done with it.
 #[tauri::command]
-fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
+async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
     let root = boot::require_root(&boot)?;
-    let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
-    boot::stop_server()?;
-    let imported = source::import_cli_data(&root, &cli);
-    boot::serve(&app, &root)?;
-    imported?;
-    Ok(onboard::setup(&root) == onboard::Setup::Done)
+    tauri::async_runtime::spawn_blocking(move || {
+        let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
+        boot::stop_server()?;
+        let imported = source::import_cli_data(&root, &cli);
+        boot::serve(&app, &root)?;
+        imported?;
+        Ok(onboard::setup(&root) == onboard::Setup::Done)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Whether macOS lets this app read Messages (Full Disk Access), checked afresh each call.

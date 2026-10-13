@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -10,9 +10,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it("imports an existing network without requiring tools for a new setup", async () => {
+it.each([true, false])("shows import progress and completion (setup done: %s)", async (done) => {
+  let finish!: (done: boolean) => void
+  const imported = new Promise<boolean>((resolve) => {
+    finish = resolve
+  })
   const invoke = vi.fn((command: string) =>
-    Promise.resolve(command === "setup_import_source" ? "/Users/casey/powerpacks" : true),
+    command === "setup_import_source" ? Promise.resolve("/Users/casey/powerpacks") : imported,
   )
   vi.stubGlobal("__TAURI__", { core: { invoke } })
   const fetch = vi.fn(() =>
@@ -39,7 +43,14 @@ it("imports an existing network without requiring tools for a new setup", async 
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false))
   fireEvent.click(button)
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("setup_import", undefined))
+  expect(screen.getByRole("heading", { name: "Connecting your existing data" })).toBeTruthy()
+  await act(async () => {
+    finish(done)
+    await imported
+  })
   await waitFor(() => expect(client.getQueryState(["people"])?.isInvalidated).toBe(true))
+  expect(await screen.findByRole("heading", { name: "Existing data connected" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: done ? "Open People" : "Continue setup" })).toBeTruthy()
   expect(fetch).not.toHaveBeenCalled()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })

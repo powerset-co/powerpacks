@@ -92,10 +92,11 @@ export function InstallPage() {
     refetchInterval: 1_500,
     retry: false,
   })
+  const [importing, setImporting] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [actionError, setActionError] = useState("")
   // Before the first click: only the welcome and the choice, none of the progress furniture.
-  const welcome = !error && data?.event === "setup.ready"
+  const welcome = importing || (!error && data?.event === "setup.ready")
   const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
@@ -177,7 +178,7 @@ export function InstallPage() {
     return (
       <div className="review-page install-page overflow-y-auto" data-welcome>
         <main className="install-main rise-in">
-          <DesktopWelcome />
+          <DesktopWelcome onImport={setImporting} />
         </main>
       </div>
     )

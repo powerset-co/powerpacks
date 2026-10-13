@@ -24,6 +24,7 @@ import {
   messagesReadable,
   type PreflightInstall,
 } from "@/lib/api/install"
+import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
@@ -200,11 +201,12 @@ function tilde(path: string): string {
 }
 
 /** Import existing data directly; only a new setup needs the prerequisite check. */
-function Choice({ onStart }: { onStart: () => void }) {
+function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active: boolean) => void }) {
   const client = useQueryClient()
   const navigate = useNavigate()
   const [clicked, setClicked] = useState<"import" | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [imported, setImported] = useState<boolean | null>(null)
   const chosen = error ? null : clicked
   // undefined while the app looks; null when there is nothing to import.
   const [source, setSource] = useState<string | null | undefined>(undefined)
@@ -220,17 +222,42 @@ function Choice({ onStart }: { onStart: () => void }) {
   const choose = (task: () => Promise<void>) => {
     setError(null)
     setClicked("import")
+    onImport?.(true)
     task().catch(fail)
+  }
+  if (chosen === "import") {
+    return (
+      <div role="status" aria-live="polite" className="w-full rise-in">
+        <EmptyPanel
+          title={imported === null ? "Connecting your existing data" : "Existing data connected"}
+          mark={imported !== null}
+          above={imported === null ? <Spinner className="size-6 text-primary" /> : undefined}
+        >
+          <p className="text-sm text-muted-foreground">
+            {imported === null
+              ? "Connecting your network and restarting the local app. This can take a few seconds."
+              : "The app now shares this install’s network, imports and account."}
+          </p>
+          <p className="text-xs text-muted-foreground">{source && tilde(source)}</p>
+          {imported !== null && (
+            <Button
+              variant="primary"
+              onClick={() => {
+                if (imported) void navigate(HOME.href)
+                else onImport?.(false)
+              }}
+            >
+              {imported ? "Open People" : "Continue setup"}
+            </Button>
+          )}
+        </EmptyPanel>
+      </div>
+    )
   }
   return (
     <div className="flex w-full flex-col gap-4">
       <div className="grid w-full grid-cols-2 gap-3 max-[720px]:grid-cols-1">
-        <button
-          type="button"
-          className={cn(CHOICE, chosen === "import" && "opacity-40")}
-          disabled={chosen !== null}
-          onClick={onStart}
-        >
+        <button type="button" className={CHOICE} onClick={onStart}>
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-primary-soft text-primary">
             <SparkIcon className="size-[18px]" />
           </span>
@@ -246,22 +273,20 @@ function Choice({ onStart }: { onStart: () => void }) {
             source && "border-[color-mix(in_srgb,var(--primary)_35%,var(--line-strong))]",
             !source && "opacity-40",
           )}
-          disabled={chosen !== null || !source}
+          disabled={!source}
           onClick={() =>
             choose(async () => {
               const done = await importData()
               await client.invalidateQueries()
-              if (done) await navigate(HOME.href)
+              setImported(done)
             })
           }
           data-import-source={source ?? ""}
         >
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground group-hover:text-primary">
-            {chosen === "import" ? <Spinner className="size-4" /> : <ImportIcon className="size-[18px]" />}
+            <ImportIcon className="size-[18px]" />
           </span>
-          <span className="text-[13.5px] font-bold">
-            {chosen === "import" ? "Importing…" : "Import existing data"}
-          </span>
+          <span className="text-[13.5px] font-bold">Import existing data</span>
           <span className="text-xs leading-snug text-muted-foreground">
             {source === undefined
               ? "Looking for a Powerpacks install on this computer…"
@@ -282,7 +307,7 @@ function Choice({ onStart }: { onStart: () => void }) {
 
 /** The desktop app's setup before it starts: import, or check prerequisites for a new setup. The
  *  third screen, the installation status, is the install page itself once setup runs. */
-export function DesktopWelcome() {
+export function DesktopWelcome({ onImport }: { onImport?: (active: boolean) => void }) {
   const [stage, setStage] = useState<0 | 1>(0)
   return (
     <div className="flex w-full flex-col items-center gap-6">
@@ -295,7 +320,11 @@ export function DesktopWelcome() {
               : "A few things Powerpacks needs on this Mac before it starts."}
           </p>
         </header>
-        {stage === 0 ? <Choice onStart={() => setStage(1)} /> : <PreflightCheck onBack={() => setStage(0)} />}
+        {stage === 0 ? (
+          <Choice onStart={() => setStage(1)} onImport={onImport} />
+        ) : (
+          <PreflightCheck onBack={() => setStage(0)} />
+        )}
       </div>
     </div>
   )
