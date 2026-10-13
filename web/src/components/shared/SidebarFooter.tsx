@@ -179,14 +179,24 @@ function Profile({ rail }: { rail: boolean }) {
         {avatar}
         {relay}
       </span>
-      <div className="min-w-0 flex-1 leading-[1.25] [overflow-wrap:anywhere]">
-        <div className="text-[13px] font-semibold text-foreground">{breakAfterAt(title)}</div>
+      <div className="min-w-0 flex-1 leading-[1.25]">
+        {/* One line each: an email standing in for the name is set smaller and lighter to fit. */}
+        <div
+          className={cn(
+            "truncate text-foreground",
+            signedIn && data.name === null ? "text-[12px] font-medium" : "text-[13px] font-semibold",
+          )}
+          title={title ?? undefined}
+        >
+          {title}
+        </div>
         {detail !== null && (
           <div
-            className={cn("text-[11px] text-muted-foreground", problem !== null && "text-bad")}
+            className={cn("text-[11px] text-muted-foreground", problem === null ? "truncate" : "text-bad")}
+            title={problem === null ? detail : undefined}
             role={problem ? "alert" : undefined}
           >
-            {breakAfterAt(detail)}
+            {detail}
           </div>
         )}
       </div>
@@ -196,19 +206,6 @@ function Profile({ rail }: { rail: boolean }) {
         </Button>
       )}
     </div>
-  )
-}
-
-// An address wraps after its @ rather than mid-word.
-function breakAfterAt(text: string | null) {
-  const at = text === null ? 0 : text.indexOf("@") + 1
-  if (text === null || at === 0) return text
-  return (
-    <>
-      {text.slice(0, at)}
-      <wbr />
-      {text.slice(at)}
-    </>
   )
 }
 
