@@ -300,6 +300,14 @@ export function Connect({ onBack }: { onBack: () => void }) {
   // The mailboxes Gmail's app already takes (msgvault), its owner first: a connect sends them all,
   // so the owner stays first. Before there is an app, the first connect starts from `email`.
   const known = record?.mailboxes ?? []
+  // Deep context starts from your LinkedIn profile: needed once any source will be processed and
+  // LinkedIn's sign-in (which reads it) is not used. With nothing connected setup processes nothing.
+  const needsProfile =
+    !linkedin &&
+    profile === null &&
+    (readable === true ||
+      known.length > 0 ||
+      (["gmail", "whatsapp"] as const).some((name) => standing(record, name).state === "ready"))
   const connectGmail = (emails: string[]) => {
     setAsked(emails)
     void connect("gmail", emails)
@@ -453,13 +461,13 @@ export function Connect({ onBack }: { onBack: () => void }) {
           Back
         </Button>
         <span className="text-xs text-muted-foreground">
-          {signedIn && !linkedin && profile === null
+          {signedIn && needsProfile
             ? "Sign in to LinkedIn or add your profile link."
             : "Anything left unconnected is skipped."}
         </span>
         <Button
           variant="primary"
-          disabled={!signedIn || (!linkedin && profile === null) || busy || starting}
+          disabled={!signedIn || needsProfile || busy || starting}
           onClick={() => {
             setStarting(true)
             setError(null)

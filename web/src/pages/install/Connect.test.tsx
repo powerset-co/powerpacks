@@ -104,7 +104,21 @@ it("starts setup once Powerset is signed in and LinkedIn is connected", async ()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
 })
 
+it("with nothing connected, setup starts without a profile link", async () => {
+  mount()
+  const setUp = await screen.findByRole("button", { name: "Set up" })
+  await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
+  fireEvent.click(setUp)
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+})
+
 it("without LinkedIn's sign-in, setup starts from the profile link", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "sources",
+    status: "completed",
+    steps: { whatsapp_login: { status: "completed" } },
+  }
   mount()
   const setUp = await screen.findByRole("button", { name: "Set up" })
   expect(await screen.findByText("Sign in to LinkedIn or add your profile link.")).toBeTruthy()
