@@ -1,13 +1,16 @@
-"""Refresh selected People's signals from saved facts/counts, reusing exact JEV answers.
+"""Refresh People's signals from saved facts and counts: Worth (Luna's two requests), then Share.
 
-The check never calls a provider. A start is bound to those requests and their cache coverage;
-without paid confirmation the JEV client has no key, even if a cache disappears. Worth and Share
-run in one transaction, so a failure keeps the previous signals and human decisions.
+With no one selected it refreshes the families worth would ask anyway: new, or judged under older
+questions. A selection is asked again as well, judged or not. The check never calls OpenAI. A start
+is bound to those requests and their cache coverage; without a confirmed check it reads only saved
+answers, even if one disappears. Worth and Share run in one transaction, so a failure keeps the
+previous signals and human decisions.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass, replace
@@ -20,12 +23,18 @@ from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT
 from packs.ingestion.primitives.share.share_list import Share
 
 
+# Requests answered per second, for the time estimate: JEV's measured pace; Luna's is measured on
+# the first run.
+REQUESTS_PER_SECOND = 66
+
+
 @dataclass(frozen=True)
 class SignalsPlan:
     people: int
     cached: int
     new_requests: int
     estimated_cost_usd: float
+    estimated_seconds: int
     checked: str
 
 
@@ -35,6 +44,9 @@ class SignalsStatus:
     message: str | None = None
     plan: SignalsPlan | None = None
     error: str | None = None
+    # Requests answered in the current phase, of `total`.
+    done: int = 0
+    total: int = 0
 
 
 class RefreshSignals(Node):
@@ -51,23 +63,24 @@ class RefreshSignals(Node):
 
     def plan(self) -> SignalsPlan:
         families = self.worth.pending(self.worth.families())
-        if {family.key for family in families} != set(self.parent_ids):
+        if not set(self.parent_ids) <= {family.key for family in families}:
             raise ValueError("Some selected people no longer have saved dossiers. Reload People and try again.")
         estimate = self.worth.estimate()
-        cached = int(estimate["jev_cached"])
-        calls = int(estimate["jev_calls"])
+        cached = int(estimate["cached"])
+        requests = int(estimate["requests"])
         cost = float(estimate["estimated_cost_usd"])
         digest = hashlib.sha256(json.dumps([(family.key, family.members, family.digest) for family in families]).encode())
-        digest.update(json.dumps((cached, calls, estimate["jev_input_tokens"])).encode())
-        return SignalsPlan(len(families), cached, calls - cached, cost, digest.hexdigest())
+        digest.update(json.dumps((cached, requests, estimate["input_tokens"])).encode())
+        new: int = requests - cached
+        return SignalsPlan(len(families), cached, new, cost, math.ceil(new / REQUESTS_PER_SECOND), digest.hexdigest())
 
     def execute(self) -> dict[str, int]:
         plan = self.plan()
         if self.checked is not None and self.checked != plan.checked:
             raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
-        self.progress("Refreshing signals from saved dossiers…", 0, plan.people)
+        self.worth.on_progress = self.progress
         counts = self.worth.execute(cache_only=self.cache_only)
-        self.progress("Updating People…", plan.people, plan.people)
+        self.progress("Updating People", 0, 0)
         Share(self.conn, self.data_root).execute()
         return counts
 
@@ -108,7 +121,7 @@ class PeopleSignals:
             except Exception:
                 conn.close()
                 raise
-            self._status = SignalsStatus("running", "Refreshing signals from saved dossiers…", plan)
+            self._status = SignalsStatus("running", "Reading signals", plan)
             node.cache_only = plan.new_requests == 0
             node.checked = plan.checked
             self._thread = threading.Thread(target=self._run, args=(node,), daemon=True)
@@ -118,7 +131,7 @@ class PeopleSignals:
     def _run(self, node: RefreshSignals) -> None:
         def progress(message: str, done: int, total: int) -> None:
             with self._lock:
-                self._status = replace(self._status, message=message)
+                self._status = replace(self._status, message=message, done=done, total=total)
         node.on_progress = progress
         try:
             node.run()

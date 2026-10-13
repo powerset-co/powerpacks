@@ -1,17 +1,19 @@
-"""The share stage's whole policy: deterministic labels, Jev label reduction,
-the confirm-flag table and the share decision.
+"""The share stage's whole policy: deterministic labels, the labels worth saved, the
+flags that keep a family home, and the share decision.
 
 Flow: `deterministic_labels(person)` -> cadence/direction/worth from metadata;
-`labels_from_answers(answers)` -> one value per Jev question; `confirm_flag(jev)`
--> the first flag rule that fires; `share_decision(row, tags)` -> the
+`labels_from_saved(labels)` -> one value per Luna question and the share call; `flag(labels)`
+-> the first rule that keeps a worth-yes family home; `share_decision(row, tags)` -> the
 yes/no/confirm and reason the `share` table carries.
 
-Share follows worth. The Jev labels decide nothing: they only flag a worth-yes
-person for a human to confirm.
+In order: you (the owner, then your tags), worth, the flags, then Luna's share call, which read
+every label and its confidence (worth/luna.py request 2). A call under SHARE_FLOOR asks you.
 
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-10-13: Luna's share call decides a worth-yes family that no flag keeps home; minor keeps a
+    family home; the clinician, automated-sender and stranger flags are gone into the call.
   2026-10-07: v2. Worth comes from the v2 store's current_worth; the row types are the share
     package's own; a flag or identifier that is absent is '' not None.
   2026-09-26: `label_row_from_export` rebuilds the decision inputs from
@@ -25,7 +27,7 @@ Changelog:
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Callable
+from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, Worth
@@ -33,29 +35,34 @@ from packs.ingestion.primitives.share.models import (
     GROUP_CHANNELS,
     DeterministicLabels,
     HumanTags,
-    JevLabels,
     LabelRow,
+    Labels,
     PersonEvidence,
     PersonLabelRow,
     ShareDecisionRow,
 )
-from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.primitives.share.questions import (
+    CALL_KEEP_PRIVATE,
+    CALL_SHARE,
+    CHOICE_LABELS,
+    NOUL_LABELS,
+    SCORE_LABELS,
+)
 from packs.ingestion.schemas.share_schema import (
-    AUTOMATED_SENDER,
     FAMILY,
     HUMAN_PRIVATE,
     HUMAN_SHARE,
     MINOR,
+    NOT_PROFESSIONAL,
     OWNER,
     ROMANTIC_PARTNER,
-    SENSITIVE_PROVIDER,
     SHARE_CONFIRM,
     SHARE_NO,
     SHARE_YES,
-    STRANGER,
+    UNSURE,
     WORTH_MAYBE,
     WORTH_NO,
-    WORTH_YES,
+    WOULD_VOUCH,
 )
 
 # Cadence bands, first rule wins: staleness before volume.
@@ -70,10 +77,11 @@ I_INITIATE_ABOVE = 0.65
 
 # A noul label is "active" (listed on the share row) at this probability.
 ACTIVE_P = 0.6
-# A sensitive noul label raises a confirm flag at this probability — a lower bar,
-# because a needless confirmation costs one click and a false share cannot be
-# taken back.
-CONFIRM_P = 0.5
+# is_family or is_minor keeps a family home at this probability — a lower bar, because a
+# needless hold costs one click and a false share cannot be taken back.
+FLAG_P = 0.5
+# Luna's share or keep_private call decides only at this probability; under it, you do.
+SHARE_FLOOR = 0.6
 
 PRIVATE_TAG = "private"
 SHARE_TAG = "share"
@@ -132,62 +140,28 @@ def deterministic_labels(person: PersonEvidence, *, reference_date: str) -> Dete
     )
 
 
-def labels_from_answers(answers: dict[str, dict[str, Any]]) -> JevLabels:
-    """Reduce one Jev response: choice -> argmax option, score -> expected level, noul -> p."""
-    choices: dict[str, str] = {}
-    choice_p: dict[str, float] = {}
-    for name in CHOICE_LABELS:
-        probabilities = answers[name]["probabilities"]
-        best = max(probabilities, key=lambda option: probabilities[option])
-        choices[name] = best
-        choice_p[name] = float(probabilities[best])
-    scores: dict[str, float] = {}
-    for name in SCORE_LABELS:
-        probabilities = answers[name]["probabilities"]
-        scores[name] = round(sum(int(level) * p for level, p in probabilities.items()), 2)
-    return JevLabels(
-        choices=choices,
-        choice_p=choice_p,
-        scores=scores,
-        probabilities={name: float(answers[name]["noul"]) for name in NOUL_LABELS},
-    )
-
-
-def labels_from_saved(labels: dict[str, Any]) -> JevLabels:
-    """Parse the labels persisted with a person's synthesized facts."""
-    return JevLabels(
+def labels_from_saved(labels: dict[str, Any]) -> Labels:
+    """Parse the labels worth saved: one value per question, and the share call."""
+    return Labels(
         choices={name: str(labels[name]) for name in CHOICE_LABELS},
         choice_p={name: float(labels[f"{name}_p"]) for name in CHOICE_LABELS},
         scores={name: float(labels[name]) for name in SCORE_LABELS},
         probabilities={name: float(labels[name]) for name in NOUL_LABELS},
+        share_call=str(labels["share_call"]),
+        share_p=float(labels["share_call_p"]),
     )
 
 
-# First rule wins; the rule NAME is the label row's flag.
-_CONFIRM_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
-    (FAMILY, lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= CONFIRM_P),
-    (ROMANTIC_PARTNER, lambda j: j.choices["relationship_kind"] == "romantic_partner"),
-    (MINOR, lambda j: j.probabilities["is_minor"] >= CONFIRM_P),
-    (SENSITIVE_PROVIDER,
-     lambda j: j.probabilities["is_healthcare_legal_or_financial_provider"] >= CONFIRM_P),
-    (AUTOMATED_SENDER, lambda j: j.probabilities["is_automated_sender"] >= ACTIVE_P),
-    (STRANGER, lambda j: j.probabilities["is_stranger"] >= ACTIVE_P),
-)
-# `confidential_dealings` stays a label, not a flag: on a real network it fired
-# on 87 people, 50 of them recruiters — hiring talk is ordinary here. So does
-# `sensitive_context` (dropped 2026-10-12): it re-asked about people already
-# judged worth yes, 12 of the 14 confirmations on one network.
-
-
-def confirm_flag(jev: JevLabels | None) -> str:
-    """The first flag rule that fires, or ''. A flag asks a human; it decides nothing.
-
-    A person Jev never saw raises no flag: no answers, no question to ask."""
-    if jev is None:
+def flag(labels: Labels | None) -> str:
+    """The first rule that keeps a worth-yes family home, or ''. A family worth never judged has none."""
+    if labels is None:
         return ""
-    for name, fired in _CONFIRM_RULES:
-        if fired(jev):
-            return name
+    if labels.choices["relationship_kind"] == "family" or labels.probabilities["is_family"] >= FLAG_P:
+        return FAMILY
+    if labels.choices["relationship_kind"] == "romantic_partner":
+        return ROMANTIC_PARTNER
+    if labels.probabilities["is_minor"] >= FLAG_P:
+        return MINOR
     return ""
 
 
@@ -200,9 +174,9 @@ def active_labels(row: LabelRow) -> tuple[str, ...]:
 def label_row_from_export(row: PersonLabelRow) -> LabelRow:
     """The decision inputs, read back from the label export the node wrote.
 
-    `labels_json` carries `is_owner` and every noul probability (absent for a
-    LinkedIn-only person, who was never sent to Jev); `worth` and `flag` are
-    columns. The same `share_decision` then yields the same row the node wrote.
+    `labels_json` carries `is_owner`, every noul probability and the share call (none of them
+    for a family worth never judged; an export written before Luna has no call); `worth` and
+    `flag` are columns. The same `share_decision` then yields the same row the node wrote.
     """
     cells = parse_json_object(row.labels_json)
     return LabelRow(
@@ -212,16 +186,18 @@ def label_row_from_export(row: PersonLabelRow) -> LabelRow:
         worth=row.worth,
         flag=row.flag,
         probabilities={name: float(cells[name]) for name in NOUL_LABELS if name in cells},
+        share_call=str(cells.get("share_call", "")),
+        share_p=float(cells.get("share_call_p", 0.0)),
     )
 
 
 def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) -> ShareDecisionRow:
     """First rule wins; the rule name is the row's `reason`.
 
-    Share follows worth — the same effective worth the human reviewed, human over
-    machine. `owner` comes before the human tags because the mailbox owner is not
-    a contact; no tag makes them one. A flag on a worth-yes person shares nothing
-    until a human confirms it.
+    Worth first — the same effective worth the human reviewed, human over machine. `owner`
+    comes before the human tags because the mailbox owner is not a contact; no tag makes them
+    one. A flag keeps a worth-yes family home. Everyone else gets Luna's share call; a call
+    under SHARE_FLOOR, or no call, asks the human.
     """
     held = tags.tags if tags else frozenset()
     if row.is_owner:
@@ -234,13 +210,15 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
         share, reason = SHARE_NO, WORTH_NO
     elif row.worth != Worth.YES.value:
         share, reason = SHARE_NO, WORTH_MAYBE
-    elif row.flag in (FAMILY, ROMANTIC_PARTNER):
-        # Family and partners stay home unless the human tags them Share (decided 2026-10-08).
-        share, reason = SHARE_NO, row.flag
     elif row.flag:
-        share, reason = SHARE_CONFIRM, row.flag
+        # Family, partners and minors stay home unless the human tags them Share (decided 2026-10-08).
+        share, reason = SHARE_NO, row.flag
+    elif row.share_call == CALL_KEEP_PRIVATE and row.share_p >= SHARE_FLOOR:
+        share, reason = SHARE_NO, NOT_PROFESSIONAL
+    elif row.share_call == CALL_SHARE and row.share_p >= SHARE_FLOOR:
+        share, reason = SHARE_YES, WOULD_VOUCH
     else:
-        share, reason = SHARE_YES, WORTH_YES
+        share, reason = SHARE_CONFIRM, UNSURE
     return ShareDecisionRow(
         person_id=row.person_id,
         public_identifier=row.public_identifier,

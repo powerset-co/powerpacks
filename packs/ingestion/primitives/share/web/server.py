@@ -251,8 +251,9 @@ class ShareRoutes:
         try:
             form = json.loads(handler.rfile.read(length))
             people = form.get("people") if isinstance(form, dict) else None
-            if not isinstance(people, list) or not people or not all(isinstance(value, str) for value in people):
-                raise ValueError("people must be a non-empty list of parent ids")
+            # No one selected: refresh whoever needs it. A selection is asked again as well.
+            if not isinstance(people, list) or not all(isinstance(value, str) for value in people):
+                raise ValueError("people must be a list of parent ids")
             known = {row.parent_id for row in self.load()}
             if not set(people) <= known:
                 raise ValueError("Some selected people no longer exist. Reload People and try again.")
