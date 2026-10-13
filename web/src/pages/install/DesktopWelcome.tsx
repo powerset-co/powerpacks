@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useState, type ReactNode } from "react"
 
 import { useNavigate } from "react-router-dom"
@@ -201,6 +201,7 @@ function tilde(path: string): string {
 
 /** Import existing data directly; only a new setup needs the prerequisite check. */
 function Choice({ onStart }: { onStart: () => void }) {
+  const client = useQueryClient()
   const navigate = useNavigate()
   const [clicked, setClicked] = useState<"import" | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -248,7 +249,9 @@ function Choice({ onStart }: { onStart: () => void }) {
           disabled={chosen !== null || !source}
           onClick={() =>
             choose(async () => {
-              if (await importData()) await navigate(HOME.href)
+              const done = await importData()
+              await client.invalidateQueries()
+              if (done) await navigate(HOME.href)
             })
           }
           data-import-source={source ?? ""}

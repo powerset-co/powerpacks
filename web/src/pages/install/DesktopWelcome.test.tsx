@@ -26,8 +26,10 @@ it("imports an existing network without requiring tools for a new setup", async 
     ),
   )
   vi.stubGlobal("fetch", fetch)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(["people"], [])
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <QueryClientProvider client={client}>
       <MemoryRouter>
         <DesktopWelcome />
       </MemoryRouter>
@@ -37,6 +39,7 @@ it("imports an existing network without requiring tools for a new setup", async 
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false))
   fireEvent.click(button)
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("setup_import", undefined))
+  await waitFor(() => expect(client.getQueryState(["people"])?.isInvalidated).toBe(true))
   expect(fetch).not.toHaveBeenCalled()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
