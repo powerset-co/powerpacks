@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 
-import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
+import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner, WarningIcon } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
@@ -50,7 +50,11 @@ const TOOL = { chromium: "browser", gcloud: "gcloud" } as const
 
 type State = "checking" | "working" | "ready" | "needed"
 
-/** One thing to connect: what it is for, then a button, a spinner or a check. */
+// Every row's right side: one slot of one width, an icon beside a word.
+const SLOT = "w-28 shrink-0 self-center"
+
+/** One thing to connect: what it is for, then its slot: a warning on the Connect button while it
+ *  is not connected, "Working" while its sign-in runs, a check once connected. */
 function Row({
   icon,
   title,
@@ -82,20 +86,22 @@ function Row({
           size="sm"
           onClick={action.onClick}
           disabled={action.disabled}
-          className="w-28 shrink-0 self-center"
+          aria-label={`${title}: ${action.label}`}
+          className={cn(SLOT, "gap-1.5")}
         >
+          <WarningIcon className="size-3.5 text-warn" />
           {action.label}
         </Button>
       ) : (
         <span
-          role="img"
-          aria-label={state === "ready" ? `${title} connected` : `${title} working`}
           className={cn(
-            "rise-in grid size-7 shrink-0 place-items-center self-center rounded-full",
-            state === "ready" ? "bg-ok-soft text-ok" : "text-faint",
+            SLOT,
+            "rise-in inline-flex items-center justify-center gap-1.5 text-xs font-semibold",
+            state === "ready" ? "text-ok" : "text-muted-foreground",
           )}
         >
           {state === "ready" ? <CheckIcon className="size-3.5" /> : <Spinner />}
+          {state === "ready" ? "Connected" : state === "working" ? "Working" : "Checking"}
         </span>
       )}
     </li>
@@ -256,7 +262,7 @@ function Mailboxes({
     )
   return (
     <>
-      From {email || "your Google account"}
+      Your mail, from {email || "your Google account"}
       {" · "}
       <button type="button" className={LINK} onClick={() => setTyping(true)}>
         Change
@@ -302,12 +308,11 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const known = record?.mailboxes ?? []
   // Deep context starts from your LinkedIn profile: needed once any source will be processed and
   // LinkedIn's sign-in (which reads it) is not used. With nothing connected setup processes nothing.
-  const needsProfile =
-    !linkedin &&
-    profile === null &&
-    (readable === true ||
-      known.length > 0 ||
-      (["gmail", "whatsapp"] as const).some((name) => standing(record, name).state === "ready"))
+  const processed =
+    readable === true ||
+    known.length > 0 ||
+    (["gmail", "whatsapp"] as const).some((name) => standing(record, name).state === "ready")
+  const needsProfile = !linkedin && profile === null && processed
   const connectGmail = (emails: string[]) => {
     setAsked(emails)
     void connect("gmail", emails)
@@ -341,7 +346,6 @@ export function Connect({ onBack }: { onBack: () => void }) {
     title: string,
     icon: ReactNode,
     why: ReactNode,
-    label: string,
     // A line of the row's own under its run's.
     extra?: ReactNode,
   ) => {
@@ -359,7 +363,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
         why={why}
         state={at.state}
         action={{
-          label: "stopped" in at ? "Try again" : label,
+          label: "stopped" in at ? "Try again" : "Connect",
           onClick: () =>
             name === "gmail"
               ? connectGmail(asked ?? (known.length ? [...known] : [email]))
@@ -391,10 +395,10 @@ export function Connect({ onBack }: { onBack: () => void }) {
         <Row
           icon={<PowersetMark className="size-[18px]" />}
           title="Powerset"
-          why={signedIn ? (account.data?.email ?? "") : "Your account. Needed for setup."}
+          why={signedIn ? (account.data?.email ?? "") : "Your account, needed for setup."}
           state={account.isPending ? "checking" : signedIn ? "ready" : "needed"}
           action={{
-            label: "Sign in",
+            label: "Connect",
             onClick: () => {
               setError(null)
               void signIn()
@@ -406,7 +410,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
         <Row
           icon={<span className="font-mono text-[12px] font-bold">&gt;_</span>}
           title="Codex"
-          why="Runs Chat on your ChatGPT plan."
+          why="Chat, on your ChatGPT plan."
           state={
             codex.loading
               ? "checking"
@@ -423,17 +427,18 @@ export function Connect({ onBack }: { onBack: () => void }) {
         <Row
           icon={<MessagesIcon className="size-[18px]" />}
           title="Messages"
-          why="Full Disk Access, for iMessage and Contacts."
+          why="iMessage and Contacts, with Full Disk Access."
           state={readable === null ? "checking" : readable ? "ready" : "needed"}
-          action={{ label: "Open Settings", onClick: () => void installAction("permissions").catch(fail) }}
+          action={{ label: "Connect", onClick: () => void installAction("permissions").catch(fail) }}
         />
         {source(
           "linkedin",
           "LinkedIn",
           <LinkedInIcon className="size-[18px]" />,
-          "Your connections, after one sign-in.",
-          "Sign in",
-          linkedin ? null : <ProfileLink url={profile} onChange={setProfile} />,
+          "Your LinkedIn connections.",
+          !linkedin && (processed || profile !== null) ? (
+            <ProfileLink url={profile} onChange={setProfile} />
+          ) : null,
         )}
         {source(
           "gmail",
@@ -446,14 +451,12 @@ export function Connect({ onBack }: { onBack: () => void }) {
             onChange={setMailbox}
             onAdd={(added) => connectGmail([...known, added])}
           />,
-          "Connect",
         )}
         {source(
           "whatsapp",
           "WhatsApp",
           <WhatsAppIcon className="size-[18px]" />,
-          "Scan a code with your phone.",
-          "Link",
+          "Your WhatsApp chats, by scanning a code.",
         )}
       </ul>
       <div className="flex items-center justify-between gap-3">

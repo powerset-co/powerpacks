@@ -93,7 +93,7 @@ it("starts setup once Powerset is signed in and LinkedIn is connected", async ()
   }
   const { unmount } = mount()
   const setUp = await screen.findByRole("button", { name: "Set up" })
-  await within(row("Powerset")).findByRole("button", { name: "Sign in" })
+  await within(row("Powerset")).findByRole("button", { name: "Powerset: Connect" })
   expect(setUp.hasAttribute("disabled")).toBe(true)
   unmount()
   state.account = SIGNED_IN
@@ -138,7 +138,7 @@ it("without LinkedIn's sign-in, setup starts from the profile link", async () =>
 
 it("connects a source and follows its run to the check", async () => {
   mount()
-  fireEvent.click(await within(row("LinkedIn")).findByRole("button", { name: "Sign in" }))
+  fireEvent.click(await within(row("LinkedIn")).findByRole("button", { name: "LinkedIn: Connect" }))
   await waitFor(() =>
     expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "linkedin" } }),
   )
@@ -157,7 +157,7 @@ it("connects a source and follows its run to the check", async () => {
     status: "completed",
     steps: { linkedin_login: { status: "completed" } },
   }
-  expect(await screen.findByRole("img", { name: "LinkedIn connected" }, { timeout: 4_000 })).toBeTruthy()
+  expect(await within(row("LinkedIn")).findByText("Connected", {}, { timeout: 4_000 })).toBeTruthy()
 })
 
 it("shows a stopped wait's line and command with Try again", async () => {
@@ -172,7 +172,7 @@ it("shows a stopped wait's line and command with Try again", async () => {
   const gmail = row("Gmail")
   expect(await within(gmail).findByText("brew install msgvault")).toBeTruthy()
   expect(within(gmail).getByText("Your Mac password is needed to prepare import tools.")).toBeTruthy()
-  expect(within(gmail).getByRole("button", { name: "Try again" })).toBeTruthy()
+  expect(within(gmail).getByRole("button", { name: "Gmail: Try again" })).toBeTruthy()
 })
 
 it("shows WhatsApp's code while it waits on a scan", async () => {
@@ -191,7 +191,7 @@ it("shows WhatsApp's code while it waits on a scan", async () => {
 
 it("connects Gmail with the Powerset address, then adds another mailbox after the first", async () => {
   mount()
-  fireEvent.click(await within(row("Gmail")).findByRole("button", { name: "Connect" }))
+  fireEvent.click(await within(row("Gmail")).findByRole("button", { name: "Gmail: Connect" }))
   await waitFor(() =>
     expect(state.posts).toContainEqual({
       url: "/api/install/connect",
@@ -225,7 +225,7 @@ it("keeps an existing Gmail app's owner first", async () => {
   mount()
   const gmail = row("Gmail")
   expect(await within(gmail).findByText("owner@example.com")).toBeTruthy()
-  fireEvent.click(within(gmail).getByRole("button", { name: "Connect" }))
+  fireEvent.click(within(gmail).getByRole("button", { name: "Gmail: Connect" }))
   await waitFor(() =>
     expect(state.posts).toContainEqual({
       url: "/api/install/connect",
