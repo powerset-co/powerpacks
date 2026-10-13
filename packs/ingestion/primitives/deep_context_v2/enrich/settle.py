@@ -5,8 +5,8 @@ An own connection is a family one of the owner's first-degree connections was pr
 judged wrong: the owner chose to connect with this person, so they are in until a human says no. A
 real profile is a confirmed LinkedIn whose profile has a name and positions or a location, or a
 synthetic card a human accepted. A human worth row wins in the view, so nothing is written when a
-member has one, and a family already at the settled worth needs no row. The row carries the family's
-worth key, so worth does not judge it again.
+member has one, and a family already at the settled worth needs no row. The row carries worth's
+version key, so worth does not judge it again.
 
 Changelog:
 - 2026-10-13: `settle` applies the rule in one call, for Enrich and anything else that rewrites worth.
@@ -83,7 +83,7 @@ def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[Wo
             if family.worth.worth == Worth.NO or family.messages >= MESSAGE_BAR or has_real_profile(family, profiles):
                 continue
             settled, reason = Worth.NO.value, REASON
-        key: str = evidence.family_key(list(family.members))
+        key: str = evidence.version_key()
         for candidate_id in family.candidates:
             rows.append((candidate_id, settled, DecidedBy.MACHINE.value, reason, family.worth.labels_json, key, now))
     return rows

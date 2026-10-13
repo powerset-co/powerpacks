@@ -16,7 +16,7 @@ import httpx
 from test_share_v2 import StoreTests
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.db import queries
-from packs.ingestion.primitives.deep_context_v2.worth import luna
+from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 from packs.ingestion.primitives.share.labels import flag, labels_from_saved, share_decision
@@ -138,6 +138,24 @@ class WorthRunTests(StoreTests):
                                               "ORDER BY seq DESC").fetchone()[0])
         self.assertEqual((labels["worth"], labels["share_call"], labels["version"]),
                          ("yes", "share", luna.REQUEST_VERSION))
+
+
+class MergeTests(StoreTests):
+    def test_a_merge_asks_nothing(self) -> None:
+        # Both people were judged under today's questions; dedupe then puts c2 under p:a.
+        root = Path(self.tmp.name)
+        self._parent("p:a", "c1")
+        self._parent("p:b", "c2")
+        self._facts("c1", "Jordan Bravo")
+        self._facts("c2", "Casey Delta")
+        self.conn.executemany(
+            "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
+            "VALUES (?, 'yes', 'machine', 'judged', NULL, ?, '2026-10-13')",
+            [("c1", evidence.version_key()), ("c2", evidence.version_key())])
+        self._parent("p:a", "c2")
+        families = Worth(self.conn, root, limit=DEFAULT_LIMIT).families()
+        self.assertEqual([(family.key, family.members, family.judged) for family in families],
+                         [("p:a", ("c1", "c2"), True)])
 
 
 class LabelsTests(unittest.TestCase):

@@ -12,15 +12,16 @@ In order:
 3. Every family gets Luna's two requests (luna.py): the labels and worth over its members' facts
    (collapsed into one) and message counts, then the share call over those labels. Worth is yes,
    maybe or no with a reason, for every family not settled by rules 1 and 2.
-4. A family is judged once: its key is the request version and its member ids. Only a merge, which
-   makes a new family, brings a new judgment; a family whose members' latest machine worth rows all
-   carry its key is skipped at $0. People's explicit refresh selects its families again, reusing
-   the exact-request cache. A family Luna refuses to answer gets no row and stays pending.
+4. A family is judged once per question version, as soon as any member is (evidence.version_key):
+   new messages and merges never ask again, and a version bump asks everyone once. People's explicit
+   refresh selects its families again, reusing the exact-request cache. A family Luna refuses to
+   answer gets no row and stays pending.
 5. One worth row per member candidate, the same verdict and labels to each.
 
 Created: 2026-10-06
 Changelog:
-  2026-10-13: Luna Decisions replace JEV and its frozen worth model; request 2, the share call.
+  2026-10-13: Luna Decisions replace JEV and its frozen worth model; request 2, the share call. A
+    family is judged once any member is under the current version: a merge no longer asks again.
 """
 from __future__ import annotations
 
@@ -67,7 +68,7 @@ class Family:
     key: str
     members: tuple[str, ...]
     fingerprint: str
-    judged: bool                     # every member's latest machine worth row carries the fingerprint
+    judged: bool                     # a member's latest machine worth row carries the version key
     match: Connection | None         # None = the pre-match did not tie the family to exactly one connection
     request: dict[str, Any]          # request 1: every family is labelled, pre-matched or not
     digest: str                      # its cache key
@@ -126,11 +127,13 @@ class Worth(Node):
                 match = matches[0]
             # The message counts: the members' bundles added together, counts only.
             summary: ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
-            fingerprint: str = evidence.family_key(members)
-            is_judged: bool = True
+            fingerprint: str = evidence.version_key()
+            # Judged once any member was, under these questions: a merge, or a new identity joining a
+            # judged person, asks nothing.
+            is_judged: bool = False
             for member in members:
-                if judged.get(member.candidate_id) != fingerprint:
-                    is_judged = False
+                if judged.get(member.candidate_id) == fingerprint:
+                    is_judged = True
             # Every family gets Luna's labels, a pre-matched one included: its worth is yes by the match, its
             # labels and share call come from the same requests as everyone else's.
             request: dict[str, Any] = luna.build_request(evidence.family_facts(members), summary, owner,
@@ -143,7 +146,7 @@ class Worth(Node):
         return families
 
     def pending(self, families: list[Family]) -> list[Family]:
-        """The first `limit` families without a machine worth row under their version/member key, and
+        """The first `limit` families no member of which has a machine worth row under this version, and
         every family People asked for again (`parent_ids`), judged or not. New facts never make a family
         pending. Asking for a few people still brings everyone else up to the current version, so the
         share step after it never meets labels from older questions."""
