@@ -5,8 +5,8 @@ Changelog:
       so it never stops at WhatsApp's QR to be skipped.
   2026-10-13: connect: `POST /api/install/connect` runs one source's tools and login for the
       desktop app's Connect screen (onboard.py --logins-only) in the background, Gmail with every
-      mailbox; `GET` reads its record, with the QR's URL while WhatsApp waits on one and the
-      Gmail mailboxes msgvault's app takes.
+      mailbox; `GET` reads its record: what the sign-in is doing now, with the QR's URL while
+      WhatsApp waits on one. Whether a source is signed in is accounts.signed_in's.
   2026-10-09: preflight: `GET /api/install/preflight` reports what the desktop app's first screen
       checks (a browser for sign-ins, the Google Cloud CLI); `POST` installs one in the background.
 """
@@ -22,7 +22,6 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
-from packs.ingestion.primitives.setup.automations import msgvault_home
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
@@ -89,14 +88,12 @@ class InstallController:
         return path.read_bytes() if path else None
 
     def connection(self) -> dict:
-        """The Connect screen's run: its record, with the QR's URL while WhatsApp waits on one, and
-        the Gmail mailboxes msgvault's app takes, its owner first."""
+        """The Connect screen's sign-in in progress: its record, with the QR's URL while WhatsApp
+        waits on one."""
         record = InstallStatus(self.root, "connect").read()
         qr = self.qr(record)
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
-        app = msgvault_home.load_setup_state(Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser())
-        record["mailboxes"] = [email for email in dict.fromkeys((app.email, *app.test_users)) if email]
         return record
 
     def connect(self, source: object, emails: object = None) -> dict:

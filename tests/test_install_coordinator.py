@@ -18,6 +18,7 @@ from packs.powerset.primitives.install.tools import ImportTools
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.setup.automations import accounts
+from packs.ingestion.primitives.accounts.accounts import SignedIn
 
 
 class InstallCoordinatorTests(unittest.TestCase):
@@ -175,20 +176,23 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.events, [])
         self.launch_page.assert_not_called()
 
-    def test_native_sources_take_the_connected_mailbox_and_keep_it_on_retry(self):
-        # The Connect screen stores the mailbox; setup under the desktop app never asks for one.
+    def test_native_sources_take_the_signed_in_mailboxes_on_every_run(self):
+        # The Connect screen signs Gmail in; setup under the desktop app takes the mailboxes
+        # accounts.signed_in names, never a saved or asked-for one.
         self.enterContext(patch('packs.powerset.primitives.install.workflow.DESKTOP', True))
         self.sources.stop()  # Exercise SourceOnboarding.run after the account step writes its email.
-        self.retry = f"{self.root}/bin/onboard --source gmail --harness pi --port 8899"
+        self.retry = f"{self.root}/bin/onboard --source gmail --gmail-email saved@gmail.com --harness pi --port 8899"
         self.status.write('step.waiting', step=InstallStep.ACCOUNT, pid=0,
                           retry_command=self.retry, account_email='')
         self.account_email = 'new-powerset@example.com'
         previous_cwd = Path.cwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, previous_cwd)
-        vault = {'config': {'oauth_configured': True}, 'database': {'exists': True}, 'accounts': []}
-        with patch.object(ImportTools, 'run', return_value={'status': 'ok'}), \
-             patch.object(accounts, 'status_payload', side_effect=lambda home: vault), \
+        ready = SignedIn(linkedin=False, gmail=False, imessage=False, whatsapp=False, mailboxes=())
+        with patch('packs.powerset.primitives.install.workflow.signed_in', side_effect=lambda: ready), \
+             patch.object(ImportTools, 'run', return_value={'status': 'ok'}), \
+             patch.object(accounts, 'status_payload', return_value={
+                 'config': {'oauth_configured': True}, 'database': {'exists': True}, 'accounts': []}), \
              patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}) as health, \
              patch.object(GmailDiscovery, 'run', return_value=SimpleNamespace(
                  to_payload=lambda: {'status': 'completed'})), \
@@ -197,21 +201,15 @@ class InstallCoordinatorTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertEqual(self.status.read()['event'], 'sources.all_skipped')
             health.assert_not_called()
-            vault['accounts'] = [{'email': 'mailbox@gmail.com'}]
-            code, output = self.run_command()
-            self.assertEqual(code, 0, output)
-            self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
-            retry = self.status.read()['retry_command']
-            self.assertIn('--gmail-email mailbox@gmail.com', retry)
-            self.assertIn('--harness pi --port 8899', retry)
-            window = SourceOnboarding(self.root, sources=()).sync_after
-            self.account_email = 'different-powerset@example.com'
+            ready = SignedIn(linkedin=False, gmail=True, imessage=False, whatsapp=False, mailboxes=('mailbox@gmail.com',))
             code, output = self.run_command()
             self.assertEqual(code, 0, output)
             self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
             self.assertIn('--harness pi --port 8899', self.status.read()['retry_command'])
-            self.assertEqual(SourceOnboarding(self.root, sources=()).sync_after, window)
-
+            self.account_email = 'different-powerset@example.com'
+            code, output = self.run_command()
+            self.assertEqual(code, 0, output)
+            self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,8 +88,7 @@ class AccountRoutesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp())
         self.credentials = self.root / "credentials.json"
-        patch.dict("os.environ", {"POWERPACKS_CREDENTIALS_PATH": str(self.credentials),
-                                  "MSGVAULT_HOME": str(self.root / "msgvault")}).start()
+        patch.dict("os.environ", {"POWERPACKS_CREDENTIALS_PATH": str(self.credentials)}).start()
         self.addCleanup(patch.stopall)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), persistent_handler(self.root))
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

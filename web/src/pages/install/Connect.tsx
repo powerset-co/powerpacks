@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 
 import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
+import { fetchSignedIn, type SignedIn } from "@/lib/api/accounts"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
 import {
@@ -14,7 +15,6 @@ import {
   fetchPreflight,
   installAction,
   installPreflight,
-  messagesReadable,
   type ConnectSource,
   type Preflight,
 } from "@/lib/api/install"
@@ -28,8 +28,9 @@ const {
   whatsapp: WhatsAppIcon,
 } = CHANNEL_ICON
 
-// While a sign-in, an install or macOS is still answering, ask again this often.
+// While a sign-in or an install is still running, ask again this often.
 const POLL_MS = 2_000
+const SIGNED_IN = ["signed-in"]
 
 // Each source's steps in the Connect screen's run, the last its login (status_prose.py).
 const STEPS: Record<ConnectSource, readonly InstallStep[]> = {
@@ -112,39 +113,24 @@ function Line({ children, bad = false }: { children: ReactNode; bad?: boolean })
   return <span className={cn("text-xs leading-snug", bad ? "text-bad" : "text-foreground")}>{children}</span>
 }
 
-/** Where one source stands in the Connect screen's run. */
-function standing(record: InstallStatus | undefined, source: ConnectSource) {
-  if (record === undefined) return { state: "checking" as const }
-  const current = STEPS[source].includes(record.step)
-  const live = (record.installer_pid ?? 0) > 0
-  if (current && (record.status === "running" || (record.status === "waiting" && live)))
-    return { state: "working" as const, line: record.message, qr: record.action?.qr_url }
-  // Stopped: failed, or waiting with nothing left running (a password, a closed window).
-  if (current && (record.status === "failed" || record.status === "waiting"))
-    return { state: "needed" as const, line: record.message, command: record.action?.command, stopped: true }
-  const login = STEPS[source][STEPS[source].length - 1] ?? ""
-  return { state: record.steps[login]?.status === "completed" ? ("ready" as const) : ("needed" as const) }
-}
-
-/** Whether macOS lets Powerpacks read Messages, asked again while not yet; null until it answers. */
-function useMessagesReadable(): boolean | null {
-  const [readable, setReadable] = useState<boolean | null>(null)
-  useEffect(() => {
-    let stopped = false
-    const check = async () => {
-      const allowed = await messagesReadable()
-      if (stopped) return
-      setReadable(allowed)
-      if (allowed) stopped = true
-    }
-    const timer = setInterval(() => void check(), POLL_MS)
-    void check()
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [])
-  return readable
+/** Where one source stands: its sign-in in progress (the connect record), else whether it is
+ *  signed in (accounts.signed_in, the answer setup takes). Only signing in makes a source ready. */
+function standing(record: InstallStatus | undefined, signed: SignedIn | undefined, source: ConnectSource) {
+  if (record && STEPS[source].includes(record.step)) {
+    const live = (record.installer_pid ?? 0) > 0
+    if (record.status === "running" || (record.status === "waiting" && live))
+      return { state: "working" as const, line: record.message, qr: record.action?.qr_url }
+    // Stopped: failed, or waiting with nothing left running (a password, a closed window).
+    if (record.status === "failed" || record.status === "waiting")
+      return {
+        state: "needed" as const,
+        line: record.message,
+        command: record.action?.command,
+        stopped: true,
+      }
+  }
+  if (signed === undefined) return { state: "checking" as const }
+  return { state: signed[source] ? ("ready" as const) : ("needed" as const) }
 }
 
 const LINK =
@@ -276,7 +262,6 @@ function Mailboxes({
 export function Connect({ onBack }: { onBack: () => void }) {
   const client = useQueryClient()
   const codex = useCodexAccount()
-  const readable = useMessagesReadable()
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [mailbox, setMailbox] = useState<string | null>(null)
@@ -295,22 +280,33 @@ export function Connect({ onBack }: { onBack: () => void }) {
     refetchInterval: POLL_MS,
   })
   const record = connection.data
+  // What is signed in, from where each sign-in lives; asked again on coming back to the window
+  // (from System Settings or a browser) and once a sign-in here ends.
+  const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
+  const ready = signed.data
+  useEffect(() => {
+    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN })
+    window.addEventListener("focus", again)
+    return () => window.removeEventListener("focus", again)
+  }, [client])
   // One sign-in at a time: setup's own lock holds the others off.
   const busy =
     queued !== null ||
     (record !== undefined &&
       (record.status === "running" || (record.status === "waiting" && (record.installer_pid ?? 0) > 0)))
+  const wasBusy = useRef(false)
+  useEffect(() => {
+    if (wasBusy.current && !busy) void client.invalidateQueries({ queryKey: SIGNED_IN })
+    wasBusy.current = busy
+  }, [busy, client])
   const email = mailbox ?? account.data?.email ?? ""
-  const linkedin = standing(record, "linkedin").state === "ready"
-  // The mailboxes Gmail's app already takes (msgvault), its owner first: a connect sends them all,
-  // so the owner stays first. Before there is an app, the first connect starts from `email`.
-  const known = record?.mailboxes ?? []
+  const linkedin = ready?.linkedin === true
+  // The Gmail mailboxes msgvault keeps, signed in or not, the app's owner first: a connect sends
+  // them all, so the owner stays first. Before there is one, the first connect starts from `email`.
+  const known = ready?.mailboxes ?? []
   // Deep context starts from your LinkedIn profile: needed once any source will be processed and
-  // LinkedIn's sign-in (which reads it) is not used. With nothing connected setup processes nothing.
-  const processed =
-    readable === true ||
-    known.length > 0 ||
-    (["gmail", "whatsapp"] as const).some((name) => standing(record, name).state === "ready")
+  // LinkedIn's sign-in (which reads it) is not used. With nothing signed in setup processes nothing.
+  const processed = ready !== undefined && (ready.imessage || ready.gmail || ready.whatsapp)
   const needsProfile = !linkedin && profile === null && processed
   const connectGmail = (emails: string[]) => {
     setAsked(emails)
@@ -351,7 +347,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
     const at =
       queued === name
         ? { state: "working" as const, line: "Installing what it needs…" }
-        : standing(record, name)
+        : standing(record, ready, name)
     const qr = "qr" in at ? at.qr : undefined
     const command = "command" in at ? at.command : undefined
     return (
@@ -427,7 +423,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
           icon={<MessagesIcon className="size-[18px]" />}
           title="Messages"
           why="iMessage and Contacts, with Full Disk Access."
-          state={readable === null ? "checking" : readable ? "ready" : "needed"}
+          state={ready === undefined ? "checking" : ready.imessage ? "ready" : "needed"}
           action={{ label: "Connect", onClick: () => void installAction("permissions").catch(fail) }}
         />
         {source(
@@ -469,11 +465,11 @@ export function Connect({ onBack }: { onBack: () => void }) {
         </span>
         <Button
           variant="primary"
-          disabled={!signedIn || needsProfile || busy || starting}
+          disabled={!signedIn || ready === undefined || needsProfile || busy || starting}
           onClick={() => {
             setStarting(true)
             setError(null)
-            // Without the sign-in, the app looks the profile up before setup starts (onboard.rs).
+            // Without LinkedIn's sign-in, setup's owner step reads the profile from its link.
             void continueSetup(linkedin || profile === null ? {} : { linkedinUrl: profile }).catch(
               (caught: unknown) => {
                 fail(caught)

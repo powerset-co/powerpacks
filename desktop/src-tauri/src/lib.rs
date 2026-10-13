@@ -226,17 +226,6 @@ async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool
     .map_err(|error| error.to_string())?
 }
 
-/// Whether macOS lets this app read Messages (Full Disk Access), checked afresh each call.
-#[tauri::command]
-async fn permission_messages(boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
-    let root = boot::require_root(&boot)?;
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || onboard::messages_readable(&root))
-            .await
-            .unwrap_or(false),
-    )
-}
-
 /// Resumes setup from the install page with what the user answered there.
 #[tauri::command]
 async fn onboard_continue(
@@ -385,7 +374,6 @@ pub fn run() {
             open_external,
             update_check,
             onboard_continue,
-            permission_messages,
             debug_state,
             debug_skip_setup,
             debug_reset_data,

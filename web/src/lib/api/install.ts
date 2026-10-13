@@ -20,16 +20,12 @@ export async function installAction(action: string, values: object = {}): Promis
 /** The sources the Connect screen signs in to before setup (controller.py CONNECTABLE). */
 export type ConnectSource = "linkedin" | "gmail" | "whatsapp"
 
-/** The Connect screen's run: one source's tools and login at a time, in its own record, with
- *  the Gmail mailboxes msgvault's app takes (its owner first). */
-export interface Connection extends InstallStatus {
-  mailboxes: string[]
-}
-
-export async function fetchConnection(signal: AbortSignal): Promise<Connection> {
+/** The Connect screen's sign-in in progress (one source's tools and login at a time, in its own
+ *  record): what it is doing now, or why it stopped. Whether a source is signed in is fetchSignedIn's. */
+export async function fetchConnection(signal: AbortSignal): Promise<InstallStatus> {
   const response = await fetch("/api/install/connect", { signal, cache: "no-store" })
   if (!response.ok) throw await failure(response, "Couldn't check your connections")
-  return body<Connection>(response)
+  return body<InstallStatus>(response)
 }
 
 /** Sign in to one source before setup; Gmail's takes every mailbox, the app's owner first.
@@ -56,11 +52,6 @@ export function focusApp(): Promise<void> {
 /** Open a page in the system browser. */
 export function openExternal(url: string): Promise<void> {
   return invoke("open_external", { url }).then(() => undefined)
-}
-
-/** Whether macOS lets the app read Messages (Full Disk Access), checked afresh each call. */
-export async function messagesReadable(): Promise<boolean> {
-  return (await invoke("permission_messages")) === true
 }
 
 /** The command-line install on this machine whose data the app can import, as a path to show. */

@@ -3,6 +3,8 @@
 GET  /accounts/api/accounts   every connected account (accounts.read_accounts), the
                               Sync/Reconnect jobs this server started (by card key),
                               and whether a daily refresh task is installed.
+GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in): what
+                              setup will take, as its Connect screen shows it
                               Jobs and health arrive together, so a finished job never
                               shows next to the account's pre-sync health.
 POST /accounts/api/sync       source=imessage|whatsapp, or source=gmail&email=<address>:
@@ -18,6 +20,7 @@ browser sign-in before that, so an abandoned sign-in never blocks other syncs. W
 page's polls reuse the last Gmail sign-in checks instead of asking Google each time.
 
 Changelog:
+  2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
   2026-09-28: created for the local Accounts page.
 """
 
@@ -31,7 +34,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from typing import Callable, Literal
 
-from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME, SignIn, gmail_signins, read_accounts
+from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME, SignIn, gmail_signins, read_accounts, signed_in
 from packs.ingestion.primitives.refresh.refresh_sources import (
     SourceResult,
     sync_gmail,
@@ -42,6 +45,7 @@ from packs.ingestion.primitives.refresh.tasks import installed_runners
 from packs.ingestion.primitives.setup.automations.accounts import add_account
 
 ACCOUNTS_PATH = "/accounts/api/accounts"
+SIGNED_IN_PATH = "/accounts/api/signed-in"
 SYNC_PATH = "/accounts/api/sync"
 RECONNECT_PATH = "/accounts/api/reconnect"
 
@@ -64,6 +68,9 @@ class AccountsApi:
         self._signins: dict[str, SignIn] | None = None
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        if parsed.path == SIGNED_IN_PATH:
+            _send_json(handler, asdict(signed_in()))
+            return True
         if parsed.path != ACCOUNTS_PATH:
             return False
         if not any(job.state in BUSY for job in self.jobs.values()) or self._signins is None:

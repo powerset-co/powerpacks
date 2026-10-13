@@ -27,7 +27,9 @@ flowchart LR
 Setup is clicked through on the install page; no agent runs it. The Connect screen
 (`web/src/pages/install/Connect.tsx`) takes every sign-in first (`bin/onboard --logins-only` per
 source), so setup then runs without waiting on anyone; `DesktopSetup.tsx` shows anything it still
-asks. Chat (`web/src/pages/agent/`) searches people, companies and dossiers.
+asks. Which sources are signed in has one answer, `accounts.signed_in`
+(`GET /accounts/api/signed-in`), read where each sign-in lives: the screen shows it and setup
+takes exactly those sources. Chat (`web/src/pages/agent/`) searches people, companies and dossiers.
 
 Sign-ins happen in a browser, and the app comes forward again when each lands. Powerset's opens
 in the default browser: an app's own web view gets none of the Mac's passkeys (macOS keeps them to

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
+import type { SignedIn } from "@/lib/api/accounts"
 import { must } from "@/lib/must"
 
 import { Connect } from "./Connect"
@@ -19,17 +20,16 @@ vi.mock("@/lib/agent/useCodexAccount", () => ({
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: null, picture: null }
 const READY = { browser: { ok: true, name: "Chrome", install: null }, gcloud: { ok: true, install: null } }
 // A connect record as GET /api/install/connect returns it: nothing run yet.
-const NOTHING = {
-  step: "runtime",
-  status: "waiting",
-  installer_pid: 0,
-  message: "",
-  steps: {},
-  action: null,
-  mailboxes: [],
-}
+const NOTHING = { step: "runtime", status: "waiting", installer_pid: 0, message: "", steps: {}, action: null }
+// GET /accounts/api/signed-in on a fresh Mac: nothing signed in.
+const NONE: SignedIn = { linkedin: false, gmail: false, imessage: false, whatsapp: false, mailboxes: [] }
 
-let state: { account: object; connect: object; posts: { url: string; body: unknown }[] }
+let state: {
+  account: object
+  connect: object
+  signed: SignedIn
+  posts: { url: string; body: unknown }[]
+}
 let invoke: ReturnType<typeof vi.fn>
 
 function reply(body: unknown, status = 200) {
@@ -37,7 +37,7 @@ function reply(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
-  state = { account: SIGNED_IN, connect: NOTHING, posts: [] }
+  state = { account: SIGNED_IN, connect: NOTHING, signed: NONE, posts: [] }
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) => {
@@ -47,11 +47,12 @@ beforeEach(() => {
       }
       if (url === "/api/account") return reply(state.account)
       if (url === "/api/install/connect") return reply(state.connect)
+      if (url === "/accounts/api/signed-in") return reply(state.signed)
       if (url === "/api/install/preflight") return reply(READY)
       return reply({ error: url }, 404)
     }),
   )
-  invoke = vi.fn((command: string) => Promise.resolve(command === "permission_messages" ? false : null))
+  invoke = vi.fn(() => Promise.resolve(null))
   vi.stubGlobal("__TAURI__", { core: { invoke } })
 })
 
@@ -83,14 +84,32 @@ it("lists every sign-in once, in setup's order", async () => {
   expect(titles).toEqual(["Powerset", "Codex", "Messages", "LinkedIn", "Gmail", "WhatsApp"])
 })
 
-it("starts setup once Powerset is signed in and LinkedIn is connected", async () => {
-  state.account = { signed_in: false, email: null, name: null, picture: null }
+it("shows a source connected only when it is signed in, never from the connect record alone", async () => {
+  // The record says LinkedIn's sign-in finished, but its session is gone: Connect again.
   state.connect = {
     ...NOTHING,
     step: "sources",
     status: "completed",
     steps: { linkedin_login: { status: "completed" } },
   }
+  state.signed = { ...NONE, imessage: true }
+  mount()
+  expect(await within(row("Messages")).findByText("Connected")).toBeTruthy()
+  expect(within(row("LinkedIn")).getByRole("button", { name: "LinkedIn: Connect" })).toBeTruthy()
+})
+
+it("asks again what is signed in on coming back to the window (Full Disk Access from System Settings)", async () => {
+  mount()
+  const messages = row("Messages")
+  await within(messages).findByRole("button", { name: "Messages: Connect" })
+  state.signed = { ...NONE, imessage: true }
+  fireEvent.focus(window)
+  expect(await within(messages).findByText("Connected")).toBeTruthy()
+})
+
+it("starts setup once Powerset is signed in and LinkedIn is connected", async () => {
+  state.account = { signed_in: false, email: null, name: null, picture: null }
+  state.signed = { ...NONE, linkedin: true }
   const { unmount } = mount()
   const setUp = await screen.findByRole("button", { name: "Set up" })
   await within(row("Powerset")).findByRole("button", { name: "Powerset: Connect" })
@@ -113,12 +132,7 @@ it("with nothing connected, setup starts without a profile link", async () => {
 })
 
 it("without LinkedIn's sign-in, setup starts from the profile link", async () => {
-  state.connect = {
-    ...NOTHING,
-    step: "sources",
-    status: "completed",
-    steps: { whatsapp_login: { status: "completed" } },
-  }
+  state.signed = { ...NONE, whatsapp: true }
   mount()
   const setUp = await screen.findByRole("button", { name: "Set up" })
   expect(await screen.findByText("Sign in to LinkedIn or add your profile link.")).toBeTruthy()
@@ -136,7 +150,7 @@ it("without LinkedIn's sign-in, setup starts from the profile link", async () =>
   )
 })
 
-it("connects a source and follows its run to the check", async () => {
+it("connects a source, follows its run, then reads its sign-in once the run ends", async () => {
   mount()
   fireEvent.click(await within(row("LinkedIn")).findByRole("button", { name: "LinkedIn: Connect" }))
   await waitFor(() =>
@@ -151,12 +165,9 @@ it("connects a source and follows its run to the check", async () => {
   }
   expect(await within(row("LinkedIn")).findByText("Checking LinkedIn", {}, { timeout: 4_000 })).toBeTruthy()
   expect(screen.getByRole("button", { name: "Set up" }).hasAttribute("disabled")).toBe(true)
-  state.connect = {
-    ...NOTHING,
-    step: "sources",
-    status: "completed",
-    steps: { linkedin_login: { status: "completed" } },
-  }
+  // The run ends and LinkedIn's session is there: the screen asks what is signed in again.
+  state.signed = { ...NONE, linkedin: true }
+  state.connect = { ...NOTHING, step: "sources", status: "completed" }
   expect(await within(row("LinkedIn")).findByText("Connected", {}, { timeout: 4_000 })).toBeTruthy()
 })
 
@@ -189,7 +200,7 @@ it("shows WhatsApp's code while it waits on a scan", async () => {
   expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
 })
 
-it("connects Gmail with the Powerset address, then adds another mailbox after the first", async () => {
+it("connects Gmail with the Powerset address, then adds another mailbox to the signed-in ones", async () => {
   mount()
   fireEvent.click(await within(row("Gmail")).findByRole("button", { name: "Gmail: Connect" }))
   await waitFor(() =>
@@ -199,13 +210,7 @@ it("connects Gmail with the Powerset address, then adds another mailbox after th
     }),
   )
   cleanup()
-  state.connect = {
-    ...NOTHING,
-    step: "sources",
-    status: "completed",
-    steps: { gmail_login: { status: "completed" } },
-    mailboxes: ["casey@example.com"],
-  }
+  state.signed = { ...NONE, gmail: true, mailboxes: ["casey@example.com"] }
   mount()
   const gmail = row("Gmail")
   fireEvent.click(await within(gmail).findByRole("button", { name: "Add another" }))
@@ -220,11 +225,14 @@ it("connects Gmail with the Powerset address, then adds another mailbox after th
   )
 })
 
-it("keeps an existing Gmail app's owner first", async () => {
-  state.connect = { ...NOTHING, mailboxes: ["owner@example.com"] }
+it("keeps the Google app's owner first when a mailbox needs signing in again", async () => {
+  state.signed = { ...NONE, mailboxes: ["owner@example.com"] }
   mount()
   const gmail = row("Gmail")
   expect(await within(gmail).findByText("owner@example.com")).toBeTruthy()
+  // Signed out, Gmail is left out of setup: nothing to process, so no profile link is needed.
+  const setUp = screen.getByRole("button", { name: "Set up" })
+  await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
   fireEvent.click(within(gmail).getByRole("button", { name: "Gmail: Connect" }))
   await waitFor(() =>
     expect(state.posts).toContainEqual({

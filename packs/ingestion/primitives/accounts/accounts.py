@@ -12,7 +12,13 @@ tool owns, so the page can never disagree with it:
 Contact counts and the last import come from each discover manifest. An
 expired Gmail sign-in is the 7-day grant of a Testing-status OAuth app lapsing.
 
+`signed_in` is the one answer to which sources need no sign-in, read the same
+way: setup takes the sources it names, and its Connect screen shows it. Only a
+sign-in writes it (msgvault's tokens, macOS's Full Disk Access, wacli's link, the
+sign-in browser's LinkedIn session).
+
 Changelog:
+  2026-10-13: `signed_in`, shared by setup and its Connect screen.
   2026-09-28: created for the local Accounts page.
 """
 
@@ -20,8 +26,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,11 +45,15 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
     DEFAULT_MSGVAULT_DB,
     MESSAGES_OUT_DIR,
 )
+from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE  # noqa: E402
 from packs.ingestion.primitives.discover.messages.chatdb import apple_timestamp_to_iso  # noqa: E402
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli import auth as wacli_auth  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveFailed  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.store_db import whatsapp_epoch_to_iso  # noqa: E402
 from packs.ingestion.primitives.imports.status import linkedin_connections_count  # noqa: E402
+from packs.ingestion.primitives.setup.automations import msgvault_home  # noqa: E402
 from packs.ingestion.primitives.setup.automations.accounts import check_account  # noqa: E402
 
 Source = Literal["gmail", "imessage", "whatsapp", "linkedin"]
@@ -54,6 +67,11 @@ STALE_SYNC_DAYS = 2
 STALE_LINKEDIN_DAYS = 30
 
 MSGVAULT_HOME = DEFAULT_MSGVAULT_DB.parent
+# Seconds from Chrome's cookie epoch (1601-01-01) to Unix time's.
+CHROME_EPOCH_SECONDS = 11_644_473_600
+# Reads Messages' store, or exits non-zero: run in a child process (_messages_readable).
+_MESSAGES_PROBE = ("import sqlite3, sys; sqlite3.connect(f'file:{sys.argv[1]}?mode=ro', uri=True)"
+                   ".execute('SELECT COUNT(*) FROM sqlite_master').fetchone()")
 IMESSAGE_MANIFEST = MESSAGES_OUT_DIR / "imessage.manifest.json"
 WHATSAPP_MANIFEST = MESSAGES_OUT_DIR / "whatsapp.contacts.csv.manifest.json"
 GMAIL_MANIFEST = DEFAULT_DISCOVER_DIR / "gmail" / "manifest.json"
@@ -70,6 +88,59 @@ class Account:
     contacts: int
     latest_message_at: str | None
     last_sync_at: str | None
+
+
+@dataclass(frozen=True)
+class SignedIn:
+    """Which sources need no sign-in, and Gmail's mailboxes (the Google app's owner first: it is
+    the one that lets the others in)."""
+    linkedin: bool
+    gmail: bool
+    imessage: bool
+    whatsapp: bool
+    mailboxes: tuple[str, ...]
+
+
+def signed_in() -> SignedIn:
+    """Each source's sign-in, read where it lives. Gmail counts once every stored mailbox's
+    sign-in is healthy now: an expired one would open Google's consent mid-setup."""
+    signins = gmail_signins()
+    owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower()
+    return SignedIn(
+        linkedin=_linkedin_session(),
+        gmail=bool(signins) and all(state == "healthy" for state in signins.values()),
+        imessage=_messages_readable(),
+        whatsapp=_whatsapp_linked(),
+        mailboxes=tuple(sorted(signins, key=lambda email: email != owner)),
+    )
+
+
+def _linkedin_session() -> bool:
+    """The sign-in browser's LinkedIn session: an unexpired `li_at` cookie in its profile, read
+    without taking Chrome's lock."""
+    cookies = BROWSER_PROFILE.expanduser() / "Default" / "Cookies"
+    try:
+        with closing(sqlite3.connect(f"file:{cookies}?immutable=1", uri=True)) as conn:
+            (expires,) = conn.execute("SELECT MAX(expires_utc) FROM cookies WHERE host_key LIKE '%linkedin.com' "
+                                      "AND name = 'li_at'").fetchone()
+    except sqlite3.Error:
+        return False
+    return expires is not None and expires / 1_000_000 - CHROME_EPOCH_SECONDS > time.time()
+
+
+def _messages_readable() -> bool:
+    """Whether macOS lets Powerpacks read Messages (Full Disk Access), asked in a fresh child
+    process: macOS answers a process once, so only a new one sees a permission granted since."""
+    return subprocess.run([sys.executable, "-c", _MESSAGES_PROBE, str(DEFAULT_CHAT_DB)],
+                          capture_output=True).returncode == 0
+
+
+def _whatsapp_linked() -> bool:
+    """wacli's link to the phone; before wacli is installed there is none."""
+    try:
+        return wacli_auth.auth_status(DEFAULT_STORE).authenticated
+    except (PrimitiveFailed, OSError):
+        return False
 
 
 def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:

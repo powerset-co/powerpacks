@@ -7,8 +7,9 @@ primitives stop the flow. It never starts enrichment, provider calls, or uploads
 Changelog:
   2026-10-13: `connect()` runs only the chosen sources' tools and logins, into the connect
       record: the desktop app's Connect screen connects each source this way before setup.
-      Under the desktop app, setup leaves out every source not connected, so it never waits on
-      the user (Gmail no longer asks which mailbox there).
+      Under the desktop app, setup leaves out every source not signed in (accounts.signed_in,
+      what the Connect screen shows), so it never waits on the user (Gmail no longer asks which
+      mailbox there).
   2026-10-05: every write names a status_prose event; a primitive's own text goes
       to the action's details. Google Cloud stages, the LinkedIn count and the
       WhatsApp download count show on the page as they happen.
@@ -45,6 +46,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from packs.ingestion.primitives.accounts.accounts import signed_in
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD, LinkedInConnections
@@ -395,32 +397,17 @@ class SourceOnboarding:
                   Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
         return all(logins[source]() for source in active)
 
-    def _connected(self, source: Source) -> bool:
-        """Whether `source` needs no login from the user. Full Disk Access and the WhatsApp link are
-        asked of macOS and wacli, Gmail of msgvault (every chosen mailbox authorized now: an expired
-        one would open Google's consent after Set up); LinkedIn's saved profile has no quiet check,
-        so a login finished on the Connect screen or in an earlier run counts."""
-        if source is Source.IMESSAGE:
-            return IMessageExtractor().check(strict=True)["status"] == "ok"
-        if source is Source.WHATSAPP:
-            return auth.auth_status(self.wacli_store).authenticated
-        if source is Source.GMAIL:
-            home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
-            return bool(self.gmail_emails) and accounts.check_accounts_payload(
-                home, list(self.gmail_emails))["status"] == "ok"
-        records = (InstallStatus(self.root, "connect").read(), InstallStatus(self.root).read())
-        return self._linkedin_current() or any(
-            record["steps"].get(InstallStep.LINKEDIN_LOGIN.value, {}).get("status") == InstallState.COMPLETED
-            for record in records)
-
     def _run(self) -> dict:
         previous = self.status.read()
         self._write("sources.selected")
-        # Under the desktop app every login happens on the Connect screen first: setup takes the
-        # sources connected there and leaves the rest out, so it never waits on the user.
+        # Under the desktop app every sign-in happens on the Connect screen first: setup takes the
+        # sources signed in (accounts.signed_in, the answer that screen shows) and leaves the rest
+        # out, so it never waits on the user; Gmail syncs exactly the mailboxes signed in.
         if DESKTOP:
+            ready = signed_in()
             self.skip_sources = tuple(dict.fromkeys(
-                [*self.skip_sources, *(source for source in self.sources if not self._connected(source))]))
+                [*self.skip_sources, *(source for source in self.sources if not getattr(ready, source.value))]))
+            self.gmail_emails = ready.mailboxes
         for source in self.sources:
             for step in _SOURCE_STEPS[source]:
                 if source in self.skip_sources:

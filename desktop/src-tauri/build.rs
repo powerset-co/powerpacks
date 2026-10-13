@@ -16,7 +16,6 @@ const COMMANDS: &[&str] = &[
     "open_external",
     "update_check",
     "onboard_continue",
-    "permission_messages",
     "debug_state",
     "debug_skip_setup",
     "debug_reset_data",
