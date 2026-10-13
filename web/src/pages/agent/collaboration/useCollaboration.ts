@@ -11,7 +11,7 @@ import { invoke } from "@/lib/desktop"
 
 const KEY = ["collaboration"]
 
-export function useCollaboration() {
+export function useCollaboration(enabled = true) {
   const client = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [answering, setAnswering] = useState<string | null>(null)
@@ -19,14 +19,16 @@ export function useCollaboration() {
   const state = useQuery({
     queryKey: KEY,
     queryFn: fetchCollaboration,
-    refetchInterval: 5000,
+    refetchInterval: enabled ? 5000 : false,
+    enabled,
   })
   const pending = useQuery({
     queryKey: [...KEY, "pending"],
     queryFn: fetchQuestions,
-    refetchInterval: 5000,
+    refetchInterval: enabled ? 5000 : false,
+    enabled,
   })
-  const data = state.data
+  const data = enabled ? state.data : undefined
 
   async function run<T>(action: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -76,7 +78,7 @@ export function useCollaboration() {
     busy,
     answering,
     error: error ?? state.error?.message ?? pending.error?.message,
-    pending: pending.data?.questions ?? [],
+    pending: enabled ? (pending.data?.questions ?? []) : [],
     create,
     send,
     answer,

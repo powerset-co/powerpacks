@@ -1,3 +1,4 @@
+import { useFeatures } from "@/lib/features"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 
@@ -101,6 +102,7 @@ function Conversation({
   runId: string | null
   collaboration: ReturnType<typeof useCollaboration>
 }) {
+  const features = useFeatures()
   const agent = useAgent()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -117,7 +119,7 @@ function Conversation({
     if (element && pinned.current) element.scrollTop = element.scrollHeight
   }, [agent.entries, agent.approvals, waiting])
 
-  if (runId)
+  if (runId && features.sets)
     return (
       <section className="flex min-h-0 min-w-0 flex-col">
         <ChatHeader onToggle={onToggle} runTitle={runTitle} />
@@ -229,7 +231,8 @@ function SignedInAgent() {
 /** The chats, the open chat, and the search it ran beside it (a quick search is one pond). */
 function Workspace() {
   const agent = useAgent()
-  const collaboration = useCollaboration()
+  const features = useFeatures()
+  const collaboration = useCollaboration(features.sets)
   const catalog = useCatalog()
   const client = useQueryClient()
   const [sidebarOpen, setSidebarOpen] = useState(false)

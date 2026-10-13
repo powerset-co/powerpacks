@@ -39,6 +39,7 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,12 +48,13 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account
+from packs.shared.web import account, features
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
 DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
+MAX_FEATURE_REQUEST_BYTES = 1024
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
@@ -242,6 +244,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/account":
                 self._json(account.read(root))
                 return
+            if parsed.path == "/api/features":
+                self._json(asdict(features.read(root)))
+                return
             if parsed.path == "/api/status":
                 stage = "linkedin" if (root / STORE).is_file() else "install"
                 self._json({**identity, "stage": stage})
@@ -255,6 +260,20 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path == "/api/features":
+                origin = self.headers.get("Origin")
+                if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
+                    self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_FEATURE_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    flags = features.FeatureFlags.parse(json.loads(self.rfile.read(length)))
+                    self._json(features.save(root, flags))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
             if app.post(self, parsed):
                 return
             _load_project_packages(root)

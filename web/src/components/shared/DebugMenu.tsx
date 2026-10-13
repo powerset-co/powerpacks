@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { useDismiss } from "@/hooks/useDismiss"
 import { fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
+import { useFeatures, useUpdateFeatures } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 
 const DEBUG_KEY = ["desktop-debug"] as const
@@ -31,6 +32,8 @@ export function DebugMenu() {
 }
 
 function DesktopDebugMenu() {
+  const features = useFeatures()
+  const updateFeatures = useUpdateFeatures()
   const client = useQueryClient()
   const navigate = useNavigate()
   const state = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState })
@@ -102,6 +105,30 @@ function DesktopDebugMenu() {
               className="accent-[var(--primary)]"
             />
           </label>
+          <div className="my-1.5 border-t border-line" />
+          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
+            Local features
+          </p>
+          {(["sets", "auto_reply"] as const).map((feature) => (
+            <label
+              key={feature}
+              className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary"
+            >
+              {feature === "sets" ? "Sets" : "Auto Reply"}
+              <input
+                type="checkbox"
+                checked={features[feature]}
+                disabled={updateFeatures.isPending}
+                onChange={() => updateFeatures.mutate({ ...features, [feature]: !features[feature] })}
+                className="accent-[var(--primary)]"
+              />
+            </label>
+          ))}
+          {updateFeatures.error && (
+            <p role="alert" className="m-0 px-2.5 py-1 text-xs text-bad">
+              {errorText(updateFeatures.error)}
+            </p>
+          )}
           <button
             type="button"
             role="menuitem"

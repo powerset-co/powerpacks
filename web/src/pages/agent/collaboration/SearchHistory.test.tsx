@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { must } from "@/lib/must"
 import { SearchHistory } from "./SearchHistory"
 
+vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: true, auto_reply: false }) }))
+
 beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 800 })
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 1200 })

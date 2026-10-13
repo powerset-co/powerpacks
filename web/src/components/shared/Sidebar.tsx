@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from "react"
 import { NavLink } from "react-router-dom"
 
+import { useFeatures } from "@/lib/features"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
@@ -48,6 +49,7 @@ function useMedia(query: string): boolean {
  *  the update pane and who is signed in. Collapsed it is an icon rail with the labels as
  *  tooltips; the choice is remembered on this machine. */
 export function Sidebar() {
+  const features = useFeatures()
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -99,7 +101,7 @@ export function Sidebar() {
         </button>
       </div>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-2">
-        {PAGES.map((page) => (
+        {PAGES.filter((page) => page.key !== "sets" || features.sets).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} />
           </li>
