@@ -125,9 +125,9 @@ export function RefreshSignals({
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">Refresh signals</DialogTitle>
           <DialogDescription className="text-[13px]">
-            {selected ? `${targets.length} selected people. ` : `All ${targets.length} people. `}
-            Regenerate relationship, warmth and labels with JEV from saved dossiers and message counts. New
-            requests send this saved evidence to TypeSafe/JEV.
+            Update relationship, warmth and labels for{" "}
+            {selected ? `${targets.length.toLocaleString()} selected` : `all ${targets.length.toLocaleString()}`}{" "}
+            people.
           </DialogDescription>
         </DialogHeader>
         <div role="status" className="text-[13px]">
@@ -136,12 +136,7 @@ export function RefreshSignals({
               <Spinner /> Checking saved signals…
             </>
           ) : plan ? (
-            <p className="m-0">
-              {plan.people.toLocaleString()} people · {plan.cached.toLocaleString()} cached answers ·{" "}
-              {plan.new_requests.toLocaleString()} new requests.
-              <br />
-              Estimated cost: ${plan.estimated_cost_usd.toFixed(4)}. Confirm to make these paid requests.
-            </p>
+            <p className="m-0 text-xs text-muted-foreground">Processed by TypeSafe.</p>
           ) : running ? (
             <>
               <Spinner /> {query.data?.message}
@@ -162,8 +157,14 @@ export function RefreshSignals({
             <Button variant="ghost">Close</Button>
           </DialogClose>
           {plan && (
-            <Button variant="primary" disabled={checking} onClick={() => void confirm()}>
-              Confirm ${plan.estimated_cost_usd.toFixed(4)} refresh
+            <Button
+              variant="primary"
+              disabled={checking}
+              title={`Estimated $${plan.estimated_cost_usd.toFixed(4)}`}
+              onClick={() => void confirm()}
+            >
+              Refresh for{" "}
+              {plan.estimated_cost_usd < 0.01 ? "<$0.01" : `$${plan.estimated_cost_usd.toFixed(2)}`}
             </Button>
           )}
           {failure && !running && (

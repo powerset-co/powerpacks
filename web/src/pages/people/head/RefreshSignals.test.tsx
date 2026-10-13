@@ -46,10 +46,12 @@ describe("Refresh signals", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
     expect(fetch.mock.calls[0]?.[1]).toBeUndefined()
     fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
-    await screen.findByText(/2 people · 1 cached answers · 1 new requests/)
-    expect(screen.getByText(/2 selected people/)).toBeTruthy()
+    await screen.findByText("Processed by TypeSafe.")
+    expect(screen.getByText(/for 2 selected people/)).toBeTruthy()
     expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1)
-    fireEvent.click(screen.getByRole("button", { name: "Confirm $0.0042 refresh" }))
+    const pay = screen.getByRole("button", { name: "Refresh for <$0.01" })
+    expect(pay.title).toBe("Estimated $0.0042")
+    fireEvent.click(pay)
     await screen.findByText("Signals refreshed for 2 people.")
     expect(fetch.mock.calls.at(-1)?.[1]?.body).toBe(
       JSON.stringify({ people: ["p:a", "p:b"], checked: "exact" }),
@@ -62,8 +64,8 @@ describe("Refresh signals", () => {
     const { fetch } = show({ ...PLAN, cached: 2, new_requests: 0, estimated_cost_usd: 0 }, false)
     fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
     await screen.findByText("Signals refreshed for 2 people.")
-    expect(screen.getByText(/All 2 people/)).toBeTruthy()
-    expect(screen.queryByRole("button", { name: /Confirm/ })).toBeNull()
+    expect(screen.getByText(/for all 2 people/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /Refresh for/ })).toBeNull()
     expect(fetch.mock.calls.at(-1)?.[1]?.body).toBe(JSON.stringify({ people: ["p:a", "p:b"] }))
   })
 
