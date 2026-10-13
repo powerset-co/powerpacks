@@ -3,8 +3,9 @@ import { body, failure } from "@/lib/api/http"
 export interface Account {
   signed_in: boolean
   email: string | null
-  /** The token's own name claim; null when it carries none. */
+  /** The name and picture the login stored (auth.py); null when it stored none. */
   name: string | null
+  picture: string | null
 }
 
 export async function fetchAccount(signal?: AbortSignal): Promise<Account> {

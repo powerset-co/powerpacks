@@ -1,6 +1,5 @@
-"""Who is signed in to Powerset on this machine, for the side nav's footer: the stored
-credentials' email (packs/powerset/primitives/auth/auth.py), with the name when the token
-carries one.
+"""Who is signed in to Powerset on this machine, for the side nav's footer: the email, name and
+picture the login stored with its credentials (packs/powerset/primitives/auth/auth.py).
 
 Standard library only, like the server's persistent handler: it answers before the project's
 Python environment exists. Token values never leave this module.
@@ -14,7 +13,6 @@ from packs.powerset.primitives.auth import auth
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_env_file
 
 ENV_TEMPLATE = Path("packs/powerset/templates/env.powerset.example")
-NAME_CLAIMS = ("name", "https://api.powerset.dev/name", "nickname")
 
 
 def config(root: Path) -> dict[str, str]:
@@ -30,12 +28,12 @@ def credentials_path(root: Path) -> Path:
 
 
 def read(root: Path) -> dict[str, object]:
-    """`{"signed_in", "email", "name"}`; the name is the token's own claim, or null."""
+    """`{"signed_in", "email", "name", "picture"}`; the name and picture are null for a login that
+    stored none, and the name too when it is only the email again."""
     credentials = auth._load_credentials(credentials_path(root)) or {}
     email = credentials.get("email")
     if not isinstance(email, str) or not email:
-        return {"signed_in": False, "email": None, "name": None}
-    payload = auth._decode_jwt_payload(str(credentials.get("access_token") or "")) or {}
-    name = next((payload[claim] for claim in NAME_CLAIMS
-                 if isinstance(payload.get(claim), str) and payload[claim] and payload[claim] != email), None)
-    return {"signed_in": True, "email": email, "name": name}
+        return {"signed_in": False, "email": None, "name": None, "picture": None}
+    name = credentials.get("name")
+    return {"signed_in": True, "email": email, "name": name if name != email else None,
+            "picture": credentials.get("picture")}

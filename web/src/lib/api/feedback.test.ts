@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { buildSearchFeedback } from "@/lib/searches/feedback"
+import { must } from "@/lib/must"
+import { PAYLOAD } from "@/testing/people-fixture"
 
-import { postFeedback } from "./feedback"
+import { postFeedback, sendPersonFeedback } from "./feedback"
+import { decodePeople } from "./people"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -30,6 +33,37 @@ describe("postFeedback", () => {
       vi.fn(() => Promise.resolve(new Response("candidate not found", { status: 404 }))),
     )
     await expect(postFeedback(buildSearchFeedback("jordan-role", "x"))).rejects.toThrow("candidate not found")
+  })
+})
+
+describe("sendPersonFeedback", () => {
+  it("posts the note with who the person is and the calls shown, not the whole row", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify({ status: "submitted" }))),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const jordan = must(decodePeople(PAYLOAD)[0])
+    await sendPersonFeedback("Should be shared.", jordan)
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(url).toBe("/api/feedback")
+    const sent: unknown = JSON.parse(typeof init?.body === "string" ? init.body : "null")
+    const { parent_id, name, public_identifier, title, company } = jordan
+    const { worth, worth_source, share, share_source, reason, labels, confidence } = jordan
+    const person = {
+      parent_id,
+      name,
+      public_identifier,
+      title,
+      company,
+      worth,
+      worth_source,
+      share,
+      share_source,
+      reason,
+      labels,
+      confidence,
+    }
+    expect(sent).toEqual({ comment: "Should be shared.", person })
   })
 })
 

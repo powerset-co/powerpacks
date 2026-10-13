@@ -2,7 +2,8 @@
 """Auth0 PKCE login for Powerset / search-api access.
 
 Subcommands:
-    login    Reuse managed Chrome, capture Auth0 callback, save JWT to disk.
+    login    Reuse managed Chrome, capture Auth0 callback, save JWT to disk
+             with the signed-in name and picture.
     whoami   Print stored credential info (no refresh).
     token    Print a fresh access token, refreshing if needed.
     logout   Remove stored credentials.
@@ -517,11 +518,16 @@ def cmd_login(args: argparse.Namespace, on_authorize_url: "Callable[[str], None]
         return 1
 
     access_token = token_payload["access_token"]
+    # The access token names only the email; the ID token adds the name and picture the app's
+    # side nav shows (refreshes keep them).
+    identity = _decode_jwt_payload(token_payload.get("id_token", "")) or {}
     creds = {
         "access_token": access_token,
         "refresh_token": token_payload.get("refresh_token"),
         "expires_at": time.time() + int(token_payload.get("expires_in", 86400)),
         "email": _decode_jwt_email(access_token),
+        "name": identity.get("name"),
+        "picture": identity.get("picture"),
         "audience": args.audience,
         "auth0_domain": args.auth0_domain,
         "client_id": args.client_id,

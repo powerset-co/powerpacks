@@ -1,10 +1,7 @@
 import { useRef, useState, type RefObject } from "react"
-import { useLocation } from "react-router-dom"
 
-import { sendAppFeedback } from "@/lib/api/feedback"
-import { errorText } from "@/lib/api/http"
-
-import { Button } from "../ui/button"
+import { FeedbackFooter, FlagIcon, NotesField } from "@/components/shared"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogClose,
@@ -14,28 +11,25 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "../ui/dialog"
-import { FeedbackFooter } from "./FeedbackFooter"
-import { FlagIcon } from "./icons/actions"
-import { NotesField } from "./NotesField"
-import { Tip } from "./Tip"
+} from "@/components/ui/dialog"
+import { sendPersonFeedback } from "@/lib/api/feedback"
+import { errorText } from "@/lib/api/http"
+import type { Person } from "@/types/people"
 
-const TITLE = "Send feedback"
-
-/** The side nav's flag beside who is signed in: a note on the app for the Powerset team, sent with
- *  the page it was written on. */
-export function FeedbackButton({ rail }: { rail: boolean }) {
+/** The drawer's flag beside Close: a note about this person for the Powerset team, sent with who
+ *  they are and the worth and share call shown (as a search's drawer flags a candidate). */
+export function PersonFeedback({ row }: { row: Person }) {
   const [open, setOpen] = useState(false)
   const notes = useRef<HTMLTextAreaElement>(null)
-  const page = useLocation().pathname
+  const role = [row.title, row.company].filter(Boolean).join(" · ")
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
-        aria-label={TITLE}
-        className="group relative grid size-8 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+        className="drawer-icon"
+        aria-label={`Send feedback about ${row.name}`}
+        title="Send feedback"
       >
-        <FlagIcon className="size-4" />
-        <Tip side={rail ? "right" : "above"}>{TITLE}</Tip>
+        <FlagIcon className="size-[15px]" />
       </DialogTrigger>
       <DialogContent
         className="w-[min(448px,calc(100%-32px))] gap-5 p-6"
@@ -47,10 +41,12 @@ export function FeedbackButton({ rail }: { rail: boolean }) {
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">{TITLE}</DialogTitle>
-          <DialogDescription className="text-[13px]">To the Powerset team</DialogDescription>
+          <DialogTitle className="text-lg font-semibold">Person feedback</DialogTitle>
+          <DialogDescription className="text-[13px]">
+            {[row.name, role].filter(Boolean).join(" · ")}
+          </DialogDescription>
         </DialogHeader>
-        <FeedbackForm notes={notes} page={page} />
+        <FeedbackForm notes={notes} row={row} />
       </DialogContent>
     </Dialog>
   )
@@ -58,11 +54,11 @@ export function FeedbackButton({ rail }: { rail: boolean }) {
 
 interface FeedbackFormProps {
   notes: RefObject<HTMLTextAreaElement>
-  page: string
+  row: Person
 }
 
 // Mounted per opening (the dialog unmounts its content once closed), so each opens empty.
-function FeedbackForm({ notes, page }: FeedbackFormProps) {
+function FeedbackForm({ notes, row }: FeedbackFormProps) {
   const [comment, setComment] = useState("")
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
@@ -74,7 +70,7 @@ function FeedbackForm({ notes, page }: FeedbackFormProps) {
     setSending(true)
     setProblem(null)
     try {
-      await sendAppFeedback(comment, page)
+      await sendPersonFeedback(comment, row)
       setSent(true)
     } catch (error) {
       setProblem(errorText(error))

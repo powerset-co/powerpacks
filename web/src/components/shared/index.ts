@@ -9,7 +9,6 @@ export { DetailsSection } from "./DetailsSection"
 export { ChatGptSignIn } from "./ChatGptSignIn"
 export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
-export { FeedbackButton } from "./FeedbackButton"
 export { FeedbackFooter } from "./FeedbackFooter"
 export { Fold } from "./Fold"
 export {

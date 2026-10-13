@@ -10,7 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
-- 2026-10-13: POST /api/feedback files the side nav's flag note with Powerset (feedback.py).
+- 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
 - 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People

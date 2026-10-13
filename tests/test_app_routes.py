@@ -72,6 +72,12 @@ class AppRoutesTests(unittest.TestCase):
             self.assertEqual(self._get(path)[0], FELL_THROUGH, path)
 
 
+# A person as the People drawer's flag sends them (web/src/lib/api/feedback.ts sendPersonFeedback).
+PERSON = {"parent_id": "p1", "name": "Jordan Bravo", "public_identifier": "jordan-bravo", "title": "Engineer",
+          "company": "Acme", "worth": "yes", "worth_source": "model", "share": "confirm",
+          "share_source": "model", "reason": "unsure", "labels": ["coworker"], "confidence": 0.55}
+
+
 def _token(claims: dict[str, str]) -> str:
     payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     return f"synthetic-header.{payload}.synthetic-signature"
@@ -112,41 +118,46 @@ class AccountRoutesTests(unittest.TestCase):
         sender.return_value.run.return_value = reply
         return sender
 
-    def test_feedback_files_the_note_with_its_page_and_the_release(self) -> None:
+    def test_feedback_files_the_note_with_the_person_and_the_release(self) -> None:
         sender = self._sender({"status": "submitted", "feedback_id": "row-1"})
-        status, payload = self._post("/api/feedback", {"comment": "  The filters jump.  ", "page": "/people"})
+        status, payload = self._post("/api/feedback", {"comment": "  Should be shared.  ", "person": PERSON})
         self.assertEqual((status, payload["feedback_id"]), (HTTPStatus.OK, "row-1"))
         request = sender.call_args.args[0]
-        self.assertEqual((request.comment, request.category), ("The filters jump.", "app"))
+        self.assertEqual((request.comment, request.category), ("Should be shared.", "person"))
         self.assertEqual(request.metadata,
-                         {"source": "powerpacks-app", "page": "/people", "powerpacks_version": "3.22.2"})
+                         {"source": "powerpacks-people", "powerpacks_version": "3.22.2", "person": PERSON})
         self.assertEqual(sender.call_args.kwargs["env_file"], self.root / ".env")
 
     def test_feedback_needs_a_note(self) -> None:
         sender = self._sender({"status": "submitted"})
-        self.assertEqual(self._post("/api/feedback", {"comment": " ", "page": "/people"})[0], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(self._post("/api/feedback", {"comment": " ", "person": PERSON})[0], HTTPStatus.BAD_REQUEST)
         sender.assert_not_called()
 
     def test_feedback_without_a_sign_in_says_so(self) -> None:
         self._sender({"status": "needs_auth", "error": "not signed in to Powerset; run `$powerset login` first"})
-        status, payload = self._post("/api/feedback", {"comment": "The filters jump.", "page": "/people"})
+        status, payload = self._post("/api/feedback", {"comment": "Should be shared.", "person": PERSON})
         self.assertEqual((status, payload["error"]), (HTTPStatus.UNAUTHORIZED, "Sign in to Powerset again, then send."))
 
     def test_signed_out_without_credentials(self) -> None:
-        self.assertEqual(self._json("/api/account"), (200, {"signed_in": False, "email": None, "name": None}))
+        self.assertEqual(self._json("/api/account"),
+                         (200, {"signed_in": False, "email": None, "name": None, "picture": None}))
 
-    def test_signed_in_names_the_token_holder_and_keeps_the_token(self) -> None:
-        token = _token({"email": "casey@example.com", "name": "Jordan Bravo"})
-        self.credentials.write_text(json.dumps({"access_token": token, "refresh_token": "synthetic-refresh",
-                                                "email": "casey@example.com"}))
+    def test_signed_in_names_who_the_login_stored_and_keeps_the_token(self) -> None:
+        self.credentials.write_text(json.dumps({
+            "access_token": _token({"email": "casey@example.com"}), "refresh_token": "synthetic-refresh",
+            "email": "casey@example.com", "name": "Jordan Bravo", "picture": "https://pictures.example.test/j.jpg"}))
         status, payload = self._json("/api/account")
-        self.assertEqual((status, payload),
-                         (200, {"signed_in": True, "email": "casey@example.com", "name": "Jordan Bravo"}))
+        self.assertEqual((status, payload), (200, {"signed_in": True, "email": "casey@example.com",
+                                                   "name": "Jordan Bravo",
+                                                   "picture": "https://pictures.example.test/j.jpg"}))
         self.assertNotIn("synthetic", json.dumps(payload))
 
-    def test_a_token_without_a_name_claim_has_no_name(self) -> None:
-        self.credentials.write_text(json.dumps({"access_token": _token({"sub": "auth0|1"}), "email": "casey@example.com"}))
-        self.assertEqual(self._json("/api/account")[1], {"signed_in": True, "email": "casey@example.com", "name": None})
+    def test_a_login_that_stored_no_name_has_none(self) -> None:
+        for stored in ({}, {"name": "casey@example.com", "picture": None}):
+            self.credentials.write_text(json.dumps({"access_token": _token({"sub": "auth0|1"}),
+                                                    "email": "casey@example.com", **stored}))
+            self.assertEqual(self._json("/api/account")[1],
+                             {"signed_in": True, "email": "casey@example.com", "name": None, "picture": None})
 
     def test_login_uses_current_config_and_named_credentials(self) -> None:
         from packs.search.primitives.deep_search.results_web import server

@@ -1,13 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
+
+import { must } from "@/lib/must"
 
 import { SidebarFooter } from "./SidebarFooter"
 
-const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn(), sendAppFeedback: vi.fn() }))
+const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn() }))
 vi.mock("@/lib/api/account", () => auth)
-vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn, sendAppFeedback: auth.sendAppFeedback }))
+vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true }))
 vi.mock("@/lib/signin", () => ({ useSignIn: () => null }))
 vi.mock("@/lib/api/update", () => ({
@@ -23,9 +24,7 @@ function mount(rail = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/people"]}>
-        <SidebarFooter rail={rail} />
-      </MemoryRouter>
+      <SidebarFooter rail={rail} />
     </QueryClientProvider>,
   )
 }
@@ -35,7 +34,7 @@ afterEach(() => {
 })
 
 it("reports the real native login failure", async () => {
-  auth.fetchAccount.mockResolvedValue({ signed_in: false, email: null, name: null })
+  auth.fetchAccount.mockResolvedValue({ signed_in: false, email: null, name: null, picture: null })
   auth.signIn.mockRejectedValue(new Error("Sign-in did not complete. Try again."))
   mount()
   fireEvent.click(await screen.findByRole("button", { name: "Sign in" }))
@@ -47,48 +46,43 @@ it("reports the real native login failure", async () => {
 })
 
 it.each([false, true])("keeps reauthentication reachable with stored identity, rail=%s", async (rail) => {
-  auth.fetchAccount.mockResolvedValue({ signed_in: true, email: "casey@example.com", name: "Casey" })
+  auth.fetchAccount.mockResolvedValue({
+    signed_in: true,
+    email: "casey@example.com",
+    name: "Casey",
+    picture: null,
+  })
   auth.signIn.mockResolvedValue(undefined)
   mount(rail)
   fireEvent.click(await screen.findByRole("button", { name: "Reconnect Powerset" }))
   await waitFor(() => expect(auth.signIn).toHaveBeenCalledOnce())
 })
 
-const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: "Casey" }
-
-it.each([false, true])(
-  "sends a note from the flag with the page it was written on, rail=%s",
-  async (rail) => {
-    auth.fetchAccount.mockResolvedValue(SIGNED_IN)
-    auth.sendAppFeedback.mockResolvedValue(undefined)
-    mount(rail)
-    fireEvent.click(await screen.findByRole("button", { name: "Send feedback" }))
-    fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), {
-      target: { value: "The filters jump." },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
-    expect(await screen.findByRole("status")).toHaveProperty("textContent", "Sent. Thank you.")
-    expect(auth.sendAppFeedback).toHaveBeenCalledWith("The filters jump.", "/people")
-  },
-)
-
-it("keeps the note and says why when it did not go out", async () => {
-  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
-  auth.sendAppFeedback.mockRejectedValue(new Error("Sign in to Powerset again, then send."))
+it("shows who is signed in by picture, name and email", async () => {
+  auth.fetchAccount.mockResolvedValue({
+    signed_in: true,
+    email: "casey@example.com",
+    name: "Casey Bravo",
+    picture: "https://pictures.example.test/casey.jpg",
+  })
   mount()
-  fireEvent.click(await screen.findByRole("button", { name: "Send feedback" }))
-  fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), { target: { value: "The filters jump." } })
-  fireEvent.click(screen.getByRole("button", { name: "Send" }))
-  expect(await screen.findByRole("alert")).toHaveProperty(
-    "textContent",
-    "Sign in to Powerset again, then send.",
-  )
-  expect(screen.getByRole("textbox", { name: "Notes" })).toHaveProperty("value", "The filters jump.")
+  expect(await screen.findByText("Casey Bravo")).toBeTruthy()
+  expect(screen.getByText("casey@example.com")).toBeTruthy()
+  const picture = must(document.querySelector("img"), "the picture")
+  expect(picture.getAttribute("src")).toBe("https://pictures.example.test/casey.jpg")
+  fireEvent.error(picture)
+  expect(document.querySelector("img")).toBeNull()
+  expect(screen.getByText("CB")).toBeTruthy()
 })
 
-it("shows no flag while signed out", async () => {
-  auth.fetchAccount.mockResolvedValue({ signed_in: false, email: null, name: null })
+it("names a login that stored no name by its email", async () => {
+  auth.fetchAccount.mockResolvedValue({
+    signed_in: true,
+    email: "casey@example.com",
+    name: null,
+    picture: null,
+  })
   mount()
-  await screen.findByRole("button", { name: "Sign in" })
-  expect(screen.queryByRole("button", { name: "Send feedback" })).toBeNull()
+  expect(await screen.findByText("casey@example.com")).toBeTruthy()
+  expect(document.querySelector("img")).toBeNull()
 })

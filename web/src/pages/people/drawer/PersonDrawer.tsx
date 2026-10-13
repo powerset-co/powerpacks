@@ -13,6 +13,7 @@ import { DetailFailed, DetailLoading } from "./DetailStatus"
 import { RefreshSignals } from "../head/RefreshSignals"
 import { DrawerActions, LogbookButton } from "./DrawerActions"
 import { DrawerHeader } from "./DrawerHeader"
+import { PersonFeedback } from "./PersonFeedback"
 import type { SectionState } from "./sections"
 
 interface PersonDrawerProps {
@@ -63,6 +64,7 @@ export function PersonDrawer(props: PersonDrawerProps) {
                     if (row.logbook) onView([row.logbook])
                   }}
                 />
+                <PersonFeedback row={row} />
               </>
             }
             onClose={onClose}

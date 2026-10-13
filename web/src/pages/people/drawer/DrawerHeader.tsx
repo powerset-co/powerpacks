@@ -9,7 +9,7 @@ import type { Person, PersonDetail } from "@/types/people"
 interface DrawerHeaderProps {
   row: Person
   detail: PersonDetail | null
-  // An icon action beside Close.
+  // The icon actions beside Close.
   action: ReactNode
   onClose: () => void
 }

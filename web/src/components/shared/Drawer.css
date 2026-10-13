@@ -71,7 +71,7 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-/* Close, and any icon action beside it (People's logbook). */
+/* Close, and the icon actions beside it (People's refresh, logbook and flag). */
 .drawer-close,
 .drawer-icon {
   flex: 0 0 auto;

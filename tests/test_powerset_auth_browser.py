@@ -1,5 +1,6 @@
 """Managed login owns its browser and callback listener; manual login needs neither runtime."""
 import argparse
+import base64
 import contextlib
 import io
 import json
@@ -13,6 +14,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
+
+
+# The token exchange's ID token: who signed in, as the app's side nav shows them.
+ID_TOKEN = "synthetic." + base64.urlsafe_b64encode(json.dumps(
+    {"name": "Jordan Bravo", "picture": "https://pictures.example.test/j.jpg"}).encode()).decode().rstrip("=") + ".signature"
 
 
 class PowersetBrowserTests(unittest.TestCase):
@@ -35,7 +41,8 @@ class PowersetBrowserTests(unittest.TestCase):
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()), \
                 patch.object(auth, "_login_in_browser", side_effect=browser, create=True), \
                 patch("webbrowser.open"), \
-                patch.object(auth, "_post_json", return_value=(200, {"access_token": "synthetic.jwt.token"}, "")) as exchange:
+                patch.object(auth, "_post_json", return_value=(200, {"access_token": "synthetic.jwt.token",
+                                                                     "id_token": ID_TOKEN}, "")) as exchange:
             code = auth.cmd_login(self.args)
         with socket.socket() as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -62,7 +69,8 @@ class PowersetBrowserTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(exchange.call_args.args[1]["code"], "synthetic-code")
         self.assertEqual(len(exchange.call_args.args[1]["code_verifier"]), 86)
-        self.assertTrue(self.args.credentials_path.exists())
+        saved = json.loads(self.args.credentials_path.read_text())
+        self.assertEqual((saved["name"], saved["picture"]), ("Jordan Bravo", "https://pictures.example.test/j.jpg"))
 
     def test_browser_startup_failure_closes_callback_without_saving_credentials(self):
         code, payload, exchange = self.login(RuntimeError("Install Google Chrome or Brave to continue."))
