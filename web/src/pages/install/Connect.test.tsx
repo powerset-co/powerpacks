@@ -205,3 +205,17 @@ it("connects Gmail with the Powerset address, then adds another mailbox after th
     }),
   )
 })
+
+it("keeps an existing Gmail app's owner first", async () => {
+  state.connect = { ...NOTHING, mailboxes: ["owner@example.com"] }
+  mount()
+  const gmail = row("Gmail")
+  expect(await within(gmail).findByText("owner@example.com")).toBeTruthy()
+  fireEvent.click(within(gmail).getByRole("button", { name: "Connect" }))
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({
+      url: "/api/install/connect",
+      body: { source: "gmail", emails: ["owner@example.com"] },
+    }),
+  )
+})

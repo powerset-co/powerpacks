@@ -210,16 +210,17 @@ function ProfileLink({ url, onChange }: { url: string | null; onChange: (url: st
   )
 }
 
-/** Gmail's mailboxes: once connected, each one and Add another; before that, the address the
- *  first connect uses (the Powerset one until changed). The first mailbox owns Gmail's app. */
+/** Gmail's mailboxes: the ones its app already takes, each shown with Add another; before there
+ *  is an app, the address the first connect uses (the Powerset one until changed). The first
+ *  mailbox owns the app, so it stays first. */
 function Mailboxes({
-  connected,
+  known,
   email,
   disabled,
   onChange,
   onAdd,
 }: {
-  connected: readonly string[]
+  known: readonly string[]
   email: string
   disabled: boolean
   onChange: (email: string) => void
@@ -229,21 +230,21 @@ function Mailboxes({
   if (typing)
     return (
       <Field
-        initial={connected.length ? "" : email}
+        initial={known.length ? "" : email}
         label="Gmail address"
         placeholder="you@gmail.com"
         type="email"
         valid={(value) => value.includes("@")}
         onDone={(value) => {
           setTyping(false)
-          if (value) (connected.length ? onAdd : onChange)(value)
+          if (value) (known.length ? onAdd : onChange)(value)
         }}
       />
     )
-  if (connected.length)
+  if (known.length)
     return (
       <span className="flex flex-wrap items-center gap-1.5">
-        {connected.map((mailbox) => (
+        {known.map((mailbox) => (
           <span key={mailbox} className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-foreground">
             {mailbox}
           </span>
@@ -296,8 +297,9 @@ export function Connect({ onBack }: { onBack: () => void }) {
       (record.status === "running" || (record.status === "waiting" && (record.installer_pid ?? 0) > 0)))
   const email = mailbox ?? account.data?.email ?? ""
   const linkedin = standing(record, "linkedin").state === "ready"
-  // Gmail's mailboxes once it is connected, the app's owner first.
-  const connected = standing(record, "gmail").state === "ready" ? (record?.mailboxes ?? []) : []
+  // The mailboxes Gmail's app already takes (msgvault), its owner first: a connect sends them all,
+  // so the owner stays first. Before there is an app, the first connect starts from `email`.
+  const known = record?.mailboxes ?? []
   const connectGmail = (emails: string[]) => {
     setAsked(emails)
     void connect("gmail", emails)
@@ -350,7 +352,10 @@ export function Connect({ onBack }: { onBack: () => void }) {
         state={at.state}
         action={{
           label: "stopped" in at ? "Try again" : label,
-          onClick: () => (name === "gmail" ? connectGmail(asked ?? [email]) : void connect(name)),
+          onClick: () =>
+            name === "gmail"
+              ? connectGmail(asked ?? (known.length ? [...known] : [email]))
+              : void connect(name),
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
@@ -427,11 +432,11 @@ export function Connect({ onBack }: { onBack: () => void }) {
           "Gmail",
           <GmailIcon className="size-[18px]" />,
           <Mailboxes
-            connected={connected}
+            known={known}
             email={email}
             disabled={busy}
             onChange={setMailbox}
-            onAdd={(added) => connectGmail([...connected, added])}
+            onAdd={(added) => connectGmail([...known, added])}
           />,
           "Connect",
         )}
