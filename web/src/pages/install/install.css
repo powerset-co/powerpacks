@@ -164,39 +164,15 @@
   .install-page .install-steps li {
     transition: none;
   }
-  .install-page .install-index-progress {
-    animation: none;
-  }
 }
 
-/* The index bar matches the orange orb: thin, and pulsing while it works. */
-.install-page .install-index-progress {
-  appearance: none;
-  display: block;
-  width: 100%;
-  height: 3px;
-  margin: 4px 0 20px;
-  border: 0;
-  border-radius: 99px;
-  overflow: hidden;
-  background: var(--primary-soft);
-  animation: install-progress-pulse 1.6s ease-in-out infinite;
-}
-.install-page .install-index-progress::-webkit-progress-bar {
-  background: var(--primary-soft);
-}
-.install-page .install-index-progress::-webkit-progress-value {
-  background: var(--primary);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-.install-page .install-index-progress::-moz-progress-bar {
-  background: var(--primary);
-}
-@keyframes install-progress-pulse {
-  50% {
-    opacity: 0.55;
-  }
+/* How many of setup's tasks are done, over the list: the count the ring used to draw. */
+.install-page .install-count {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 .install-page .install-history[data-empty="true"] {
   visibility: hidden;

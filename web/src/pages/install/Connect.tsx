@@ -82,7 +82,7 @@ function Row({
           size="sm"
           onClick={action.onClick}
           disabled={action.disabled}
-          className="shrink-0 self-center"
+          className="w-28 shrink-0 self-center"
         >
           {action.label}
         </Button>
@@ -255,7 +255,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
-        {"line" in at && at.line ? <Line bad={"stopped" in at}>{at.line}</Line> : null}
+        {"line" in at && at.line && !qr ? <Line bad={"stopped" in at}>{at.line}</Line> : null}
         {command ? (
           <code className="select-all break-all rounded-[var(--radius-s)] bg-surface-2 px-2 py-1 text-[11px]">
             {command}
@@ -310,7 +310,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
         <Row
           icon={<MessagesIcon className="size-[18px]" />}
           title="Messages"
-          why="Full Disk Access, to read iMessage and Contacts. macOS reopens the app after."
+          why="Full Disk Access, for iMessage and Contacts."
           state={readable === null ? "checking" : readable ? "ready" : "needed"}
           action={{ label: "Open Settings", onClick: () => void installAction("permissions").catch(fail) }}
         />

@@ -10,12 +10,11 @@ import { isDesktop } from "@/lib/desktop"
 import { errorText } from "@/lib/api/http"
 import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
-import { AsciiForm } from "@/pages/home/AsciiForm"
-import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
 import { DesktopSetup } from "./DesktopSetup"
 import { DesktopWelcome } from "./DesktopWelcome"
+import { SetupKnot } from "./SetupKnot"
 
 // Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
 const OFFLINE = {
@@ -193,18 +192,7 @@ export function InstallPage() {
       {/* The welcome and the progress are two layouts: the new one rises in, never a jump. */}
       <main key={welcome ? "welcome" : "progress"} className="install-main rise-in">
         <section aria-live="polite">
-          <EmptyPanel
-            title={title}
-            above={
-              <EnrichMark
-                part={completed.length}
-                parts={Math.max(steps.length, 1)}
-                running={!error && !failed && data?.status === "running"}
-                // The home page's knot, drawn small: in the ring where the soft shape sits.
-                center={<AsciiForm cols={40} rows={20} className="w-[96px]" />}
-              />
-            }
-          >
+          <EmptyPanel title={title} above={<SetupKnot />}>
             {welcome ? (
               <p className="install-message">Start fresh, or bring over what you already have on this Mac.</p>
             ) : (
@@ -226,14 +214,6 @@ export function InstallPage() {
               </ReservedLines>
             )}
           </EmptyPanel>
-          {data?.step === "index" && data.index_progress?.progress != null && !failed ? (
-            <progress
-              className="install-index-progress"
-              aria-label="Search index progress"
-              max={1}
-              value={data.index_progress.progress}
-            />
-          ) : null}
         </section>
         {action && (data?.status === "waiting" || action.kind === "review") ? (
           <section className="install-action">
@@ -266,6 +246,11 @@ export function InstallPage() {
         {data && !error && isDesktop() ? <DesktopSetup data={data} /> : null}
         {data && !welcome ? (
           <>
+            <p className="install-count">
+              {word("tasks.done")
+                .replace("{done}", String(completed.length))
+                .replace("{total}", String(steps.length))}
+            </p>
             {/* The button keeps its slot even with nothing folded, so the list never moves. */}
             <button
               className="install-history"

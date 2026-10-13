@@ -12,6 +12,7 @@ import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
 import { Connect } from "./Connect"
+import { SetupKnot } from "./SetupKnot"
 
 const CHOICE =
   "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform,opacity] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
@@ -133,6 +134,8 @@ export function DesktopWelcome({ onImport }: { onImport?: (active: boolean) => v
   return (
     <div className="flex w-full flex-col items-center gap-6">
       <div key={stage} className="rise-in flex w-full flex-col items-center gap-5">
+        {/* The knot greets a new install; connecting is a plain list of sign-ins. */}
+        {stage === 0 ? <SetupKnot /> : null}
         <header className="flex flex-col items-center gap-1.5 text-center">
           <h2 className="m-0 text-xl font-bold">Setup</h2>
           <p className="m-0 text-sm text-muted-foreground">

@@ -16,7 +16,8 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
-  2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`).
+  2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`); the page
+      counts its tasks ("3 of 7 tasks completed") where the ring was.
   2026-10-09: under the desktop app (POWERPACKS_DESKTOP=1) no agent reads the page, so the lines
       that speak as one get the app's words (DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE); the
       paid stages report their counts as they go; the Skip WhatsApp and elapsed-time page words.
@@ -95,6 +96,7 @@ PAGE = {
     "state.paused": "Paused",
     "state.next": "Next",
     "failed.note": "Your progress is saved. I can check this step and retry.",
+    "tasks.done": "{done} of {total} tasks completed",
     "history.folded": "{count} tasks completed",
     "history.open": "Hide completed tasks",
     "permission.button": "Open settings & show the app",

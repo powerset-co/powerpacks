@@ -242,14 +242,14 @@ describe("installation progress", () => {
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText("Building search records")
-    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("0.4")
+    // The task count stands in for any bar.
+    expect(screen.queryByRole("progressbar")).toBeNull()
     status = {
       ...status,
       index_progress: { status: "failed", message: "Index download failed", payload: {} },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Setup needs a fix" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
 
   it("folds older completed steps and shows only one next step", async () => {
@@ -375,7 +375,16 @@ describe("installation progress", () => {
     expect(screen.getByText(/Drag Example into Full Disk Access/)).toBeTruthy()
   })
 
-  it("keeps the page mounted on unchanged reads and stops the progress orbit while waiting or failed", async () => {
+  it("counts the tasks done over the list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(INSTALL)))),
+    )
+    mount()
+    expect(await screen.findByText(/^\d+ of \d+ tasks completed$/)).toBeTruthy()
+  })
+
+  it("keeps the page mounted on unchanged reads, through waiting and failed", async () => {
     let status = INSTALL
     vi.stubGlobal(
       "fetch",
@@ -384,21 +393,20 @@ describe("installation progress", () => {
     const renders = vi.fn()
     const { client, container } = mount(renders)
     await screen.findByText(INSTALL.message)
-    const shape = container.querySelector(".enrich-shape")
+    const knot = container.querySelector("canvas")
+    expect(knot).not.toBeNull()
     const before = renders.mock.calls.length
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     expect(renders.mock.calls.length).toBe(before)
-    expect(container.querySelector(".enrich-shape")).toBe(shape)
+    expect(container.querySelector("canvas")).toBe(knot)
 
     status = { ...INSTALL, status: "waiting", message: "Answer in chat whether to add Gmail tools" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "One thing to finish" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
 
     status = { ...INSTALL, status: "failed", message: "Installation was interrupted" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText(status.message)
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     expect(screen.getByText("Your progress is saved. I can check this step and retry.")).toBeTruthy()
   })
 
@@ -418,14 +426,12 @@ describe("installation progress", () => {
     )
     const { client, container } = mount()
     await screen.findByRole("heading", { name: "Powerpacks is installed" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     reachable = false
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Reconnecting to Powerpacks" })
     reachable = true
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() => expect(screen.getByRole("heading", { name: "Powerpacks is installed" })).toBeTruthy())
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
 
   it("shows account waits, skipped login, and verified network without claiming early readiness", async () => {
@@ -442,7 +448,6 @@ describe("installation progress", () => {
     )
     const { client, container } = mount()
     await screen.findByRole("heading", { name: "Waiting for you to sign in" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     expect(screen.getByText("Please sign in to Powerset")).toBeTruthy()
 
     status = {
@@ -475,7 +480,6 @@ describe("installation progress", () => {
     await screen.findByRole("heading", { name: "Powerpacks is ready" })
     expect(screen.queryByText("Personal Network · 4 people")).toBeNull()
     expect(screen.getByText(status.message)).toBeTruthy()
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
 
   it("counts how long a running step has taken, and only while it runs", async () => {

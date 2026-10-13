@@ -71,6 +71,7 @@
     "state.paused": "Paused",
     "state.next": "Next",
     "failed.note": "Your progress is saved. I can check this step and retry.",
+    "tasks.done": "{done} of {total} tasks completed",
     "history.folded": "{count} tasks completed",
     "history.open": "Hide completed tasks",
     "permission.button": "Open settings & show the app",
