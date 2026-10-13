@@ -120,7 +120,7 @@ def _linkedin_session() -> bool:
     without taking Chrome's lock."""
     cookies = BROWSER_PROFILE.expanduser() / "Default" / "Cookies"
     try:
-        with closing(sqlite3.connect(f"file:{cookies}?immutable=1", uri=True)) as conn:
+        with closing(sqlite3.connect(f"file:{cookies}?mode=ro&immutable=1", uri=True)) as conn:
             (expires,) = conn.execute("SELECT MAX(expires_utc) FROM cookies WHERE host_key LIKE '%linkedin.com' "
                                       "AND name = 'li_at'").fetchone()
     except sqlite3.Error:

@@ -107,6 +107,11 @@ class SignedInTest(unittest.TestCase):
         self.assertEqual(accounts.signed_in(), accounts.SignedIn(linkedin=False, gmail=False, imessage=False,
                                                                  whatsapp=False, mailboxes=()))
 
+    def test_reading_a_profile_chrome_has_not_written_cookies_to_leaves_it_as_is(self):
+        (self.profile / "Default").mkdir(parents=True)
+        self.assertFalse(accounts.signed_in().linkedin)
+        self.assertFalse((self.profile / "Default" / "Cookies").exists())
+
     def test_linkedin_is_the_sign_in_browsers_unexpired_session(self):
         self.cookie(expires_in_days=300)
         self.assertTrue(accounts.signed_in().linkedin)
