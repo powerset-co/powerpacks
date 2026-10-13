@@ -238,3 +238,28 @@
     display: none;
   }
 }
+
+/* The sources cell's pills are a button: hovering or clicking them opens the person's emails
+   and numbers (table/ContactSources) in a float panel. */
+.contact-trigger {
+  display: inline-flex;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.contact-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.contact-popover {
+  width: min(260px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.contact-popover .dim {
+  color: var(--muted);
+}

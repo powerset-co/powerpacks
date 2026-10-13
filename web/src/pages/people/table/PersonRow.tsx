@@ -1,12 +1,12 @@
 import { memo, type MouseEvent } from "react"
 
-import { ProxiedLinkedinAvatar, SourcePills } from "@/components/shared"
-import { toChannels } from "@/lib/channels"
+import { ProxiedLinkedinAvatar } from "@/components/shared"
 import { monthYear } from "@/lib/copy"
 import { facetOf, facetText } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
 import { NumberCell, WarmthCell, WorthCell } from "./cells"
+import { ContactSources } from "./ContactSources"
 
 interface PersonRowProps {
   row: Person
@@ -63,7 +63,7 @@ export const PersonRow = memo(function PersonRow({
         </span>
         {row.in_progress ? <span className="src shrink-0">Updating</span> : null}
       </div>
-      <SourcePills role="cell" className="sources c-sources" channels={toChannels(row.channels)} />
+      <ContactSources row={row} />
       <div role="cell" className="rel c-rel">
         {facetText(facetOf("relationship_kind"), row.relationship_kind)}
       </div>

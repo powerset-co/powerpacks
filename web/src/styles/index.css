@@ -178,6 +178,22 @@
   }
 }
 
+/* A panel floating under its trigger (hooks/useFloatPanel): the tag editor, a search result's
+   sources, a person's emails and numbers. */
+.float-panel {
+  z-index: 80;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--card);
+  box-shadow: var(--shadow-2);
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+
 /* Overlays that rise in and drop out (bulk bar, toast): 8px travel, 200ms in, 160ms out.
    @starting-style gives the entrance; hooks/usePresence unmounts after the exit. */
 .rise {
