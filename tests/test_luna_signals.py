@@ -144,6 +144,12 @@ class MergeTests(StoreTests):
     def test_a_merge_asks_nothing(self) -> None:
         # Both people were judged under today's questions; dedupe then puts c2 under p:a.
         root = Path(self.tmp.name)
+        queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
+        self.conn.executemany("INSERT INTO candidate_sources (candidate_id, source) VALUES (?, 'gmail_msgvault')",
+                              [("c1",), ("c2",)])
+        self.conn.executemany("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
+                              "VALUES (?, '{\"messages\":[],\"groups\":[]}', 'test', '2026-10-07')",
+                              [("c1",), ("c2",)])
         self._parent("p:a", "c1")
         self._parent("p:b", "c2")
         self._facts("c1", "Jordan Bravo")
