@@ -6,6 +6,8 @@ description: Download EVERYTHING for a set of people across Gmail, iMessage, and
 <!--
 Created: 2026-06-25
 Changelog:
+- 2026-10-12: People's logbook action is a book icon beside the drawer's Close; the Has
+  logbook filter is gone (the reader lists every saved logbook).
 - 2026-09-30: People page reads saved logbooks in-app (Logbook reader, Has logbook
   filter); the ZIP download is gone.
 - 2026-09-30: WhatsApp reads include `@lid` chats and groups where the person is a
@@ -144,15 +146,16 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
 
 ## From the People page
 
-Open the People page → select people (or open one) → **Build logbook**.
+Open the People page → select people and press **Build logbook** on the selection bar, or open
+one person and press the book icon beside Close.
 It runs the same export for exactly those people (every candidate's email and phone
 under each parent; no Worth or share filter), over every date the local stores
 hold, groups included. It reads only what is already synced — no deepen, no
 network — and says which channel was missing or unreadable. When it finishes the
 page opens the Logbook reader on what it built; **Back to People** (or browser
-Back) returns to the same list. Saved logbooks stay readable after a restart:
-filter People by **Logbook: Has logbook** and use **View logbook** on a person or
-selection. Nothing is uploaded with Share.
+Back) returns to the same list. Saved logbooks stay readable after a restart: the reader
+lists them all, and a person's book icon (or **View logbook** on a selection) opens theirs.
+Nothing is uploaded with Share.
 
 ## Notes
 

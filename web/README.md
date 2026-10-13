@@ -6,6 +6,9 @@ Change log:
 - 2026-10-01: the Review page is `/`; the Jinja page it replaced is deleted.
 - 2026-10-02: `/install` shows installation, sign-in, search access, and network
   checks from the bootstrap manifest, including waiting and skipped steps.
+- 2026-10-12: every page's title row is `PageHeader`; People's decision tabs, quick
+  filters and facet rail became one search line with Sharing and Relationship
+  selects; the drawer's logbook action is a book icon beside Close.
 
 # web
 
@@ -54,18 +57,17 @@ server; everything else reads typed values.
 | `src/main.tsx`, `src/App.tsx`                               | The one root: query client, router, the shell (top bar + routed page)                                                                                   | —                                 |
 | `src/pages/people/`                                         | `PeoplePage` (load), `PeopleWorkspace` (state wiring), `PeopleShell`, `PeopleLoading`, `BulkBar`                                                        | Its hooks; renders the sections   |
 | `src/pages/people/hooks/`                                   | People-typed hooks: view state (`useFilters`), rows query, drawer + person detail, decisions (writes), the page's keys (`useKeyboard`) and their wiring | `lib/api`, `lib/people/view`      |
-| `src/pages/people/head/`                                    | Decision tabs with rolling counts and the sliding ink                                                                                                   | View tab, totals                  |
+| `src/pages/people/head/`                                    | Refresh signals, the header's action beside Share network                                                                                               | The signals routes                |
 | `src/pages/people/upload/`                                  | Share button (last upload beside it) and its dialog: `useUpload` (poll while running), plan summary, progress bar, result                               | `lib/api/upload`, page toast      |
-| `src/pages/people/filters/`                                 | Quick filters, search box, active facet chips                                                                                                           | View filters and text             |
-| `src/pages/people/rail/`                                    | Facet rail, "More filters", label search, shortcuts hint                                                                                                | Facet counts; toggles filters     |
+| `src/pages/people/filters/`                                 | The search line: search box, Sharing and Relationship selects (each option counted), the narrowed count                                                 | View tab, filters and text        |
 | `src/pages/people/table/`                                   | Virtualized table: head, rows, cells, columns, `ROW_H`                                                                                                  | Matching people, selection, focus |
 | `src/pages/people/drawer/`                                  | Person drawer (in the shared `Drawer`): header, actions, sections                                                                                       | Person detail; writes share tags  |
-| `src/pages/people/styles/`                                  | Page CSS ported from `share/web/people.css`: shell, rail, table, drawer sections                                                                        | —                                 |
+| `src/pages/people/styles/`                                  | Page CSS ported from `share/web/people.css`: shell, table, drawer sections, logbook                                                                     | —                                 |
 | `src/components/shared/`                                    | One home each (table below); imported through `index.ts`                                                                                                | Props only                        |
 | `src/components/ui/`                                        | shadcn/ui primitives (button, badge, dialog, skeleton)                                                                                                  | Props only                        |
 | `src/hooks/`                                                | Page-agnostic hooks (table below)                                                                                                                       | —                                 |
 | `src/lib/api/`                                              | `http.ts` (`failure`, `body`: W1), `people.ts`, `searches.ts` (catalog, run, tags), `feedback.ts` (`POST /searches/feedback`)                           | The review server                 |
-| `src/lib/people/`                                           | Page copy and labels, facets and quick filters, the filter/count pass, the saved view and its parser                                                    | Typed rows, `sessionStorage`      |
+| `src/lib/people/`                                           | Page copy and labels, facets, the filter pass and its relationship counts, the saved view and its parser                                                | Typed rows, `sessionStorage`      |
 | `src/lib/advance.ts`                                        | `nextOpenIndex`: which row a drawer opens after its row was labeled (People) or scored (Searches)                                                       | —                                 |
 | `src/lib/channels.ts`                                       | The source-family vocabulary: `Channel`, titles and pill colours, `toChannel(s)` (the search server's `twitter` is X, `phone` iMessage)                 | —                                 |
 | `src/lib/copy.ts`                                           | Words both pages use: `plural`, `countOf` ("N of M people"), `monthYear`                                                                                | —                                 |
@@ -79,20 +81,20 @@ server; everything else reads typed values.
 
 ### Shared components (`src/components/shared/`)
 
-| Component                           | Role                                                                                                                                                            |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TopBar`, `NavTabs`, `TabInk`       | Brand cell and page tabs (`lib/nav.ts` `PAGES`); the one sliding underline                                                                                      |
-| `ProxiedLinkedinAvatar`, `initials` | Initials with the picture fading in over them                                                                                                                   |
-| `Chip`, `Kbd`, `EmptyState`         | Filter pill with optional count; key cap; centred muted line that rises in                                                                                      |
-| `SourcePill`, `SourcePills`, icons  | Channel pill (sm/md, optional count) and a person's pills; `icons/channels.tsx` and `icons/actions.tsx` (plus, pin, flag, `CLOSE_MARK`), pinned by `test_icons` |
-| `SearchField`, `SortHeader`         | The one text box style; a sortable column header                                                                                                                |
-| `FacetShell`, `FacetValue`, `Fold`  | A facet (head + folded values), one value, the height fold (inert while shut)                                                                                   |
-| `DetailsSection`                    | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                       |
-| `Appear`                            | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                       |
-| `CountRoll`, `Toast`                | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                              |
-| `VirtualRows`                       | The virtualized list (fixed row height)                                                                                                                         |
-| `Drawer`, `DrawerClose`             | The right-hand panel both pages open a row in: slides in and out, its content keyed and crossfaded (`hooks/useDrawerSwap`), inert while shut                    |
-| `ActionBar`, `ActionBarRule`        | The floating bottom bar (label, then the page's buttons); rises in and drops out                                                                                |
+| Component                             | Role                                                                                                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Sidebar`, `PageHeader`, `Page`       | The side nav (`lib/nav.ts` `PAGES`); every page's title row, one height and gutter; a page that scrolls as one column of one width                                    |
+| `ProxiedLinkedinAvatar`, `initials`   | Initials with the picture fading in over them                                                                                                                         |
+| `Chip`, `Kbd`, `EmptyState`           | Filter pill with optional count; key cap; centred muted line that rises in                                                                                            |
+| `SourcePill`, `SourcePills`, icons    | Channel pill (sm/md, optional count) and a person's pills; `icons/channels.tsx` and `icons/actions.tsx` (plus, pin, flag, book, `CLOSE_MARK`), pinned by `test_icons` |
+| `SearchField`, `Select`, `SortHeader` | The one text box style; the native select with a chevron; a sortable column header                                                                                    |
+| `Fold`                                | The height fold (inert while shut)                                                                                                                                    |
+| `DetailsSection`                      | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                             |
+| `Appear`                              | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                             |
+| `CountRoll`, `Toast`                  | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                                    |
+| `VirtualRows`                         | The virtualized list (fixed row height)                                                                                                                               |
+| `Drawer`, `DrawerClose`               | The right-hand panel both pages open a row in: slides in and out, its content keyed and crossfaded (`hooks/useDrawerSwap`), inert while shut                          |
+| `ActionBar`, `ActionBarRule`          | The floating bottom bar (label, then the page's buttons); rises in and drops out                                                                                      |
 
 `src/components/ui/`: shadcn/ui `button`, `badge`, `dialog`, `skeleton`.
 
