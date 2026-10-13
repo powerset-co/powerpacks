@@ -13,18 +13,7 @@ const BRANDS: Readonly<Record<string, string>> = {
 }
 
 export type TextKind =
-  | "share"
-  | "reason"
-  | "worth"
-  | "source"
-  | "mode"
-  | "hierarchy"
-  | "intro_source"
-  | "seniority"
-  | "function"
-  | "direction"
-  | "cadence"
-  | "labels"
+  "share" | "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
@@ -46,15 +35,7 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
   },
   worth: { yes: "Yes", maybe: "Maybe", no: "No", unjudged: "Not assessed" },
   source: { human: "You", machine: "AI" },
-  mode: { professional_only: "Work only", personal_only: "Personal only", mixed: "Work and personal" },
-  hierarchy: {
-    manager: "They managed you",
-    peer: "Same level",
-    report: "You managed them",
-    none: "No reporting line",
-  },
   intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
-  seniority: { mid: "Mid-level" },
   function: { founder_exec: "Founder or executive", people: "People and recruiting" },
   direction: { they_initiate: "Mostly them", i_initiate: "Mostly you", mutual: "Both" },
   cadence: { dormant: "No contact in over 2 years", stale: "No contact in over 1 year" },

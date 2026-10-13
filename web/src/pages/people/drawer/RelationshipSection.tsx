@@ -5,8 +5,8 @@ import type { Person, PersonDetail } from "@/types/people"
 import { Pair } from "./Pair"
 import type { SectionProps } from "./sections"
 
-// The single-choice labels, each with the model's confidence in the choice.
-const CHOICES = ["relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function"] as const
+// The single-choice labels, each with the model's confidence in the choice; N/A carries none.
+const CHOICES = ["relationship_kind", "intro_source", "function"] as const
 
 interface RelationshipSectionProps extends SectionProps {
   row: Person
@@ -24,7 +24,7 @@ export function RelationshipSection({ row, detail, ...section }: RelationshipSec
             const percent = Math.round((detail.choice_p[key] ?? 0) * 100)
             return (
               <Pair key={key} term={facet.label}>
-                {facetText(facet, row[key])} <small>{percent}%</small>
+                {facetText(facet, row[key])} {row[key] === "unknown" ? null : <small>{percent}%</small>}
               </Pair>
             )
           })}

@@ -35,11 +35,8 @@ export type FacetKey =
   | "tags"
   | "labels"
   | "function"
-  | "seniority"
-  | "mode"
   | "warmth"
   | "direction"
-  | "hierarchy"
   | "intro_source"
   | "evidence"
 
@@ -97,16 +94,8 @@ export const FACETS: readonly FacetDef[] = [
     words: "labels",
   },
   { key: "function", label: "Function", get: (r) => one(r.function), words: "function" },
-  { key: "seniority", label: "Seniority", get: (r) => one(r.seniority), words: "seniority" },
-  { key: "mode", label: "Conversation", get: (r) => one(r.mode), words: "mode" },
   { key: "warmth", label: "Warmth", get: (r) => one(r.warmthBucket) },
   { key: "direction", label: "Who writes", get: (r) => one(r.direction), words: "direction" },
-  {
-    key: "hierarchy",
-    label: "Reporting relationship",
-    get: (r) => one(r.hierarchy),
-    words: "hierarchy",
-  },
   {
     key: "intro_source",
     label: "How you met",
@@ -136,7 +125,9 @@ export function facetOf(key: FacetKey): FacetDef {
   return must(FACET_BY_KEY.get(key), `facet ${key}`)
 }
 
+// A choice the evidence could not settle reads N/A, not Unknown.
 export function facetText(facet: FacetDef, value: string): string {
+  if (value === "unknown") return "N/A"
   return facet.words ? label(facet.words, value) : sentence(value)
 }
 
