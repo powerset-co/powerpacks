@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 use boot::{Boot, BootState};
@@ -218,16 +218,30 @@ fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
     source::cli_install(&root).map(|path| path.display().to_string())
 }
 
+/// How many of the import's steps are done, as each finishes: find the install, pause the local
+/// page, bring its data over, start the page again (the page lists them, DesktopWelcome.tsx).
+const IMPORT_STEP_EVENT: &str = "import://step";
+
 /// Import the command-line install's data; true when setup is already done with it.
 #[tauri::command]
 async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
     let root = boot::require_root(&boot)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let done = |count: usize| {
+            let _ = app.emit(IMPORT_STEP_EVENT, count);
+        };
         let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
+        done(1);
         boot::stop_server()?;
+        done(2);
+        // The page comes back whether or not the import worked; its error is reported after.
         let imported = source::import_cli_data(&root, &cli);
+        if imported.is_ok() {
+            done(3);
+        }
         boot::serve(&app, &root)?;
         imported?;
+        done(4);
         Ok(onboard::setup(&root) == onboard::Setup::Done)
     })
     .await

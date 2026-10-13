@@ -3,16 +3,33 @@ import { useCallback, useEffect, useState } from "react"
 
 import { useNavigate } from "react-router-dom"
 
-import { ImportIcon, SparkIcon, Spinner } from "@/components/shared"
+import { ImportIcon, SparkIcon } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import { importData, importSource } from "@/lib/api/install"
-import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
+import { continueSetup, importData, importSource } from "@/lib/api/install"
+import { listen } from "@/lib/desktop"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
 import { Connect } from "./Connect"
 import { SetupKnot } from "./SetupKnot"
+
+// The import's steps, as the app reports them done (desktop/src-tauri/src/lib.rs setup_import).
+const IMPORT_STEPS = [
+  "Find your Powerpacks install",
+  "Pause the local app",
+  "Bring over your network, imports and account",
+  "Start the local app again",
+]
+
+function Heading({ title, line }: { title: string; line: string }) {
+  return (
+    <header className="flex flex-col items-center gap-1.5 text-center">
+      <h2 className="m-0 text-xl font-bold">{title}</h2>
+      <p className="m-0 text-sm text-muted-foreground">{line}</p>
+    </header>
+  )
+}
 
 const CHOICE =
   "group flex w-full cursor-pointer flex-col items-start gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-card p-4 text-left text-foreground transition-[border-color,background-color,transform,opacity] duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))] hover:bg-surface-2 active:translate-y-px disabled:cursor-default disabled:hover:border-line-strong disabled:hover:bg-card disabled:active:translate-y-0"
@@ -29,6 +46,8 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
   const [clicked, setClicked] = useState<"import" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [imported, setImported] = useState<boolean | null>(null)
+  // How many of the import's steps are done.
+  const [done, setDone] = useState(0)
   const chosen = error ? null : clicked
   // undefined while the app looks; null when there is nothing to import.
   const [source, setSource] = useState<string | null | undefined>(undefined)
@@ -44,40 +63,56 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
   const choose = (task: () => Promise<void>) => {
     setError(null)
     setClicked("import")
+    setDone(0)
     onImport?.(true)
-    task().catch(fail)
+    const stop = listen("import://step", (count) => setDone(Number(count)))
+    task().catch(fail).finally(stop)
   }
   if (chosen === "import") {
     return (
-      <div role="status" aria-live="polite" className="w-full rise-in">
-        <EmptyPanel
-          title={imported === null ? "Connecting your existing data" : "Existing data connected"}
-          mark={imported !== null}
-          above={imported === null ? <Spinner className="size-6 text-primary" /> : undefined}
-        >
-          <p className="text-sm text-muted-foreground">
-            {imported === null
-              ? "Connecting your network and restarting the local app. This can take a few seconds."
-              : "The app now shares this install’s network, imports and account."}
-          </p>
-          <p className="text-xs text-muted-foreground">{source && tilde(source)}</p>
-          {imported !== null && (
-            <Button
-              variant="primary"
-              onClick={() => {
-                if (imported) void navigate(HOME.href)
-                else onImport?.(false)
-              }}
-            >
-              {imported ? "Open People" : "Continue setup"}
-            </Button>
-          )}
-        </EmptyPanel>
+      <div role="status" aria-live="polite" className="rise-in flex w-full flex-col items-center gap-5">
+        <Heading
+          title={imported === null ? "Bringing over your data" : "Your data is here"}
+          line={`${done} of ${IMPORT_STEPS.length} tasks completed`}
+        />
+        <ol className="install-steps m-0 w-full max-w-[420px] p-0" aria-label="Import steps">
+          {IMPORT_STEPS.map((label, index) => {
+            const finished = index < done
+            const current = index === done && imported === null
+            return (
+              <li key={label} data-done={finished} aria-current={current ? "step" : undefined}>
+                <div className="install-step-row">
+                  <span className="install-step-mark" aria-hidden="true">
+                    {finished ? "✓" : current ? "•" : "○"}
+                  </span>
+                  <span>{label}</span>
+                  <span className="install-step-status">
+                    {finished ? "Done" : current ? "Working" : "Next"}
+                  </span>
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+        {source ? <p className="m-0 text-xs text-muted-foreground">{tilde(source)}</p> : null}
+        {imported !== null && (
+          <Button
+            variant="primary"
+            onClick={() => {
+              if (imported) void navigate(HOME.href)
+              // The imported install brings its sign-ins: setup goes on without the Connect list.
+              else void continueSetup({}).then(() => onImport?.(false), fail)
+            }}
+          >
+            {imported ? "Open People" : "Continue setup"}
+          </Button>
+        )}
       </div>
     )
   }
   return (
     <div className="flex w-full flex-col gap-4">
+      <Heading title="Setup" line="Start fresh, or bring over what you already have on this Mac." />
       <div className="grid w-full grid-cols-2 gap-3 max-[720px]:grid-cols-1">
         <button type="button" className={CHOICE} onClick={onStart}>
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-primary-soft text-primary">
@@ -134,20 +169,17 @@ export function DesktopWelcome({ onImport }: { onImport?: (active: boolean) => v
   return (
     <div className="flex w-full flex-col items-center gap-6">
       <div key={stage} className="rise-in flex w-full flex-col items-center gap-5">
-        {/* The knot greets a new install; connecting is a plain list of sign-ins. */}
-        {stage === 0 ? <SetupKnot /> : null}
-        <header className="flex flex-col items-center gap-1.5 text-center">
-          <h2 className="m-0 text-xl font-bold">Setup</h2>
-          <p className="m-0 text-sm text-muted-foreground">
-            {stage === 0
-              ? "Start fresh, or bring over what you already have on this Mac."
-              : "Connect your accounts. Setup does the rest on its own."}
-          </p>
-        </header>
+        {/* The knot greets a new install and stays through an import; connecting is a plain list. */}
         {stage === 0 ? (
-          <Choice onStart={() => setStage(1)} onImport={onImport} />
+          <>
+            <SetupKnot />
+            <Choice onStart={() => setStage(1)} onImport={onImport} />
+          </>
         ) : (
-          <Connect onBack={() => setStage(0)} />
+          <>
+            <Heading title="Setup" line="Connect your accounts. Setup does the rest on its own." />
+            <Connect onBack={() => setStage(0)} />
+          </>
         )}
       </div>
     </div>
