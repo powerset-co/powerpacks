@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import { continueSetup, messagesReadable, skipSource, type SetupAnswer } from "@/lib/api/install"
-import { openSignIn, POWERSET_CALLBACK } from "@/lib/signin"
+import {
+  continueSetup,
+  focusApp,
+  messagesReadable,
+  openExternal,
+  skipSource,
+  type SetupAnswer,
+} from "@/lib/api/install"
 import type { InstallStatus } from "@/types/install"
 
 // The waits setup stops at until the user resumes it; the others finish on their own.
@@ -12,10 +18,11 @@ const STOPPED = new Set(["error", "resume", "details", "gmail"])
 // (packs/powerset/primitives/install/controller.py SKIPPABLE).
 const WHATSAPP_STEPS = new Set(["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"])
 
-/** Powerset signs in inside the app; LinkedIn and Google sign in through Chrome, which brings
- *  the app back forward when it closes (packs/ingestion/primitives/common/browser.js returnFocus). */
+/** Every sign-in happens in a browser: Powerset's in the default one (where the Mac's passkeys
+ *  are), LinkedIn's and Google's in Chrome, which brings the app back forward when it closes
+ *  (packs/ingestion/primitives/common/browser.js returnFocus). */
 function signInToPowerset(url: string): void {
-  openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })
+  void openExternal(url)
 }
 
 // While setup waits for Full Disk Access, ask macOS again this often and continue by itself.
@@ -77,9 +84,13 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
   const signInUrl = action?.kind === "signin" ? (action.url ?? null) : null
   const resume = () => void continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
 
-  // The sign-in opens once per URL setup hands over.
+  // The sign-in opens once per URL setup hands over; once setup moves past it, the app comes
+  // back forward from the browser.
+  const signingIn = useRef(false)
   useEffect(() => {
     if (signInUrl !== null) signInToPowerset(signInUrl)
+    else if (signingIn.current) void focusApp()
+    signingIn.current = signInUrl !== null
   }, [signInUrl])
   // Full Disk Access: setup resumes on its own the moment macOS reports the grant.
   const waitingForMessages = action?.kind === "permission"

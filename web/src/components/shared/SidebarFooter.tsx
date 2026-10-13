@@ -15,7 +15,6 @@ import {
   type Update,
 } from "@/lib/api/update"
 import { isDesktop } from "@/lib/desktop"
-import { useSignIn } from "@/lib/signin"
 import { cn } from "@/lib/utils"
 
 import { Button } from "../ui/button"
@@ -26,7 +25,7 @@ import { Tip } from "./Tip"
 
 const ACCOUNT_KEY = ["account"]
 const UPDATE_KEY = ["update"]
-// While signed out the footer watches for the sign-in the server finishes after the pane closes.
+// While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000
 
 /** The side nav's bottom: the update pane when a newer app is out, then who is signed in. */
@@ -119,14 +118,13 @@ function Profile({ rail }: { rail: boolean }) {
     },
     onSettled: () => client.invalidateQueries({ queryKey: ACCOUNT_KEY }),
   })
-  const pane = useSignIn()
 
   const data = account.data
   const signedIn = data?.signed_in === true
   const name = signedIn ? (data.name ?? data.email) : null
   const email = signedIn && data.name !== null ? data.email : null
   const picture = signedIn ? data.picture : null
-  const busy = signIn.isPending || pane !== null
+  const busy = signIn.isPending
   const problem = signIn.error ? errorText(signIn.error) : null
   const title = data === undefined ? "Checking who is signed in…" : signedIn ? name : "Not signed in"
   const detail = problem ?? email ?? (signedIn || data === undefined ? null : "Powerset")

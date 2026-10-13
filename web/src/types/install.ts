@@ -14,8 +14,8 @@ export interface InstallAction {
     | "details"
     | "signin"
   text?: string
-  // signin: the provider's sign-in page. Powerset and LinkedIn show inside the desktop app;
-  // Google only allows its own in the browser, so the app opens it there and waits.
+  // signin: the provider's sign-in page, opened in a browser: Powerset's in the default one
+  // (where the Mac's passkeys are), LinkedIn's and Google's in Chrome.
   url?: string
   provider?: "powerset" | "linkedin" | "google"
   command?: string

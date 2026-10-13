@@ -1,7 +1,7 @@
 import { Fragment, useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { DebugMenu, EmptyState, Sidebar, SignInModal } from "@/components/shared"
+import { DebugMenu, EmptyState, Sidebar } from "@/components/shared"
 import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
@@ -85,7 +85,6 @@ export function App() {
             <Route path="*" element={<Navigate to={HOME.href} replace />} />
           </Route>
         </Routes>
-        <SignInModal />
         <DebugMenu />
       </AccountProvider>
     </BrowserRouter>

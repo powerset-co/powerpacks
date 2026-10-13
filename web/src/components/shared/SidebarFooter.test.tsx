@@ -10,7 +10,6 @@ const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn() }))
 vi.mock("@/lib/api/account", () => auth)
 vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true }))
-vi.mock("@/lib/signin", () => ({ useSignIn: () => null }))
 vi.mock("@/lib/api/update", () => ({
   lastCheck: () => null,
   dismissedVersion: () => null,

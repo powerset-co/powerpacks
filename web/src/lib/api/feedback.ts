@@ -1,13 +1,13 @@
 // POST /searches/feedback on the Python review server (results_web/server.py _save_feedback),
 // POST /api/feedback for the People drawer's flag (shared/web/feedback.py), and POST
 // /searches/auth/login, which runs `$powerset login` on this machine when Powerset answers that
-// it needs a sign-in. In the desktop app the login's page shows in the app's sign-in pane
+// it needs a sign-in. In the desktop app the app opens the login's page in the default browser
 // instead: /auth/login/start hands over its URL, /auth/login/finish its outcome.
 
 import { body, failure } from "@/lib/api/http"
+import { focusApp, openExternal } from "@/lib/api/install"
 import { isDesktop } from "@/lib/desktop"
 import { formValues } from "@/lib/searches/feedback"
-import { openSignIn, POWERSET_CALLBACK, signInFinished } from "@/lib/signin"
 import type { Person } from "@/types/people"
 import type { FeedbackRecord, FeedbackReply } from "@/types/searches"
 
@@ -50,21 +50,23 @@ export async function sendPersonFeedback(comment: string, row: Person): Promise<
 }
 
 /** Runs the Powerset sign-in on the server; throws the server's message when it did not complete.
- *  In the desktop app the page shows in the sign-in pane, never in a browser. */
+ *  In the desktop app the page opens in the default browser, then the app comes back forward. */
 export async function signIn(): Promise<void> {
-  if (isDesktop()) return signInInApp()
+  if (isDesktop()) return signInFromApp()
   const response = await fetch(LOGIN, { method: "POST" })
   if (response.status === 409) location.assign("/install")
   if (!response.ok) throw await failure(response, NOT_SIGNED_IN)
 }
 
-async function signInInApp(): Promise<void> {
+// macOS keeps a Mac's passkeys to the browsers: a view inside the app gets none, so Google there
+// asks for a phone over Bluetooth. The browser has them; the app comes forward once it is done.
+async function signInFromApp(): Promise<void> {
   const started = await fetch(`${LOGIN}/start`, { method: "POST" })
   if (started.status === 409) location.assign("/install")
   if (!started.ok) throw await failure(started, NOT_SIGNED_IN)
   const { url } = await body<{ url: string }>(started)
-  openSignIn({ title: "Powerset", url, finish: POWERSET_CALLBACK })
-  if (!(await signInFinished())) throw new Error("The sign-in was closed before it finished.")
+  await openExternal(url)
   const finished = await fetch(`${LOGIN}/finish`, { method: "POST" })
+  await focusApp()
   if (!finished.ok) throw await failure(finished, NOT_SIGNED_IN)
 }

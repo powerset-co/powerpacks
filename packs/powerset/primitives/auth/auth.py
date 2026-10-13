@@ -315,7 +315,7 @@ _PAGE_STYLE = """
 _SUCCESS_HTML = (
     f"<!doctype html><html><head><meta charset='utf-8'><title>Powerpacks</title>{_PAGE_STYLE}</head>"
     "<body><div class='card'><div class='icon'>✅</div><h1>You're in.</h1>"
-    "<p>Authentication complete. Head back to your terminal.</p>"
+    "<p>Authentication complete. Powerpacks picks up from here.</p>"
     "<p class='subtle'>You can close this tab.</p></div></body></html>"
 )
 
