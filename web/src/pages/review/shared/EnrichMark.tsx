@@ -1,12 +1,16 @@
+import type { ReactNode } from "react"
+
 import "../styles/enrich.css"
 
 interface EnrichMarkProps {
   part: number
   parts: number
   running: boolean
+  // What sits inside the ring: the soft shape unless the page puts its own there.
+  center?: ReactNode
 }
 
-export function EnrichMark({ part, parts, running }: EnrichMarkProps) {
+export function EnrichMark({ part, parts, running, center }: EnrichMarkProps) {
   const ring = { cx: 56, cy: 56, r: 52, pathLength: parts }
   return (
     <span className="enrich-mark" aria-hidden="true">
@@ -18,7 +22,7 @@ export function EnrichMark({ part, parts, running }: EnrichMarkProps) {
         ) : null}
       </svg>
       {running ? <span className="enrich-orbit" /> : null}
-      <span className="enrich-shape" />
+      {center ?? <span className="enrich-shape" />}
     </span>
   )
 }

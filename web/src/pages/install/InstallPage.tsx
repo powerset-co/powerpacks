@@ -10,6 +10,7 @@ import { isDesktop } from "@/lib/desktop"
 import { errorText } from "@/lib/api/http"
 import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
+import { AsciiForm } from "@/pages/home/AsciiForm"
 import { EnrichMark } from "@/pages/review/shared/EnrichMark"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
@@ -199,6 +200,8 @@ export function InstallPage() {
                 part={completed.length}
                 parts={Math.max(steps.length, 1)}
                 running={!error && !failed && data?.status === "running"}
+                // The home page's knot, drawn small: in the ring where the soft shape sits.
+                center={<AsciiForm cols={40} rows={20} className="w-[96px]" />}
               />
             }
           >
@@ -206,7 +209,11 @@ export function InstallPage() {
               <p className="install-message">Start fresh, or bring over what you already have on this Mac.</p>
             ) : (
               // One fixed block: the status line, then how long it has run or the note.
-              <ReservedLines className="install-message" lines={MESSAGE_LINES.wide} narrowLines={MESSAGE_LINES.narrow}>
+              <ReservedLines
+                className="install-message"
+                lines={MESSAGE_LINES.wide}
+                narrowLines={MESSAGE_LINES.narrow}
+              >
                 {/* A new line fades in over the old one's slot. */}
                 <span key={message} className="fade-swap">
                   {message}

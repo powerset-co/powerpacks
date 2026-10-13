@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react"
 
-const WIDTH = 960
-const HEIGHT = 580
+// One character's cell, in canvas pixels; the grid is the home page's unless a page asks smaller.
+const CELL_W = 8
+const CELL_H = 10
 const COLS = 120
 const ROWS = 58
 const GLYPHS = "powerset%$"
@@ -19,8 +20,17 @@ function knot(u: number, v: number, t: number): [number, number, number] {
   ]
 }
 
-/** A sampled torus knot, projected into a character grid with a depth buffer. */
-export function AsciiForm() {
+interface AsciiFormProps {
+  cols?: number
+  rows?: number
+  className?: string
+}
+
+/** A sampled torus knot, projected into a character grid with a depth buffer. A smaller grid
+ *  draws the same knot in fewer, coarser characters. */
+export function AsciiForm({ cols = COLS, rows = ROWS, className = "w-full max-w-[960px]" }: AsciiFormProps) {
+  const width = cols * CELL_W
+  const height = rows * CELL_H
   const canvas = useRef<HTMLCanvasElement>(null)
   const elapsed = useRef(0)
   useEffect(() => {
@@ -29,8 +39,8 @@ export function AsciiForm() {
     const context = element.getContext("2d")
     if (!context) return
     const motion = window.matchMedia("(prefers-reduced-motion: reduce)")
-    const depth = new Float32Array(COLS * ROWS)
-    const light = new Float32Array(COLS * ROWS)
+    const depth = new Float32Array(cols * rows)
+    const light = new Float32Array(cols * rows)
     const pointer = { x: 0, y: 0 }
     const target = { x: 0, y: 0 }
     let frame = 0
@@ -71,29 +81,29 @@ export function AsciiForm() {
           const ry = y * cx - rz * sx
           const zz = y * sx + rz * cx
           const scale = 1 / (5 - zz)
-          const col = Math.floor(COLS / 2 + rx * scale * 68)
-          const row = Math.floor(ROWS / 2 + ry * scale * 44)
-          if (col < 0 || col >= COLS || row < 0 || row >= ROWS) continue
-          const cell = row * COLS + col
+          const col = Math.floor(cols / 2 + ((rx * scale * 68) / COLS) * cols)
+          const row = Math.floor(rows / 2 + ((ry * scale * 44) / ROWS) * rows)
+          if (col < 0 || col >= cols || row < 0 || row >= rows) continue
+          const cell = row * cols + col
           if (zz <= (depth[cell] ?? -Infinity)) continue
           depth[cell] = zz
           light[cell] = Math.max(0, Math.min(1, 0.45 + zz * 0.16 + Math.sin(v + u - t * 1.8) * 0.24))
         }
       }
-      context.clearRect(0, 0, WIDTH, HEIGHT)
+      context.clearRect(0, 0, width, height)
       context.font = "11px ui-monospace, Menlo, monospace"
       context.textAlign = "center"
       context.textBaseline = "middle"
       for (let cell = 0; cell < depth.length; cell++) {
         if (depth[cell] === -Infinity) continue
         const brightness = light[cell] ?? 0
-        const x = (cell % COLS) * 8 + 4
-        const y = Math.floor(cell / COLS) * 10 + 5
+        const x = (cell % cols) * CELL_W + CELL_W / 2
+        const y = Math.floor(cell / cols) * CELL_H + CELL_H / 2
         context.fillStyle =
           brightness > 0.82
             ? `rgba(255,220,185,${brightness})`
             : `rgba(242,80,42,${0.22 + brightness * 0.78})`
-        context.fillText(GLYPHS.charAt((cell % COLS) % GLYPHS.length), x, y)
+        context.fillText(GLYPHS.charAt((cell % cols) % GLYPHS.length), x, y)
       }
     }
     const changeMotion = () => {
@@ -109,14 +119,6 @@ export function AsciiForm() {
       element.removeEventListener("pointerleave", leave)
       motion.removeEventListener("change", changeMotion)
     }
-  }, [])
-  return (
-    <canvas
-      ref={canvas}
-      width={WIDTH}
-      height={HEIGHT}
-      aria-hidden
-      className="w-full max-w-[960px] shrink-0"
-    />
-  )
+  }, [cols, rows, width, height])
+  return <canvas ref={canvas} width={width} height={height} aria-hidden className={`shrink-0 ${className}`} />
 }
