@@ -1,13 +1,13 @@
 # Share
 
-Worth produces machine labels during deep-context synthesis. Share projects those
-saved labels, applies human tags, and builds the upload list. It makes no paid
+Worth produces machine labels and a share call (OpenAI's Luna Decisions, `worth/luna.py`).
+Share projects those saved labels, applies human tags, and builds the upload list. It makes no paid
 calls and writes no file state: the labels, the share list, and the human tags
 are tables in the canonical store.
 
 ```mermaid
 flowchart LR
-  F[deep-context facts: JEV labels + worth] --> PL[person_labels table]
+  F[worth: Luna labels + share call] --> PL[person_labels table]
   P[people.csv] --> E[evidence join]
   DB[(deep-context.sqlite)] --> E
   E --> PL
@@ -24,7 +24,7 @@ bin/deep-context-v2 review      # the page server; the People page is /people: t
 `share` is the stage's one node (`share_list.ShareList`, declared in
 `pipeline/graph.py`): one pass writes `person_labels` and `share` for every merged
 person, so the list can never be partial. A context-bearing person without saved
-JEV labels must complete deep-context synthesis first. LinkedIn-only people get
+labels must complete worth first. LinkedIn-only people get
 deterministic labels. Human tags are never changed by machine labeling.
 
 Its `manifest.json` (`ShareManifest`) is `completed` when both tables are
@@ -37,10 +37,10 @@ write is skipped).
 
 | File | Role | Reads | Writes |
 |---|---|---|---|
-| `questions.py` | 34 label questions JEV answers during synthesis | — | — |
+| `questions.py` | The label questions (3 choices, warmth, 28 yes/no) and the share question Luna answers in worth | — | — |
 | `models.py` | Typed evidence, label cells, the manifest path | — | — |
 | `evidence.py` | Join the roster to parents, facts, dossiers, bundles | people.csv, `deep-context.sqlite` | — |
-| `labels.py` | Label reduction, confirm flags, sharing policy | saved labels | — |
+| `labels.py` | Saved labels, the flags that keep a family home, sharing policy | saved labels | — |
 | `store.py` | `TagStore`: the human's tags | `person_tags` | `person_tags` |
 | `share_list.py` | The `share` node: labels + share list in one pass | evidence, `person_tags` | `person_labels`, `share`, manifest.json |
 | `share.py` | CLI | command arguments | command results |
@@ -67,8 +67,7 @@ One row per person in each; the node rewrites both in one transaction.
 
 ## The share decision
 
-Share follows worth. `share.share` is `yes | no | confirm`; the first rule
-that fires names the row's `reason`:
+`share.share` is `yes | no | confirm`; the first rule that fires names the row's `reason`:
 
 | # | Rule | share | reason |
 |---|---|---|---|
@@ -77,13 +76,15 @@ that fires names the row's `reason`:
 | 3 | human tag `share` | yes | `human_share` |
 | 4 | worth `no` | no | `worth_no` |
 | 5 | worth not `yes` (maybe / unjudged) | no | `worth_maybe` |
-| 6 | a confirm flag fired | confirm | the flag name |
-| 7 | otherwise | yes | `worth_yes` |
+| 6 | a flag keeps them home | no | `family`, `romantic_partner` or `minor` |
+| 7 | Luna's call `keep_private` at `SHARE_FLOOR` (0.6) or more | no | `not_professional` |
+| 8 | Luna's call `share` at `SHARE_FLOOR` or more | yes | `would_vouch` |
+| 9 | otherwise: `ask`, a weaker call, or no call | confirm | `unsure` |
 
-The JEV labels decide nothing. `labels.confirm_flag` raises at most one flag —
-`family`, `romantic_partner`, `minor`, `sensitive_context`, `sensitive_provider`,
-`automated_sender`, `stranger`, in that order — and a flag on a worth-yes person
-only asks a human. A `confirm` row leaves the laptop no more than a `no` does
+Luna's share call (worth's request 2) reads every label and its confidence; its keep-private
+option spells out the easy no's: the owner's clinician, lawyer, accountant or lender, HR and
+benefits contacts, support and billing desks, landlords and vendors, automated senders and
+strangers. A `confirm` row leaves the laptop no more than a `no` does
 until the human answers; the UI records that answer as a tag through `TagStore`,
 and the manifest's `confirm` count is what it surfaces. Tags follow merged
 identities through `superseded_person_ids`.

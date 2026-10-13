@@ -9,6 +9,7 @@ member has one, and a family already at the settled worth needs no row. The row 
 worth key, so worth does not judge it again.
 
 Changelog:
+- 2026-10-13: `settle` applies the rule in one call, for Enrich and anything else that rewrites worth.
 - 2026-10-07 (Arthur): the own-connection yes, dropped in the first port, restored.
 
 Created: 2026-10-07
@@ -17,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from pathlib import Path
 
+from packs.ingestion.primitives.deep_context_v2.db import queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import WorthRow
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, DecidedBy, Origin, Verdict, Worth
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
@@ -84,6 +87,16 @@ def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[Wo
         for candidate_id in family.candidates:
             rows.append((candidate_id, settled, DecidedBy.MACHINE.value, reason, family.worth.labels_json, key, now))
     return rows
+
+
+def settle(conn: sqlite3.Connection, data_root: Path, now: str) -> int:
+    """Settle every family as it stands, from cached profiles only: the worth rows written. Enrich runs
+    it after the judge; anything else that rewrites worth runs it after, so the rule holds."""
+    families: list[Family] = load_families(conn)
+    profiles: Profiles = load_profiles(data_root, confirmed_urls(families), fetch=False)
+    rows: list[WorthRow] = settle_rows(families, profiles, now)
+    queries_worth.append_worth(conn, rows)
+    return len(rows)
 
 
 def main(argv: list[str] | None = None) -> int:

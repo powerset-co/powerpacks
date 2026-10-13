@@ -2,10 +2,12 @@
 
 A family is a parent id with the members `current_parent` puts under it. Its export row is what
 realize writes (name, public identifier, channels, counts, last interaction); its worth and the
-JEV labels worth saved come from `current_worth`; its facts are the members' facts collapsed as
-every judge sees them; its message statistics come from the members' bundles, counts only.
+labels worth saved come from `current_worth`, read only when today's questions asked them; its
+facts are the members' facts collapsed as every judge sees them; its message statistics come from
+the members' bundles, counts only.
 
 Changelog:
+  2026-10-13: labels from older questions are absent: a family Luna refused keeps its JEV row.
   2026-10-07: v2. people.csv, dossier artifacts and the v1 parents table are gone; the roster is
     realize's rows and the facts are the collapsed family facts.
 """
@@ -20,6 +22,7 @@ from packs.ingestion.primitives.deep_context_v2.db import queries_review, querie
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
+from packs.ingestion.primitives.deep_context_v2.worth.luna import REQUEST_VERSION
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
@@ -86,8 +89,11 @@ class ShareEvidence:
                 groups += counts.groups.get(member.candidate_id, 0)
             decided = worth[parent_id]
             # The labels worth computed stay with the family when a human overrides the worth itself.
+            # Labels from older questions (a family Luna refused keeps its JEV row) are absent.
             labels_json: str | None = queries_review.labels_json(self.conn, candidates[parent_id])
             labels: dict[str, Any] | None = json.loads(labels_json) if labels_json else None
+            if labels is not None and labels.get("version") != REQUEST_VERSION:
+                labels = None
             overlaps: set[str] = set()
             for item in facts["shared_context"]:
                 overlaps.add(item["overlap"])
