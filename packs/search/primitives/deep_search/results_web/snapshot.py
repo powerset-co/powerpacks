@@ -12,6 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from . import RESULTS_CSS, RESULTS_JS
 from .model import Candidate, CandidateJudgment, SearchResult, load_searches
@@ -52,6 +53,8 @@ def _decode(kind: Any, value: Any, path: str) -> Any:
         return float(value)
     if type(value) is not kind:
         raise ValueError(f"{path} must be {kind.__name__}")
+    if kind is str and path.endswith(".set_id") and value:
+        UUID(value)
     if kind is str and path.endswith("_url") and value:
         url = urlsplit(value)
         if url.scheme not in ("http", "https") or not url.netloc or url.username or url.password:

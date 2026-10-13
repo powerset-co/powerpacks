@@ -230,6 +230,10 @@ uv run --project . python \
   --run-dir <run> --env-file .env
 ```
 
+Report the saved backend and set ID with the result summary. Uploads and feedback
+preserve them from each source run. Local searches have no set ID; older runs
+without saved scope stay unknown. Never substitute today's default set.
+
 `uploaded` returns the private viewer URL; include it with the local viewer link.
 `needs_auth` is quiet and normal: keep the local viewer, without requesting login.
 On upload failure, keep the local results and report that hosting failed.

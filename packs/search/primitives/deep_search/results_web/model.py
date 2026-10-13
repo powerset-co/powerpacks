@@ -206,6 +206,8 @@ class Pond:
     result_count: int
     cost_usd: float
     candidates: tuple[PondCandidate, ...] = ()
+    backend: str = ""
+    set_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -312,6 +314,8 @@ class SearchResult:
     team: tuple[TeamMember, ...] = ()
     team_fetched_at: str = ""
     team_status: str = ""
+    backend: str = ""
+    set_id: str = ""
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -594,8 +598,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     for candidates in (summary.get("groups") or {}).values():
         for candidate in candidates or []:
             for found in candidate.get("found_by") or []:
-                pond = (_text(found.get("run")), int(found.get("pond") or 0))
-                reviewed_people.setdefault(pond, set()).add(_text(candidate.get("person")))
+                pond_key = (_text(found.get("run")), int(found.get("pond") or 0))
+                reviewed_people.setdefault(pond_key, set()).add(_text(candidate.get("person")))
     ponds: list[Pond] = []
     for raw in summary.get("pond_chain") or []:
         source_run = _text(raw.get("run"))
@@ -614,6 +618,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             result_count=int(raw.get("result_count") or 0),
             cost_usd=_number(raw.get("cost_usd")),
             candidates=rows,
+            backend=_text((source.payload.get("retrieval") or {}).get("backend")) if source else "",
+            set_id=_text((source.payload.get("retrieval") or {}).get("set_id")) if source else "",
         ))
     raw_groups = summary.get("groups") or {}
     raw_candidates = {_text(row.get("person")): dict(row)
@@ -659,6 +665,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
     jd_path = root / run_id / "jd.txt"
     return SearchResult(
         run_id=run_id,
+        backend=_text((payload.get("retrieval") or {}).get("backend")),
+        set_id=_text((payload.get("retrieval") or {}).get("set_id")),
         title=_text(payload.get("title")) or run_id,
         company=_text(payload.get("company")),
         created_at=_text(payload.get("created_at") or payload.get("updated_at")),

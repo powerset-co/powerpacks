@@ -27,10 +27,15 @@ def build_feedback_payload(search: SearchResult, comment: str,
     """Compose one row from the run's search context plus, for a candidate, its
     group, fit reason, and trait scores — enough to re-label the result later."""
     queries = candidate.queries if candidate else search.queries
+    scope = next((pond for pond in search.ponds
+                  if candidate and pond.run_id == candidate.found_run
+                  and pond.pond_n == candidate.found_pond), search)
     metadata: dict[str, object] = {
         "source": "powerpacks-deep-search-results",
         "action": "candidate" if candidate else "search",
         "run_id": search.run_id,
+        "backend": scope.backend,
+        "set_id": scope.set_id,
         "queries": list(queries),
         "jd": search.jd_text,
         "title": search.title,
@@ -70,11 +75,13 @@ def build_feedback_payload(search: SearchResult, comment: str,
                             "confidence": trait.confidence, "reason": trait.reason}
                            for trait in pond_row.traits],
             })
-    return dict(
+    payload = dict(
         comment=comment or "Candidate fit reviewed.",
         feedback_type=("taste_score" if human_judgment else "bad_rerank") if candidate else "bad_search",
         category="search",
         field_value=candidate.linkedin_url if candidate else search.run_id,
         metadata={key: value for key, value in metadata.items() if value not in (None, "", [], {})},
     )
-
+    if scope.set_id:
+        payload["set_id"] = scope.set_id
+    return payload
