@@ -9,7 +9,7 @@ member has one, and a family already at the settled worth needs no row. The row 
 worth key, so worth does not judge it again.
 
 Changelog:
-- 2026-10-13: `settle` applies the rule in one call: Enrich after the judge, People's Refresh after worth.
+- 2026-10-13: `settle` applies the rule in one call, for Enrich and anything else that rewrites worth.
 - 2026-10-07 (Arthur): the own-connection yes, dropped in the first port, restored.
 
 Created: 2026-10-07
@@ -91,7 +91,7 @@ def settle_rows(families: list[Family], profiles: Profiles, now: str) -> list[Wo
 
 def settle(conn: sqlite3.Connection, data_root: Path, now: str) -> int:
     """Settle every family as it stands, from cached profiles only: the worth rows written. Enrich runs
-    it after the judge; People's Refresh runs it after worth, so a refresh keeps the rule."""
+    it after the judge; anything else that rewrites worth runs it after, so the rule holds."""
     families: list[Family] = load_families(conn)
     profiles: Profiles = load_profiles(data_root, confirmed_urls(families), fetch=False)
     rows: list[WorthRow] = settle_rows(families, profiles, now)

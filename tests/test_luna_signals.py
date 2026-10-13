@@ -13,8 +13,11 @@ from unittest import mock
 
 import httpx
 
+from test_share_v2 import StoreTests
 from packs.ingestion.primitives.deep_context_v2 import decisions
+from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.worth import luna
+from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 from packs.ingestion.primitives.share.labels import flag, labels_from_saved, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, LabelRow
@@ -31,6 +34,24 @@ ANSWERS: list[dict[str, Any]] = [
 
 def no_progress(_done: int, _total: int) -> None:
     pass
+
+
+def answers_for(request: dict[str, Any]) -> list[dict[str, Any]]:
+    """A synthetic Decisions response to `request`: every predicate low, every choice its first value."""
+    answers: list[dict[str, Any]] = []
+    for question in request["questions"]:
+        name: str = question["name"]
+        if question["type"] == "predicate":
+            answers.append({"type": "predicate", "name": name, "probability": 0.1})
+        elif question["type"] == "score":
+            answers.append({"type": "score", "name": name, "score": 1.0, "confidence": 0.9, "probabilities": [
+                {"value": level, "label": item["label"], "probability": float(level == 1)}
+                for level, item in enumerate(question["levels"])]})
+        else:
+            values = [item["value"] for item in question["choices"]]
+            answers.append({"type": "choice", "name": name, "choice": values[0], "confidence": 0.9, "probabilities": [
+                {"value": value, "probability": 0.9 if value == values[0] else 0.05} for value in values]})
+    return answers
 
 
 class DecisionsClientTests(unittest.TestCase):
@@ -80,6 +101,43 @@ class DecisionsClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not saved yet"):
             self.decide({decisions.request_digest("v1", request): request}, cache_only=True)
         self.assertEqual(self.sent, [])
+
+
+class WorthRunTests(StoreTests):
+    """Worth end to end on a synthetic store, with OpenAI answering through a mock transport."""
+
+    def test_worth_asks_both_requests_and_writes_luna_labels(self) -> None:
+        queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
+        self.conn.execute("INSERT INTO candidate_sources (candidate_id, source) VALUES ('c1', 'gmail_msgvault')")
+        self.conn.execute("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
+                          "VALUES ('c1', '{\"messages\":[],\"groups\":[]}', 'test', '2026-10-07')")
+        self._parent("p:a", "c1")
+        self._facts("c1", "Jordan Bravo")
+        root = Path(self.tmp.name)
+        sent: list[dict[str, Any]] = []
+        real = decisions.AsyncOpenAI
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            sent.append(body)
+            return httpx.Response(200, json={"answers": answers_for(body)})
+
+        def client(**options: Any) -> Any:
+            return real(**options, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+        phases: list[str] = []
+        node = Worth(self.conn, root, limit=DEFAULT_LIMIT)
+        node.on_progress = lambda phase, done, total: phases.append(phase)
+        with mock.patch.object(decisions, "AsyncOpenAI", client), \
+                mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic",
+                                             "POWERPACKS_USAGE_LOG": str(root / "usage.jsonl")}):
+            manifest = node.run()
+        self.assertEqual((manifest.status, manifest.counts["requests"], len(sent)), ("completed", 2, 2))
+        self.assertEqual(set(phases), {"Reading signals", "Deciding who to share"})
+        labels = json.loads(self.conn.execute("SELECT labels_json FROM worth WHERE candidate_id = 'c1' "
+                                              "ORDER BY seq DESC").fetchone()[0])
+        self.assertEqual((labels["worth"], labels["share_call"], labels["version"]),
+                         ("yes", "share", luna.REQUEST_VERSION))
 
 
 class LabelsTests(unittest.TestCase):
