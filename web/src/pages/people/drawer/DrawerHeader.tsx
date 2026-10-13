@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react"
+import { Fragment, useState, type ReactNode } from "react"
 
 import { ProxiedLinkedinAvatar, DrawerClose, LinkedinLink, SourcePill, Tip } from "@/components/shared"
 import { toChannels, type Channel } from "@/lib/channels"
@@ -9,6 +9,8 @@ import type { Person, PersonDetail } from "@/types/people"
 interface DrawerHeaderProps {
   row: Person
   detail: PersonDetail | null
+  // An icon action beside Close.
+  action: ReactNode
   onClose: () => void
 }
 
@@ -78,7 +80,7 @@ function ContactLine({ row }: { row: Person }) {
 
 // Who this is and how to reach them: the row draws it at once; the detail adds the headline,
 // picture, LinkedIn link, and the emails and numbers.
-export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
+export function DrawerHeader({ row, detail, action, onClose }: DrawerHeaderProps) {
   const avatar = orNone(detail?.avatar_url) ?? (row.avatar_url || undefined)
   const headline = orNone(detail?.headline) ?? [row.title, row.company].filter(Boolean).join(" · ")
   const channels = toChannels(row.channels)
@@ -110,6 +112,7 @@ export function DrawerHeader({ row, detail, onClose }: DrawerHeaderProps) {
         </div>
         <ContactLine row={row} />
       </div>
+      {action}
       <DrawerClose onClose={onClose} />
     </div>
   )

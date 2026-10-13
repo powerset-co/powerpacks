@@ -12,6 +12,7 @@ export { EmptyState } from "./EmptyState"
 export { Fold } from "./Fold"
 export {
   CLOSE_MARK,
+  BookIcon,
   CheckIcon,
   CopyIcon,
   FlagIcon,

@@ -21,6 +21,10 @@
   display: flex;
   gap: 8px;
 }
+/* A saved logbook's icon takes the accent: there is something to read. */
+.drawer-icon[data-logbook="saved"] {
+  color: var(--primary);
+}
 
 /* Section bodies; the folding shell is DetailsSection, and .dsec the plain loading block. */
 .dsec {

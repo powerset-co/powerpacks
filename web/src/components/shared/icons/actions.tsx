@@ -82,6 +82,16 @@ export function ImportIcon(props: IconProps) {
   )
 }
 
+/** A person's logbook: an open book. */
+export function BookIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M3 5h6a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H3z" />
+      <path d="M21 5h-6a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h7z" />
+    </svg>
+  )
+}
+
 /** A preflight item that still needs something: a warning triangle. */
 export function WarningIcon(props: IconProps) {
   return (

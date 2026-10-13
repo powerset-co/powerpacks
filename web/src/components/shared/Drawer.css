@@ -71,7 +71,9 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.drawer-close {
+/* Close, and any icon action beside it (People's logbook). */
+.drawer-close,
+.drawer-icon {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
@@ -87,7 +89,17 @@
     background var(--t-fast) var(--ease-out),
     color var(--t-fast) var(--ease-out);
 }
-.drawer-close:hover {
+.drawer-close:hover,
+.drawer-icon:hover:enabled {
   color: var(--foreground);
   background: var(--secondary);
+}
+.drawer-icon {
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.drawer-icon:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
