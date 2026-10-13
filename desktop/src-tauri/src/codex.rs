@@ -43,15 +43,22 @@ pub const PAGE_METHODS: &[&str] = &[
     "turn/interrupt",
     "thread/archive",
 ];
-/// The only skills the in-app agent gets: people, company, contact and SQL search, which also
-/// answer dossier lookups. Setup, imports, Deep Context and the index run from the app's pages.
-const SKILL_ROOTS: [&str; 2] = ["packs/search/skills", "packs/contacts/skills"];
+/// The in-app agent gets every pack's skills but Powerset's own (install, sign-in, update,
+/// doctor), which run from the app's pages.
+const SKILL_ROOTS: [&str; 6] = [
+    "packs/search/skills",
+    "packs/contacts/skills",
+    "packs/ingestion/skills",
+    "packs/indexing/skills",
+    "packs/sales-nav/skills",
+    "packs/apollo/skills",
+];
 const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app. \
-You search the user's network and answer questions about people, companies and dossiers with \
-the Powerpacks search skills. Setup, sign-in, contact imports, Deep Context processing and the \
-search index are run by the user from the app's own pages (Accounts, People, Searches); do not \
-run those workflows yourself. If one is needed, say which page to open. Never ask the user to \
-open a URL in a browser: the app already shows every Powerpacks page.";
+You search the user's network, answer questions about people, companies and dossiers, and run \
+the Powerpacks workflows the user asks for (contact imports, Deep Context processing, logbooks, \
+the search index) with the Powerpacks skills. Powerpacks setup and the Powerset sign-in run from \
+the app's own pages; if one is needed, say which page to open. Never ask the user to open a URL \
+in a browser: the app already shows every Powerpacks page.";
 const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;
