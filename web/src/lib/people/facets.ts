@@ -150,7 +150,6 @@ export interface QuickFilter {
 
 export const QUICK: readonly QuickFilter[] = [
   { name: "Family", set: { relationship_kind: ["family"] } },
-  { name: "Sensitive context", set: { labels: ["sensitive_context"] } },
   { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
   { name: "Recruiters", set: { labels: ["is_recruiter"] } },
   { name: "Strangers", set: { labels: ["is_stranger"] } },
