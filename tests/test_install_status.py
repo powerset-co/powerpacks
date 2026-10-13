@@ -204,5 +204,45 @@ class SkipSourceTests(unittest.TestCase):
             self.controller.skip("imessage")
 
 
+
+class ConnectTests(unittest.TestCase):
+    """The Connect screen signs in to one source before setup, in the background, into its own record."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.controller = InstallController(self.root)
+
+    def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
+            self.assertEqual(self.controller.connect("gmail", " mailbox@gmail.com "),
+                             {"status": "started", "source": "gmail"})
+        self.assertEqual(popen.call_args.args[0][1:], [
+            "-m", "packs.powerset.primitives.install.onboard", "--root", str(self.root),
+            "--source", "gmail", "--logins-only", "--gmail-email", "mailbox@gmail.com"])
+        self.assertEqual(popen.call_args.kwargs["cwd"], self.root)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    def test_connect_takes_only_a_source_with_a_login(self) -> None:
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
+            for source in ("imessage", "powerset", None):
+                with self.assertRaises(ValueError):
+                    self.controller.connect(source, None)
+            with self.assertRaises(ValueError):
+                self.controller.connect("gmail", "")
+        popen.assert_not_called()
+
+    def test_the_connect_record_carries_its_qr_and_leaves_setups_alone(self) -> None:
+        InstallStatus(self.root, "connect").write("whatsapp.qr", pid=os.getpid(),
+                                                  retry_command="bin/onboard --source whatsapp --logins-only")
+        qr = self.root / ".powerpacks/messages/wacli-login-qr.png"
+        qr.parent.mkdir(parents=True)
+        qr.write_bytes(b"png")
+        self.assertTrue(self.controller.connection()["action"]["qr_url"].startswith("/api/install/qr?connect=1&t="))
+        self.assertEqual(self.controller.qr_image(connect=True), b"png")
+        self.assertIsNone(self.controller.qr_image())
+        self.assertFalse((self.root / ".powerpacks/install/manifest.json").exists())
+
 if __name__ == "__main__":
     unittest.main()

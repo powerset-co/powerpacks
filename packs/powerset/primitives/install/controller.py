@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-13: connect: `POST /api/install/connect` runs one source's tools and login for the
+      desktop app's Connect screen (onboard.py --logins-only) in the background; `GET` reads its
+      record, with the QR's URL while WhatsApp waits on one.
   2026-10-09: preflight: `GET /api/install/preflight` reports what the desktop app's first screen
       checks (a browser for sign-ins, the Google Cloud CLI); `POST` installs one in the background.
   2026-10-09: `/api/install/skip` skips a stopped source (WhatsApp at its QR) for the rest of the
@@ -14,6 +17,7 @@ import os
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime
@@ -31,6 +35,9 @@ PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privac
 SKIPPABLE = {"whatsapp": {InstallStep.WHATSAPP_TOOLS.value, InstallStep.WHATSAPP_LOGIN.value,
                           InstallStep.WHATSAPP_SYNC.value, InstallStep.WHATSAPP_IMPORT.value}}
 _STOP_SECONDS = 5.0
+# The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
+# Access is a macOS setting) or none at all.
+CONNECTABLE = ("linkedin", "gmail", "whatsapp")
 
 
 def _stop(pid: int) -> None:
@@ -100,9 +107,35 @@ class InstallController:
         started = datetime.fromisoformat(record["updated_at"].replace("Z", "+00:00")).timestamp()
         return path if path.stat().st_mtime >= started else None
 
-    def qr_image(self) -> bytes | None:
-        path = self.qr(InstallStatus(self.root).read())
+    def qr_image(self, connect: bool = False) -> bytes | None:
+        """Setup's QR, or with `connect` the Connect screen's."""
+        path = self.qr(InstallStatus(self.root, "connect" if connect else "manifest").read())
         return path.read_bytes() if path else None
+
+    def connection(self) -> dict:
+        """The Connect screen's run: its record, with the QR's URL while WhatsApp waits on one."""
+        record = InstallStatus(self.root, "connect").read()
+        qr = self.qr(record)
+        if qr:
+            record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
+        return record
+
+    def connect(self, source: object, email: object) -> dict:
+        """Sign in to one source before setup: its tools and login, in the background like setup
+        (one at a time, by setup's own lock), followed by the page in the connect record."""
+        if source not in CONNECTABLE:
+            raise ValueError("Unknown source")
+        command = [sys.executable, "-m", "packs.powerset.primitives.install.onboard", "--root", str(self.root),
+                   "--source", str(source), "--logins-only"]
+        if source == "gmail":
+            if not isinstance(email, str) or "@" not in email:
+                raise ValueError("Which Gmail address?")
+            command += ["--gmail-email", email.strip()]
+        directory = self.root / ".powerpacks/install"
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / "connect.log").open("a") as log:
+            subprocess.Popen(command, cwd=self.root, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        return {"status": "started", "source": source}
 
     @staticmethod
     def _body(handler) -> dict:
@@ -152,6 +185,9 @@ class InstallController:
                 response = self.install(self._body(handler).get("item"))
             elif path == "/api/install/skip":
                 response = self.skip(self._body(handler).get("source"))
+            elif path == "/api/install/connect":
+                body = self._body(handler)
+                response = self.connect(body.get("source"), body.get("email"))
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)
                 return True

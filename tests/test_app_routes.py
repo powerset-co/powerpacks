@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.powerset.primitives.install.status import InstallStatus
 from packs.shared.web import account, feedback
 from packs.shared.web.app import AppRoutes
 from packs.shared.web.server import persistent_handler
@@ -137,6 +138,11 @@ class AccountRoutesTests(unittest.TestCase):
         self._sender({"status": "needs_auth", "error": "not signed in to Powerset; run `$powerset login` first"})
         status, payload = self._post("/api/feedback", {"comment": "Should be shared.", "person": PERSON})
         self.assertEqual((status, payload["error"]), (HTTPStatus.UNAUTHORIZED, "Sign in to Powerset again, then send."))
+
+    def test_the_connect_screen_reads_its_own_record(self) -> None:
+        InstallStatus(self.root, "connect").write("linkedin.login.done", pid=0)
+        status, payload = self._json("/api/install/connect")
+        self.assertEqual((status, payload["event"], payload["status"]), (200, "linkedin.login.done", "completed"))
 
     def test_signed_out_without_credentials(self) -> None:
         self.assertEqual(self._json("/api/account"),

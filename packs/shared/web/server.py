@@ -11,6 +11,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 
 Changelog:
 - 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
+- 2026-10-13: GET /api/install/connect reads the Connect screen's run; its QR is /api/install/qr?connect=1.
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
 - 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
@@ -231,8 +232,11 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/install/preflight":
                 self._json(install.preflight())
                 return
+            if parsed.path == "/api/install/connect":
+                self._json(install.connection())
+                return
             if parsed.path == "/api/install/qr":
-                body = install.qr_image()
+                body = install.qr_image(connect="connect=1" in parsed.query.split("&"))
                 if body is None:
                     self._json({"error": "Waiting for a fresh QR code"}, HTTPStatus.NOT_FOUND)
                     return
