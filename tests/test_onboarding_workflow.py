@@ -475,6 +475,7 @@ class SourceOnboardingTests(unittest.TestCase):
                              'accounts': [{'email': 'casey@example.com'}] if 'gmail' in connected else []}
                     with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
                          patch.object(accounts, 'status_payload', return_value=vault), \
+                         patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}), \
                          patch.object(IMessageExtractor, 'check',
                                       return_value={'status': 'ok' if 'imessage' in connected else 'blocked_user_action'}), \
                          patch.object(auth, 'auth_status',
@@ -491,6 +492,18 @@ class SourceOnboardingTests(unittest.TestCase):
                     self.assertEqual(result['event'], 'sources.ready' if connected else 'sources.all_skipped')
                     self.assertEqual({source for source in sources if result['steps'].get(login_steps[source], {}).get('status') == 'skipped'},
                                      set(sources) - set(connected))
+
+    def test_desktop_leaves_out_a_stored_mailbox_whose_sign_in_expired(self):
+        # Google ends a testing app's sign-ins after a week: setup leaves the mailbox to Connect.
+        vault = {'config': {'oauth_configured': True}, 'database': {'exists': True},
+                 'accounts': [{'email': 'casey@example.com'}]}
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch.object(accounts, 'status_payload', return_value=vault), \
+             patch.object(accounts, 'check_accounts_payload', return_value={'status': 'needs_user_action'}), \
+             patch.object(SourceOnboarding, '_gmail_connect') as connect:
+            result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
+        connect.assert_not_called()
+        self.assertEqual(result['event'], 'sources.all_skipped')
 
     def test_desktop_leaves_out_gmail_without_a_connected_mailbox(self):
         # The Connect screen connects Gmail; setup never asks for a mailbox under the desktop app.

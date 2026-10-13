@@ -398,17 +398,17 @@ class SourceOnboarding:
 
     def _connected(self, source: Source) -> bool:
         """Whether `source` needs no login from the user. Full Disk Access and the WhatsApp link are
-        asked of macOS and wacli, Gmail of msgvault (every chosen mailbox stored); LinkedIn's saved
-        profile has no quiet check, so a login finished on the Connect screen or in an earlier run
-        counts."""
+        asked of macOS and wacli, Gmail of msgvault (every chosen mailbox authorized now: an expired
+        one would open Google's consent after Set up); LinkedIn's saved profile has no quiet check,
+        so a login finished on the Connect screen or in an earlier run counts."""
         if source is Source.IMESSAGE:
             return IMessageExtractor().check(strict=True)["status"] == "ok"
         if source is Source.WHATSAPP:
             return auth.auth_status(self.wacli_store).authenticated
         if source is Source.GMAIL:
             home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
-            stored = accounts.VaultHealth.from_status(accounts.status_payload(home)).stored_emails
-            return bool(self.gmail_emails) and {email.lower() for email in self.gmail_emails} <= stored
+            return bool(self.gmail_emails) and accounts.check_accounts_payload(
+                home, list(self.gmail_emails))["status"] == "ok"
         records = (InstallStatus(self.root, "connect").read(), InstallStatus(self.root).read())
         return self._linkedin_current() or any(
             record["steps"].get(InstallStep.LINKEDIN_LOGIN.value, {}).get("status") == InstallState.COMPLETED
