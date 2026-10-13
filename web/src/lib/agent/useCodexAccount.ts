@@ -17,6 +17,8 @@ import { focusApp, openExternal } from "@/lib/api/install"
 import type { CodexStatus } from "@/types/agent"
 
 const CODEX_KEY = ["codex"] as const
+// Codex keeps a sign-in nobody finishes open for ten minutes; the app ends it after two.
+const LOGIN_TIMEOUT_MS = 120_000
 
 export interface CodexAccountState {
   status: CodexStatus | undefined
@@ -63,6 +65,15 @@ export function useCodexAccountState(): CodexAccountState {
       }),
     [refresh],
   )
+
+  useEffect(() => {
+    if (!login) return
+    const timer = setTimeout(() => {
+      setLogin(null)
+      cancelCodexLogin(login.loginId).catch((error: unknown) => setActionError(errorText(error)))
+    }, LOGIN_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [login])
 
   const run = (action: Promise<unknown>) => {
     setActionError(null)

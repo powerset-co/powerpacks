@@ -48,6 +48,7 @@ function renderAccount() {
 afterEach(() => {
   cleanup()
   vi.resetAllMocks()
+  vi.useRealTimers()
 })
 
 describe("useCodexAccount", () => {
@@ -117,6 +118,27 @@ describe("useCodexAccount", () => {
     act(() => result.current.cancel())
     expect(result.current.login).toBeNull()
     expect(codexApi.cancelCodexLogin).toHaveBeenCalledWith("l1")
+  })
+
+  it("ends a sign-in nobody finishes after two minutes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    codexApi.fetchCodexStatus.mockResolvedValue({ installed: true, account: null })
+    codexApi.startCodexLogin.mockResolvedValue(LOGIN)
+    codexApi.cancelCodexLogin.mockResolvedValue(undefined)
+    installApi.openExternal.mockResolvedValue(undefined)
+    const { result } = renderAccount()
+    act(() => result.current.connect())
+    await waitFor(() => expect(result.current.login).toEqual(LOGIN))
+
+    act(() => {
+      vi.advanceTimersByTime(119_000)
+    })
+    expect(codexApi.cancelCodexLogin).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(1_000)
+    })
+    expect(codexApi.cancelCodexLogin).toHaveBeenCalledWith("l1")
+    expect(result.current.login).toBeNull()
   })
 
   it("reports a failed completion and a refused browser", async () => {
