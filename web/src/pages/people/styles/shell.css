@@ -7,11 +7,6 @@
   min-height: 0;
   overflow: hidden;
 }
-.people-layout {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  min-height: 0;
-}
 
 /* The whole pane, and the container the table's columns respond to as the window narrows. */
 .people-main {
@@ -141,13 +136,4 @@
   font-size: 12px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-}
-
-@media (max-width: 960px) {
-  .people-layout {
-    grid-template-columns: 1fr;
-  }
-  .rail {
-    display: none;
-  }
 }

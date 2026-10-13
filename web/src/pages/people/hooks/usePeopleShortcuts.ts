@@ -26,7 +26,7 @@ interface ShortcutTargets {
   targets: readonly string[]
 }
 
-// The People page's keys wired to its state; the Keyboard shortcuts list in the rail names them.
+// The People page's keys wired to its state.
 export function usePeopleShortcuts({
   active,
   search,
@@ -51,7 +51,6 @@ export function usePeopleShortcuts({
       search.current?.focus()
       search.current?.select()
     },
-    focusFacets: () => document.querySelector<HTMLButtonElement>("[data-rail] [data-facet-value]")?.focus(),
     switchTab: (position) => setTab(ORDER[position] ?? "confirm"),
     move: (step) => {
       if (!matching.length) return

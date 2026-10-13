@@ -35,11 +35,8 @@ export type FacetKey =
   | "tags"
   | "labels"
   | "function"
-  | "seniority"
-  | "mode"
   | "warmth"
   | "direction"
-  | "hierarchy"
   | "intro_source"
   | "evidence"
 
@@ -51,79 +48,59 @@ export interface FacetDef {
   key: FacetKey
   label: string
   get: (row: Person) => string[]
-  order?: readonly string[]
   words?: TextKind
-  more?: boolean
-  search?: boolean
 }
 
 const one = (value: string): string[] => (value ? [value] : [])
 
-// The default facets stay open; the `more` ones collapse under "More filters".
+// What each held filter reads from a row: the quick filters, the chips and the URL view use these.
 export const FACETS: readonly FacetDef[] = [
   { key: "reason", label: "Reason", get: (r) => [r.reason], words: "reason" },
   {
     key: "worth",
     label: "Worth",
     get: (r) => [r.worth || "unjudged"],
-    order: ["yes", "maybe", "no", "unjudged"],
     words: "worth",
   },
   { key: "relationship_kind", label: "Relationship", get: (r) => one(r.relationship_kind) },
-  { key: "last", label: "Last contact", get: (r) => [r.last], order: LAST },
+  { key: "last", label: "Last contact", get: (r) => [r.last] },
   {
     key: "channels",
     label: "Sources",
     get: (r) => r.channels,
-    order: ["gmail", "imessage", "whatsapp", "linkedin"],
   },
   {
     key: "linkedin",
     label: "LinkedIn",
     get: (r) => [r.public_identifier ? "Has LinkedIn" : "No LinkedIn"],
-    order: ["Has LinkedIn", "No LinkedIn"],
   },
   {
     key: "logbook",
     label: "Logbook",
     // No values until the saved logbooks are read: an unread catalog is not "No logbook".
     get: (r) => (r.logbook === null ? [] : [r.logbook ? "Has logbook" : "No logbook"]),
-    order: ["Has logbook", "No logbook"],
   },
   {
     key: "worth_source",
     label: "Worth decided by",
     get: (r) => one(r.worth_source),
     words: "source",
-    more: true,
   },
-  { key: "tags", label: "Your tags", get: (r) => r.tags, more: true },
+  { key: "tags", label: "Your tags", get: (r) => r.tags },
   {
     key: "labels",
     label: "Relationship labels",
     get: (r) => r.labels,
     words: "labels",
-    more: true,
-    search: true,
   },
-  { key: "function", label: "Function", get: (r) => one(r.function), words: "function", more: true },
-  { key: "seniority", label: "Seniority", get: (r) => one(r.seniority), words: "seniority", more: true },
-  { key: "mode", label: "Conversation", get: (r) => one(r.mode), words: "mode", more: true },
-  { key: "warmth", label: "Warmth", get: (r) => one(r.warmthBucket), order: WARMTH, more: true },
-  { key: "direction", label: "Who writes", get: (r) => one(r.direction), words: "direction", more: true },
-  {
-    key: "hierarchy",
-    label: "Reporting relationship",
-    get: (r) => one(r.hierarchy),
-    words: "hierarchy",
-    more: true,
-  },
+  { key: "function", label: "Function", get: (r) => one(r.function), words: "function" },
+  { key: "warmth", label: "Warmth", get: (r) => one(r.warmthBucket) },
+  { key: "direction", label: "Who writes", get: (r) => one(r.direction), words: "direction" },
   {
     key: "intro_source",
     label: "How you met",
     get: (r) => one(r.intro_source),
     words: "intro_source",
-    more: true,
   },
   {
     key: "evidence",
@@ -134,7 +111,6 @@ export const FACETS: readonly FacetDef[] = [
       ...(r.shared_employer ? ["Shared employer"] : []),
       ...(r.shared_school ? ["Shared school"] : []),
     ],
-    more: true,
   },
 ]
 
@@ -149,7 +125,9 @@ export function facetOf(key: FacetKey): FacetDef {
   return must(FACET_BY_KEY.get(key), `facet ${key}`)
 }
 
+// A choice the evidence could not settle reads N/A, not Unknown.
 export function facetText(facet: FacetDef, value: string): string {
+  if (value === "unknown") return "N/A"
   return facet.words ? label(facet.words, value) : sentence(value)
 }
 
@@ -172,7 +150,6 @@ export interface QuickFilter {
 
 export const QUICK: readonly QuickFilter[] = [
   { name: "Family", set: { relationship_kind: ["family"] } },
-  { name: "Sensitive context", set: { labels: ["sensitive_context"] } },
   { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
   { name: "Recruiters", set: { labels: ["is_recruiter"] } },
   { name: "Strangers", set: { labels: ["is_stranger"] } },
@@ -215,19 +192,6 @@ export function quickActive(quick: QuickFilter, filters: FacetFilters): boolean 
       return held?.size === values.length && values.every((value) => held.has(value))
     })
   )
-}
-
-/** A facet's values for the rail: its fixed order when it has one, else most people first; held
- *  values stay listed at zero. */
-export function orderedValues(
-  facet: FacetDef,
-  counts: ReadonlyMap<string, number>,
-  held: ReadonlySet<string>,
-): string[] {
-  const values = [...new Set([...counts.keys(), ...held])]
-  const { order } = facet
-  if (order) return values.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
-  return values.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || a.localeCompare(b))
 }
 
 export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] {

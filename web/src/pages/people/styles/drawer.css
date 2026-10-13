@@ -3,8 +3,9 @@
 
 .drawer-top .sub.sources {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 4px 12px;
   margin-top: 4px;
 }
 .drawer-top .sub.sources a {

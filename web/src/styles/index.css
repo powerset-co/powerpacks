@@ -48,8 +48,8 @@
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-2: 0 12px 40px -12px rgba(0, 0, 0, 0.65);
     /* motion: short; ease-out in, ease-in out; transform, opacity and color only. The one
-       layout exception is the facet fold (FacetShell), which animates grid-template-rows
-       because a variable-height list cannot fold with a transform. */
+       layout exception is Fold, which animates grid-template-rows because a variable-height
+       list cannot fold with a transform. */
     --ease-out: cubic-bezier(0.2, 0, 0, 1);
     --ease-in: cubic-bezier(0.4, 0, 1, 1);
     --t-fast: 120ms;

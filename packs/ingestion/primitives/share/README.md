@@ -81,8 +81,8 @@ that fires names the row's `reason`:
 | 7 | otherwise | yes | `worth_yes` |
 
 The JEV labels decide nothing. `labels.confirm_flag` raises at most one flag —
-`family`, `romantic_partner`, `minor`, `sensitive_context`, `sensitive_provider`,
-`automated_sender`, `stranger`, in that order — and a flag on a worth-yes person
+`family`, `romantic_partner`, `minor`, `sensitive_provider`, `automated_sender`,
+`stranger`, in that order — and a flag on a worth-yes person
 only asks a human. A `confirm` row leaves the laptop no more than a `no` does
 until the human answers; the UI records that answer as a tag through `TagStore`,
 and the manifest's `confirm` count is what it surfaces. Tags follow merged

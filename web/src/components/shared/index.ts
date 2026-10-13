@@ -9,9 +9,7 @@ export { DetailsSection } from "./DetailsSection"
 export { ChatGptSignIn } from "./ChatGptSignIn"
 export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
-export { FacetShell } from "./FacetShell"
 export { Fold } from "./Fold"
-export { FacetValue } from "./FacetValue"
 export {
   CLOSE_MARK,
   CheckIcon,
@@ -39,5 +37,6 @@ export { SourcePill, type SourcePillSize } from "./SourcePill"
 export { SourcePills } from "./SourcePills"
 export { Spinner } from "./Spinner"
 export { TabInk } from "./TabInk"
+export { Tip } from "./Tip"
 export { Toast, type ToastAction, type ToastMessage } from "./Toast"
 export { VirtualRows, type VirtualRowsHandle, type VirtualRowsProps } from "./VirtualRows"

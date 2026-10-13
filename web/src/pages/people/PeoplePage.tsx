@@ -82,7 +82,7 @@ export function PeoplePage() {
       <PeopleWorkspace people={people.data} reading={reading} logbook={logbook} onView={openLogbooks} />
     )
   } else if (people.error) {
-    content = <PeopleShell rail={null} main={<EmptyState data-empty>{people.error.message}</EmptyState>} />
+    content = <PeopleShell main={<EmptyState data-empty>{people.error.message}</EmptyState>} />
   } else content = <PeopleLoading />
 
   return (

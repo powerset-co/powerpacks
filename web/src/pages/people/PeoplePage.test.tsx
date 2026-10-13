@@ -217,7 +217,8 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const first = renderPage()
     await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.click(must(first.container.querySelector('[data-facet-key="worth"][data-facet-value="yes"]')))
+    const quick = must(first.container.querySelector<HTMLElement>("[data-quick]"))
+    fireEvent.click(within(quick).getByRole("button", { name: /^Family/ }))
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
       target: { value: "Jordan" },
     })
@@ -229,7 +230,7 @@ describe("PeoplePage", () => {
     const params = new URLSearchParams(path.split("?")[1])
     expect(params.get("person")).toBe("p1")
     expect(params.get("q")).toBe("Jordan")
-    expect(params.getAll("filter.worth")).toEqual(["yes"])
+    expect(params.getAll("filter.relationship_kind")).toEqual(["family"])
     expect(params.get("sort")).toBe("messages")
     expect(params.get("sections")).toContain("relationship")
     first.unmount()
@@ -240,9 +241,9 @@ describe("PeoplePage", () => {
     expect(second.container.querySelector("[data-drawer] h2")?.textContent).toBe("Jordan Bravo")
     expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Search people" }).value).toBe("Jordan")
     expect(
-      second.container
-        .querySelector('[data-facet-key="worth"][data-facet-value="yes"]')
-        ?.getAttribute("aria-pressed"),
+      within(must(second.container.querySelector<HTMLElement>("[data-quick]")))
+        .getByRole("button", { name: /^Family/ })
+        .getAttribute("aria-pressed"),
     ).toBe("true")
     expect(second.container.querySelector('[data-section="relationship"]')?.getAttribute("data-open")).toBe(
       "true",
@@ -590,13 +591,12 @@ describe("PeoplePage logbook", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const notice = await waitFor(() => must(container.querySelector<HTMLElement>("[data-logbook-unread]")))
     expect(notice.textContent).toContain("Couldn't read saved logbooks.")
-    const rail = must(container.querySelector<HTMLElement>("[data-rail]"))
-    expect(rail.querySelector("[data-facet='logbook']")).toBeNull()
-    expect(within(rail).queryByText("No logbook")).toBeNull()
+    const quick = must(container.querySelector<HTMLElement>("[data-quick]"))
+    expect(within(quick).queryByRole("button", { name: /Has logbook/ })).toBeNull()
 
     failing = false
     fireEvent.click(within(notice).getByRole("button", { name: "Retry" }))
-    await waitFor(() => expect(within(rail).getByRole("button", { name: /Has logbook/ })).toBeTruthy())
+    await waitFor(() => expect(within(quick).getByRole("button", { name: /Has logbook/ })).toBeTruthy())
     expect(container.querySelector("[data-logbook-unread]")).toBeNull()
   })
 
@@ -605,8 +605,8 @@ describe("PeoplePage logbook", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    const rail = must(container.querySelector<HTMLElement>("[data-rail]"))
-    fireEvent.click(await within(rail).findByRole("button", { name: /Has logbook/ }))
+    const quick = must(container.querySelector<HTMLElement>("[data-quick]"))
+    fireEvent.click(await within(quick).findByRole("button", { name: /Has logbook/ }))
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(1))
     expect(container.querySelector(".row .who b")?.textContent).toBe("Casey Delta")
   })

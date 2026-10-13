@@ -48,7 +48,6 @@ from packs.ingestion.schemas.share_schema import (
     MINOR,
     OWNER,
     ROMANTIC_PARTNER,
-    SENSITIVE_CONTEXT,
     SENSITIVE_PROVIDER,
     SHARE_CONFIRM,
     SHARE_NO,
@@ -169,14 +168,15 @@ _CONFIRM_RULES: tuple[tuple[str, Callable[[JevLabels], bool]], ...] = (
     (FAMILY, lambda j: j.choices["relationship_kind"] == "family" or j.probabilities["is_family"] >= CONFIRM_P),
     (ROMANTIC_PARTNER, lambda j: j.choices["relationship_kind"] == "romantic_partner"),
     (MINOR, lambda j: j.probabilities["is_minor"] >= CONFIRM_P),
-    (SENSITIVE_CONTEXT, lambda j: j.probabilities["sensitive_context"] >= CONFIRM_P),
     (SENSITIVE_PROVIDER,
      lambda j: j.probabilities["is_healthcare_legal_or_financial_provider"] >= CONFIRM_P),
     (AUTOMATED_SENDER, lambda j: j.probabilities["is_automated_sender"] >= ACTIVE_P),
     (STRANGER, lambda j: j.probabilities["is_stranger"] >= ACTIVE_P),
 )
 # `confidential_dealings` stays a label, not a flag: on a real network it fired
-# on 87 people, 50 of them recruiters — hiring talk is ordinary here.
+# on 87 people, 50 of them recruiters — hiring talk is ordinary here. So does
+# `sensitive_context` (dropped 2026-10-12): it re-asked about people already
+# judged worth yes, 12 of the 14 confirmations on one network.
 
 
 def confirm_flag(jev: JevLabels | None) -> str:

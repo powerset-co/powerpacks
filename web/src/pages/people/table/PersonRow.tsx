@@ -3,7 +3,7 @@ import { memo, type MouseEvent } from "react"
 import { ProxiedLinkedinAvatar, SourcePills } from "@/components/shared"
 import { toChannels } from "@/lib/channels"
 import { monthYear } from "@/lib/copy"
-import { sentence } from "@/lib/people/copy"
+import { facetOf, facetText } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
 import { NumberCell, WarmthCell, WorthCell } from "./cells"
@@ -65,7 +65,7 @@ export const PersonRow = memo(function PersonRow({
       </div>
       <SourcePills role="cell" className="sources c-sources" channels={toChannels(row.channels)} />
       <div role="cell" className="rel c-rel">
-        {sentence(row.relationship_kind)}
+        {facetText(facetOf("relationship_kind"), row.relationship_kind)}
       </div>
       <WorthCell row={row} />
       <WarmthCell value={row.warmth} />

@@ -2,7 +2,6 @@ import { isTyping, useKeys } from "@/hooks/useKeys"
 
 export interface KeyboardActions {
   focusSearch: () => void
-  focusFacets: () => void
   switchTab: (position: 0 | 1 | 2) => void
   move: (step: 1 | -1) => void
   toggleFocused: () => boolean
@@ -38,10 +37,6 @@ export function useKeyboard(active: boolean, run: KeyboardActions) {
       case "/":
         event.preventDefault()
         run.focusSearch()
-        break
-      case "f":
-        event.preventDefault()
-        run.focusFacets()
         break
       case "j":
       case "ArrowDown":

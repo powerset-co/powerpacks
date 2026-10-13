@@ -8,7 +8,6 @@ import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
-import { VariationsPage } from "@/pages/home/VariationsPage"
 import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
@@ -46,7 +45,6 @@ export function App() {
     <BrowserRouter>
       <AccountProvider>
         <Routes>
-          <Route path="/home/variations" element={<VariationsPage />} />
           {desktop ? null : <Route path="/" element={<ReviewPage />} />}
           <Route element={<Shell />}>
             {desktop ? (
