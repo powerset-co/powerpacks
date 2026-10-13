@@ -429,16 +429,40 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(seen, [('casey@example.com',)])
         self.assertNotEqual(result['event'], 'gmail.which_accounts')
 
-    def test_gmail_asks_for_mailbox_before_using_the_powerset_login(self):
+    def test_connect_runs_one_sources_tools_and_login_into_its_own_record(self):
+        before = InstallStatus(self.root).read()['event']
+        with patch.object(SourceOnboarding, '_linkedin_sync') as sync:
+            result = SourceOnboarding(self.root, sources=('linkedin',), record='connect').connect()
+        self.assertEqual(result['event'], 'sources.connected')
+        self.assertEqual(result['steps']['linkedin_login']['status'], 'completed')
+        sync.assert_not_called()
+        self.assertTrue((self.root / '.powerpacks/install/connect.json').is_file())
+        self.assertEqual(InstallStatus(self.root).read()['event'], before)
+
+    def test_desktop_setup_takes_only_the_sources_already_connected(self):
+        # LinkedIn signed in on the Connect screen; no stored mailbox, no Full Disk Access, no WhatsApp link.
+        InstallStatus(self.root, 'connect').write('linkedin.login.done', pid=0)
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch.object(SourceOnboarding, '_linkedin_sync', return_value=True) as linkedin_sync, \
+             patch.object(SourceOnboarding, '_messages_sync') as messages_sync, \
+             patch.object(SourceOnboarding, '_gmail_connect') as gmail:
+            result = SourceOnboarding(self.root, sources=('linkedin', 'gmail', 'imessage', 'whatsapp')).run()
+        gmail.assert_not_called()
+        messages_sync.assert_not_called()
+        linkedin_sync.assert_called_once()
+        self.assertEqual(result['event'], 'sources.ready')
+        self.assertEqual({step: result['steps'][step]['status'] for step in ('gmail_login', 'imessage_access', 'whatsapp_login')},
+                         {'gmail_login': 'skipped', 'imessage_access': 'skipped', 'whatsapp_login': 'skipped'})
+
+    def test_desktop_leaves_out_gmail_without_a_connected_mailbox(self):
+        # The Connect screen connects Gmail; setup never asks for a mailbox under the desktop app.
         InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(), account_email='casey@example.com')
         with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
              patch.object(SourceOnboarding, '_gmail_connect') as connect:
             result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
         connect.assert_not_called()
-        self.assertEqual(result['event'], 'gmail.which_accounts')
-        self.assertEqual(result['account_email'], 'casey@example.com')
-        self.assertEqual(result['installer_pid'], 0)
-        self.assertNotIn('--gmail-email', result['retry_command'])
+        self.assertEqual(result['event'], 'sources.all_skipped')
+        self.assertEqual(result['steps']['gmail_login']['status'], 'skipped')
 
     def test_fresh_gmail_creates_the_oauth_app_in_process_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={

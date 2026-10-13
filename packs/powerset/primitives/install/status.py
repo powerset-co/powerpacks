@@ -5,6 +5,8 @@ step come from there. The manifest is the one record the page, the agent and the
 CLI read; a primitive's own text goes into the action's details, not the line.
 
 Changelog:
+  2026-10-13: a record can be named: the desktop app's Connect screen runs each source's logins
+      into `connect.json`, so the setup record stays on its welcome until setup starts.
   2026-10-09: `step_started_at` records when the run entered the current step, so the page can
       show how long a long step has run.
   2026-10-05: `write` takes an event instead of a message; the step enums moved
@@ -61,9 +63,10 @@ class _InstallManifest:
 
 
 class InstallStatus:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, name: str = "manifest") -> None:
         self.directory = Path(root).resolve() / ".powerpacks/install"
-        self.manifest_path = self.directory / "manifest.json"
+        self.name = name
+        self.manifest_path = self.directory / f"{name}.json"
         self.log_path = self.directory / "install.log"
 
     def write(self, event: str, *, pid: int, step: InstallStep | None = None,
@@ -104,7 +107,7 @@ class InstallStatus:
                                     account_email=account_email if account_email is not None else previous.get("account_email"),
                                     network_name=network_name if network_name is not None else previous.get("network_name"),
                                     person_count=person_count if person_count is not None else previous.get("person_count"))
-        temporary = self.directory / "manifest.tmp"
+        temporary = self.directory / f"{self.name}.tmp"
         payload = write_stage_manifest(temporary, manifest)
         temporary.replace(self.manifest_path)
         return payload

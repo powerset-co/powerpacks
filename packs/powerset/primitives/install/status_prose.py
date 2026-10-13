@@ -16,6 +16,7 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
+  2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`).
   2026-10-09: under the desktop app (POWERPACKS_DESKTOP=1) no agent reads the page, so the lines
       that speak as one get the app's words (DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE); the
       paid stages report their counts as they go; the Skip WhatsApp and elapsed-time page words.
@@ -157,6 +158,7 @@ PROSE: dict[str, Prose] = {
     "source.skipped": Prose(None, S, "Skipped for now"),
     "source.not_started": Prose(None, W, "Not started"),
     "sources.all_skipped": Prose(InstallStep.READY, C, "Powerpacks is installed"),
+    "sources.connected": Prose(InstallStep.SOURCES, C, "Connected"),  # a Connect screen run's end
     "gmail.which_accounts": Prose(InstallStep.GMAIL_LOGIN, W, "Which Gmail accounts should I add? The first one owns the Gmail setup.", action="gmail"),
 
     # Logging in to your accounts: tools first, then every login back to back
