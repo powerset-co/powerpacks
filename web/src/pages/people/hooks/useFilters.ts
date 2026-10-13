@@ -1,8 +1,7 @@
 import { useCallback, useState } from "react"
 
-import { setEntries, type FacetKey, type FacetSet, type SortKey } from "@/lib/people/facets"
+import { setEntries, type FacetSet, type SortKey } from "@/lib/people/facets"
 import { DEFAULT_VIEW, readView, type PeopleView } from "@/lib/people/view"
-import { EMPTY, toggled } from "@/lib/sets"
 import { ORDER, type Decision, type Person } from "@/types/people"
 
 // Honor a linked tab; otherwise start at the first decision with people.
@@ -21,16 +20,6 @@ export function useFilters(rows: readonly Person[], params: URLSearchParams) {
     setView((current) => (current.tab === tab ? current : { ...current, tab }))
   }, [])
 
-  const toggleFilter = useCallback((key: FacetKey, value: string) => {
-    setView((current) => {
-      const filters = new Map(current.filters)
-      const held = toggled(filters.get(key) ?? EMPTY, value)
-      if (held.size) filters.set(key, held)
-      else filters.delete(key)
-      return { ...current, filters }
-    })
-  }, [])
-
   const setFilters = useCallback((set: FacetSet) => {
     const filters = new Map(setEntries(set).map(([key, values]) => [key, new Set(values)]))
     setView((current) => ({ ...current, filters }))
@@ -46,5 +35,5 @@ export function useFilters(rows: readonly Person[], params: URLSearchParams) {
     })
   }, [])
 
-  return { view, setTab, toggleFilter, setFilters, setText, setSort }
+  return { view, setTab, setFilters, setText, setSort }
 }

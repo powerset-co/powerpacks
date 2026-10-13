@@ -1,5 +1,5 @@
-// Facets, quick filters, the filter/count pass, sorting and the tag toggle, ported 1:1 from people.js.
-// Facets: OR within one, AND across, always within the selected decision tab.
+// Facets, sorting and the tag toggle, ported from people.js. A held facet keeps the rows with one
+// of its values, always within the selected decision tab.
 
 import { must } from "@/lib/must"
 import { LAST, WARMTH, type LastBucket, type Person, type WarmthBucket } from "@/types/people"
@@ -53,7 +53,7 @@ export interface FacetDef {
 
 const one = (value: string): string[] => (value ? [value] : [])
 
-// What each held filter reads from a row: the quick filters, the chips and the URL view use these.
+// What each facet reads from a row: the relationship filter and the URL view use these.
 export const FACETS: readonly FacetDef[] = [
   { key: "reason", label: "Reason", get: (r) => [r.reason], words: "reason" },
   {
@@ -131,7 +131,7 @@ export function facetText(facet: FacetDef, value: string): string {
   return facet.words ? label(facet.words, value) : sentence(value)
 }
 
-/** Held values by facet, as a quick filter names them and a view is set from them. */
+/** Held values by facet, as a view is set from them. */
 export type FacetSet = Readonly<Partial<Record<FacetKey, readonly string[]>>>
 
 /** A set's facets and values, in FACETS order. */
@@ -141,23 +141,6 @@ export function setEntries(set: FacetSet): [FacetKey, readonly string[]][] {
     return values ? [[key, values]] : []
   })
 }
-
-/** Quick filters: named facet selections, counted within the tab. */
-export interface QuickFilter {
-  name: string
-  set: FacetSet
-}
-
-export const QUICK: readonly QuickFilter[] = [
-  { name: "Family", set: { relationship_kind: ["family"] } },
-  { name: "Service providers", set: { relationship_kind: ["service_provider"] } },
-  { name: "Recruiters", set: { labels: ["is_recruiter"] } },
-  { name: "Strangers", set: { labels: ["is_stranger"] } },
-  { name: "Automated senders", set: { labels: ["is_automated_sender"] } },
-  { name: "Last contact > 2 years", set: { last: [LAST[2]] } },
-  { name: "Close friends", set: { relationship_kind: ["close_friend"] } },
-  { name: "Has logbook", set: { logbook: ["Has logbook"] } },
-]
 
 export type SortKey = "name" | "relationship" | "worth" | "warmth" | "last" | "messages"
 
@@ -179,19 +162,6 @@ const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
 
 export function isSortKey(value: unknown): value is SortKey {
   return typeof value === "string" && Object.hasOwn(SORTERS, value)
-}
-
-/** A quick filter is on when the held facets are exactly its set, nothing more. */
-export function quickActive(quick: QuickFilter, filters: FacetFilters): boolean {
-  const entries = setEntries(quick.set)
-  const heldKeys = [...filters].filter(([, values]) => values.size).length
-  return (
-    heldKeys === entries.length &&
-    entries.every(([key, values]) => {
-      const held = filters.get(key)
-      return held?.size === values.length && values.every((value) => held.has(value))
-    })
-  )
 }
 
 export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] {

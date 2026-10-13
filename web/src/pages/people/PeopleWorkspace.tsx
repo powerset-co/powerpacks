@@ -2,11 +2,11 @@ import { useQuery } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { Toast } from "@/components/shared"
+import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { nextOpenIndex } from "@/lib/advance"
-import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
+import type { FacetSet, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
@@ -16,8 +16,6 @@ import { personKey, type Decision, type Person } from "@/types/people"
 import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
 import { FilterBar } from "./filters/FilterBar"
-import { QuickFilters } from "./filters/QuickFilters"
-import { DecisionTabs } from "./head/DecisionTabs"
 import { RefreshSignals } from "./head/RefreshSignals"
 import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
@@ -51,7 +49,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const initialParams = reading ? new URLSearchParams() : params
   const filters = useFilters(rows, initialParams)
   const { view } = filters
-  const { matching, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
+  const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
     const counts: Record<Decision, number> = { confirm: 0, yes: 0, no: 0 }
@@ -135,7 +133,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
   // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
-  const { setTab: pickTab, toggleFilter: pickFilter, setFilters: pickFilters, setText: pickText } = filters
+  const { setTab: pickTab, setFilters: pickFilters, setText: pickText } = filters
   const startOver = useCallback(() => {
     clearSelection()
     setFocus(-1)
@@ -149,13 +147,6 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
       startOver()
     },
     [view.tab, pickTab, startOver],
-  )
-  const toggleFilter = useCallback(
-    (key: FacetKey, value: string) => {
-      pickFilter(key, value)
-      startOver()
-    },
-    [pickFilter, startOver],
   )
   const setFilters = useCallback(
     (set: FacetSet) => {
@@ -172,8 +163,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     [pickText, startOver],
   )
   const clearFilters = useCallback(() => setFilters({}), [setFilters])
-  const pickQuick = useCallback(
-    (quick: QuickFilter | null) => setFilters(quick ? quick.set : {}),
+  const setRelationship = useCallback(
+    (kind: string) => setFilters(kind ? { relationship_kind: [kind] } : {}),
     [setFilters],
   )
 
@@ -206,33 +197,27 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     <PeopleShell
       main={
         <>
-          <DecisionTabs
-            tab={view.tab}
-            totals={totals}
-            onTab={setTab}
-            action={
-              <div className="head-share">
-                <RefreshSignals
-                  people={
-                    selection.selected.size ? [...selection.selected] : rows.map((row) => row.parent_id)
-                  }
-                  selected={selection.selected.size > 0}
-                  onDone={refresh}
-                />
-                <ShareUpload onToast={(message) => decisions.showToast({ message })} />
-              </div>
-            }
-          />
-          <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
+          <PageHeader title="People" data-head>
+            <div className="head-share">
+              <RefreshSignals
+                people={selection.selected.size ? [...selection.selected] : rows.map((row) => row.parent_id)}
+                selected={selection.selected.size > 0}
+                onDone={refresh}
+              />
+              <ShareUpload onToast={(message) => decisions.showToast({ message })} />
+            </div>
+          </PageHeader>
           <FilterBar
             ref={search}
             text={view.text}
-            filters={view.filters}
+            tab={view.tab}
+            totals={totals}
+            relationship={[...(view.filters.get("relationship_kind") ?? [])][0] ?? ""}
+            kinds={kinds}
             shown={matching.length}
-            inTab={totals[view.tab]}
             onText={setText}
-            onRemove={toggleFilter}
-            onClear={clearFilters}
+            onTab={setTab}
+            onRelationship={setRelationship}
             notice={
               catalog.error ? (
                 <span className="bar-notice" data-logbook-unread>

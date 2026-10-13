@@ -205,20 +205,26 @@ afterEach(() => {
 })
 
 describe("PeoplePage", () => {
-  it("opens on the confirm tab with the tab totals", async () => {
+  it("opens on the confirm decision with each decision's total", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    expect(container.querySelector("[data-tab='confirm']")?.getAttribute("aria-pressed")).toBe("true")
-    expect(screen.getByText("3 people", { selector: "[data-count]" })).toBeTruthy()
+    const sharing = screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" })
+    expect(sharing.value).toBe("confirm")
+    expect([...sharing.options].map((option) => option.textContent)).toEqual([
+      "Needs confirmation · 3",
+      "Sharing · 1",
+      "Not sharing · 0",
+    ])
+    // The count shows only once the search or a filter narrows the list.
+    expect(must(container.querySelector("[data-count]")).textContent).toBe("")
   })
 
   it("restores filters, sort, person and open sections from the URL after remounting", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const first = renderPage()
     await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(3))
-    const quick = must(first.container.querySelector<HTMLElement>("[data-quick]"))
-    fireEvent.click(within(quick).getByRole("button", { name: /^Family/ }))
+    fireEvent.change(screen.getByRole("combobox", { name: "Relationship" }), { target: { value: "family" } })
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
       target: { value: "Jordan" },
     })
@@ -240,11 +246,7 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(second.container.querySelectorAll(".row")).toHaveLength(1))
     expect(second.container.querySelector("[data-drawer] h2")?.textContent).toBe("Jordan Bravo")
     expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Search people" }).value).toBe("Jordan")
-    expect(
-      within(must(second.container.querySelector<HTMLElement>("[data-quick]")))
-        .getByRole("button", { name: /^Family/ })
-        .getAttribute("aria-pressed"),
-    ).toBe("true")
+    expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Relationship" }).value).toBe("family")
     expect(second.container.querySelector('[data-section="relationship"]')?.getAttribute("data-open")).toBe(
       "true",
     )
@@ -256,13 +258,13 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no&person=p1&sections=")
     await waitFor(() =>
-      expect(container.querySelector('[data-tab="no"]')?.getAttribute("aria-pressed")).toBe("true"),
+      expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" }).value).toBe("no"),
     )
     await screen.findByRole("button", { name: "Relationship", expanded: false })
     expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
   })
 
-  it("shows only the share action beside the tab totals", async () => {
+  it("shows only the share action beside Refresh signals in the header", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await screen.findByRole("button", { name: "Share network" })
@@ -535,7 +537,7 @@ describe("PeoplePage logbook", () => {
     const logbookButtons = (scope: HTMLElement) =>
       within(scope)
         .queryAllByRole("button")
-        .map((button) => button.textContent)
+        .map((button) => button.getAttribute("aria-label") ?? button.textContent)
         .filter((text) => /logbook/i.test(text))
 
     // The open person: the drawer holds their one action; the bar holds none.
@@ -591,24 +593,10 @@ describe("PeoplePage logbook", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const notice = await waitFor(() => must(container.querySelector<HTMLElement>("[data-logbook-unread]")))
     expect(notice.textContent).toContain("Couldn't read saved logbooks.")
-    const quick = must(container.querySelector<HTMLElement>("[data-quick]"))
-    expect(within(quick).queryByRole("button", { name: /Has logbook/ })).toBeNull()
 
     failing = false
     fireEvent.click(within(notice).getByRole("button", { name: "Retry" }))
-    await waitFor(() => expect(within(quick).getByRole("button", { name: /Has logbook/ })).toBeTruthy())
-    expect(container.querySelector("[data-logbook-unread]")).toBeNull()
-  })
-
-  it("filters People to those with a saved logbook", async () => {
-    saved = [savedEntry()]
-    vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
-    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    const quick = must(container.querySelector<HTMLElement>("[data-quick]"))
-    fireEvent.click(await within(quick).findByRole("button", { name: /Has logbook/ }))
-    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(1))
-    expect(container.querySelector(".row .who b")?.textContent).toBe("Casey Delta")
+    await waitFor(() => expect(container.querySelector("[data-logbook-unread]")).toBeNull())
   })
 
   it("reads a saved logbook on a fresh load and shows exactly the conversation picked", async () => {

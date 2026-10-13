@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { EmptyState, SourcePill, Spinner } from "@/components/shared"
+import { EmptyState, Page, SourcePill, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -59,32 +59,29 @@ export function AccountsPage() {
   }
 
   return (
-    <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
-      <div className="mx-auto flex max-w-[860px] flex-col gap-4">
-        <h1 className="m-0 text-lg font-semibold">Accounts</h1>
-        {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
-        {accounts.isPending && <ScheduleLineSkeleton />}
-        {accounts.data && <ScheduleLine scheduled={accounts.data.scheduled} />}
-        {actionError && <p className="m-0 text-xs text-bad">{actionError}</p>}
-        <ul
-          className="m-0 flex list-none flex-col gap-3 p-0"
-          aria-label="Accounts"
-          aria-busy={accounts.isPending}
-        >
-          {isDesktop() && <CodexCard />}
-          {accounts.isPending && [0, 1].map((card) => <AccountCardSkeleton key={card} />)}
-          {accounts.data?.accounts.map((account) => (
-            <AccountCard
-              key={`${account.source}:${account.name}`}
-              account={account}
-              job={jobFor(account, accounts.data.jobs)}
-              onReconnect={() => start(reconnectGmail(account.name))}
-              onSync={() => start(syncAccount(account))}
-            />
-          ))}
-        </ul>
-      </div>
-    </main>
+    <Page title="Accounts">
+      {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
+      {accounts.isPending && <ScheduleLineSkeleton />}
+      {accounts.data && <ScheduleLine scheduled={accounts.data.scheduled} />}
+      {actionError && <p className="m-0 text-xs text-bad">{actionError}</p>}
+      <ul
+        className="m-0 flex list-none flex-col gap-3 p-0"
+        aria-label="Accounts"
+        aria-busy={accounts.isPending}
+      >
+        {isDesktop() && <CodexCard />}
+        {accounts.isPending && [0, 1].map((card) => <AccountCardSkeleton key={card} />)}
+        {accounts.data?.accounts.map((account) => (
+          <AccountCard
+            key={`${account.source}:${account.name}`}
+            account={account}
+            job={jobFor(account, accounts.data.jobs)}
+            onReconnect={() => start(reconnectGmail(account.name))}
+            onSync={() => start(syncAccount(account))}
+          />
+        ))}
+      </ul>
+    </Page>
   )
 }
 

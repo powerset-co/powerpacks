@@ -1,8 +1,6 @@
-import { Chip, SearchField } from "@/components/shared"
+import { PageHeader, SearchField, Select } from "@/components/shared"
 import { Skeleton } from "@/components/ui/skeleton"
 import { label, SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
-import { QUICK } from "@/lib/people/facets"
-import { ORDER } from "@/types/people"
 
 import { PeopleShell } from "./PeopleShell"
 import "./styles/table.css"
@@ -10,29 +8,13 @@ import "./styles/table.css"
 const SKELETON_ROWS = 8
 
 // The page's frame while the people load, laid out as the loaded page is so nothing moves
-// when it arrives: the decision tabs, quick filters, the search box, and shimmering rows.
+// when it arrives: the title, the search line, and shimmering rows.
 export function PeopleLoading() {
   return (
     <PeopleShell
       main={
         <>
-          <section className="people-head" data-head aria-busy="true">
-            {ORDER.map((decision) => (
-              <span key={decision} className="stat">
-                <b>
-                  <Skeleton className="h-[22px] w-12" />
-                </b>
-                <span>{label("share", decision)}</span>
-              </span>
-            ))}
-          </section>
-          <section className="quick" data-quick aria-label="Quick filters">
-            {QUICK.map((quick) => (
-              <Chip key={quick.name} className="chip" pressed={false} disabled>
-                {quick.name}
-              </Chip>
-            ))}
-          </section>
+          <PageHeader title="People" data-head aria-busy="true" />
           <section className="bar" data-bar>
             <SearchField
               className="bar-search"
@@ -41,6 +23,12 @@ export function PeopleLoading() {
               aria-label={SEARCH_LABEL}
               disabled
             />
+            <Select aria-label="Sharing" disabled>
+              <option>{label("share", "confirm")}</option>
+            </Select>
+            <Select aria-label="Relationship" disabled>
+              <option>All relationships</option>
+            </Select>
           </section>
           <section className="people-grid" data-grid>
             <div className="grid-head" role="row" data-grid-head />

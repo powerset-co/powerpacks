@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState, type SVGProps } from "react"
 
-import { EmptyState } from "@/components/shared"
+import { EmptyState, Page } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
@@ -50,30 +50,24 @@ export function TasksPage() {
   const selected = runs.find((run) => run.id === selectedId) ?? runs[0]
 
   return (
-    <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
-      <div className="mx-auto flex max-w-[1040px] flex-col gap-6">
-        <h1 className="m-0 text-lg font-semibold">Scheduled tasks</h1>
-        {task.error && <EmptyState>{errorText(task.error)}</EmptyState>}
-        {task.isPending && <EmptyState>Loading scheduled tasks…</EmptyState>}
-        {task.data && (
-          <>
-            <section
-              aria-label="Tasks"
-              className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3"
-            >
-              <TaskTile
-                key={JSON.stringify(task.data.schedule_settings)}
-                task={task.data}
-                pending={change.isPending ? change.variables.runner : null}
-                error={change.error}
-                onChange={(runner, installed, schedule) => change.mutate({ runner, installed, schedule })}
-              />
-            </section>
-            <History runs={runs} selected={selected} onSelect={setSelectedId} />
-          </>
-        )}
-      </div>
-    </main>
+    <Page title="Scheduled tasks">
+      {task.error && <EmptyState>{errorText(task.error)}</EmptyState>}
+      {task.isPending && <EmptyState>Loading scheduled tasks…</EmptyState>}
+      {task.data && (
+        <>
+          <section aria-label="Tasks" className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
+            <TaskTile
+              key={JSON.stringify(task.data.schedule_settings)}
+              task={task.data}
+              pending={change.isPending ? change.variables.runner : null}
+              error={change.error}
+              onChange={(runner, installed, schedule) => change.mutate({ runner, installed, schedule })}
+            />
+          </section>
+          <History runs={runs} selected={selected} onSelect={setSelectedId} />
+        </>
+      )}
+    </Page>
   )
 }
 

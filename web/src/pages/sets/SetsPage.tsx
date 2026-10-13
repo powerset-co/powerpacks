@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { initials } from "@/components/shared"
+import { initials, Page, Select } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -23,125 +23,102 @@ export function SetsPage() {
   const [confirming, setConfirming] = useState(false)
 
   return (
-    <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
-      <div className="mx-auto flex max-w-[960px] flex-col gap-5">
-        {/* The title and the controls share one row, centred on each other; the description wraps under
-            the title in its own column, never under the controls. They stack only at a phone's width. */}
-        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 max-[680px]:grid-cols-1">
-          <h1 className="m-0 text-xl font-semibold leading-8">{SETS.title}</h1>
-          <div className="flex items-center gap-2 max-[680px]:order-last">
-            {/* Always on screen: "Loading sets…" until the first answer, "No sets yet" with none. */}
-            <span className="relative inline-flex">
-              <select
-                aria-label={SETS.choose}
-                value={chosen?.set_id ?? ""}
-                onChange={(event) => {
-                  choose(event.target.value)
-                  setConfirming(false)
-                }}
-                disabled={!local.length}
-                className="h-8 min-w-[220px] cursor-pointer appearance-none rounded-[var(--radius-s)] border border-line-strong bg-background pl-2.5 pr-8 text-[13px] text-foreground disabled:cursor-default disabled:text-muted-foreground"
-              >
-                {local.length ? null : (
-                  <option value="">{sets.isPending ? SETS.loading : SETS.noneTitle}</option>
-                )}
-                {local.map((set) => (
-                  <option key={set.set_id} value={set.set_id}>
-                    {set.name}
-                  </option>
-                ))}
-              </select>
-              <svg
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                className="pointer-events-none absolute right-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-              >
-                <path
-                  d="M4 6l4 4 4-4"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
-            <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
-              + {SETS.newSet}
-            </Button>
-          </div>
-          <p className="col-start-1 m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">
-            {SETS.lead}
-          </p>
-        </header>
-
-        {naming ? (
-          <NewSet
-            busy={sets.busy}
-            onCancel={() => setNaming(false)}
-            onCreate={(name) =>
-              sets.create(name).then((payload) => {
-                setNaming(false)
-                const made = payload.sets.find((set) => !set.is_personal && set.name === name)
-                if (made) choose(made.set_id)
-              })
-            }
-          />
-        ) : null}
-
-        {sets.failure ? (
-          <div className="flex items-center gap-3 rounded-[var(--radius-m)] border border-line bg-card px-4 py-3 text-[13px]">
-            <span>{sets.failure.needsAuth ? SETS.signInNeeded : sets.failure.message}</span>
-            {sets.failure.needsAuth ? (
-              <Button size="sm" onClick={() => void signIn().then(sets.reload).catch(sets.fail)}>
-                {SETS.signIn}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {sets.data?.invites.length ? (
-          <section className="flex flex-col gap-2" aria-label={SETS.invites}>
-            <h2 className="m-0 text-[10.5px] font-bold uppercase tracking-[.08em] text-faint">
-              {SETS.invites}
-            </h2>
-            {sets.data.invites.map((invite) => (
-              <InviteCard
-                key={invite.id}
-                invite={invite}
-                busy={sets.busy}
-                onAnswer={(accepted) => sets.answer(invite.id, accepted)}
-              />
+    <Page
+      title={SETS.title}
+      actions={
+        <div className="flex items-center gap-2">
+          {/* Always on screen: "Loading sets…" until the first answer, "No sets yet" with none. */}
+          <Select
+            aria-label={SETS.choose}
+            value={chosen?.set_id ?? ""}
+            onChange={(event) => {
+              choose(event.target.value)
+              setConfirming(false)
+            }}
+            disabled={!local.length}
+            className="min-w-[220px]"
+          >
+            {local.length ? null : <option value="">{sets.isPending ? SETS.loading : SETS.noneTitle}</option>}
+            {local.map((set) => (
+              <option key={set.set_id} value={set.set_id}>
+                {set.name}
+              </option>
             ))}
-          </section>
-        ) : null}
+          </Select>
+          <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
+            + {SETS.newSet}
+          </Button>
+        </div>
+      }
+    >
+      <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{SETS.lead}</p>
 
-        {sets.isPending ? <SetCardSkeleton /> : null}
-        {sets.data && !local.length && !naming ? (
-          <div className="rounded-[var(--radius-l)] border border-dashed border-line px-6 py-14 text-center">
-            <p className="m-0 text-[15px] font-semibold">{SETS.noneTitle}</p>
-            <p className="m-0 mt-1 text-[13px] text-muted-foreground">{SETS.none}</p>
-          </div>
-        ) : null}
+      {naming ? (
+        <NewSet
+          busy={sets.busy}
+          onCancel={() => setNaming(false)}
+          onCreate={(name) =>
+            sets.create(name).then((payload) => {
+              setNaming(false)
+              const made = payload.sets.find((set) => !set.is_personal && set.name === name)
+              if (made) choose(made.set_id)
+            })
+          }
+        />
+      ) : null}
 
-        {chosen ? (
-          <SetCard
-            key={chosen.set_id}
-            set={chosen}
-            busy={sets.busy}
-            confirming={confirming}
-            onConfirm={setConfirming}
-            onInvite={(email) => sets.invite(chosen.set_id, email)}
-            onDelete={() =>
-              void sets.remove(chosen.set_id).then(() => {
-                setConfirming(false)
-                choose("")
-              })
-            }
-          />
-        ) : null}
-      </div>
-    </main>
+      {sets.failure ? (
+        <div className="flex items-center gap-3 rounded-[var(--radius-m)] border border-line bg-card px-4 py-3 text-[13px]">
+          <span>{sets.failure.needsAuth ? SETS.signInNeeded : sets.failure.message}</span>
+          {sets.failure.needsAuth ? (
+            <Button size="sm" onClick={() => void signIn().then(sets.reload).catch(sets.fail)}>
+              {SETS.signIn}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {sets.data?.invites.length ? (
+        <section className="flex flex-col gap-2" aria-label={SETS.invites}>
+          <h2 className="m-0 text-[10.5px] font-bold uppercase tracking-[.08em] text-faint">
+            {SETS.invites}
+          </h2>
+          {sets.data.invites.map((invite) => (
+            <InviteCard
+              key={invite.id}
+              invite={invite}
+              busy={sets.busy}
+              onAnswer={(accepted) => sets.answer(invite.id, accepted)}
+            />
+          ))}
+        </section>
+      ) : null}
+
+      {sets.isPending ? <SetCardSkeleton /> : null}
+      {sets.data && !local.length && !naming ? (
+        <div className="rounded-[var(--radius-l)] border border-dashed border-line px-6 py-14 text-center">
+          <p className="m-0 text-[15px] font-semibold">{SETS.noneTitle}</p>
+          <p className="m-0 mt-1 text-[13px] text-muted-foreground">{SETS.none}</p>
+        </div>
+      ) : null}
+
+      {chosen ? (
+        <SetCard
+          key={chosen.set_id}
+          set={chosen}
+          busy={sets.busy}
+          confirming={confirming}
+          onConfirm={setConfirming}
+          onInvite={(email) => sets.invite(chosen.set_id, email)}
+          onDelete={() =>
+            void sets.remove(chosen.set_id).then(() => {
+              setConfirming(false)
+              choose("")
+            })
+          }
+        />
+      ) : null}
+    </Page>
   )
 }
 

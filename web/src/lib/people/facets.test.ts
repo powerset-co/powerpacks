@@ -4,7 +4,7 @@ import { decodePeople } from "@/lib/api/people"
 import { savedEntry } from "@/testing/logbook-fixture"
 import { PAYLOAD } from "@/testing/people-fixture"
 
-import { LAST, lastBucket, nextTags, QUICK, sortRows, type FacetKey } from "./facets"
+import { LAST, lastBucket, nextTags, sortRows, type FacetKey } from "./facets"
 import { filterRows } from "./filter"
 import { withLogbooks } from "./logbook"
 import { DEFAULT_VIEW, type PeopleView } from "./view"
@@ -38,27 +38,16 @@ describe("filterRows", () => {
     expect(matching.map((row) => row.name)).toEqual(["Jordan Bravo"])
   })
 
-  it("counts quick filters within the tab, before text and facets", () => {
+  it("counts relationship kinds within the tab, before text and facets", () => {
     const filters = new Map<FacetKey, Set<string>>([["worth", new Set(["yes"])]])
-    const { quickCounts } = filterRows(rows, { ...view, filters, text: "jordan" })
-    const byName = Object.fromEntries(QUICK.map((quick, position) => [quick.name, quickCounts[position]]))
-    expect(byName).toMatchObject({
-      Family: 2,
-      Recruiters: 1,
-      "Close friends": 1,
-      "Last contact > 2 years": 1,
-    })
+    const { kinds } = filterRows(rows, { ...view, filters, text: "jordan" })
+    expect(Object.fromEntries(kinds)).toEqual({ family: 2, close_friend: 1 })
   })
 
   it("filters to the people with a saved logbook", () => {
     const filters = new Map<FacetKey, Set<string>>([["logbook", new Set(["Has logbook"])]])
     const { matching } = filterRows(rows, { ...view, filters })
     expect(matching.map((row) => row.name)).toEqual(["Casey Delta"])
-  })
-
-  it("counts no one under Has logbook before the saved logbooks are read", () => {
-    const { quickCounts } = filterRows(decodePeople(PAYLOAD), view)
-    expect(quickCounts[QUICK.findIndex((quick) => quick.name === "Has logbook")]).toBe(0)
   })
 
   it("matches text on name, title, company and location", () => {
