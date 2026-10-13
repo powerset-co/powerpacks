@@ -17,6 +17,8 @@ export interface SignalsStatus {
   // Requests answered in the current phase, of `total`.
   done: number
   total: number
+  // People Luna declined to answer: they keep their old signals.
+  refused: number
 }
 
 export async function readSignals(): Promise<SignalsStatus> {

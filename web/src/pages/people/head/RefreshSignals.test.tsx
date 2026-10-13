@@ -14,18 +14,26 @@ const PLAN: SignalsPlan = {
   estimated_seconds: 1,
   checked: "exact",
 }
-const IDLE: SignalsStatus = { status: "idle", message: null, plan: null, error: null, done: 0, total: 0 }
+const IDLE: SignalsStatus = {
+  status: "idle",
+  message: null,
+  plan: null,
+  error: null,
+  done: 0,
+  total: 0,
+  refused: 0,
+}
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
 
-function show(plan = PLAN, people: readonly string[] = ["p:a", "p:b"]) {
+function show(plan = PLAN, people: readonly string[] = ["p:a", "p:b"], refused = 0) {
   let status = IDLE
   const fetch = vi.fn((url: string, init?: RequestInit) => {
     if (init?.method === "POST" && !url.endsWith("/check")) {
-      status = { status: "completed", message: null, plan, error: null, done: 0, total: 0 }
+      status = { ...IDLE, status: "completed", plan, refused }
     }
     return Promise.resolve(new Response(JSON.stringify(url.endsWith("/check") ? plan : status)))
   })
@@ -68,6 +76,16 @@ describe("Refresh signals", () => {
     expect(fetch.mock.calls.at(-1)?.[1]?.body).toBe(JSON.stringify({ people: [] }))
   })
 
+  it("says how many Luna declined once the refresh is done", async () => {
+    show({ ...PLAN, cached: 2, new_requests: 0, estimated_cost_usd: 0 }, [], 1)
+    fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
+    expect(
+      await screen.findByText(
+        "Signals refreshed for 1 person. Luna declined 1 person; they keep their old signals.",
+      ),
+    ).toBeTruthy()
+  })
+
   it("says signals are up to date and starts nothing when no one needs them", async () => {
     const { fetch } = show({ ...PLAN, people: 0, cached: 0, new_requests: 0, estimated_cost_usd: 0 }, [])
     fireEvent.click(screen.getByRole("button", { name: "Refresh signals" }))
@@ -79,10 +97,10 @@ describe("Refresh signals", () => {
 
   it("follows a running refresh with a progress bar", async () => {
     const running: SignalsStatus = {
+      ...IDLE,
       status: "running",
       message: "Reading signals",
       plan: PLAN,
-      error: null,
       done: 3,
       total: 8,
     }

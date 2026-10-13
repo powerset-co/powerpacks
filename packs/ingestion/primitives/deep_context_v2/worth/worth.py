@@ -218,7 +218,8 @@ class Worth(Node):
         for family in todo:
             if family.key not in labelled or luna.refused(calls[share_digest[family.key]]):
                 continue
-            labels: Labels = {**labelled[family.key], **luna.labels(calls[share_digest[family.key]])}
+            labels: Labels = {**labelled[family.key], **luna.labels(calls[share_digest[family.key]]),
+                              "version": luna.REQUEST_VERSION}
             labels_json: str = json.dumps(labels, sort_keys=True)
             if family.match is not None:
                 # Rules 1 and 2: already in the network, so yes; the labels are Luna's all the same.

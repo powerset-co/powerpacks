@@ -42,7 +42,8 @@ NOTABLE_POSITION_RE = re.compile(
     re.IGNORECASE,
 )
 
-Labels = dict[str, str | float]  # predicate -> p; choice -> value, plus <choice>_p; score -> level
+Labels = dict[str, str | float]  # predicate -> p; choice -> value, plus <choice>_p; score -> level;
+# as worth saves them, "version" -> the REQUEST_VERSION that asked
 
 
 @dataclass(frozen=True)

@@ -101,6 +101,23 @@ class SignalsRefreshTests(StoreTests):
         self.assertEqual(self.signals.check(()).people, 1)
         self.assertEqual(self.signals.check(("p:a",)).people, 2)
 
+    def test_a_family_luna_refuses_keeps_its_old_signals_and_share_still_runs(self) -> None:
+        # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b.
+        self.conn.execute(
+            "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
+            "VALUES ('c1', 'yes', 'machine', 'old', ?, 'an-older-version-key', '2026-10-08')",
+            (json.dumps({"relationship_kind": "friend", "relationship_kind_p": 0.8, "is_family": 0.1}),))
+        self.conn.commit()
+        cache = self.root / DECISIONS_CACHE_DIR
+        cache.mkdir(parents=True, exist_ok=True)
+        refusal = {"answers": [{"type": "refusal", "name": "worth"}], "usage": None}
+        decisions.cache_path(cache, self.families[0].digest).write_text(json.dumps(refusal))
+        self._cache(self.families[1])
+        manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
+        self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
+        share = dict(self.conn.execute("SELECT candidate_id, reason FROM share").fetchall())
+        self.assertEqual(share, {"c1": "unsure", "c2": "family"})
+
     def test_paid_refresh_without_confirmation_never_starts(self) -> None:
         plan = self.signals.check(("p:a",))
         self.assertEqual((plan.people, plan.cached, plan.new_requests), (1, 0, 2))

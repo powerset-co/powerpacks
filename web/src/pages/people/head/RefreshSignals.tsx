@@ -91,6 +91,7 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
       error: null,
       done: 0,
       total: 0,
+      refused: 0,
     })
     const ids = [...people]
     setTargets(ids)
@@ -174,7 +175,12 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
               <ProgressBar label="Refresh progress" done={status.done} total={status.total} />
             </div>
           ) : status?.status === "completed" && !failure ? (
-            <p className="m-0 text-ok">Signals refreshed for {plural(status.plan?.people ?? 0, "person")}.</p>
+            <p className="m-0 text-ok">
+              Signals refreshed for {plural((status.plan?.people ?? 0) - status.refused, "person")}.
+              {status.refused
+                ? ` Luna declined ${plural(status.refused, "person")}; they keep their old signals.`
+                : null}
+            </p>
           ) : null}
         </div>
         {failure && (

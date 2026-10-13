@@ -47,6 +47,8 @@ class SignalsStatus:
     # Requests answered in the current phase, of `total`.
     done: int = 0
     total: int = 0
+    # Families Luna declined to answer: they keep their old signals and are asked next time.
+    refused: int = 0
 
 
 class RefreshSignals(Node):
@@ -134,12 +136,13 @@ class PeopleSignals:
                 self._status = replace(self._status, message=message, done=done, total=total)
         node.on_progress = progress
         try:
-            node.run()
+            manifest = node.run()
         except Exception as error:
             with self._lock:
                 self._status = replace(self._status, status="failed", message=None, error=str(error))
         else:
             with self._lock:
-                self._status = replace(self._status, status="completed", message=None)
+                self._status = replace(self._status, status="completed", message=None,
+                                       refused=manifest.counts["refused"])
         finally:
             node.conn.close()
