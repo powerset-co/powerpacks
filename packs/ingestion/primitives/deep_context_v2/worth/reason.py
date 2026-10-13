@@ -38,8 +38,9 @@ EXPLAINS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 def reason(labels: Labels, verdict: str) -> str:
     """"Looks like ..." for what holds, "There's little evidence of ..." for what is absent."""
     toward, away = EXPLAINS[verdict]
-    holds: list[str] = [PHRASES[name][0] for name in toward if float(labels[name]) >= CLEAR_HIGH]
-    absent: list[str] = [PHRASES[name][1] for name in away if float(labels[name]) <= CLEAR_LOW]
+    # A question Luna declined says nothing either way.
+    holds: list[str] = [PHRASES[name][0] for name in toward if name in labels and float(labels[name]) >= CLEAR_HIGH]
+    absent: list[str] = [PHRASES[name][1] for name in away if name in labels and float(labels[name]) <= CLEAR_LOW]
     sentences: list[str] = []
     if holds:
         sentences.append("Looks like " + _joined(holds, " and ") + ".")

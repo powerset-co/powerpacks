@@ -146,7 +146,8 @@ def labels_from_saved(labels: dict[str, Any]) -> Labels:
         choices={name: str(labels[name]) for name in CHOICE_LABELS},
         choice_p={name: float(labels[f"{name}_p"]) for name in CHOICE_LABELS},
         scores={name: float(labels[name]) for name in SCORE_LABELS},
-        probabilities={name: float(labels[name]) for name in NOUL_LABELS},
+        # A yes/no question Luna declined has no label.
+        probabilities={name: float(labels[name]) for name in NOUL_LABELS if name in labels},
         share_call=str(labels["share_call"]),
         share_p=float(labels["share_call_p"]),
     )
@@ -156,11 +157,11 @@ def flag(labels: Labels | None) -> str:
     """The first rule that keeps a worth-yes family home, or ''. A family worth never judged has none."""
     if labels is None:
         return ""
-    if labels.choices["relationship_kind"] == "family" or labels.probabilities["is_family"] >= FLAG_P:
+    if labels.choices["relationship_kind"] == "family" or labels.probabilities.get("is_family", 0.0) >= FLAG_P:
         return FAMILY
     if labels.choices["relationship_kind"] == "romantic_partner":
         return ROMANTIC_PARTNER
-    if labels.probabilities["is_minor"] >= FLAG_P:
+    if labels.probabilities.get("is_minor", 0.0) >= FLAG_P:
         return MINOR
     return ""
 

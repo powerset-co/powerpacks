@@ -1,4 +1,5 @@
-"""Refresh People's signals from saved facts and counts: Worth (Luna's two requests), then Share.
+"""Refresh People's signals from saved facts and counts: Worth (Luna's two requests), the settle rule
+(as Enrich applies it after worth), then Share.
 
 With no one selected it refreshes the families worth would ask anyway: new, or judged under older
 questions. A selection is asked again as well, judged or not. The check never calls OpenAI. A start
@@ -17,15 +18,17 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store
+from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
+from packs.ingestion.primitives.deep_context_v2.enrich.settle import settle
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.share_list import Share
 
 
-# Requests answered per second, for the time estimate: JEV's measured pace; Luna's is measured on
-# the first run.
-REQUESTS_PER_SECOND = 66
+# Requests answered per second, for the time estimate: Luna's measured pace, 1,011 requests in 13 s
+# on 510 families (2026-10-13).
+REQUESTS_PER_SECOND = 75
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,7 @@ class SignalsStatus:
 
 class RefreshSignals(Node):
     name = "signals"
-    reads = tuple(dict.fromkeys((*Worth.reads, *Share.reads)))
+    reads = tuple(dict.fromkeys((*Worth.reads, *Enrich.reads, *Share.reads)))
     writes = (*Worth.writes, *Share.writes)
     cache_only = True
 
@@ -82,6 +85,7 @@ class RefreshSignals(Node):
             raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
         self.worth.on_progress = self.progress
         counts = self.worth.execute(cache_only=self.cache_only)
+        counts["settle_worth_rows"] = settle(self.conn, self.data_root, now_iso())
         self.progress("Updating People", 0, 0)
         Share(self.conn, self.data_root).execute()
         return counts

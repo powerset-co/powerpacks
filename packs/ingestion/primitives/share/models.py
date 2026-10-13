@@ -23,7 +23,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.primitives.share.questions import CHOICE_LABELS, SCORE_LABELS
 
 SHARE_DIR = Path(".powerpacks/share")
 MANIFEST_FILENAME = "manifest.json"
@@ -160,6 +160,6 @@ def label_payload(deterministic: DeterministicLabels, labels: Labels | None) -> 
         cells.update(labels.choices)
         cells.update({f"{name}_p": round(labels.choice_p[name], 3) for name in CHOICE_LABELS})
         cells.update({name: round(labels.scores[name], 2) for name in SCORE_LABELS})
-        cells.update({name: labels.probabilities[name] for name in NOUL_LABELS})
+        cells.update(labels.probabilities)
         cells.update({"share_call": labels.share_call, "share_call_p": labels.share_p})
     return json.dumps(cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

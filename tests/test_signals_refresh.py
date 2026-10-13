@@ -12,6 +12,7 @@ from test_share_v2 import StoreTests
 from test_logbook_people import Handler
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.enrich import settle
 from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.share_list import Share
@@ -102,21 +103,32 @@ class SignalsRefreshTests(StoreTests):
         self.assertEqual(self.signals.check(("p:a",)).people, 2)
 
     def test_a_family_luna_refuses_keeps_its_old_signals_and_share_still_runs(self) -> None:
-        # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b.
+        # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
+        # both are worth yes, so the settle rule leaves them alone.
         self.conn.execute(
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES ('c1', 'yes', 'machine', 'old', ?, 'an-older-version-key', '2026-10-08')",
             (json.dumps({"relationship_kind": "friend", "relationship_kind_p": 0.8, "is_family": 0.1}),))
+        self.conn.executemany("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
+                              "VALUES (?, 'yes', 'human', 'mine', '2026-10-09')", [("c1",), ("c2",)])
         self.conn.commit()
         cache = self.root / DECISIONS_CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
-        refusal = {"answers": [{"type": "refusal", "name": "worth"}], "usage": None}
+        refusal = {"answers": [{"type": "refusal", "name": "relationship_kind"}], "usage": None}
         decisions.cache_path(cache, self.families[0].digest).write_text(json.dumps(refusal))
         self._cache(self.families[1])
         manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
         self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
         share = dict(self.conn.execute("SELECT candidate_id, reason FROM share").fetchall())
         self.assertEqual(share, {"c1": "unsure", "c2": "family"})
+
+    def test_a_refresh_keeps_the_settle_rule(self) -> None:
+        # Luna says p:a is worth yes; with no profile and no messages, settle still makes it no.
+        self._cache(self.families[0])
+        manifest = RefreshSignals(self.conn, self.root, ("p:a",)).run()
+        self.assertEqual(manifest.status, "completed")
+        self.assertEqual(self.conn.execute("SELECT worth, reason FROM current_worth WHERE parent_id = 'p:a'").fetchone()[:],
+                         ("no", settle.REASON))
 
     def test_paid_refresh_without_confirmation_never_starts(self) -> None:
         plan = self.signals.check(("p:a",))
@@ -165,7 +177,9 @@ class SignalsRefreshTests(StoreTests):
         self.assertEqual(self.signals.status()["status"], "completed", self.signals.status())
         self.assertEqual(self.conn.execute("SELECT worth, decided_by FROM current_worth WHERE parent_id = 'p:a'").fetchone()[:], ("no", "human"))
         self.assertEqual(self.conn.execute("SELECT tags, note FROM person_tags WHERE candidate_id = 'c1'").fetchone()[:], ("private", "keep note"))
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth WHERE candidate_id = 'c2'").fetchone()[0], 1)
+        # p:b was not asked: no worth row of its carries Luna's labels.
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth WHERE candidate_id = 'c2' "
+                                           "AND labels_json LIKE '%\"version\"%'").fetchone()[0], 0)
         labels = json.loads(self.conn.execute("SELECT labels_json FROM person_labels WHERE candidate_id = 'c1'").fetchone()[0])
         self.assertEqual((labels["relationship_kind"], labels["share_call"]), ("family", "share"))
         self.assertEqual(self.conn.execute("SELECT reason FROM share WHERE candidate_id = 'c1'").fetchone()[0], "human_private")

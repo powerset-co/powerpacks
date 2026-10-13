@@ -27,14 +27,13 @@ from pathlib import Path
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.owner import owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import ParentRow, append_parent_rows
-from packs.ingestion.primitives.deep_context_v2.db.queries_worth import WorthRow
 from packs.ingestion.primitives.deep_context_v2.db.schema import Origin
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich import judge, proposals, research, settle
 from packs.ingestion.primitives.deep_context_v2.enrich.judge import JudgePlan, JudgeTask
 from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchSubject
 from packs.ingestion.primitives.deep_context_v2.enrich.pre_match import PreMatch, pre_match_families
-from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, judgment_fingerprint, load_families
+from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, judgment_fingerprint
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
 from packs.ingestion.primitives.deep_context_v2.node import Node
@@ -115,11 +114,7 @@ class Enrich(Node):
                                                    on_progress=self.progress)).items():
             counts[key] = value
         # Step 5: settle, on the families as the judge left them.
-        families: list[Family] = load_families(self.conn)
-        confirmed: Profiles = load_profiles(self.data_root, settle.confirmed_urls(families), fetch=False)
-        rows: list[WorthRow] = settle.settle_rows(families, confirmed, now)
-        queries_worth.append_worth(self.conn, rows)
-        counts["settle_worth_rows"] = len(rows)
+        counts["settle_worth_rows"] = settle.settle(self.conn, self.data_root, now)
         return counts
 
     def estimate(self) -> dict[str, object]:

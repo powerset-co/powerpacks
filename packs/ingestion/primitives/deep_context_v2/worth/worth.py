@@ -49,8 +49,12 @@ from packs.ingestion.primitives.deep_context_v2.worth.pre_match import pre_match
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 
 DECISIONS_CACHE_DIR = Path("deep-context") / "decisions"  # both requests' answers, by request digest
-# Request 2 before request 1 is answered: its measured mean on one store (2026-10-13).
-SHARE_REQUEST_TOKENS = 500
+# What OpenAI bills beyond a request's own text, measured on 510 families (2026-10-13): 103-108
+# tokens per question of request 1, and 33 on request 2, which before request 1 is answered is
+# priced at its measured size (617 tokens, median).
+LABELS_TOKENS_PER_QUESTION = 107
+SHARE_EXTRA_TOKENS = 33
+SHARE_REQUEST_TOKENS = 650
 LABELS_PHASE = "Reading signals"
 SHARE_PHASE = "Deciding who to share"
 PRE_MATCHED_REASON = "Already in the network: the name matches one LinkedIn connection."
@@ -152,8 +156,8 @@ class Worth(Node):
 
     def estimate(self) -> dict[str, int | float | str]:
         """The dry run: count families, the free yeses and Luna's requests, and price the requests not
-        yet cached. Request 2 is known only once request 1 is answered; before that it is priced at
-        its measured size. No call."""
+        yet cached as OpenAI bills them. Request 2 is known only once request 1 is answered; before
+        that it is priced at its measured size. No call."""
         families: list[Family] = self.families()
         pending: list[Family] = self.pending(families)
         fresh: int = 0
@@ -173,7 +177,8 @@ class Worth(Node):
                     notable += 1
             first = cache_path(self.cache_dir, family.digest)
             if not first.exists():
-                tokens += input_tokens(family.request) + SHARE_REQUEST_TOKENS
+                tokens += (input_tokens(family.request) + LABELS_TOKENS_PER_QUESTION * len(family.request["questions"])
+                           + SHARE_REQUEST_TOKENS)
                 continue
             cached += 1
             answers: list[Answer] = json.loads(first.read_text(encoding="utf-8"))["answers"]
@@ -183,7 +188,7 @@ class Worth(Node):
             if cache_path(self.cache_dir, request_digest(luna.REQUEST_VERSION, share)).exists():
                 cached += 1
             else:
-                tokens += input_tokens(share)
+                tokens += input_tokens(share) + SHARE_EXTRA_TOKENS
         return {
             "families": len(families), "members": members, "fresh": fresh,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,

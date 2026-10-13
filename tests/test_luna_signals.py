@@ -87,9 +87,11 @@ class LabelsTests(unittest.TestCase):
         self.assertEqual(luna.labels(ANSWERS), {"is_recruiter": 0.91, "relationship_kind": "colleague",
                                                 "relationship_kind_p": 0.82, "warmth": 2.44})
 
-    def test_a_refusal_leaves_the_family_unlabelled(self) -> None:
-        self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "is_minor"}]))
-        self.assertFalse(luna.refused(ANSWERS))
+    def test_a_refused_choice_leaves_the_family_unlabelled_and_a_refused_yes_no_only_its_label(self) -> None:
+        self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "relationship_kind"}]))
+        declined = [*ANSWERS, {"type": "refusal", "name": "is_minor"}]
+        self.assertFalse(luna.refused(declined))
+        self.assertNotIn("is_minor", luna.labels(declined))
 
     def test_the_share_request_reads_each_label_with_its_confidence(self) -> None:
         request = luna.share_request(luna.labels(ANSWERS))
@@ -134,6 +136,11 @@ class ShareRuleTests(unittest.TestCase):
         self.assertEqual(decided(saved(share_call="keep_private"), frozenset({"share"})), ("yes", "human_share"))
         self.assertEqual(decided(saved(), frozenset({"private"})), ("no", "human_private"))
 
+    def test_a_declined_yes_no_question_raises_no_flag(self) -> None:
+        cells = saved()
+        del cells["is_minor"]
+        self.assertEqual(decided(cells), ("yes", "would_vouch"))
+
     def test_worth_then_the_flags_keep_people_home(self) -> None:
         self.assertEqual(decided(saved(), worth="no"), ("no", "worth_no"))
         self.assertEqual(decided(saved(), worth="maybe"), ("no", "worth_maybe"))
@@ -145,7 +152,6 @@ class ShareRuleTests(unittest.TestCase):
     def test_lunas_call_decides_the_rest_and_a_weak_call_asks_you(self) -> None:
         self.assertEqual(decided(saved()), ("yes", "would_vouch"))
         self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.8)), ("no", "not_professional"))
-        self.assertEqual(decided(saved(share_call="ask", share_call_p=0.9)), ("confirm", "unsure"))
         self.assertEqual(decided(saved(share_call_p=0.55)), ("confirm", "unsure"))
         self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.55)), ("confirm", "unsure"))
 

@@ -141,25 +141,25 @@ NOUL_QUESTIONS: dict[str, str] = {
 }
 
 # Request 2: from request 1's answers alone, who leaves the laptop. share_decision (labels.py)
-# reads the call: share is Sharing, keep_private is Not sharing, ask is Needs confirmation.
+# reads the call: share is Sharing, keep_private is Not sharing, and a weak call of either asks the
+# owner. There is no ask option: offered one, Luna took it for most business contacts (2026-10-13).
 CALL_SHARE = "share"
-CALL_ASK = "ask"
 CALL_KEEP_PRIVATE = "keep_private"
 SHARE_QUESTION: dict[str, Any] = {
     "type": "choice",
     "name": "share_call",
-    "instructions": "These are signals about one contact of the owner's, each with its confidence. Should the "
-                    "owner share this contact with their professional network: would the owner introduce them, "
-                    "or vouch for them, at work?",
+    "instructions": "These are signals about one contact of the owner's, each with its confidence. Does this "
+                    "contact belong in the professional network the owner shares with teammates, or is it one "
+                    "of the contacts to keep private?",
     "choices": [
-        {"value": CALL_SHARE, "description": "A real professional relationship the owner would vouch for: a "
-                                          "colleague, client, collaborator, investor, founder, or a friend with "
-                                          "real professional standing."},
-        {"value": CALL_ASK, "description": "Mixed or thin signals: ask the owner."},
-        {"value": CALL_KEEP_PRIVATE, "description": "Not a professional contact: the owner's dentist, doctor, lawyer, "
+        {"value": CALL_SHARE, "description": "Someone the owner knows through work, school or a real "
+                                          "professional tie: colleagues and classmates, clients, partners, "
+                                          "investors, founders, people they interviewed or hired with, and friends "
+                                          "with a work side or real professional standing."},
+        {"value": CALL_KEEP_PRIVATE, "description": "A contact to keep private: the owner's dentist, doctor, lawyer, "
                                                  "accountant or lender; HR, benefits, payroll or IT met as an "
-                                                 "employee; support and billing desks, landlords and vendors; "
-                                                 "automated senders, strangers and cold pitches."},
+                                                 "employee; support and billing desks, landlords and vendors' account "
+                                                 "managers; automated senders, strangers and cold pitches."},
     ],
 }
 

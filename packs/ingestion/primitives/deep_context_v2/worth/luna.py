@@ -25,7 +25,9 @@ from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
 from packs.ingestion.primitives.deep_context_v2.decisions import MODEL, Answer
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
-from packs.ingestion.primitives.share.questions import EVIDENCE_POLICY, SHARE_QUESTION, label_questions
+from packs.ingestion.primitives.share.questions import (
+    CHOICE_LABELS, EVIDENCE_POLICY, SCORE_LABELS, SHARE_QUESTION, label_questions,
+)
 
 # Both requests' questions: a bump asks every family again.
 REQUEST_VERSION = "deep-context-luna-decisions-20261013"
@@ -126,16 +128,22 @@ def build_request(facts: SynthesizedFacts, channels: ChannelSummary, owner: Owne
 
 
 def refused(answers: list[Answer]) -> bool:
-    """A refusal leaves the family unlabelled: it stays pending and is asked again next run."""
-    return any(answer["type"] == "refusal" for answer in answers)
+    """A refused choice or score leaves the family unlabelled: it stays pending and is asked again
+    next run. A refused yes/no question only leaves that label out (Luna declines is_minor for some)."""
+    asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
+    asked.update(question["name"] for question in WORTH_QUESTIONS if question["type"] == "choice")
+    asked.add(SHARE_QUESTION["name"])
+    return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)
 
 
 def labels(answers: list[Answer]) -> Labels:
     """predicate -> its probability; choice -> the chosen value, and its probability as <name>_p;
-    score -> the expected level (2.7, not 3)."""
+    score -> the expected level (2.7, not 3). A refused yes/no question has no label."""
     result: Labels = {}
     for answer in answers:
         name: str = answer["name"]
+        if answer["type"] == "refusal":
+            continue
         if answer["type"] == "predicate":
             result[name] = answer["probability"]
         elif answer["type"] == "score":
