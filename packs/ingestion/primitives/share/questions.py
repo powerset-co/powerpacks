@@ -154,12 +154,13 @@ SHARE_QUESTION: dict[str, Any] = {
     "choices": [
         {"value": CALL_SHARE, "description": "Someone the owner knows through work, school or a real "
                                           "professional tie: colleagues and classmates, clients, partners, "
-                                          "investors, founders, people they interviewed or hired with, and friends "
+                                          "investors, founders, people they interviewed or hired with, recruiters "
+                                          "(even one who only reached out or scheduled an interview), and friends "
                                           "with a work side or real professional standing."},
         {"value": CALL_KEEP_PRIVATE, "description": "A contact to keep private: the owner's dentist, doctor, lawyer, "
                                                  "accountant or lender; HR, benefits, payroll or IT met as an "
                                                  "employee; support and billing desks, landlords and vendors' account "
-                                                 "managers; automated senders, strangers and cold pitches."},
+                                                 "managers; automated senders, strangers and cold sales pitches."},
     ],
 }
 
