@@ -68,6 +68,7 @@
       <p class="detail" id="detail"></p>
       <ol class="log" id="log" aria-label="Setup output"></ol>
       <button id="retry" type="button" hidden>Try again</button>
+      <button id="back" type="button" hidden>Back to app</button>
     </div>
   </main>
 <script>
@@ -90,8 +91,14 @@
   }
 
   retry.addEventListener("click", () => tauri.core.invoke("boot_retry"))
-  tauri.event.listen("boot://state", (event) => render(event.payload))
-  tauri.core.invoke("boot_state").then(render)
+  if (new URLSearchParams(location.search).has("preview")) {
+    const back = document.getElementById("back")
+    back.hidden = false
+    back.addEventListener("click", () => location.assign("http://127.0.0.1:8765/agent"))
+  } else {
+    tauri.event.listen("boot://state", (event) => render(event.payload))
+    tauri.core.invoke("boot_state").then(render)
+  }
 </script>
 </body>
 </html>

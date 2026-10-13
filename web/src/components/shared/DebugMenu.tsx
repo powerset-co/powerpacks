@@ -6,7 +6,7 @@ import { useDismiss } from "@/hooks/useDismiss"
 import { fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
 import { useFeatures, useUpdateFeatures } from "@/lib/features"
-import { isDesktop } from "@/lib/desktop"
+import { desktopPlatform, isDesktop } from "@/lib/desktop"
 
 const DEBUG_KEY = ["desktop-debug"] as const
 
@@ -95,6 +95,18 @@ function DesktopDebugMenu() {
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            role="menuitem"
+            className={ITEM}
+            onClick={() =>
+              window.location.assign(
+                `${desktopPlatform() === "windows" ? "http://tauri.localhost" : "tauri://localhost"}/index.html?preview`,
+              )
+            }
+          >
+            Loading screen
+          </button>
           <div className="my-1.5 border-t border-line" />
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
             Skip setup on launch
