@@ -22,6 +22,7 @@ export {
   ImportIcon,
   PinIcon,
   PlusIcon,
+  RefreshIcon,
   SparkIcon,
   WarningIcon,
 } from "./icons/actions"
@@ -30,6 +31,7 @@ export { initials } from "./initials"
 export { Kbd } from "./Kbd"
 export { SearchField } from "./SearchField"
 export { PowersetMark } from "./PowersetMark"
+export { ProgressBar } from "./ProgressBar"
 export { Page, PageHeader } from "./PageHeader"
 export { Select } from "./Select"
 export { Sidebar } from "./Sidebar"

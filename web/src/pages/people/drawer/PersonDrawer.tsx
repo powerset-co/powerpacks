@@ -10,6 +10,7 @@ import "../styles/drawer.css"
 import { DecisionSection } from "./DecisionSection"
 import { DetailSections } from "./DetailSections"
 import { DetailFailed, DetailLoading } from "./DetailStatus"
+import { RefreshSignals } from "../head/RefreshSignals"
 import { DrawerActions, LogbookButton } from "./DrawerActions"
 import { DrawerHeader } from "./DrawerHeader"
 import type { SectionState } from "./sections"
@@ -51,15 +52,18 @@ export function PersonDrawer(props: PersonDrawerProps) {
             row={row}
             detail={ready}
             action={
-              <LogbookButton
-                row={row}
-                disabled={saving || swap.leaving || row.in_progress}
-                building={building}
-                onBuild={onLogbook}
-                onView={() => {
-                  if (row.logbook) onView([row.logbook])
-                }}
-              />
+              <>
+                <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
+                <LogbookButton
+                  row={row}
+                  disabled={saving || swap.leaving || row.in_progress}
+                  building={building}
+                  onBuild={onLogbook}
+                  onView={() => {
+                    if (row.logbook) onView([row.logbook])
+                  }}
+                />
+              </>
             }
             onClose={onClose}
           />

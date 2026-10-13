@@ -1,3 +1,4 @@
+import { ProgressBar } from "@/components/shared"
 import type { LastUpload, UploadStatus } from "@/lib/api/upload"
 import { countOf } from "@/lib/copy"
 import { finishedAt, UPLOAD } from "@/lib/people/copy"
@@ -24,23 +25,7 @@ export function UploadProgress({ status, reconnecting }: UploadProgressProps) {
           </span>
         )}
       </div>
-      <div
-        role="progressbar"
-        aria-label={UPLOAD.progress}
-        aria-valuemin={0}
-        aria-valuemax={counting?.total}
-        aria-valuenow={counting ? done : undefined}
-        className="h-1.5 overflow-hidden rounded-full bg-secondary"
-      >
-        {counting ? (
-          <div
-            className="h-full origin-left bg-primary transition-transform duration-med ease-out"
-            style={{ transform: `scaleX(${done / counting.total})` }}
-          />
-        ) : (
-          <div className="h-full w-full -translate-x-full animate-[shimmer_var(--t-shimmer)_var(--ease-in)_infinite] bg-[linear-gradient(90deg,transparent,var(--primary),transparent)] motion-reduce:translate-x-0 motion-reduce:opacity-40" />
-        )}
-      </div>
+      <ProgressBar label={UPLOAD.progress} done={done} total={counting?.total ?? 0} />
     </div>
   )
 }

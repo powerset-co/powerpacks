@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
-import { Spinner } from "@/components/shared"
+import { ProgressBar, RefreshIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -21,21 +21,32 @@ import {
   type SignalsPlan,
   type SignalsStatus,
 } from "@/lib/api/signals"
+import { countOf, plural } from "@/lib/copy"
 
 import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
 
 const SIGNALS_KEY = ["people-signals"]
+const TITLE = "Refresh signals"
 
-/** Refresh the exact selection, or every person, from saved dossiers and counts. */
-export function RefreshSignals({
-  people,
-  selected,
-  onDone,
-}: {
+// The plan's estimate in words: "under a minute", "about 4 minutes".
+function duration(seconds: number): string {
+  if (seconds < 60) return "under a minute"
+  const minutes = Math.round(seconds / 60)
+  return minutes === 1 ? "about a minute" : `about ${minutes} minutes`
+}
+
+interface RefreshSignalsProps {
+  // Empty: whoever needs it (new people, or signals from older questions). Else these people too,
+  // asked again even when their signals are current.
   people: readonly string[]
-  selected: boolean
+  // The drawer's round icon beside Close, instead of the header's button.
+  icon?: boolean
   onDone: () => void
-}) {
+}
+
+/** Refresh signals from saved facts: says how many people and about how long, asks before any paid
+ *  request, then follows the run with a progress bar. */
+export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsProps) {
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [checking, setChecking] = useState(false)
@@ -57,12 +68,13 @@ export function RefreshSignals({
     staleTime: Infinity,
     retry: false,
   })
-  const running = query.data?.status === "running"
+  const status = query.data
+  const running = status?.status === "running"
   const start = async (ids: readonly string[], checked?: string) => {
-    const status = await refreshSignals(ids, checked)
-    client.setQueryData(SIGNALS_KEY, status)
+    const next = await refreshSignals(ids, checked)
+    client.setQueryData(SIGNALS_KEY, next)
     setPlan(null)
-    if (status.status === "completed") {
+    if (next.status === "completed") {
       void client.invalidateQueries({ queryKey: PEOPLE_QUERY_KEY })
       onDone()
     }
@@ -77,13 +89,16 @@ export function RefreshSignals({
       message: null,
       plan: null,
       error: null,
+      done: 0,
+      total: 0,
     })
     const ids = [...people]
     setTargets(ids)
     try {
       await client.cancelQueries({ queryKey: SIGNALS_KEY })
       const next = await checkSignals(ids)
-      if (next.new_requests === 0) await start(ids)
+      // Nothing to pay for starts at once; nobody to refresh starts nothing.
+      if (next.new_requests === 0 && next.people > 0) await start(ids)
       else setPlan(next)
     } catch (error) {
       setError(errorText(error))
@@ -104,49 +119,62 @@ export function RefreshSignals({
       setChecking(false)
     }
   }
-  const failure = error ?? query.error?.message ?? (query.data?.status === "failed" ? query.data.error : null)
+  const failure = error ?? query.error?.message ?? (status?.status === "failed" ? status.error : null)
+  const shown = plan ?? status?.plan ?? null
+  const openOrCheck = () => (running ? setOpen(true) : void check())
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button
-          disabled={checking || !people.length}
-          title={
-            selected
-              ? `Refresh signals for ${people.length} selected people`
-              : `Refresh signals for all ${people.length} people`
-          }
-          onClick={() => (running ? setOpen(true) : void check())}
-        >
-          {running ? "Refreshing signals…" : "Refresh signals"}
-          {running && <Spinner />}
-        </Button>
+        {icon ? (
+          <button
+            type="button"
+            className="drawer-icon"
+            aria-label={TITLE}
+            title={TITLE}
+            disabled={checking}
+            onClick={openOrCheck}
+          >
+            {running ? <Spinner /> : <RefreshIcon className="size-[15px]" />}
+          </button>
+        ) : (
+          <Button
+            disabled={checking}
+            title={people.length ? `${TITLE} for ${people.length.toLocaleString()} selected` : undefined}
+            onClick={openOrCheck}
+          >
+            {running ? "Refreshing signals…" : TITLE}
+            {running && <Spinner />}
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="gap-5 p-6" onKeyDown={(event) => event.stopPropagation()}>
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Refresh signals</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">{TITLE}</DialogTitle>
           <DialogDescription className="text-[13px]">
-            Update relationship, warmth and labels for{" "}
-            {selected
-              ? `${targets.length.toLocaleString()} selected`
-              : `all ${targets.length.toLocaleString()}`}{" "}
-            people.
+            {shown
+              ? `${plural(shown.people, "person")} · ${duration(shown.estimated_seconds)}`
+              : "Checking saved signals…"}
           </DialogDescription>
         </DialogHeader>
         <div role="status" className="text-[13px]">
           {checking ? (
-            <>
-              <Spinner /> Checking saved signals…
-            </>
-          ) : plan ? (
-            <p className="m-0 text-xs text-muted-foreground">Processed by TypeSafe.</p>
+            <Spinner />
+          ) : plan?.people === 0 ? (
+            <p className="m-0">Signals are up to date.</p>
           ) : running ? (
-            <>
-              <Spinner /> {query.data?.message}
-            </>
-          ) : query.data?.status === "completed" && !failure ? (
-            <p className="m-0 text-ok">
-              Signals refreshed for {query.data.plan?.people.toLocaleString()} people.
-            </p>
+            <div className="grid gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <span>{status.message}</span>
+                {status.total ? (
+                  <span className="tabular-nums text-muted-foreground">
+                    {countOf(status.done, status.total, "request")}
+                  </span>
+                ) : null}
+              </div>
+              <ProgressBar label="Refresh progress" done={status.done} total={status.total} />
+            </div>
+          ) : status?.status === "completed" && !failure ? (
+            <p className="m-0 text-ok">Signals refreshed for {plural(status.plan?.people ?? 0, "person")}.</p>
           ) : null}
         </div>
         {failure && (
@@ -158,7 +186,7 @@ export function RefreshSignals({
           <DialogClose asChild>
             <Button variant="ghost">Close</Button>
           </DialogClose>
-          {plan && (
+          {plan && plan.new_requests > 0 && (
             <Button
               variant="primary"
               disabled={checking}

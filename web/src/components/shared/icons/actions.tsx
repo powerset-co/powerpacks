@@ -82,6 +82,16 @@ export function ImportIcon(props: IconProps) {
   )
 }
 
+/** Refresh: a circling arrow. */
+export function RefreshIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v5h-5" />
+    </svg>
+  )
+}
+
 /** A person's logbook: an open book. */
 export function BookIcon(props: IconProps) {
   return (

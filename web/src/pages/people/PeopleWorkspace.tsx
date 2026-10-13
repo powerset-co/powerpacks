@@ -199,11 +199,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
         <>
           <PageHeader title="People" data-head>
             <div className="head-share">
-              <RefreshSignals
-                people={selection.selected.size ? [...selection.selected] : rows.map((row) => row.parent_id)}
-                selected={selection.selected.size > 0}
-                onDone={refresh}
-              />
+              <RefreshSignals people={[...selection.selected]} onDone={refresh} />
               <ShareUpload onToast={(message) => decisions.showToast({ message })} />
             </div>
           </PageHeader>

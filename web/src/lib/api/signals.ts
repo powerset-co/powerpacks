@@ -5,6 +5,7 @@ export interface SignalsPlan {
   cached: number
   new_requests: number
   estimated_cost_usd: number
+  estimated_seconds: number
   checked: string
 }
 
@@ -13,6 +14,9 @@ export interface SignalsStatus {
   message: string | null
   plan: SignalsPlan | null
   error: string | null
+  // Requests answered in the current phase, of `total`.
+  done: number
+  total: number
 }
 
 export async function readSignals(): Promise<SignalsStatus> {
