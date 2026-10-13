@@ -24,6 +24,7 @@ export TYPESAFE_API_KEY=""
 exec "$UV_BIN" run --project . python -m unittest \
   tests.test_bootstrap \
   tests.test_installed_skill_context \
+  tests.test_gtm_discover \
   tests.test_skill_spec \
   tests.test_install_status \
   tests.test_install_onboard \

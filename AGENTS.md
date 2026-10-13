@@ -58,6 +58,7 @@ Paths below are relative to the installed checkout.
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
+| Combined warm+cold GTM prospects or exact-target introduction paths | `packs/gtm/skills/gtm/SKILL.md` |
 | People search, job description, shortlist, named person or dossier lookup | `packs/search/skills/search/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |

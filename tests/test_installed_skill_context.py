@@ -46,6 +46,8 @@ class InstalledSkillContextTests(unittest.TestCase):
                             installed = skills / name / source.name
                             self.assertFalse(installed.is_symlink())
                             self.assertEqual(installed.read_bytes(), source.read_bytes())
+                self.assertTrue((skills / "gtm/SKILL.md").exists())
+                self.assertIn(f"{ROOT}/AGENTS.md", (skills / "gtm/SKILL.md").read_text())
                 self.assertTrue((skills / "powerpacks-doctor/SKILL.md").exists())
                 self.assertFalse((skills / "powerpacks-doctor/powerpacks").exists())
                 self.assertFalse((home / ".codex/powerpacks/packs").exists())
