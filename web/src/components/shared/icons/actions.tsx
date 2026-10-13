@@ -102,31 +102,12 @@ export function BookIcon(props: IconProps) {
   )
 }
 
-/** A preflight item that still needs something: a warning triangle. */
+/** Something still to connect: a warning triangle. */
 export function WarningIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>
       <path d="M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
       <path d="M12 9.5v4M12 17h.01" />
-    </svg>
-  )
-}
-
-/** Setup's preflight browser: a window with its address bar. */
-export function BrowserIcon(props: IconProps) {
-  return (
-    <svg {...STROKED} {...props}>
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <path d="M3 9h18M7 6.5h.01M10 6.5h.01" />
-    </svg>
-  )
-}
-
-/** Setup's preflight Google Cloud CLI: a cloud. */
-export function CloudIcon(props: IconProps) {
-  return (
-    <svg {...STROKED} {...props}>
-      <path d="M7 18a4 4 0 0 1-.6-7.96A6 6 0 0 1 18 9.5a4.25 4.25 0 0 1-.5 8.5Z" />
     </svg>
   )
 }

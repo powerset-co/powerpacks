@@ -137,9 +137,7 @@ fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> 
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Answer {
-    /// The Gmail account to add.
-    pub gmail_email: Option<String>,
-    /// The user's own LinkedIn profile, when the import could not tell whose network it is.
+    /// The user's own LinkedIn profile, when setup cannot tell whose network it is.
     pub linkedin_url: Option<String>,
 }
 
@@ -192,12 +190,6 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
         // Setup's owner step looks the profile up once its credentials are in (pipeline.py).
         onboard.args(["--linkedin-url", url.trim()]);
     }
-    if let Some(email) = answer.gmail_email {
-        if !email.contains('@') {
-            return Err("Enter a Gmail address.".into());
-        }
-        onboard.args(["--gmail-email", email.trim()]);
-    }
 
     let log = root.join(LOG);
     fs::create_dir_all(log.parent().expect("log has a parent"))
@@ -224,7 +216,6 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     });
     Ok(())
 }
-
 
 /// Whether this app may read Messages (Full Disk Access). Each check runs in a fresh child
 /// process: macOS answers a process once, so only a new one sees a permission granted since.
@@ -255,7 +246,6 @@ mod tests {
         fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
         let answer = |url: &str| Answer {
             linkedin_url: Some(url.into()),
-            gmail_email: None,
         };
         assert!(start(&root, answer("https://example.com/jordan")).is_err());
         assert!(!root.join("setup-args").exists());

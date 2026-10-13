@@ -40,19 +40,12 @@ export function connectSource(source: ConnectSource, emails?: string[]): Promise
 
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */
 export interface SetupAnswer {
-  gmailEmail?: string
   linkedinUrl?: string
 }
 
 /** Resumes setup in the desktop app, which runs it instead of an agent. */
 export async function continueSetup(answer: SetupAnswer = {}): Promise<void> {
   await invoke("onboard_continue", { answer })
-}
-
-/** Skip a source setup stopped at (WhatsApp at its QR) for the rest of this setup; the server
- *  stops the waiting run and saves the skip, and setup resumes with `continueSetup`. */
-export function skipSource(source: "whatsapp"): Promise<void> {
-  return installAction("skip", { source })
 }
 
 /** Bring the app forward after a sign-in that had to happen in the browser. */

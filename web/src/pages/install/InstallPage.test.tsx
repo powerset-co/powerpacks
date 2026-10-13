@@ -550,113 +550,31 @@ describe("installation progress", () => {
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 
-  it.each(["gmail.which_accounts", "gmail.connect.failed"])(
-    "lets the user choose the Gmail mailbox at %s",
-    async (event) => {
-      const invoke = vi.fn(() => Promise.resolve(null))
-      vi.stubGlobal("__TAURI__", {
-        core: { invoke },
-        event: { listen: () => Promise.resolve(() => undefined) },
-      })
-      const choosing = event === "gmail.which_accounts"
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(() =>
-          Promise.resolve(
-            new Response(
-              JSON.stringify({
-                ...INSTALL,
-                step: "gmail_login",
-                status: choosing ? "waiting" : "failed",
-                event,
-                installer_pid: 0,
-                account_email: "powerset@example.com",
-                action: { kind: choosing ? "gmail" : "error" },
-              }),
-            ),
-          ),
-        ),
-      )
-      mount()
-      const input = await screen.findByLabelText("Gmail account")
-      expect(input).toHaveProperty("value", choosing ? "powerset@example.com" : "")
-      if (!choosing) {
-        fireEvent.click(screen.getByRole("button", { name: "Retry current account" }))
-        await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
-        await waitFor(() => expect(input).toHaveProperty("disabled", false))
-      }
-      fireEvent.change(input, { target: { value: "mailbox@gmail.com" } })
-      fireEvent.click(screen.getByRole("button", { name: "Continue" }))
-      await waitFor(() =>
-        expect(invoke).toHaveBeenCalledWith("onboard_continue", {
-          answer: { gmailEmail: "mailbox@gmail.com" },
-        }),
-      )
-    },
-  )
-
-  it("waits for live Gmail authorization and only offers Continue when setup hands back control", async () => {
+  it("in the desktop app, a failed step offers Try again", async () => {
     const invoke = vi.fn(() => Promise.resolve(null))
     vi.stubGlobal("__TAURI__", {
       core: { invoke },
       event: { listen: () => Promise.resolve(() => undefined) },
     })
-    let status = {
-      ...INSTALL,
-      step: "gmail_login",
-      status: "waiting",
-      event: "gmail.connect.waiting",
-      installer_pid: 12345,
-      message: "Connect Gmail in your browser",
-      action: { kind: "gmail" },
-    }
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
-    )
-    const { client } = mount()
-    await screen.findByText("Connect Gmail in your browser")
-    expect(screen.queryByRole("button", { name: "Continue setup" })).toBeNull()
-    expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
-
-    status = { ...status, installer_pid: 0 }
-    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    fireEvent.click(await screen.findByRole("button", { name: "Continue setup" }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
-  })
-
-  it("in the desktop app, offers to skip WhatsApp at its QR and resumes setup without it", async () => {
-    const invoke = vi.fn(() => Promise.resolve(null))
-    vi.stubGlobal("__TAURI__", {
-      core: { invoke },
-      event: { listen: () => Promise.resolve(() => undefined) },
-    })
-    const status: InstallStatus = {
-      ...INSTALL,
-      plan: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "deep_context"],
-      step: "whatsapp_login",
-      status: "waiting",
-      message: "Connect WhatsApp",
-      action: { kind: "qr", qr_url: "/api/install/qr?t=1" },
-      steps: {
-        whatsapp_tools: { status: "completed", message: "" },
-        whatsapp_login: { status: "waiting", message: "" },
-      },
-    }
-    const fetch = vi.fn((url: string) =>
-      Promise.resolve(
-        new Response(JSON.stringify(url.endsWith("/api/install/skip") ? { status: "skipped" } : status)),
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "gmail_login",
+              status: "failed",
+              event: "gmail.connect.failed",
+              installer_pid: 0,
+              action: { kind: "error" },
+            }),
+          ),
+        ),
       ),
     )
-    vi.stubGlobal("fetch", fetch)
     mount()
-    fireEvent.click(await screen.findByRole("button", { name: "Skip WhatsApp for now" }))
-    await waitFor(() =>
-      expect(fetch).toHaveBeenCalledWith(
-        "/api/install/skip",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ source: "whatsapp" }) }),
-      ),
-    )
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
   })
 })

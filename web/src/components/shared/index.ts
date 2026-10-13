@@ -18,8 +18,6 @@ export {
   CopyIcon,
   FlagIcon,
   HiveIcon,
-  BrowserIcon,
-  CloudIcon,
   ImportIcon,
   PinIcon,
   PlusIcon,

@@ -16,6 +16,8 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
+  2026-10-13: under the desktop app, setup never asks which Gmail account (the Connect screen
+      connects it) and WhatsApp has no skip: their words are gone.
   2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`); the page
       counts its tasks ("3 of 7 tasks completed") where the ring was.
   2026-10-09: under the desktop app (POWERPACKS_DESKTOP=1) no agent reads the page, so the lines
@@ -103,7 +105,6 @@ PAGE = {
     "qr.loading": "Getting your QR code…",
     "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
     "qr.alt": "Scan this QR code to link WhatsApp",
-    "qr.skip": "Skip WhatsApp for now",
     "running.elapsed": "{elapsed} so far",
     "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",
     "review.offer.many": "{count} LinkedIn matches need a quick look when you have time.",
@@ -307,12 +308,11 @@ DESKTOP_LINES = {
     "account.login_failed": "Powerset sign-in did not finish. Try again to reopen the sign-in page.",
     "credentials.hosted_off": "Hosted search isn't enabled for {email} yet, so local setup continues.",
     "account.error": "Setup could not finish. Check the installation log, then try again.",
-    "gmail.which_accounts": "Which Gmail account should setup add?",
     "tools.needs_password": "Your Mac password is needed to prepare import tools.",
     "gmail.app.stopped": "Gmail setup stopped in Google Cloud. Try again to pick up from here.",
     "imessage.unavailable": "Messages could not be read on this Mac.",
-    "whatsapp.blocked": "WhatsApp can't link right now. Skip it for now, or try again.",
-    "whatsapp.failed": "WhatsApp could not be linked. Skip it for now, or try again.",
+    "whatsapp.blocked": "WhatsApp can't link right now. Try again, or set up without it.",
+    "whatsapp.failed": "WhatsApp could not be linked. Try again, or set up without it.",
     "linkedin.done.stalled": "LinkedIn stopped sending connections after {read:,} of {total:,}, "
                              "so setup stopped to keep your account safe.",
     "linkedin.done.export_requested": "LinkedIn stopped sending connections after {read:,} of {total:,}, so setup "
@@ -325,11 +325,11 @@ DESKTOP_NOTES = {
     "credentials.not_provisioned": "Ask Powerset to finish enabling search for this account, then continue setup.",
     "network.unconfirmed": "Setup continues with your contacts.",
     "network.not_searchable": "Powerset is still preparing them; setup continues with your contacts.",
-    "gmail.connect.waiting": "Finish connecting Gmail in your browser; setup continues here.",
+    "gmail.connect.waiting": "Finish connecting Gmail in your browser; Powerpacks continues here.",
     "imessage.permission": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into "
-                           "Full Disk Access and turn it on; setup continues on its own.",
-    "whatsapp.qr": "Scan the code with WhatsApp; setup continues on its own. Or skip WhatsApp for now.",
-    "whatsapp.qr.refreshed": "Scan the code with WhatsApp; setup continues on its own. Or skip WhatsApp for now.",
+                           "Full Disk Access and turn it on; Powerpacks continues on its own.",
+    "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own.",
+    "whatsapp.qr.refreshed": "Scan the code with WhatsApp; Powerpacks continues on its own.",
 }
 DESKTOP_PAGE = {"failed.note": "Your progress is saved. Try again picks up from this step."}
 

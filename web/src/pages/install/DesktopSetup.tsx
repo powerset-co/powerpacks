@@ -2,52 +2,18 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import {
-  continueSetup,
-  focusApp,
-  messagesReadable,
-  openExternal,
-  skipSource,
-  type SetupAnswer,
-} from "@/lib/api/install"
+import { continueSetup, focusApp, openExternal, type SetupAnswer } from "@/lib/api/install"
 import type { InstallStatus } from "@/types/install"
 
 // The waits setup stops at until the user resumes it; the others finish on their own.
-const STOPPED = new Set(["error", "resume", "details", "gmail"])
-// The WhatsApp steps: stopped at any of them, setup can go on without WhatsApp
-// (packs/powerset/primitives/install/controller.py SKIPPABLE).
-const WHATSAPP_STEPS = new Set(["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"])
-
-/** Every sign-in happens in a browser: Powerset's in the default one (where the Mac's passkeys
- *  are), LinkedIn's and Google's in Chrome, which brings the app back forward when it closes
- *  (packs/ingestion/primitives/common/browser.js returnFocus). */
-function signInToPowerset(url: string): void {
-  void openExternal(url)
-}
-
-// While setup waits for Full Disk Access, ask macOS again this often and continue by itself.
-const PERMISSION_POLL_MS = 3_000
+const STOPPED = new Set(["error", "resume", "details"])
 
 const INPUT =
   "min-h-9 w-full rounded-[var(--radius-s)] border border-line-strong bg-card px-3 text-[13px] text-foreground outline-none placeholder:text-faint focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
 
-/** One text field and a submit button, for the waits that need a value. */
-function Ask({
-  label,
-  placeholder,
-  type,
-  initialValue = "",
-  busy,
-  onAnswer,
-}: {
-  label: string
-  placeholder: string
-  type: "email" | "url"
-  initialValue?: string
-  busy: boolean
-  onAnswer: (value: string) => void
-}) {
-  const [value, setValue] = useState(initialValue)
+/** The LinkedIn profile setup's owner step asks for when it found no LinkedIn session. */
+function ProfileForm({ busy, onAnswer }: { busy: boolean; onAnswer: (url: string) => void }) {
+  const [value, setValue] = useState("")
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!busy && value.trim()) onAnswer(value.trim())
@@ -55,15 +21,15 @@ function Ask({
   return (
     <form onSubmit={submit} className="mx-auto flex w-full max-w-[420px] flex-col gap-2 text-left">
       <label className="text-xs font-semibold text-muted-foreground" htmlFor="setup-answer">
-        {label}
+        Your LinkedIn profile
       </label>
       <div className="flex gap-2">
         <input
           id="setup-answer"
-          type={type}
+          type="url"
           value={value}
           disabled={busy}
-          placeholder={placeholder}
+          placeholder="https://www.linkedin.com/in/your-name"
           onChange={(event) => setValue(event.target.value)}
           className={INPUT}
         />
@@ -75,40 +41,24 @@ function Ask({
   )
 }
 
-/** In the desktop app nobody runs setup's commands in chat: its waits get buttons here, and
- *  the Powerset sign-in shows in the app's sign-in pane. */
+/** In the desktop app nobody runs setup's commands in chat. Its sign-ins happen on the Connect
+ *  screen before it starts (Connect.tsx); what it can still ask for gets a button here: a
+ *  Powerset sign-in gone stale (in the default browser, then the app comes back forward), the
+ *  owner's LinkedIn profile, and a step that stopped. */
 export function DesktopSetup({ data }: { data: InstallStatus }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const action = data.action
   const signInUrl = action?.kind === "signin" ? (action.url ?? null) : null
-  const resume = () => void continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
 
   // The sign-in opens once per URL setup hands over; once setup moves past it, the app comes
   // back forward from the browser.
   const signingIn = useRef(false)
   useEffect(() => {
-    if (signInUrl !== null) signInToPowerset(signInUrl)
+    if (signInUrl !== null) void openExternal(signInUrl)
     else if (signingIn.current) void focusApp()
     signingIn.current = signInUrl !== null
   }, [signInUrl])
-  // Full Disk Access: setup resumes on its own the moment macOS reports the grant.
-  const waitingForMessages = action?.kind === "permission"
-  useEffect(() => {
-    if (!waitingForMessages) return
-    let stopped = false
-    const check = async () => {
-      if (stopped || !(await messagesReadable())) return
-      stopped = true
-      resume()
-    }
-    const timer = setInterval(() => void check(), PERMISSION_POLL_MS)
-    void check()
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-  }, [waitingForMessages])
 
   const run = useCallback((task: () => Promise<void>) => {
     setBusy(true)
@@ -118,79 +68,25 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
       .finally(() => setBusy(false))
   }, [])
   const answer = (value: SetupAnswer) => run(() => continueSetup(value))
-  // Stopped at a WhatsApp step (its QR, a failed link): go on without it. The server saves the
-  // skip and stops the waiting run; setup then resumes from the saved choices.
-  const skipWhatsapp = () =>
-    run(async () => {
-      await skipSource("whatsapp")
-      await continueSetup({})
-    })
   const stopped =
     data.status === "failed" ||
     (data.status === "waiting" && !data.installer_pid && STOPPED.has(action?.kind ?? ""))
-  const skip =
-    WHATSAPP_STEPS.has(data.step) && (action?.kind === "qr" || stopped) ? (
-      <Button variant="default" disabled={busy} onClick={skipWhatsapp}>
-        {data.prose.page["qr.skip"]}
-      </Button>
-    ) : null
 
   let control
   if (signInUrl !== null) {
     const url = signInUrl
     control = (
-      <Button variant="primary" onClick={() => signInToPowerset(url)}>
+      <Button variant="primary" onClick={() => void openExternal(url)}>
         Sign in
       </Button>
     )
-  } else if (action?.kind === "qr") {
-    control = skip
-  } else if (
-    data.step === "gmail_login" &&
-    (data.event === "gmail.which_accounts" || data.status === "failed")
-  ) {
-    control = (
-      <>
-        <Ask
-          label="Gmail account"
-          placeholder="you@gmail.com"
-          type="email"
-          initialValue={data.event === "gmail.which_accounts" ? (data.account_email ?? "") : ""}
-          busy={busy}
-          onAnswer={(email) => answer({ gmailEmail: email })}
-        />
-        {data.status === "failed" && (
-          <Button disabled={busy} onClick={() => answer({})}>
-            Retry current account
-          </Button>
-        )}
-      </>
-    )
   } else if (action?.kind === "owner") {
-    control = (
-      <Ask
-        label="Your LinkedIn profile"
-        placeholder="https://www.linkedin.com/in/your-name"
-        type="url"
-        busy={busy}
-        onAnswer={(url) => answer({ linkedinUrl: url })}
-      />
-    )
-  } else if (action?.kind === "permission") {
-    // The page's own button opens System Settings; after the grant, setup restarts here.
-    control = (
-      <Button variant="primary" disabled={busy} onClick={() => answer({})}>
-        I turned it on
-      </Button>
-    )
+    control = <ProfileForm busy={busy} onAnswer={(url) => answer({ linkedinUrl: url })} />
   } else if (stopped) {
     control = (
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button variant="primary" disabled={busy} onClick={() => answer({})}>
-          {data.status === "failed" ? "Try again" : "Continue setup"}
-        </Button>
-        {skip}
-      </div>
+      <Button variant="primary" disabled={busy} onClick={() => answer({})}>
+        {data.status === "failed" ? "Try again" : "Continue setup"}
+      </Button>
     )
   } else {
     return null

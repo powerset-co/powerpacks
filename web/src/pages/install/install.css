@@ -152,14 +152,6 @@
   border-radius: 10px;
   margin: 0 auto;
 }
-.install-page .install-permission code {
-  display: block;
-  overflow-wrap: anywhere;
-  margin-bottom: 16px;
-}
-.install-page .install-details pre {
-  white-space: pre-wrap;
-}
 @media (prefers-reduced-motion: reduce) {
   .install-page .install-steps li {
     transition: none;

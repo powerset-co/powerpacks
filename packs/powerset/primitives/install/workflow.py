@@ -277,9 +277,8 @@ class SourceOnboarding:
         app = Path(permission_app() or "").stem or "the app running this session"
         if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
             self._write("imessage.permission", app=app, details=access, action=settings)
-            # macOS answers a process once: a grant made while this process waits never reaches
-            # it. Under the desktop app, hand back instead; the app resumes setup in a new process.
-            while (not DESKTOP and access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
+            # Under the desktop app this never waits: iMessage is taken only once access is on.
+            while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
                    and not access["chat_db"].get("missing_tables")):
                 time.sleep(_PERMISSION_POLL_SECONDS)
                 access = extractor.check(strict=True)
