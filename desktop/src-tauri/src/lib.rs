@@ -12,7 +12,6 @@ mod children;
 mod codex;
 mod onboard;
 mod paths;
-mod signin;
 mod source;
 mod update;
 
@@ -60,23 +59,6 @@ async fn codex_login(
     codex.login(&app, boot.root().as_deref()).await
 }
 
-/// Shows a provider's sign-in page inside the app's sign-in modal; `finish` holds the URL
-/// prefixes it ends on, `bounds` the modal body in CSS pixels.
-#[tauri::command]
-fn signin_open(
-    app: AppHandle,
-    url: String,
-    finish: Vec<String>,
-    bounds: signin::Bounds,
-) -> Result<(), String> {
-    signin::open(&app, &url, finish, bounds)
-}
-
-#[tauri::command]
-fn signin_place(app: AppHandle, bounds: signin::Bounds) -> Result<(), String> {
-    signin::place(&app, bounds)
-}
-
 /// Bring the window forward, after a sign-in that had to happen in the browser.
 #[tauri::command]
 fn app_focus(app: AppHandle) {
@@ -86,7 +68,8 @@ fn app_focus(app: AppHandle) {
     }
 }
 
-/// Open a web page in the system browser (Google sign-in, which refuses embedded views).
+/// Open a web page in the system browser: every sign-in (Powerset's for the Mac's passkeys, Google's
+/// because it refuses embedded views).
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     let parsed: Url = url.parse().map_err(|error| format!("Bad URL: {error}"))?;
@@ -102,11 +85,6 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<update::Update, String> {
     update::check(&app.package_info().version.to_string()).await
-}
-
-#[tauri::command]
-fn signin_close(app: AppHandle) {
-    signin::close(&app)
 }
 
 #[tauri::command]
@@ -403,9 +381,6 @@ pub fn run() {
             codex_auto_reply,
             codex_call,
             codex_respond,
-            signin_open,
-            signin_place,
-            signin_close,
             app_focus,
             open_external,
             update_check,
