@@ -1,5 +1,5 @@
 """AppRoutes: the React shell page and its two assets, nothing else; and the persistent server's
-account routes, which answer beside them before the network store exists."""
+account and feedback routes, which answer beside them before the network store exists."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.shared.web import account
+from packs.shared.web import account, feedback
 from packs.shared.web.app import AppRoutes
 from packs.shared.web.server import persistent_handler
 
@@ -96,6 +96,41 @@ class AccountRoutesTests(unittest.TestCase):
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
+
+    def _post(self, path: str, payload: dict) -> tuple[int, dict]:
+        request = urllib.request.Request(self.base + path, method="POST", data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def _sender(self, reply: dict) -> object:
+        (self.root / ".release-please-manifest.json").write_text('{".": "3.22.2"}')
+        sender = patch.object(feedback, "SendFeedback").start()
+        sender.return_value.run.return_value = reply
+        return sender
+
+    def test_feedback_files_the_note_with_its_page_and_the_release(self) -> None:
+        sender = self._sender({"status": "submitted", "feedback_id": "row-1"})
+        status, payload = self._post("/api/feedback", {"comment": "  The filters jump.  ", "page": "/people"})
+        self.assertEqual((status, payload["feedback_id"]), (HTTPStatus.OK, "row-1"))
+        request = sender.call_args.args[0]
+        self.assertEqual((request.comment, request.category), ("The filters jump.", "app"))
+        self.assertEqual(request.metadata,
+                         {"source": "powerpacks-app", "page": "/people", "powerpacks_version": "3.22.2"})
+        self.assertEqual(sender.call_args.kwargs["env_file"], self.root / ".env")
+
+    def test_feedback_needs_a_note(self) -> None:
+        sender = self._sender({"status": "submitted"})
+        self.assertEqual(self._post("/api/feedback", {"comment": " ", "page": "/people"})[0], HTTPStatus.BAD_REQUEST)
+        sender.assert_not_called()
+
+    def test_feedback_without_a_sign_in_says_so(self) -> None:
+        self._sender({"status": "needs_auth", "error": "not signed in to Powerset; run `$powerset login` first"})
+        status, payload = self._post("/api/feedback", {"comment": "The filters jump.", "page": "/people"})
+        self.assertEqual((status, payload["error"]), (HTTPStatus.UNAUTHORIZED, "Sign in to Powerset again, then send."))
 
     def test_signed_out_without_credentials(self) -> None:
         self.assertEqual(self._json("/api/account"), (200, {"signed_in": False, "email": None, "name": None}))

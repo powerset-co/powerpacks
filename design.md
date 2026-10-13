@@ -117,6 +117,7 @@ motion timings are our existing product choices, not copied Carbon branding.
 
 Navigation is a side nav (`web/src/components/shared/Sidebar.tsx`): Chat (desktop app only),
 Searches, People, Scheduled tasks, Accounts, with a collapse toggle that leaves an icon rail.
+At its foot, who is signed in, with a flag beside them that sends the Powerset team a note.
 A page's own panel (the chat list, saved searches) sits beside the nav, inside that page.
 Every page's title sits in one `PageHeader` (one height, gutter and type) so it never moves
 between pages; document pages share one left-aligned 960px column.

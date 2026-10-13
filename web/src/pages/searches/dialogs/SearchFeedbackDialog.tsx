@@ -1,6 +1,6 @@
 import { useRef, useState, type RefObject } from "react"
 
-import { FlagIcon } from "@/components/shared"
+import { FeedbackFooter, FlagIcon, NotesField } from "@/components/shared"
 import {
   Dialog,
   DialogContent,
@@ -12,8 +12,6 @@ import {
 import { buildPersonFeedback, buildSearchFeedback } from "@/lib/searches/feedback"
 import type { Candidate } from "@/types/searches"
 
-import { FeedbackFooter } from "./FeedbackFooter"
-import { NotesField } from "./NotesField"
 import { send, type FeedbackSink } from "./send"
 
 export interface SearchFeedbackDialogProps extends FeedbackSink {

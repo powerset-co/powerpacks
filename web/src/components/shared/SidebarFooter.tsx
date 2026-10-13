@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 
 import { Button } from "../ui/button"
 import { Avatar } from "./Avatar"
+import { FeedbackButton } from "./FeedbackButton"
 import { CLOSE_MARK } from "./icons/actions"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
@@ -29,7 +30,8 @@ const UPDATE_KEY = ["update"]
 // While signed out the footer watches for the sign-in the server finishes after the pane closes.
 const SIGNED_OUT_POLL_MS = 5_000
 
-/** The side nav's bottom: the update pane when a newer app is out, then who is signed in. */
+/** The side nav's bottom: the update pane when a newer app is out, then who is signed in, with
+ *  the feedback flag once they are. */
 export function SidebarFooter({ rail }: { rail: boolean }) {
   return (
     <div className="mt-auto flex flex-col">
@@ -146,7 +148,8 @@ function Profile({ rail }: { rail: boolean }) {
   const relay = <RelayDot tip={rail ? "right" : "above"} />
   if (rail) {
     return (
-      <div className="flex justify-center border-t border-line py-2.5">
+      <div className="flex flex-col items-center gap-1 border-t border-line py-2.5">
+        {signedIn && <FeedbackButton rail />}
         <span className="relative">
           {avatar}
           {relay}
@@ -177,6 +180,7 @@ function Profile({ rail }: { rail: boolean }) {
           </div>
         )}
       </div>
+      {signedIn && <FeedbackButton rail={false} />}
       {data !== undefined && !signedIn && (
         <Button size="sm" onClick={() => signIn.mutate()} disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}

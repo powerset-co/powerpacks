@@ -9,6 +9,8 @@ Change log:
 - 2026-10-12: every page's title row is `PageHeader`; People's decision tabs, quick
   filters and facet rail became one search line with Sharing and Relationship
   selects; the drawer's logbook action is a book icon beside Close.
+- 2026-10-13: the side nav's feedback flag (`FeedbackButton`); `NotesField` and
+  `FeedbackFooter` moved to the shared components.
 
 # web
 
@@ -81,20 +83,21 @@ server; everything else reads typed values.
 
 ### Shared components (`src/components/shared/`)
 
-| Component                             | Role                                                                                                                                                                  |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Sidebar`, `PageHeader`, `Page`       | The side nav (`lib/nav.ts` `PAGES`); every page's title row, one height and gutter; a page that scrolls as one column of one width                                    |
-| `ProxiedLinkedinAvatar`, `initials`   | Initials with the picture fading in over them                                                                                                                         |
-| `Chip`, `Kbd`, `EmptyState`           | Filter pill with optional count; key cap; centred muted line that rises in                                                                                            |
-| `SourcePill`, `SourcePills`, icons    | Channel pill (sm/md, optional count) and a person's pills; `icons/channels.tsx` and `icons/actions.tsx` (plus, pin, flag, book, `CLOSE_MARK`), pinned by `test_icons` |
-| `SearchField`, `Select`, `SortHeader` | The one text box style; the native select with a chevron; a sortable column header                                                                                    |
-| `Fold`                                | The height fold (inert while shut)                                                                                                                                    |
-| `DetailsSection`                      | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                             |
-| `Appear`                              | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                             |
-| `CountRoll`, `Toast`                  | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                                    |
-| `VirtualRows`                         | The virtualized list (fixed row height)                                                                                                                               |
-| `Drawer`, `DrawerClose`               | The right-hand panel both pages open a row in: slides in and out, its content keyed and crossfaded (`hooks/useDrawerSwap`), inert while shut                          |
-| `ActionBar`, `ActionBarRule`          | The floating bottom bar (label, then the page's buttons); rises in and drops out                                                                                      |
+| Component                                        | Role                                                                                                                                                                       |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Sidebar`, `PageHeader`, `Page`                  | The side nav (`lib/nav.ts` `PAGES`); every page's title row, one height and gutter; a page that scrolls as one column of one width                                         |
+| `ProxiedLinkedinAvatar`, `initials`              | Initials with the picture fading in over them                                                                                                                              |
+| `Chip`, `Kbd`, `EmptyState`                      | Filter pill with optional count; key cap; centred muted line that rises in                                                                                                 |
+| `SourcePill`, `SourcePills`, icons               | Channel pill (sm/md, optional count) and a person's pills; `icons/channels.tsx` and `icons/actions.tsx` (plus, pin, flag, book, `CLOSE_MARK`), pinned by `test_icons`      |
+| `SearchField`, `Select`, `SortHeader`            | The one text box style; the native select with a chevron; a sortable column header                                                                                         |
+| `Fold`                                           | The height fold (inert while shut)                                                                                                                                         |
+| `DetailsSection`                                 | A titled section (heading toggle, count, badge) whose body folds both ways; drawer, team, job description                                                                  |
+| `Appear`                                         | Rises in when shown and drops out before unmounting (inert while leaving)                                                                                                  |
+| `CountRoll`, `Toast`                             | A count that rolls; the page toast (rises in, keeps its last message as it leaves)                                                                                         |
+| `VirtualRows`                                    | The virtualized list (fixed row height)                                                                                                                                    |
+| `Drawer`, `DrawerClose`                          | The right-hand panel both pages open a row in: slides in and out, its content keyed and crossfaded (`hooks/useDrawerSwap`), inert while shut                               |
+| `ActionBar`, `ActionBarRule`                     | The floating bottom bar (label, then the page's buttons); rises in and drops out                                                                                           |
+| `FeedbackButton`, `NotesField`, `FeedbackFooter` | The side nav's flag beside who is signed in: a note for the Powerset team (`POST /api/feedback`); the note box and the dialog footer the search feedback dialogs share too |
 
 `src/components/ui/`: shadcn/ui `button`, `badge`, `dialog`, `skeleton`.
 

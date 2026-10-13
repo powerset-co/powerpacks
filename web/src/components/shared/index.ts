@@ -9,6 +9,8 @@ export { DetailsSection } from "./DetailsSection"
 export { ChatGptSignIn } from "./ChatGptSignIn"
 export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
+export { FeedbackButton } from "./FeedbackButton"
+export { FeedbackFooter } from "./FeedbackFooter"
 export { Fold } from "./Fold"
 export {
   CLOSE_MARK,
@@ -29,6 +31,7 @@ export {
 export { CHANNEL_ICON } from "./icons/channels"
 export { initials } from "./initials"
 export { Kbd } from "./Kbd"
+export { NotesField } from "./NotesField"
 export { SearchField } from "./SearchField"
 export { PowersetMark } from "./PowersetMark"
 export { ProgressBar } from "./ProgressBar"

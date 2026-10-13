@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-13: POST /api/feedback files the side nav's flag note with Powerset (feedback.py).
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
 - 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer.
 - 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
@@ -48,13 +49,14 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account, features
+from packs.shared.web import account, features, feedback
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
 DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
 MAX_FEATURE_REQUEST_BYTES = 1024
+MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
@@ -260,11 +262,21 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path == "/api/features":
+            if parsed.path in ("/api/features", "/api/feedback"):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
                     self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
                     return
+            if parsed.path == "/api/feedback":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_FEEDBACK_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    self._json(*feedback.send(root, self.rfile.read(length)))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/features":
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= MAX_FEATURE_REQUEST_BYTES:

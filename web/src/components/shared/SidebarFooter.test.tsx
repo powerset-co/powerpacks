@@ -1,12 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { SidebarFooter } from "./SidebarFooter"
 
-const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn() }))
+const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn(), sendAppFeedback: vi.fn() }))
 vi.mock("@/lib/api/account", () => auth)
-vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn }))
+vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn, sendAppFeedback: auth.sendAppFeedback }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true }))
 vi.mock("@/lib/signin", () => ({ useSignIn: () => null }))
 vi.mock("@/lib/api/update", () => ({
@@ -22,7 +23,9 @@ function mount(rail = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <SidebarFooter rail={rail} />
+      <MemoryRouter initialEntries={["/people"]}>
+        <SidebarFooter rail={rail} />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -49,4 +52,43 @@ it.each([false, true])("keeps reauthentication reachable with stored identity, r
   mount(rail)
   fireEvent.click(await screen.findByRole("button", { name: "Reconnect Powerset" }))
   await waitFor(() => expect(auth.signIn).toHaveBeenCalledOnce())
+})
+
+const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: "Casey" }
+
+it.each([false, true])(
+  "sends a note from the flag with the page it was written on, rail=%s",
+  async (rail) => {
+    auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+    auth.sendAppFeedback.mockResolvedValue(undefined)
+    mount(rail)
+    fireEvent.click(await screen.findByRole("button", { name: "Send feedback" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), {
+      target: { value: "The filters jump." },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(await screen.findByRole("status")).toHaveProperty("textContent", "Sent. Thank you.")
+    expect(auth.sendAppFeedback).toHaveBeenCalledWith("The filters jump.", "/people")
+  },
+)
+
+it("keeps the note and says why when it did not go out", async () => {
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  auth.sendAppFeedback.mockRejectedValue(new Error("Sign in to Powerset again, then send."))
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "Send feedback" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), { target: { value: "The filters jump." } })
+  fireEvent.click(screen.getByRole("button", { name: "Send" }))
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Sign in to Powerset again, then send.",
+  )
+  expect(screen.getByRole("textbox", { name: "Notes" })).toHaveProperty("value", "The filters jump.")
+})
+
+it("shows no flag while signed out", async () => {
+  auth.fetchAccount.mockResolvedValue({ signed_in: false, email: null, name: null })
+  mount()
+  await screen.findByRole("button", { name: "Sign in" })
+  expect(screen.queryByRole("button", { name: "Send feedback" })).toBeNull()
 })

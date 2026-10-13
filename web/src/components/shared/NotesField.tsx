@@ -1,6 +1,7 @@
 import { forwardRef, type KeyboardEvent } from "react"
 
-// server.py _save_feedback rejects a longer comment.
+// The feedback servers reject a longer comment: results_web/server.py _save_feedback and
+// shared/web/feedback.py.
 const MAX_COMMENT = 4000
 
 interface NotesFieldProps {

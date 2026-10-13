@@ -1,7 +1,8 @@
 // POST /searches/feedback on the Python review server (results_web/server.py _save_feedback),
-// and POST /searches/auth/login, which runs `$powerset login` on this machine when Powerset
-// answers that it needs a sign-in. In the desktop app the login's page shows in the app's
-// sign-in pane instead: /auth/login/start hands over its URL, /auth/login/finish its outcome.
+// POST /api/feedback for the side nav's flag (shared/web/feedback.py), and POST
+// /searches/auth/login, which runs `$powerset login` on this machine when Powerset answers that
+// it needs a sign-in. In the desktop app the login's page shows in the app's sign-in pane
+// instead: /auth/login/start hands over its URL, /auth/login/finish its outcome.
 
 import { body, failure } from "@/lib/api/http"
 import { isDesktop } from "@/lib/desktop"
@@ -20,6 +21,17 @@ export async function postFeedback(record: FeedbackRecord): Promise<FeedbackRepl
   })
   if (!response.ok) throw await failure(response, "Couldn't send feedback.")
   return body<FeedbackReply>(response)
+}
+
+/** A note on the app for the Powerset team, with the page it was written on; throws why it did not
+ *  go out. */
+export async function sendAppFeedback(comment: string, page: string): Promise<void> {
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment, page }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't send feedback. Try again.")
 }
 
 /** Runs the Powerset sign-in on the server; throws the server's message when it did not complete.

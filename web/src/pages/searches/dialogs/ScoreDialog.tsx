@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react"
 
+import { FeedbackFooter, NotesField } from "@/components/shared"
 import {
   Dialog,
   DialogContent,
@@ -21,8 +22,6 @@ import { rubricChoices, type RubricChoice } from "@/lib/searches/rubric"
 import { cn } from "@/lib/utils"
 import type { Candidate, FeedbackRecord, Ratings } from "@/types/searches"
 
-import { FeedbackFooter } from "./FeedbackFooter"
-import { NotesField } from "./NotesField"
 import { send, type FeedbackSink } from "./send"
 
 export interface ScoreDialogProps extends FeedbackSink {
