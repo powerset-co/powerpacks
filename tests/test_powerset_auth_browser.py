@@ -54,7 +54,7 @@ class PowersetBrowserTests(unittest.TestCase):
         self.assertEqual(params["code_challenge_method"], ["S256"])
         self.assertEqual(len(params["code_challenge"][0]), 43)
         if self.args.force_account:
-            self.assertEqual(params["prompt"], ["login"])
+            self.assertEqual(params["prompt"], ["login select_account"])
         query = {"state": "wrong-state" if invalid_state else params["state"][0]}
         query.update({"error": "access_denied"} if error else {"code": "synthetic-code"})
         try:

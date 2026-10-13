@@ -19,8 +19,8 @@
   padding: 0;
 }
 
-/* The header's actions: Refresh signals and Share network. */
-.head-share {
+/* The search line's right end: Refresh signals and Share network. */
+.bar-actions {
   display: flex;
   align-items: center;
   gap: 10px;

@@ -193,16 +193,22 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   })
 
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
+  // The search line's right end; it changes with the selection, never with j/k.
+  const { showToast } = decisions
+  const actions = useMemo(
+    () => (
+      <>
+        <RefreshSignals people={[...selection.selected]} onDone={refresh} />
+        <ShareUpload onToast={(message) => showToast({ message })} />
+      </>
+    ),
+    [selection.selected, refresh, showToast],
+  )
   return (
     <PeopleShell
       main={
         <>
-          <PageHeader title="People" data-head>
-            <div className="head-share">
-              <RefreshSignals people={[...selection.selected]} onDone={refresh} />
-              <ShareUpload onToast={(message) => decisions.showToast({ message })} />
-            </div>
-          </PageHeader>
+          <PageHeader title="People" data-head />
           <FilterBar
             ref={search}
             text={view.text}
@@ -214,6 +220,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             onText={setText}
             onTab={setTab}
             onRelationship={setRelationship}
+            actions={actions}
             notice={
               catalog.error ? (
                 <span className="bar-notice" data-logbook-unread>

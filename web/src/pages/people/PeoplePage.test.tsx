@@ -274,13 +274,14 @@ describe("PeoplePage", () => {
     expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
   })
 
-  it("shows only the share action beside Refresh signals in the header", async () => {
+  it("puts Refresh signals and Share network at the search line's right end", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await screen.findByRole("button", { name: "Share network" })
-    const share = must(container.querySelector<HTMLElement>("[data-head] > .head-share"))
-    expect(within(share).getByRole("button", { name: "Share network" })).toBeTruthy()
-    expect(container.querySelector("[data-head] .head-note")).toBeNull()
+    const actions = must(container.querySelector<HTMLElement>("[data-bar] > .bar-actions"))
+    expect(within(actions).getByRole("button", { name: "Share network" })).toBeTruthy()
+    expect(within(actions).getByRole("button", { name: /^Refresh signals/ })).toBeTruthy()
+    expect(must(container.querySelector("[data-head]")).querySelector("button")).toBeNull()
     expect(screen.queryByText("Never shared")).toBeNull()
   })
 

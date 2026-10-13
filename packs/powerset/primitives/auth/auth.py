@@ -435,10 +435,11 @@ def cmd_login(args: argparse.Namespace, on_authorize_url: "Callable[[str], None]
         "state": state,
     }
     if args.force_account:
-        # `prompt=login` forces Auth0 to always show its login screen, even when
-        # an SSO cookie already exists. Use this when switching between
-        # multiple Powerset/Aleph accounts on the same browser.
-        authorize_params["prompt"] = "login"
+        # `login` makes Auth0 show its login screen even when an SSO cookie
+        # exists; Auth0 passes the prompt on to Google, whose `select_account`
+        # then lists its accounts instead of reusing the one signed in. Use
+        # this when switching between Powerset/Aleph accounts in one browser.
+        authorize_params["prompt"] = "login select_account"
     authorize_url = _auth0_url(args.auth0_domain, "/authorize?") + urllib.parse.urlencode(
         authorize_params
     )
@@ -698,8 +699,8 @@ def main(argv: list[str] | None = None, on_authorize_url: Callable[[str], None] 
     login.add_argument("--no-browser", action="store_true",
                        help="Do not launch managed Chrome; print the URL only.")
     login.add_argument("--force-account", action="store_true",
-                       help="Force Auth0 to show the login screen even if an SSO "
-                            "cookie exists (use when switching accounts).")
+                       help="Show Auth0's login screen even if an SSO cookie exists, "
+                            "and Google's account chooser (use when switching accounts).")
     login.set_defaults(func=cmd_login)
 
     whoami = sub.add_parser("whoami", help="Print stored credential metadata")

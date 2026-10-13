@@ -122,9 +122,9 @@ A page's own panel (the chat list, saved searches) sits beside the nav, inside t
 Every page's title sits in one `PageHeader` (one height, gutter and type) so it never moves
 between pages; document pages share one left-aligned 960px column.
 
-People is the title with Refresh signals and Share network on the right, then one search line:
-the search box, a Sharing select (All, then each decision, with counts) and a Relationship select
-(the kinds in that choice, with counts). No tabs, no chips. Logbook belongs inside People, not
+People is the title, then one line: the search box, a Sharing select (All, then each decision,
+with counts) and a Relationship select (the kinds in that choice, with counts), with Refresh
+signals and Share network at its right end. No tabs, no chips. Logbook belongs inside People, not
 another top-level tab: a book icon beside the drawer's Close (View once saved, Build otherwise)
 and the selection bar's button; the reader lists every saved logbook, and Refresh logbook lives
 there. A flag beside Close sends the Powerset team a note about that person, as a search's drawer

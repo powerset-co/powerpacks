@@ -8,6 +8,8 @@ with or without a deep-context store; `make_handler` serves them alone for
 tests.
 
 Changelog:
+  2026-10-13: the app's sign-in passes --force-account: Auth0's screen shows and Google lists its
+      accounts, so signing in again can pick another.
   2026-10-09: POST /auth/login/start and /auth/login/finish: the desktop app shows the Powerset
       sign-in page in its own pane and the server finishes the login at the callback.
   2026-09-26: routes became mountable under a base path; the list page reads
@@ -76,7 +78,9 @@ def _login(on_authorize_url: Callable[[str], None] | None = None) -> int:
     args = ["login", "--auth0-domain", values.get("POWERPACKS_AUTH0_DOMAIN", ""),
             "--client-id", values.get("POWERPACKS_AUTH0_CLIENT_ID", ""),
             "--audience", values.get("POWERPACKS_AUTH0_AUDIENCE", ""),
-            "--credentials-path", str(account.credentials_path(ROOT))]
+            "--credentials-path", str(account.credentials_path(ROOT)),
+            # Signing in again from the app may be to another account: Google lists them.
+            "--force-account"]
     if on_authorize_url is None:
         return main(args)
     return main(args, on_authorize_url=on_authorize_url)

@@ -170,7 +170,8 @@ class AccountRoutesTests(unittest.TestCase):
             self.assertEqual(server._login(), 0)
         self.assertEqual(login.call_args.args[0], [
             "login", "--auth0-domain", "synthetic.auth0.example", "--client-id", "synthetic-client",
-            "--audience", "https://synthetic.invalid", "--credentials-path", str(self.credentials)])
+            "--audience", "https://synthetic.invalid", "--credentials-path", str(self.credentials),
+            "--force-account"])
 
     def test_login_routes_defer_to_setup_without_starting_another_login(self) -> None:
         from packs.search.primitives.deep_search.results_web import server

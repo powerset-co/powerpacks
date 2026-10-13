@@ -20,15 +20,20 @@ interface FilterBarProps {
   onRelationship: (kind: string) => void
   // A line before the count while something the filters read is unavailable.
   notice: ReactNode
+  // Refresh signals and Share network, at the line's right end.
+  actions: ReactNode
 }
 
 const KIND = facetOf("relationship_kind")
 
-// One line: the search box, the sharing decision (or all), the relationship kind, and how many
-// show once the search or the kind narrows the list.
+// One line: the search box, the sharing decision (or all), the relationship kind, how many show
+// once the search or the kind narrows the list, then the page's actions on the right.
 export const FilterBar = memo(
   forwardRef<HTMLInputElement, FilterBarProps>(
-    ({ text, tab, totals, relationship, kinds, shown, onText, onTab, onRelationship, notice }, searchRef) => {
+    (
+      { text, tab, totals, relationship, kinds, shown, onText, onTab, onRelationship, notice, actions },
+      searchRef,
+    ) => {
       // By name, N/A last; the held kind stays listed when this tab has none of it.
       const options = [...new Set([...kinds.keys(), ...(relationship ? [relationship] : [])])]
         .map((kind) => ({ kind, text: facetText(KIND, kind), count: kinds.get(kind) ?? 0 }))
@@ -74,6 +79,7 @@ export const FilterBar = memo(
           <span className="bar-count num" data-count aria-live="polite">
             {shown === totals[tab] ? "" : countOf(shown, totals[tab], "person")}
           </span>
+          <div className="bar-actions">{actions}</div>
         </section>
       )
     },
