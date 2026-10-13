@@ -1,4 +1,4 @@
-import { Fragment } from "react"
+import { Fragment, useState } from "react"
 
 import { ProxiedLinkedinAvatar, DrawerClose, LinkedinLink, SourcePill, Tip } from "@/components/shared"
 import { toChannels, type Channel } from "@/lib/channels"
@@ -19,8 +19,10 @@ const orNone = (value: string | undefined) => (value === "" ? undefined : value)
 const EMAIL_PILLS: readonly Channel[] = ["gmail"]
 const PHONE_PILLS: readonly Channel[] = ["imessage", "whatsapp"]
 
-// One kind of contact: its pills, the first value, and +N that shows the rest on hover or focus.
+// One kind of contact: its pills, the first value, and +N that shows the rest on hover; a click
+// pins them open so they can be selected and copied.
 function Contact({ pills, values }: { pills: readonly Channel[]; values: readonly string[] }) {
+  const [pinned, setPinned] = useState(false)
   const [first, ...rest] = values
   if (!pills.length && first === undefined) return null
   return (
@@ -30,19 +32,23 @@ function Contact({ pills, values }: { pills: readonly Channel[]; values: readonl
       ))}
       {first}
       {rest.length ? (
-        <button
-          type="button"
-          className="group h-5 cursor-default rounded-full border border-line px-1.5 text-[10px] font-semibold tabular-nums hover:text-foreground"
-        >
-          +{rest.length}
-          <Tip side="below">
+        <span className="group inline-flex">
+          <button
+            type="button"
+            aria-expanded={pinned}
+            className="h-5 rounded-full border border-line px-1.5 text-[10px] font-semibold tabular-nums hover:text-foreground"
+            onClick={() => setPinned(!pinned)}
+          >
+            +{rest.length}
+          </button>
+          <Tip side="below" className={pinned ? "pointer-events-auto opacity-100" : undefined}>
             {rest.map((value) => (
               <span key={value} className="block">
                 {value}
               </span>
             ))}
           </Tip>
-        </button>
+        </span>
       ) : null}
     </span>
   )

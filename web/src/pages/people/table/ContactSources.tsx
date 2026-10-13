@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react"
+import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type PointerEvent } from "react"
 import { createPortal } from "react-dom"
 
 import { SourcePills } from "@/components/shared"
@@ -29,6 +29,12 @@ export function ContactSources({ row }: { row: Person }) {
     enabled: open,
     staleTime: Infinity,
   })
+  // The panel was placed while it said Loading: place it again for its real height.
+  const { data } = detail
+  useEffect(() => {
+    if (data && open) show()
+  }, [data, open, show])
+  const panelId = useId()
 
   const leave = () => {
     stay()
@@ -61,6 +67,8 @@ export function ContactSources({ row }: { row: Person }) {
         type="button"
         className="contact-trigger"
         aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-describedby={open ? panelId : undefined}
         aria-label={label}
         onClick={click}
       >
@@ -68,10 +76,14 @@ export function ContactSources({ row }: { row: Person }) {
       </button>
       {presence.mounted && presence.shown
         ? createPortal(
+            // A portal still bubbles to the row's click: selecting an address must not open the drawer.
+            // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- the region only stops propagation
             <div
               ref={panel}
+              id={panelId}
               role="region"
               aria-label={label}
+              onClick={(event) => event.stopPropagation()}
               className="float-panel rise contact-popover fixed"
               data-open={presence.open}
               style={presence.shown}

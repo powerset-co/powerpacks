@@ -134,7 +134,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
       : null
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
-  // Each handler keeps one identity, so j/k and the drawer never re-render the rail or bars.
+  // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
   const { setTab: pickTab, toggleFilter: pickFilter, setFilters: pickFilters, setText: pickText } = filters
   const startOver = useCallback(() => {
     clearSelection()

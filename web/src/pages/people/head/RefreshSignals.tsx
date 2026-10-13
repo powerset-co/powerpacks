@@ -126,7 +126,9 @@ export function RefreshSignals({
           <DialogTitle className="text-lg font-semibold">Refresh signals</DialogTitle>
           <DialogDescription className="text-[13px]">
             Update relationship, warmth and labels for{" "}
-            {selected ? `${targets.length.toLocaleString()} selected` : `all ${targets.length.toLocaleString()}`}{" "}
+            {selected
+              ? `${targets.length.toLocaleString()} selected`
+              : `all ${targets.length.toLocaleString()}`}{" "}
             people.
           </DialogDescription>
         </DialogHeader>
