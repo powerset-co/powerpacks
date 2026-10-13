@@ -59,13 +59,11 @@ def channel_summary(members: list[MemberFacts], sources: dict[str, list[str]],
                               max(timestamps, default=None), from_me, from_them, group_count)
 
 
-def family_key(members: list[MemberFacts]) -> str:
-    """The reuse key: the request version and the family's member ids. A family is judged once; only a
-    new member (a merge) makes a new family and a new judgment. New messages never do."""
-    member_ids: list[str] = []
-    for member in members:
-        member_ids.append(member.candidate_id)
-    payload: dict[str, Any] = {"version": luna.REQUEST_VERSION, "members": sorted(member_ids)}
+def version_key() -> str:
+    """The reuse key every machine worth row carries: the request version. A family is judged once per
+    version, as soon as any member is: new messages and merges never ask again; a version bump asks
+    everyone once."""
+    payload: dict[str, Any] = {"version": luna.REQUEST_VERSION}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
