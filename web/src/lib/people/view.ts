@@ -4,8 +4,12 @@ import { ORDER, type Decision } from "@/types/people"
 
 import { FACETS, isSortKey, type FacetFilters, type Sort } from "./facets"
 
+/** The Sharing select: everyone, or one decision. */
+export type Tab = Decision | "all"
+export const TABS: readonly Tab[] = ["all", ...ORDER]
+
 export interface PeopleView {
-  tab: Decision
+  tab: Tab
   filters: FacetFilters
   text: string
   sort: Sort
@@ -21,7 +25,7 @@ export const DEFAULT_VIEW: PeopleView = {
 export function readView(params: URLSearchParams): PeopleView {
   const key = params.get("sort")
   return {
-    tab: ORDER.find((tab) => tab === params.get("tab")) ?? DEFAULT_VIEW.tab,
+    tab: TABS.find((tab) => tab === params.get("tab")) ?? DEFAULT_VIEW.tab,
     text: params.get("q") ?? "",
     sort: { key: isSortKey(key) ? key : "name", dir: params.get("dir") === "desc" ? -1 : 1 },
     filters: new Map(

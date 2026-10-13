@@ -10,8 +10,8 @@ import type { FacetSet, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
-import { writeView } from "@/lib/people/view"
-import { personKey, type Decision, type Person } from "@/types/people"
+import { writeView, type Tab } from "@/lib/people/view"
+import { personKey, type Person } from "@/types/people"
 
 import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
@@ -52,7 +52,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
-    const counts: Record<Decision, number> = { confirm: 0, yes: 0, no: 0 }
+    const counts: Record<Tab, number> = { all: rows.length, confirm: 0, yes: 0, no: 0 }
     for (const row of rows) counts[row.share] += 1
     return counts
   }, [rows])
@@ -141,7 +141,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   }, [clearSelection])
   // The tab already shown keeps its selection, focus and scroll.
   const setTab = useCallback(
-    (tab: Decision) => {
+    (tab: Tab) => {
       if (tab === view.tab) return
       pickTab(tab)
       startOver()

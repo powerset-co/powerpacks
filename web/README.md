@@ -11,7 +11,7 @@ Change log:
   selects; the drawer's logbook action is a book icon beside Close.
 - 2026-10-13: the People drawer's feedback flag (`PersonFeedback`); `NotesField` and
   `FeedbackFooter` moved to the shared components; the side nav's footer shows the
-  signed-in picture, name and email in full.
+  signed-in picture, name and email in full; People's Sharing select offers All.
 
 # web
 

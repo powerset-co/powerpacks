@@ -5,18 +5,18 @@ import { countOf } from "@/lib/copy"
 import { must } from "@/lib/must"
 import { label, SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
 import { facetOf, facetText } from "@/lib/people/facets"
-import { ORDER, type Decision } from "@/types/people"
+import { TABS, type Tab } from "@/lib/people/view"
 
 interface FilterBarProps {
   text: string
-  tab: Decision
-  totals: Readonly<Record<Decision, number>>
+  tab: Tab
+  totals: Readonly<Record<Tab, number>>
   // The relationship kind held, "" for all; and how many in the tab hold each kind.
   relationship: string
   kinds: ReadonlyMap<string, number>
   shown: number
   onText: (text: string) => void
-  onTab: (tab: Decision) => void
+  onTab: (tab: Tab) => void
   onRelationship: (kind: string) => void
   // A line before the count while something the filters read is unavailable.
   notice: ReactNode
@@ -24,8 +24,8 @@ interface FilterBarProps {
 
 const KIND = facetOf("relationship_kind")
 
-// One line: the search box, the sharing decision, the relationship kind, and how many show
-// once the search or the kind narrows the list.
+// One line: the search box, the sharing decision (or all), the relationship kind, and how many
+// show once the search or the kind narrows the list.
 export const FilterBar = memo(
   forwardRef<HTMLInputElement, FilterBarProps>(
     ({ text, tab, totals, relationship, kinds, shown, onText, onTab, onRelationship, notice }, searchRef) => {
@@ -50,11 +50,11 @@ export const FilterBar = memo(
           <Select
             aria-label="Sharing"
             value={tab}
-            onChange={(event) => onTab(must(ORDER.find((decision) => decision === event.target.value)))}
+            onChange={(event) => onTab(must(TABS.find((option) => option === event.target.value)))}
           >
-            {ORDER.map((decision) => (
-              <option key={decision} value={decision}>
-                {`${label("share", decision)} · ${totals[decision].toLocaleString()}`}
+            {TABS.map((option) => (
+              <option key={option} value={option}>
+                {`${option === "all" ? "All" : label("share", option)} · ${totals[option].toLocaleString()}`}
               </option>
             ))}
           </Select>

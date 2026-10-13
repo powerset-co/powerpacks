@@ -2,7 +2,8 @@ import type { RefObject } from "react"
 
 import type { useSelection } from "@/hooks/useSelection"
 import type { TagAction } from "@/lib/people/facets"
-import { ORDER, type Decision, type Person } from "@/types/people"
+import type { Tab } from "@/lib/people/view"
+import { ORDER, type Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
 import type { useDecisions } from "./useDecisions"
@@ -17,7 +18,7 @@ interface ShortcutTargets {
   matching: readonly Person[]
   focus: number
   setFocus: (index: number) => void
-  setTab: (tab: Decision) => void
+  setTab: (tab: Tab) => void
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
   decisions: ReturnType<typeof useDecisions>

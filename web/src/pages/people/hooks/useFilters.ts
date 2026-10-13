@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react"
 
 import { setEntries, type FacetSet, type SortKey } from "@/lib/people/facets"
-import { DEFAULT_VIEW, readView, type PeopleView } from "@/lib/people/view"
-import { ORDER, type Decision, type Person } from "@/types/people"
+import { DEFAULT_VIEW, readView, type PeopleView, type Tab } from "@/lib/people/view"
+import { ORDER, type Person } from "@/types/people"
 
 // Honor a linked tab; otherwise start at the first decision with people.
 function startView(rows: readonly Person[], params: URLSearchParams): PeopleView {
@@ -16,7 +16,7 @@ function startView(rows: readonly Person[], params: URLSearchParams): PeopleView
 export function useFilters(rows: readonly Person[], params: URLSearchParams) {
   const [view, setView] = useState<PeopleView>(() => startView(rows, params))
 
-  const setTab = useCallback((tab: Decision) => {
+  const setTab = useCallback((tab: Tab) => {
     setView((current) => (current.tab === tab ? current : { ...current, tab }))
   }, [])
 

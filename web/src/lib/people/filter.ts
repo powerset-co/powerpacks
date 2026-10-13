@@ -1,5 +1,5 @@
-// The one filter pass over the rows: the tab, the search text and the held facets, plus the
-// relationship counts the filter offers.
+// The one filter pass over the rows: the tab (one decision, or all), the search text and the
+// held facets, plus the relationship counts the filter offers.
 
 import type { Person } from "@/types/people"
 
@@ -20,7 +20,7 @@ export function filterRows(rows: readonly Person[], { tab, filters, text, sort }
   const kinds = new Map<string, number>()
   const matching: Person[] = []
   for (const row of rows) {
-    if (row.share !== tab) continue
+    if (tab !== "all" && row.share !== tab) continue
     if (row.relationship_kind) kinds.set(row.relationship_kind, (kinds.get(row.relationship_kind) ?? 0) + 1)
     if (needle && !row.search.includes(needle)) continue
     if (active.every(([facet, values]) => facet.get(row).some((value) => values.has(value))))

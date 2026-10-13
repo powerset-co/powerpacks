@@ -21,7 +21,6 @@ import type { Person } from "@/types/people"
 export function PersonFeedback({ row }: { row: Person }) {
   const [open, setOpen] = useState(false)
   const notes = useRef<HTMLTextAreaElement>(null)
-  const role = [row.title, row.company].filter(Boolean).join(" · ")
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
@@ -42,9 +41,7 @@ export function PersonFeedback({ row }: { row: Person }) {
       >
         <DialogHeader>
           <DialogTitle className="text-lg font-semibold">Person feedback</DialogTitle>
-          <DialogDescription className="text-[13px]">
-            {[row.name, role].filter(Boolean).join(" · ")}
-          </DialogDescription>
+          <DialogDescription className="text-[13px]">{row.name}</DialogDescription>
         </DialogHeader>
         <FeedbackForm notes={notes} row={row} />
       </DialogContent>

@@ -180,13 +180,13 @@ function Profile({ rail }: { rail: boolean }) {
         {relay}
       </span>
       <div className="min-w-0 flex-1 leading-[1.25] [overflow-wrap:anywhere]">
-        <div className="text-[13px] font-semibold text-foreground">{title}</div>
+        <div className="text-[13px] font-semibold text-foreground">{breakAfterAt(title)}</div>
         {detail !== null && (
           <div
             className={cn("text-[11px] text-muted-foreground", problem !== null && "text-bad")}
             role={problem ? "alert" : undefined}
           >
-            {detail}
+            {breakAfterAt(detail)}
           </div>
         )}
       </div>
@@ -196,6 +196,19 @@ function Profile({ rail }: { rail: boolean }) {
         </Button>
       )}
     </div>
+  )
+}
+
+// An address wraps after its @ rather than mid-word.
+function breakAfterAt(text: string | null) {
+  const at = text === null ? 0 : text.indexOf("@") + 1
+  if (text === null || at === 0) return text
+  return (
+    <>
+      {text.slice(0, at)}
+      <wbr />
+      {text.slice(at)}
+    </>
   )
 }
 

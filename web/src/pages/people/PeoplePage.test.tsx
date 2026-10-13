@@ -212,12 +212,22 @@ describe("PeoplePage", () => {
     const sharing = screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" })
     expect(sharing.value).toBe("confirm")
     expect([...sharing.options].map((option) => option.textContent)).toEqual([
+      "All · 4",
       "Needs confirmation · 3",
       "Sharing · 1",
       "Not sharing · 0",
     ])
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
+  })
+
+  it("shows everyone under All, whatever the decision", async () => {
+    vi.stubGlobal("fetch", vi.fn(serve))
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.change(screen.getByRole("combobox", { name: "Sharing" }), { target: { value: "all" } })
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
+    await waitFor(() => expect(new URLSearchParams(must(at()).split("?")[1]).get("tab")).toBe("all"))
   })
 
   it("restores filters, sort, person and open sections from the URL after remounting", async () => {

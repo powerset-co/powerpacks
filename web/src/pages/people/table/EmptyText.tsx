@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button"
-import type { Decision } from "@/types/people"
+import type { Tab } from "@/lib/people/view"
 
-const NOBODY: Record<Decision, string> = {
+const NOBODY: Record<Tab, string> = {
+  all: "No people yet.",
   confirm: "No one needs confirmation.",
   yes: "No people marked for sharing.",
   no: "No people marked as not sharing.",
@@ -10,7 +11,7 @@ const NOBODY: Record<Decision, string> = {
 interface EmptyTextProps {
   hasPeople: boolean
   filtered: boolean
-  tab: Decision
+  tab: Tab
   onClear: () => void
 }
 
