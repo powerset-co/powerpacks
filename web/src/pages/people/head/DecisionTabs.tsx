@@ -8,7 +8,7 @@ interface DecisionTabsProps {
   tab: Decision
   totals: Readonly<Record<Decision, number>>
   onTab: (tab: Decision) => void
-  /** The share button, at the right edge beside the tabs. */
+  /** The actions, at the right edge beside the tabs. */
   action: ReactNode
 }
 

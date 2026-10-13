@@ -90,6 +90,8 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
+  if (url.endsWith("/signals"))
+    return Promise.resolve(respond({ status: "idle", message: null, plan: null, error: null }))
   if (url.includes("/sets")) return Promise.resolve(respond(SETS))
   return Promise.resolve(respond(PAYLOAD))
 }
@@ -285,7 +287,11 @@ describe("PeoplePage", () => {
     expect(screen.getByText("No one needs confirmation.")).toBeTruthy()
     expect(
       fetch.mock.calls.filter(
-        ([url]) => !url.endsWith("/upload") && !url.includes("/logbook") && !url.includes("/sets"),
+        ([url]) =>
+          !url.endsWith("/upload") &&
+          !url.includes("/logbook") &&
+          !url.includes("/sets") &&
+          !url.endsWith("/signals"),
       ),
     ).toHaveLength(2)
   })

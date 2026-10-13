@@ -253,10 +253,11 @@ def labels(answers: dict[str, JevAnswer]) -> dict[str, str | float]:
     return result
 
 
-async def answer_all(requests: dict[str, dict[str, Any]], cache_dir: Path) -> dict[str, dict[str, JevAnswer]]:
+async def answer_all(requests: dict[str, dict[str, Any]], cache_dir: Path, *,
+                     cache_only: bool = False) -> dict[str, dict[str, JevAnswer]]:
     """Answer every request (keyed by its digest), reading the disk cache first. A fresh answer is
     cached as it arrives, so a stopped run keeps what it paid for."""
-    answered = await answer_requests(requests, output_dir=cache_dir, api_key=None, client=None,
+    answered = await answer_requests(requests, output_dir=cache_dir, api_key="" if cache_only else None, client=None,
                                      concurrency=MAX_CONCURRENCY, request_version=REQUEST_VERSION,
                                      question_version=REQUEST_VERSION)
     parsed: dict[str, dict[str, JevAnswer]] = {}

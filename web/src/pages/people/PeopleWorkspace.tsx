@@ -18,6 +18,7 @@ import { PersonDrawer } from "./drawer/PersonDrawer"
 import { FilterBar } from "./filters/FilterBar"
 import { QuickFilters } from "./filters/QuickFilters"
 import { DecisionTabs } from "./head/DecisionTabs"
+import { RefreshSignals } from "./head/RefreshSignals"
 import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
 import { useFilters } from "./hooks/useFilters"
@@ -211,7 +212,18 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             tab={view.tab}
             totals={totals}
             onTab={setTab}
-            action={<ShareUpload onToast={(message) => decisions.showToast({ message })} />}
+            action={
+              <div className="head-share">
+                <RefreshSignals
+                  people={
+                    selection.selected.size ? [...selection.selected] : rows.map((row) => row.parent_id)
+                  }
+                  selected={selection.selected.size > 0}
+                  onDone={refresh}
+                />
+                <ShareUpload onToast={(message) => decisions.showToast({ message })} />
+              </div>
+            }
           />
           <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
           <FilterBar

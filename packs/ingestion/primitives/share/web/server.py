@@ -47,6 +47,7 @@ from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow, S
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
 from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
+from packs.ingestion.primitives.share.web.signals import PeopleSignals
 from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
@@ -135,6 +136,7 @@ class ShareRoutes:
         self.load = load
         self.upload = upload
         self.logbook = PeopleLogbook(conn, root=logbook_root, stores=logbook_stores)
+        self.signals = PeopleSignals(Path(conn.execute("PRAGMA database_list").fetchone()[2]), people.data_root)
         self.sets = Sets(conn, env_file)
         self.archive = LogbookArchive(conn, logbook_root, gmail_store=self.logbook.stores["gmail"])
 
@@ -148,6 +150,8 @@ class ShareRoutes:
             self._send_json(handler, self.upload.status())
         elif parsed.path == f"{API_PREFIX}logbook":
             self._send_json(handler, self.logbook.status())
+        elif parsed.path == f"{API_PREFIX}signals":
+            self._send_json(handler, self.signals.status())
         elif parsed.path == f"{API_PREFIX}logbook/entries":
             self._send_json(handler, entries_payload(self.archive.entries()))
         elif parsed.path in {f"{API_PREFIX}logbook/entry", f"{API_PREFIX}logbook/conversation"}:
@@ -165,7 +169,8 @@ class ShareRoutes:
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
                                f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
-                               f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer"}:
+                               f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
+                               f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         host = (handler.headers.get("Host") or "").strip()
@@ -177,6 +182,9 @@ class ShareRoutes:
             return True
         if parsed.path == f"{API_PREFIX}logbook":
             self._start_logbook(handler)
+            return True
+        if parsed.path in {f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
+            self._refresh_signals(handler, check=parsed.path.endswith("/check"))
             return True
         if parsed.path.startswith(f"{API_PREFIX}sets"):
             length = min(int(handler.headers.get("Content-Length", "0")), MAX_TAGS_REQUEST_BYTES)
@@ -234,6 +242,30 @@ class ShareRoutes:
              "share_source": row.source, "tags": sorted(changes[parent_id])}
             for parent_id, row in decided.items()]})
         return True
+
+    def _refresh_signals(self, handler: BaseHTTPRequestHandler, *, check: bool) -> None:
+        length = int(handler.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
+            self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            form = json.loads(handler.rfile.read(length))
+            people = form.get("people") if isinstance(form, dict) else None
+            if not isinstance(people, list) or not people or not all(isinstance(value, str) for value in people):
+                raise ValueError("people must be a non-empty list of parent ids")
+            known = {row.parent_id for row in self.load()}
+            if not set(people) <= known:
+                raise ValueError("Some selected people no longer exist. Reload People and try again.")
+            ids = tuple(sorted(set(people)))
+            if check:
+                payload = asdict(self.signals.check(ids))
+            else:
+                checked = form.get("checked")
+                payload = self.signals.start(ids, checked if isinstance(checked, str) else None)
+        except ValueError as error:
+            self._send_json(handler, {"error": str(error)}, status=HTTPStatus.CONFLICT)
+        else:
+            self._send_json(handler, payload)
 
     def _start_logbook(self, handler: BaseHTTPRequestHandler) -> None:
         """Build the logbook for `{"people": [parent_id, ...]}`, the page's selection."""

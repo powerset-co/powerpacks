@@ -12,7 +12,8 @@ In order:
    counts: yes, maybe or no, a reason, and the share labels.
 4. A family is judged once: its key is the request version and its member ids. Only a merge, which
    makes a new family, brings a new judgment; a family whose members' latest machine worth rows all
-   carry its key is skipped at $0.
+   carry its key is skipped at $0. People's explicit refresh selects its families again, reusing
+   the exact-request cache.
 5. One worth row per member candidate, the same verdict and labels to each.
 
 Created: 2026-10-06
@@ -74,9 +75,11 @@ class Worth(Node):
     reads = ("current_parent", "candidates", "candidate_sources", "facts", "bundles", "connections", "worth", "owner")
     writes = ("worth",)
 
-    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
+    def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int,
+                 parent_ids: tuple[str, ...] | None = None) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
+        self.parent_ids = parent_ids
         self.cache_dir = data_root / JEV_CACHE_DIR
         self._families: list[Family] | None = None  # built once; estimate and execute both read it
 
@@ -128,15 +131,17 @@ class Worth(Node):
         return families
 
     def pending(self, families: list[Family]) -> list[Family]:
-        """The families with no machine worth row under their key (the version and their members), the
-        first `limit` of them. New facts or messages do not make a family pending; a new member does."""
+        """Explicit refresh selects its families even when judged; otherwise take the first `limit`
+        without a machine worth row under their version/member key. New facts do not make them pending."""
+        if self.parent_ids is not None:
+            return [family for family in families if family.key in self.parent_ids][:self.limit]
         todo: list[Family] = []
         for family in families:
             if not family.judged:
                 todo.append(family)
         return todo[: self.limit]
 
-    def estimate(self) -> dict[str, object]:
+    def estimate(self) -> dict[str, int | float | str]:
         """The dry run: count families, the free yeses and the JEV calls, and price the calls. No call."""
         encoder = tiktoken.get_encoding("o200k_base")
         families: list[Family] = self.families()
@@ -169,7 +174,7 @@ class Worth(Node):
             "estimated_cost_usd": round(tokens * INPUT_PRICE_PER_MILLION / 1_000_000, 4), "request_version": jev.REQUEST_VERSION,
         }
 
-    def execute(self) -> dict[str, int]:
+    def execute(self, *, cache_only: bool = False) -> dict[str, int]:
         """Rules 1 to 5: one JEV pass over every pending family for the labels; a pre-matched family is yes by
         its match, the rest by JEV's answer; one worth row per member."""
         todo: list[Family] = self.pending(self.families())
@@ -177,7 +182,7 @@ class Worth(Node):
         for family in todo:
             requests[family.digest] = family.request
         load_env()
-        answers = asyncio.run(jev.answer_all(requests, self.cache_dir))
+        answers = asyncio.run(jev.answer_all(requests, self.cache_dir, cache_only=cache_only))
         verdicts: dict[str, Verdict] = {}  # family key -> its verdict
         pre_matched: int = 0
         for family in todo:
