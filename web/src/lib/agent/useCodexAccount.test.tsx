@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@t
 import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { AgentEvent } from "@/types/agent"
+import type { AgentEvent, CodexStatus } from "@/types/agent"
 
 import { CodexAccountProvider } from "./CodexAccountProvider"
 import { useCodexAccount } from "./useCodexAccount"
@@ -77,7 +77,7 @@ describe("useCodexAccount", () => {
     act(() => handler?.({ type: "loginCompleted", success: true, error: null }))
     expect(installApi.focusApp).toHaveBeenCalledTimes(1)
     view.rerender(<Account />)
-    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy()
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeTruthy()
     expect(codexApi.startCodexLogin).toHaveBeenCalledTimes(1)
   })
 
@@ -93,14 +93,21 @@ describe("useCodexAccount", () => {
     await waitFor(() => expect(result.current.login).toEqual(LOGIN))
     expect(installApi.openExternal).toHaveBeenCalledWith(LOGIN.authUrl)
 
-    codexApi.fetchCodexStatus.mockResolvedValue({
-      installed: true,
-      account: { kind: "chatgpt", email: "casey@example.com", plan: "plus" },
-    })
+    // Codex's account is read again after the sign-in lands; until it answers, the sign-in holds.
+    let answer!: (status: CodexStatus) => void
+    codexApi.fetchCodexStatus.mockReturnValue(
+      new Promise<CodexStatus>((resolve) => {
+        answer = resolve
+      }),
+    )
     act(() => handler?.({ type: "loginCompleted", success: true, error: null }))
-    expect(result.current.login).toBeNull()
+    expect(result.current.login).toEqual(LOGIN)
     expect(result.current.error).toBeNull()
     expect(installApi.focusApp).toHaveBeenCalled()
+    act(() =>
+      answer({ installed: true, account: { kind: "chatgpt", email: "casey@example.com", plan: "plus" } }),
+    )
+    await waitFor(() => expect(result.current.login).toBeNull())
     await waitFor(() =>
       expect(result.current.status?.installed && result.current.status.account).toBeTruthy(),
     )
@@ -152,7 +159,7 @@ describe("useCodexAccount", () => {
     expect(result.current.login).toEqual(LOGIN)
 
     act(() => handler?.({ type: "loginCompleted", success: false, error: "Code expired." }))
-    expect(result.current.login).toBeNull()
     expect(result.current.error).toBe("Code expired.")
+    await waitFor(() => expect(result.current.login).toBeNull())
   })
 })

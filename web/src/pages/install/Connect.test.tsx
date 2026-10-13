@@ -27,7 +27,13 @@ const NONE: SignedIn = { linkedin: false, gmail: false, imessage: false, whatsap
 let state: {
   account: object
   connect: object
+  // The record a launched run writes first: the connect request answers once it is there.
+  launch: object | null
   signed: SignedIn
+  // Holds back the sign-in answer, and Powerset's browser sign-in, until a test lets them through.
+  signedGate: Promise<void> | null
+  signedAsks: number
+  finishGate: Promise<void> | null
   posts: { url: string; body: unknown }[]
 }
 let invoke: ReturnType<typeof vi.fn>
@@ -37,17 +43,32 @@ function reply(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
-  state = { account: SIGNED_IN, connect: NOTHING, signed: NONE, posts: [] }
+  state = {
+    account: SIGNED_IN,
+    connect: NOTHING,
+    launch: null,
+    signed: NONE,
+    signedGate: null,
+    signedAsks: 0,
+    finishGate: null,
+    posts: [],
+  }
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         state.posts.push({ url, body: JSON.parse(typeof init.body === "string" ? init.body : "null") })
+        if (url === "/api/install/connect" && state.launch) state.connect = state.launch
+        if (url === "/searches/auth/login/finish")
+          return (state.finishGate ?? Promise.resolve()).then(() => reply({ ok: true }))
         return reply({ status: "started" }, 202)
       }
       if (url === "/api/account") return reply(state.account)
       if (url === "/api/install/connect") return reply(state.connect)
-      if (url === "/accounts/api/signed-in") return reply(state.signed)
+      if (url === "/accounts/api/signed-in") {
+        state.signedAsks += 1
+        return (state.signedGate ?? Promise.resolve()).then(() => reply(state.signed))
+      }
       if (url === "/api/install/preflight") return reply(READY)
       return reply({ error: url }, 404)
     }),
@@ -150,25 +171,97 @@ it("without LinkedIn's sign-in, setup starts from the profile link", async () =>
   )
 })
 
-it("connects a source, follows its run, then reads its sign-in once the run ends", async () => {
-  mount()
-  fireEvent.click(await within(row("LinkedIn")).findByRole("button", { name: "LinkedIn: Connect" }))
-  await waitFor(() =>
-    expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "linkedin" } }),
-  )
+it("shows Working from the click until the sign-in answer after its run is in, nothing in between", async () => {
+  // LinkedIn's last sign-in stopped (a closed window).
   state.connect = {
+    ...NOTHING,
+    step: "linkedin_login",
+    status: "failed",
+    message: "LinkedIn sign-in stopped.",
+  }
+  state.launch = {
     ...NOTHING,
     step: "linkedin_login",
     status: "running",
     installer_pid: 41,
     message: "Checking LinkedIn",
   }
-  expect(await within(row("LinkedIn")).findByText("Checking LinkedIn", {}, { timeout: 4_000 })).toBeTruthy()
+  mount()
+  const linkedin = row("LinkedIn")
+  fireEvent.click(await within(linkedin).findByRole("button", { name: "LinkedIn: Try again" }))
+  // At once, before the run has written anything: Working, and what to do.
+  expect(within(linkedin).getByText("Working")).toBeTruthy()
+  expect(within(linkedin).getByText("Sign in to LinkedIn in the window that opens.")).toBeTruthy()
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "linkedin" } }),
+  )
+  expect(within(linkedin).getByText("Working")).toBeTruthy()
+  // Never the run's own status lines.
+  expect(within(linkedin).queryByText("Checking LinkedIn")).toBeNull()
   expect(screen.getByRole("button", { name: "Set up" }).hasAttribute("disabled")).toBe(true)
-  // The run ends and LinkedIn's session is there: the screen asks what is signed in again.
+  // The run ends; the sign-in answer after it is held back: still Working, no button.
+  let release!: () => void
+  state.signedGate = new Promise((resolve) => {
+    release = resolve
+  })
+  const asked = state.signedAsks
   state.signed = { ...NONE, linkedin: true }
   state.connect = { ...NOTHING, step: "sources", status: "completed" }
-  expect(await within(row("LinkedIn")).findByText("Connected", {}, { timeout: 4_000 })).toBeTruthy()
+  await waitFor(() => expect(state.signedAsks).toBeGreaterThan(asked), { timeout: 4_000 })
+  expect(within(linkedin).getByText("Working")).toBeTruthy()
+  expect(within(linkedin).queryByRole("button")).toBeNull()
+  release()
+  expect(await within(linkedin).findByText("Connected")).toBeTruthy()
+  expect(within(linkedin).queryByText("Sign in to LinkedIn in the window that opens.")).toBeNull()
+})
+
+it("gives WhatsApp's code its box from the click, and the code fills it", async () => {
+  state.launch = {
+    ...NOTHING,
+    step: "whatsapp_tools",
+    status: "running",
+    installer_pid: 42,
+    message: "Preparing",
+  }
+  mount()
+  const whatsapp = row("WhatsApp")
+  fireEvent.click(await within(whatsapp).findByRole("button", { name: "WhatsApp: Connect" }))
+  expect(
+    within(whatsapp).getByText("In WhatsApp on your phone, go to Linked devices and scan this code."),
+  ).toBeTruthy()
+  expect(within(whatsapp).queryByAltText("WhatsApp code to scan")).toBeNull()
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "whatsapp" } }),
+  )
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: { kind: "qr", qr_url: "/api/install/qr?connect=1&t=1" },
+  }
+  const code = await within(whatsapp).findByAltText("WhatsApp code to scan", {}, { timeout: 4_000 })
+  expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
+  expect(within(whatsapp).queryByText("Connect WhatsApp")).toBeNull()
+  expect(within(whatsapp).queryByText("Preparing")).toBeNull()
+})
+
+it("shows Powerset Working while you sign in in the browser, then Connected", async () => {
+  state.account = { signed_in: false, email: null, name: null, picture: null }
+  let finish!: () => void
+  state.finishGate = new Promise((resolve) => {
+    finish = resolve
+  })
+  mount()
+  const powerset = row("Powerset")
+  fireEvent.click(await within(powerset).findByRole("button", { name: "Powerset: Connect" }))
+  expect(within(powerset).getByText("Working")).toBeTruthy()
+  expect(within(powerset).getByText("Finish signing in to Powerset in your browser.")).toBeTruthy()
+  state.account = SIGNED_IN
+  finish()
+  expect(await within(powerset).findByText("Connected")).toBeTruthy()
+  expect(within(powerset).queryByText("Finish signing in to Powerset in your browser.")).toBeNull()
 })
 
 it("shows a stopped wait's line and command with Try again", async () => {

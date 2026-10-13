@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 
 import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -108,29 +108,44 @@ function Row({
   )
 }
 
-/** A line under a row's purpose: what its step is doing, or why it stopped. */
+/** The one line a row adds: what to do now, or the command a stopped sign-in needs. */
 function Line({ children, bad = false }: { children: ReactNode; bad?: boolean }) {
   return <span className={cn("text-xs leading-snug", bad ? "text-bad" : "text-foreground")}>{children}</span>
 }
 
-/** Where one source stands: its sign-in in progress (the connect record), else whether it is
- *  signed in (accounts.signed_in, the answer setup takes). Only signing in makes a source ready. */
+// What to do while each sign-in runs. A row shows this, never the run's own status lines.
+const TODO: Record<ConnectSource, string> = {
+  linkedin: "Sign in to LinkedIn in the window that opens.",
+  gmail: "Sign in to Google in the window that opens.",
+  whatsapp: "In WhatsApp on your phone, go to Linked devices and scan this code.",
+}
+
+/** WhatsApp's code, in a box of its own size from the start, so nothing moves when it arrives. */
+function CodeBox({ url }: { url?: string }) {
+  return (
+    <span className="mt-1 grid size-40 place-items-center rounded-[var(--radius-s)] bg-white p-2 text-muted-foreground">
+      {url ? <img src={url} alt="WhatsApp code to scan" className="size-full" /> : <Spinner />}
+    </span>
+  )
+}
+
+/** Whether the connect record is a sign-in still under way: each write carries its run's pid until
+ *  the run hands back (0) or fails, and a read reports a run whose process is gone as stopped. */
+function live(record: InstallStatus): boolean {
+  return (record.installer_pid ?? 0) > 0 && record.status !== "failed"
+}
+
+/** Where one source stands: its sign-in under way (the connect record), else whether it is signed
+ *  in (accounts.signed_in, the answer setup takes), else whether its last sign-in stopped. */
 function standing(record: InstallStatus | undefined, signed: SignedIn | undefined, source: ConnectSource) {
-  if (record && STEPS[source].includes(record.step)) {
-    const live = (record.installer_pid ?? 0) > 0
-    if (record.status === "running" || (record.status === "waiting" && live))
-      return { state: "working" as const, line: record.message, qr: record.action?.qr_url }
-    // Stopped: failed, or waiting with nothing left running (a password, a closed window).
-    if (record.status === "failed" || record.status === "waiting")
-      return {
-        state: "needed" as const,
-        line: record.message,
-        command: record.action?.command,
-        stopped: true,
-      }
-  }
+  const own = record && STEPS[source].includes(record.step) ? record : undefined
+  if (own && live(own)) return { state: "working" as const, qr: own.action?.qr_url }
   if (signed === undefined) return { state: "checking" as const }
-  return { state: signed[source] ? ("ready" as const) : ("needed" as const) }
+  if (signed[source]) return { state: "ready" as const }
+  // Stopped: failed, or waiting with nothing left running (a password, a closed window).
+  if (own && (own.status === "failed" || own.status === "waiting"))
+    return { state: "needed" as const, stopped: true, line: own.message, command: own.action?.command }
+  return { state: "needed" as const }
 }
 
 const LINK =
@@ -269,11 +284,22 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const [profile, setProfile] = useState<string | null>(null)
   // The mailboxes Gmail's last connect asked for, so Try again asks for them again.
   const [asked, setAsked] = useState<string[] | null>(null)
-  // A source waiting on its tools to install before its sign-in starts.
-  const [queued, setQueued] = useState<ConnectSource | null>(null)
+  // The sign-in a click started, from the click until its outcome is known: its row shows Working
+  // throughout, never the last run's record or a sign-in answer from before it. `launched`: its
+  // run has written to the connect record.
+  const [queued, setQueued] = useState<{ source: ConnectSource; launched: boolean } | null>(null)
+  // Powerset's sign-in in the browser, until the account is read again.
+  const [signingIn, setSigningIn] = useState(false)
 
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
   const signedIn = account.data?.signed_in === true
+  const powerset: State = account.isPending
+    ? "checking"
+    : signedIn
+      ? "ready"
+      : signingIn
+        ? "working"
+        : "needed"
   const connection = useQuery({
     queryKey: ["install", "connect"],
     queryFn: ({ signal }) => fetchConnection(signal),
@@ -289,16 +315,14 @@ export function Connect({ onBack }: { onBack: () => void }) {
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [client])
+  const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
-  const busy =
-    queued !== null ||
-    (record !== undefined &&
-      (record.status === "running" || (record.status === "waiting" && (record.installer_pid ?? 0) > 0)))
-  const wasBusy = useRef(false)
+  const busy = queued !== null || running
+  // Once the run a click launched is over, ask what is signed in, then let its row show the answer.
   useEffect(() => {
-    if (wasBusy.current && !busy) void client.invalidateQueries({ queryKey: SIGNED_IN })
-    wasBusy.current = busy
-  }, [busy, client])
+    if (!queued?.launched || running) return
+    void client.refetchQueries({ queryKey: SIGNED_IN }).finally(() => setQueued(null))
+  }, [queued, running, client])
   const email = mailbox ?? account.data?.email ?? ""
   const linkedin = ready?.linkedin === true
   // The Gmail mailboxes msgvault keeps, signed in or not, the app's owner first: a connect sends
@@ -317,7 +341,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
   // Install what the sign-in needs (a browser, Google's tools), wait for it, then start it.
   const connect = async (source: ConnectSource, emails?: string[]) => {
     setError(null)
-    setQueued(source)
+    setQueued({ source, launched: false })
     try {
       const needed = (checks: Preflight) => NEEDS[source].map((tool) => checks[TOOL[tool]])
       const checks = await fetchPreflight()
@@ -327,11 +351,12 @@ export function Connect({ onBack }: { onBack: () => void }) {
         if (broken) throw new Error(broken.install?.message ?? "Could not install what this sign-in needs")
         await new Promise((resolve) => setTimeout(resolve, POLL_MS))
       }
+      // Answers once the run has written to the connect record, so the record read next is its own.
       await connectSource(source, emails)
-      await client.invalidateQueries({ queryKey: ["install", "connect"] })
+      await client.refetchQueries({ queryKey: ["install", "connect"] })
+      setQueued({ source, launched: true })
     } catch (caught) {
       fail(caught)
-    } finally {
       setQueued(null)
     }
   }
@@ -341,14 +366,11 @@ export function Connect({ onBack }: { onBack: () => void }) {
     title: string,
     icon: ReactNode,
     why: ReactNode,
-    // A line of the row's own under its run's.
+    // A line of the row's own, while it is not working.
     extra?: ReactNode,
   ) => {
-    const at =
-      queued === name
-        ? { state: "working" as const, line: "Installing what it needs…" }
-        : standing(record, ready, name)
-    const qr = "qr" in at ? at.qr : undefined
+    const run = standing(record, ready, name)
+    const at = queued?.source === name && run.state !== "working" ? { state: "working" as const } : run
     const command = "command" in at ? at.command : undefined
     return (
       <Row
@@ -366,20 +388,19 @@ export function Connect({ onBack }: { onBack: () => void }) {
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
-        {"line" in at && at.line && !qr ? <Line bad={"stopped" in at}>{at.line}</Line> : null}
+        {at.state === "working" ? <Line>{TODO[name]}</Line> : null}
+        {at.state === "working" && name === "whatsapp" ? (
+          <CodeBox url={"qr" in at ? at.qr : undefined} />
+        ) : null}
         {command ? (
-          <code className="select-all break-all rounded-[var(--radius-s)] bg-surface-2 px-2 py-1 text-[11px]">
-            {command}
-          </code>
+          <>
+            <Line bad>{"line" in at ? at.line : null}</Line>
+            <code className="select-all break-all rounded-[var(--radius-s)] bg-surface-2 px-2 py-1 text-[11px]">
+              {command}
+            </code>
+          </>
         ) : null}
-        {qr ? (
-          <img
-            src={qr}
-            alt="WhatsApp code to scan"
-            className="mt-1 size-40 rounded-[var(--radius-s)] bg-white p-2"
-          />
-        ) : null}
-        {extra}
+        {at.state === "working" ? null : extra}
       </Row>
     )
   }
@@ -391,17 +412,23 @@ export function Connect({ onBack }: { onBack: () => void }) {
           icon={<PowersetMark className="size-[18px]" />}
           title="Powerset"
           why={signedIn ? (account.data?.email ?? "") : "Your account, needed for setup."}
-          state={account.isPending ? "checking" : signedIn ? "ready" : "needed"}
+          state={powerset}
           action={{
             label: "Connect",
             onClick: () => {
               setError(null)
+              setSigningIn(true)
               void signIn()
                 .catch(fail)
-                .finally(() => void client.invalidateQueries({ queryKey: ["account"] }))
+                .finally(
+                  () =>
+                    void client.refetchQueries({ queryKey: ["account"] }).finally(() => setSigningIn(false)),
+                )
             },
           }}
-        />
+        >
+          {powerset === "working" ? <Line>Finish signing in to Powerset in your browser.</Line> : null}
+        </Row>
         <Row
           icon={<span className="font-mono text-[12px] font-bold">&gt;_</span>}
           title="Codex"

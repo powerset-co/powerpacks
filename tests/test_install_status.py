@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
@@ -184,6 +184,22 @@ class ConnectTests(unittest.TestCase):
             "--gmail-email", "owner@gmail.com", "--gmail-email", "work@example.com"])
         self.assertEqual(popen.call_args.kwargs["cwd"], self.root)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    def test_connect_answers_once_the_run_has_written_its_own_status(self) -> None:
+        record = InstallStatus(self.root, "connect")
+        record.write("whatsapp.failed", pid=1, retry_command="bin/onboard --source whatsapp --logins-only")
+        # A live pid: a read reports a running record whose process is gone as paused.
+        run = MagicMock(pid=os.getpid())
+        run.poll.return_value = None
+
+        def first_write(_seconds: float) -> None:
+            record.write("whatsapp.checking", pid=run.pid, retry_command="bin/onboard --source whatsapp --logins-only")
+
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen", return_value=run), \
+                patch("packs.powerset.primitives.install.controller.time.sleep", side_effect=first_write) as sleep:
+            self.controller.connect("whatsapp")
+        sleep.assert_called_once()
+        self.assertEqual(self.controller.connection()["installer_pid"], run.pid)
 
     def test_connect_takes_only_a_source_with_a_login(self) -> None:
         with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:

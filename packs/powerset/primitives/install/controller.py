@@ -1,6 +1,8 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-13: `POST /api/install/connect` answers once the run has written its own status, so the
+      Connect screen never reads the previous run's record after a click.
   2026-10-13: `/api/install/skip` is gone: setup under the desktop app takes only connected sources,
       so it never stops at WhatsApp's QR to be skipped.
   2026-10-13: connect: `POST /api/install/connect` runs one source's tools and login for the
@@ -17,6 +19,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -113,7 +116,11 @@ class InstallController:
         directory = self.root / ".powerpacks/install"
         directory.mkdir(parents=True, exist_ok=True)
         with (directory / "connect.log").open("a") as log:
-            subprocess.Popen(command, cwd=self.root, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            run = subprocess.Popen(command, cwd=self.root, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        # Every write carries the run's pid: answer once the record is this run's (or the run ended).
+        record = InstallStatus(self.root, "connect")
+        while run.poll() is None and record.read()["installer_pid"] != run.pid:
+            time.sleep(0.05)
         return {"status": "started", "source": source}
 
     @staticmethod

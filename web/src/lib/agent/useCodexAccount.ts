@@ -57,13 +57,13 @@ export function useCodexAccountState(): CodexAccountState {
       onAgentEvent((event) => {
         if (event.type === "loginCompleted") {
           void focusApp()
-          setLogin(null)
           setActionError(event.success ? null : (event.error ?? "Sign-in did not finish."))
-          refresh()
+          // The sign-in ends once Codex's account is read again, so nothing shows Connect in between.
+          void client.invalidateQueries({ queryKey: CODEX_KEY }).finally(() => setLogin(null))
         }
         if (event.type === "accountUpdated") refresh()
       }),
-    [refresh],
+    [client, refresh],
   )
 
   useEffect(() => {
