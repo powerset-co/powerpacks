@@ -228,7 +228,7 @@ describe("installation progress", () => {
       "fetch",
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByText("Enriching contacts")
     status = {
       ...INSTALL,
@@ -424,7 +424,7 @@ describe("installation progress", () => {
           : Promise.reject(new TypeError("Failed to fetch")),
       ),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByRole("heading", { name: "Powerpacks is installed" })
     reachable = false
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
@@ -446,7 +446,7 @@ describe("installation progress", () => {
       "fetch",
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByRole("heading", { name: "Waiting for you to sign in" })
     expect(screen.getByText("Please sign in to Powerset")).toBeTruthy()
 
