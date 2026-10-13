@@ -102,16 +102,6 @@ export function BookIcon(props: IconProps) {
   )
 }
 
-/** Something still to connect: a warning triangle. */
-export function WarningIcon(props: IconProps) {
-  return (
-    <svg {...STROKED} {...props}>
-      <path d="M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
-      <path d="M12 9.5v4M12 17h.01" />
-    </svg>
-  )
-}
-
 /** The broadcast mark: the hive, filled. Its button carries the label. */
 export function HiveIcon(props: IconProps) {
   return (

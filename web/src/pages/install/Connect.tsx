@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 
-import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner, WarningIcon } from "@/components/shared"
+import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
@@ -53,8 +53,8 @@ type State = "checking" | "working" | "ready" | "needed"
 // Every row's right side: one slot of one width, an icon beside a word.
 const SLOT = "w-28 shrink-0 self-center"
 
-/** One thing to connect: what it is for, then its slot: a warning on the Connect button while it
- *  is not connected, "Working" while its sign-in runs, a check once connected. */
+/** One thing to connect: what it is for, then its slot: Connect while it is not connected,
+ *  "Working" while its sign-in runs, a check once connected. */
 function Row({
   icon,
   title,
@@ -87,9 +87,8 @@ function Row({
           onClick={action.onClick}
           disabled={action.disabled}
           aria-label={`${title}: ${action.label}`}
-          className={cn(SLOT, "gap-1.5")}
+          className={SLOT}
         >
-          <WarningIcon className="size-3.5 text-warn" />
           {action.label}
         </Button>
       ) : (
