@@ -5,10 +5,11 @@ The stage writes no file state: labels, the share list and human tags are tables
 family. Only the run manifest is a file.
 
 Flow: `evidence.py` joins a family's export row, worth and facts into `PersonEvidence` -> `labels.py`
-renders `DeterministicLabels` + `JevLabels` and decides -> `share_list.py` (the node) writes
+renders `DeterministicLabels` + `Labels` and decides -> `share_list.py` (the node) writes
 `person_labels` and `share`.
 
 Changelog:
+  2026-10-13: Luna's labels and share call replace JEV's (`Labels`, `LabelRow.share_call`).
   2026-10-07: v2. A person is a family (its parent id); `candidate_ids` are its members. The row
     types the v1 store held (`PersonTagRow`, `PersonLabelRow`, `ShareDecisionRow`) live here.
   2026-09-26: the noul probabilities persist unrounded: the share UI re-decides a tagged person
@@ -22,7 +23,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.primitives.share.questions import CHOICE_LABELS, SCORE_LABELS
 
 SHARE_DIR = Path(".powerpacks/share")
 MANIFEST_FILENAME = "manifest.json"
@@ -59,7 +60,7 @@ class PersonEvidence:
     interaction_counts: dict[str, int]
     last_interaction: str | None
     network_worth: str                   # the family's current worth: yes, maybe or no
-    worth_labels: dict[str, Any] | None  # the JEV labels worth saved; None when a human decided and no machine row exists
+    worth_labels: dict[str, Any] | None  # the labels worth saved; None when a human decided and no machine row exists
     facts: dict[str, Any]
     shared_overlaps: frozenset[str]      # `facts.shared_context[].overlap` values
     messages: MessageStats
@@ -86,20 +87,22 @@ class DeterministicLabels:
 
 
 @dataclass(frozen=True)
-class JevLabels:
-    """Jev's answers reduced to one value per question."""
+class Labels:
+    """Luna's answers reduced to one value per question, and its share call."""
 
     choices: dict[str, str]
     choice_p: dict[str, float]
     # Expected level (0.00-4.00 for warmth), not the argmax: the tiers spread.
     scores: dict[str, float]
     probabilities: dict[str, float]
+    share_call: str  # share, ask or keep_private (share/questions.py CALL_*)
+    share_p: float   # the call's probability
 
 
 @dataclass(frozen=True)
 class LabelRow:
-    """One person's label cells, for the share decision. `probabilities` is empty when worth never
-    judged the family (a human decided it)."""
+    """One person's label cells, for the share decision. `probabilities` is empty and `share_call`
+    is "" when worth never judged the family (a human decided it)."""
 
     person_id: str
     public_identifier: str
@@ -107,6 +110,8 @@ class LabelRow:
     worth: str
     flag: str
     probabilities: dict[str, float]
+    share_call: str
+    share_p: float
 
 
 @dataclass(frozen=True)
@@ -121,7 +126,7 @@ class HumanTags:
 
 @dataclass(frozen=True)
 class PersonLabelRow:
-    """One `person_labels` row: deterministic labels plus the JEV answers."""
+    """One `person_labels` row: deterministic labels plus Luna's answers."""
 
     person_id: str
     public_identifier: str
@@ -148,12 +153,13 @@ class ShareDecisionRow:
 DETERMINISTIC_COLUMNS = tuple(field.name for field in fields(DeterministicLabels))
 
 
-def label_payload(deterministic: DeterministicLabels, jev: JevLabels | None) -> str:
+def label_payload(deterministic: DeterministicLabels, labels: Labels | None) -> str:
     """Serialize one person's label cells flat, the shape the export table holds."""
     cells: dict[str, Any] = {name: getattr(deterministic, name) for name in DETERMINISTIC_COLUMNS}
-    if jev is not None:
-        cells.update(jev.choices)
-        cells.update({f"{name}_p": round(jev.choice_p[name], 3) for name in CHOICE_LABELS})
-        cells.update({name: round(jev.scores[name], 2) for name in SCORE_LABELS})
-        cells.update({name: jev.probabilities[name] for name in NOUL_LABELS})
+    if labels is not None:
+        cells.update(labels.choices)
+        cells.update({f"{name}_p": round(labels.choice_p[name], 3) for name in CHOICE_LABELS})
+        cells.update({name: round(labels.scores[name], 2) for name in SCORE_LABELS})
+        cells.update(labels.probabilities)
+        cells.update({"share_call": labels.share_call, "share_call_p": labels.share_p})
     return json.dumps(cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

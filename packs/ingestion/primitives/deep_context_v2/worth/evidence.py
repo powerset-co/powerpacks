@@ -11,8 +11,8 @@ from typing import Any
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import MessageDirection
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
-from packs.ingestion.primitives.deep_context_v2.worth import jev
-from packs.ingestion.primitives.deep_context_v2.worth.jev import ChannelSummary
+from packs.ingestion.primitives.deep_context_v2.worth import luna
+from packs.ingestion.primitives.deep_context_v2.worth.luna import ChannelSummary
 
 
 def family_facts(members: list[MemberFacts]) -> SynthesizedFacts:
@@ -65,7 +65,7 @@ def family_key(members: list[MemberFacts]) -> str:
     member_ids: list[str] = []
     for member in members:
         member_ids.append(member.candidate_id)
-    payload: dict[str, Any] = {"version": jev.REQUEST_VERSION, "members": sorted(member_ids)}
+    payload: dict[str, Any] = {"version": luna.REQUEST_VERSION, "members": sorted(member_ids)}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 

@@ -39,6 +39,10 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     family: "Family",
     romantic_partner: "Partner",
     minor: "Minor",
+    would_vouch: "Professional contact",
+    not_professional: "Not a professional contact",
+    unsure: "Unsure: your call",
+    // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",
     automated_sender: "Automated sender",
