@@ -19,7 +19,15 @@ vi.mock("@/lib/agent/useCodexAccount", () => ({
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: null, picture: null }
 const READY = { browser: { ok: true, name: "Chrome", install: null }, gcloud: { ok: true, install: null } }
 // A connect record as GET /api/install/connect returns it: nothing run yet.
-const NOTHING = { step: "runtime", status: "waiting", installer_pid: 0, message: "", steps: {}, action: null }
+const NOTHING = {
+  step: "runtime",
+  status: "waiting",
+  installer_pid: 0,
+  message: "",
+  steps: {},
+  action: null,
+  mailboxes: [],
+}
 
 let state: { account: object; connect: object; posts: { url: string; body: unknown }[] }
 let invoke: ReturnType<typeof vi.fn>
@@ -141,4 +149,35 @@ it("shows WhatsApp's code while it waits on a scan", async () => {
   mount()
   const code = await screen.findByRole("img", { name: "WhatsApp code to scan" })
   expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
+})
+
+it("connects Gmail with the Powerset address, then adds another mailbox after the first", async () => {
+  mount()
+  fireEvent.click(await within(row("Gmail")).findByRole("button", { name: "Connect" }))
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({
+      url: "/api/install/connect",
+      body: { source: "gmail", emails: ["casey@example.com"] },
+    }),
+  )
+  cleanup()
+  state.connect = {
+    ...NOTHING,
+    step: "sources",
+    status: "completed",
+    steps: { gmail_login: { status: "completed" } },
+    mailboxes: ["casey@example.com"],
+  }
+  mount()
+  const gmail = row("Gmail")
+  fireEvent.click(await within(gmail).findByRole("button", { name: "Add another" }))
+  const field = within(gmail).getByRole("textbox", { name: "Gmail address" })
+  fireEvent.change(field, { target: { value: "work@example.com" } })
+  fireEvent.submit(field)
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({
+      url: "/api/install/connect",
+      body: { source: "gmail", emails: ["casey@example.com", "work@example.com"] },
+    }),
+  )
 })

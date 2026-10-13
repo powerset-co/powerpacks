@@ -2,8 +2,9 @@
 
 Changelog:
   2026-10-13: connect: `POST /api/install/connect` runs one source's tools and login for the
-      desktop app's Connect screen (onboard.py --logins-only) in the background; `GET` reads its
-      record, with the QR's URL while WhatsApp waits on one.
+      desktop app's Connect screen (onboard.py --logins-only) in the background, Gmail with every
+      mailbox; `GET` reads its record, with the QR's URL while WhatsApp waits on one and the
+      Gmail mailboxes msgvault's app takes.
   2026-10-09: preflight: `GET /api/install/preflight` reports what the desktop app's first screen
       checks (a browser for sign-ins, the Google Cloud CLI); `POST` installs one in the background.
   2026-10-09: `/api/install/skip` skips a stopped source (WhatsApp at its QR) for the rest of the
@@ -25,6 +26,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.ingestion.primitives.setup.automations import msgvault_home
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
@@ -113,24 +115,30 @@ class InstallController:
         return path.read_bytes() if path else None
 
     def connection(self) -> dict:
-        """The Connect screen's run: its record, with the QR's URL while WhatsApp waits on one."""
+        """The Connect screen's run: its record, with the QR's URL while WhatsApp waits on one, and
+        the Gmail mailboxes msgvault's app takes, its owner first."""
         record = InstallStatus(self.root, "connect").read()
         qr = self.qr(record)
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
+        app = msgvault_home.load_setup_state(Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser())
+        record["mailboxes"] = [email for email in dict.fromkeys((app.email, *app.test_users)) if email]
         return record
 
-    def connect(self, source: object, email: object) -> dict:
+    def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
-        (one at a time, by setup's own lock), followed by the page in the connect record."""
+        (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
+        takes every mailbox, the app's owner first: an added one reuses the app."""
         if source not in CONNECTABLE:
             raise ValueError("Unknown source")
         command = [sys.executable, "-m", "packs.powerset.primitives.install.onboard", "--root", str(self.root),
                    "--source", str(source), "--logins-only"]
         if source == "gmail":
-            if not isinstance(email, str) or "@" not in email:
-                raise ValueError("Which Gmail address?")
-            command += ["--gmail-email", email.strip()]
+            if not isinstance(emails, list) or not emails or not all(isinstance(email, str) and "@" in email
+                                                                       for email in emails):
+                raise ValueError("Which Gmail addresses?")
+            for email in dict.fromkeys(email.strip() for email in emails):
+                command += ["--gmail-email", email]
         directory = self.root / ".powerpacks/install"
         directory.mkdir(parents=True, exist_ok=True)
         with (directory / "connect.log").open("a") as log:
@@ -187,7 +195,7 @@ class InstallController:
                 response = self.skip(self._body(handler).get("source"))
             elif path == "/api/install/connect":
                 body = self._body(handler)
-                response = self.connect(body.get("source"), body.get("email"))
+                response = self.connect(body.get("source"), body.get("emails"))
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)
                 return True

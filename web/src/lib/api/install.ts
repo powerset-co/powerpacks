@@ -20,16 +20,22 @@ export async function installAction(action: string, values: object = {}): Promis
 /** The sources the Connect screen signs in to before setup (controller.py CONNECTABLE). */
 export type ConnectSource = "linkedin" | "gmail" | "whatsapp"
 
-/** The Connect screen's run: one source's tools and login at a time, in its own record. */
-export async function fetchConnection(signal: AbortSignal): Promise<InstallStatus> {
-  const response = await fetch("/api/install/connect", { signal, cache: "no-store" })
-  if (!response.ok) throw await failure(response, "Couldn't check your connections")
-  return body<InstallStatus>(response)
+/** The Connect screen's run: one source's tools and login at a time, in its own record, with
+ *  the Gmail mailboxes msgvault's app takes (its owner first). */
+export interface Connection extends InstallStatus {
+  mailboxes: string[]
 }
 
-/** Sign in to one source before setup; Gmail's takes the mailbox. fetchConnection follows it. */
-export function connectSource(source: ConnectSource, email?: string): Promise<void> {
-  return installAction("connect", { source, email })
+export async function fetchConnection(signal: AbortSignal): Promise<Connection> {
+  const response = await fetch("/api/install/connect", { signal, cache: "no-store" })
+  if (!response.ok) throw await failure(response, "Couldn't check your connections")
+  return body<Connection>(response)
+}
+
+/** Sign in to one source before setup; Gmail's takes every mailbox, the app's owner first.
+ *  fetchConnection follows it. */
+export function connectSource(source: ConnectSource, emails?: string[]): Promise<void> {
+  return installAction("connect", { source, emails })
 }
 
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */

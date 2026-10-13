@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from packs.ingestion.primitives.setup.automations import msgvault_home
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
@@ -212,15 +213,19 @@ class ConnectTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
+        # Never read the real ~/.msgvault from a test.
+        patch.dict("os.environ", {"MSGVAULT_HOME": str(self.root / "msgvault")}).start()
+        self.addCleanup(patch.stopall)
         self.controller = InstallController(self.root)
 
     def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
         with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
-            self.assertEqual(self.controller.connect("gmail", " mailbox@gmail.com "),
+            self.assertEqual(self.controller.connect("gmail", [" owner@gmail.com ", "work@example.com", "owner@gmail.com"]),
                              {"status": "started", "source": "gmail"})
         self.assertEqual(popen.call_args.args[0][1:], [
             "-m", "packs.powerset.primitives.install.onboard", "--root", str(self.root),
-            "--source", "gmail", "--logins-only", "--gmail-email", "mailbox@gmail.com"])
+            "--source", "gmail", "--logins-only",
+            "--gmail-email", "owner@gmail.com", "--gmail-email", "work@example.com"])
         self.assertEqual(popen.call_args.kwargs["cwd"], self.root)
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
@@ -229,9 +234,16 @@ class ConnectTests(unittest.TestCase):
             for source in ("imessage", "powerset", None):
                 with self.assertRaises(ValueError):
                     self.controller.connect(source, None)
-            with self.assertRaises(ValueError):
-                self.controller.connect("gmail", "")
+            for emails in ([], ["not-an-address"], "owner@gmail.com"):
+                with self.assertRaises(ValueError):
+                    self.controller.connect("gmail", emails)
         popen.assert_not_called()
+
+    def test_the_connect_record_names_the_mailboxes_msgvaults_app_takes(self) -> None:
+        self.assertEqual(self.controller.connection()["mailboxes"], [])
+        msgvault_home.save_setup_state(self.root / "msgvault", {
+            "email": "owner@gmail.com", "test_users": ["owner@gmail.com", "work@example.com"]})
+        self.assertEqual(self.controller.connection()["mailboxes"], ["owner@gmail.com", "work@example.com"])
 
     def test_the_connect_record_carries_its_qr_and_leaves_setups_alone(self) -> None:
         InstallStatus(self.root, "connect").write("whatsapp.qr", pid=os.getpid(),

@@ -142,31 +142,15 @@ function useMessagesReadable(): boolean | null {
   return readable
 }
 
-/** The Gmail mailbox: the Powerset address until another is typed. */
-function Mailbox({ email, onChange }: { email: string; onChange: (email: string) => void }) {
-  const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState(email)
-  if (!editing)
-    return (
-      <>
-        From {email || "your Google account"}
-        {" · "}
-        <button
-          type="button"
-          className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline"
-          onClick={() => {
-            setValue(email)
-            setEditing(true)
-          }}
-        >
-          Change
-        </button>
-      </>
-    )
+const LINK =
+  "cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline disabled:opacity-50"
+
+/** An address typed in place, saved on Enter or leaving the field; anything without an @ is dropped. */
+function AddressField({ initial, onDone }: { initial: string; onDone: (email: string | null) => void }) {
+  const [value, setValue] = useState(initial)
   const save = (event: FormEvent) => {
     event.preventDefault()
-    if (value.includes("@")) onChange(value.trim())
-    setEditing(false)
+    onDone(value.includes("@") ? value.trim() : null)
   }
   return (
     <form onSubmit={save} className="flex gap-2">
@@ -184,6 +168,56 @@ function Mailbox({ email, onChange }: { email: string; onChange: (email: string)
   )
 }
 
+/** Gmail's mailboxes: once connected, each one and Add another; before that, the address the
+ *  first connect uses (the Powerset one until changed). The first mailbox owns Gmail's app. */
+function Mailboxes({
+  connected,
+  email,
+  disabled,
+  onChange,
+  onAdd,
+}: {
+  connected: readonly string[]
+  email: string
+  disabled: boolean
+  onChange: (email: string) => void
+  onAdd: (email: string) => void
+}) {
+  const [typing, setTyping] = useState(false)
+  if (typing)
+    return (
+      <AddressField
+        initial={connected.length ? "" : email}
+        onDone={(value) => {
+          setTyping(false)
+          if (value) (connected.length ? onAdd : onChange)(value)
+        }}
+      />
+    )
+  if (connected.length)
+    return (
+      <span className="flex flex-wrap items-center gap-1.5">
+        {connected.map((mailbox) => (
+          <span key={mailbox} className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-foreground">
+            {mailbox}
+          </span>
+        ))}
+        <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
+          Add another
+        </button>
+      </span>
+    )
+  return (
+    <>
+      From {email || "your Google account"}
+      {" · "}
+      <button type="button" className={LINK} onClick={() => setTyping(true)}>
+        Change
+      </button>
+    </>
+  )
+}
+
 /** The desktop app's setup before it starts: every sign-in, one row each, so setup itself never
  *  waits on the user. Only Powerset is needed; a source left unconnected is left out of setup.
  *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app. */
@@ -194,6 +228,8 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [mailbox, setMailbox] = useState<string | null>(null)
+  // The mailboxes Gmail's last connect asked for, so Try again asks for them again.
+  const [asked, setAsked] = useState<string[] | null>(null)
   // A source waiting on its tools to install before its sign-in starts.
   const [queued, setQueued] = useState<ConnectSource | null>(null)
 
@@ -211,10 +247,16 @@ export function Connect({ onBack }: { onBack: () => void }) {
     (record !== undefined &&
       (record.status === "running" || (record.status === "waiting" && (record.installer_pid ?? 0) > 0)))
   const email = mailbox ?? account.data?.email ?? ""
+  // Gmail's mailboxes once it is connected, the app's owner first.
+  const connected = standing(record, "gmail").state === "ready" ? (record?.mailboxes ?? []) : []
+  const connectGmail = (emails: string[]) => {
+    setAsked(emails)
+    void connect("gmail", emails)
+  }
 
   const fail = (caught: unknown) => setError(errorText(caught))
   // Install what the sign-in needs (a browser, Google's tools), wait for it, then start it.
-  const connect = async (source: ConnectSource) => {
+  const connect = async (source: ConnectSource, emails?: string[]) => {
     setError(null)
     setQueued(source)
     try {
@@ -226,7 +268,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
         if (broken) throw new Error(broken.install?.message ?? "Could not install what this sign-in needs")
         await new Promise((resolve) => setTimeout(resolve, POLL_MS))
       }
-      await connectSource(source, source === "gmail" ? email : undefined)
+      await connectSource(source, emails)
       await client.invalidateQueries({ queryKey: ["install", "connect"] })
     } catch (caught) {
       fail(caught)
@@ -251,7 +293,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
         state={at.state}
         action={{
           label: "stopped" in at ? "Try again" : label,
-          onClick: () => void connect(name),
+          onClick: () => (name === "gmail" ? connectGmail(asked ?? [email]) : void connect(name)),
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
@@ -318,21 +360,27 @@ export function Connect({ onBack }: { onBack: () => void }) {
           "linkedin",
           "LinkedIn",
           <LinkedInIcon className="size-[18px]" />,
-          "Your connections. Sign in once in the window that opens.",
+          "Your connections, after one sign-in.",
           "Sign in",
         )}
         {source(
           "gmail",
           "Gmail",
           <GmailIcon className="size-[18px]" />,
-          <Mailbox email={email} onChange={setMailbox} />,
+          <Mailboxes
+            connected={connected}
+            email={email}
+            disabled={busy}
+            onChange={setMailbox}
+            onAdd={(added) => connectGmail([...connected, added])}
+          />,
           "Connect",
         )}
         {source(
           "whatsapp",
           "WhatsApp",
           <WhatsAppIcon className="size-[18px]" />,
-          "Scan a code with your phone: Linked devices, then Link a device.",
+          "Scan a code with your phone.",
           "Link",
         )}
       </ul>
