@@ -334,3 +334,45 @@ it("keeps the Google app's owner first when a mailbox needs signing in again", a
     }),
   )
 })
+
+it("shows Try again when a mailbox added to a signed-in Gmail stops, not Connected", async () => {
+  state.signed = { ...NONE, gmail: true, mailboxes: ["casey@example.com"] }
+  state.connect = { ...NOTHING, step: "gmail_login", status: "failed", message: "Gmail sign-in stopped." }
+  mount()
+  const gmail = row("Gmail")
+  expect(await within(gmail).findByRole("button", { name: "Gmail: Try again" })).toBeTruthy()
+  expect(within(gmail).queryByText("Connected")).toBeNull()
+  expect(within(gmail).queryByText("Gmail sign-in stopped.")).toBeNull()
+})
+
+it("shows a sign-in that was under way when the screen opened once its run ends", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "linkedin_login",
+    status: "running",
+    installer_pid: 41,
+    message: "Checking LinkedIn",
+  }
+  mount()
+  const linkedin = row("LinkedIn")
+  expect(await within(linkedin).findByText("Working")).toBeTruthy()
+  state.signed = { ...NONE, linkedin: true }
+  state.connect = { ...NOTHING, step: "sources", status: "completed" }
+  expect(await within(linkedin).findByText("Connected", {}, { timeout: 4_000 })).toBeTruthy()
+})
+
+it("tells you to turn on Full Disk Access, Working until you come back", async () => {
+  mount()
+  const messages = row("Messages")
+  fireEvent.click(await within(messages).findByRole("button", { name: "Messages: Connect" }))
+  expect(within(messages).getByText("Working")).toBeTruthy()
+  expect(
+    within(messages).getByText("Turn on Powerpacks in System Settings, then come back here."),
+  ).toBeTruthy()
+  state.signed = { ...NONE, imessage: true }
+  fireEvent.focus(window)
+  expect(await within(messages).findByText("Connected")).toBeTruthy()
+  expect(
+    within(messages).queryByText("Turn on Powerpacks in System Settings, then come back here."),
+  ).toBeNull()
+})

@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 
 import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -140,12 +140,12 @@ function live(record: InstallStatus): boolean {
 function standing(record: InstallStatus | undefined, signed: SignedIn | undefined, source: ConnectSource) {
   const own = record && STEPS[source].includes(record.step) ? record : undefined
   if (own && live(own)) return { state: "working" as const, qr: own.action?.qr_url }
-  if (signed === undefined) return { state: "checking" as const }
-  if (signed[source]) return { state: "ready" as const }
-  // Stopped: failed, or waiting with nothing left running (a password, a closed window).
+  // Stopped: failed, or waiting with nothing left running (a password, a closed window). It comes
+  // before the sign-in answer: a Gmail mailbox added to a signed-in one can stop.
   if (own && (own.status === "failed" || own.status === "waiting"))
     return { state: "needed" as const, stopped: true, line: own.message, command: own.action?.command }
-  return { state: "needed" as const }
+  if (signed === undefined) return { state: "checking" as const }
+  return { state: signed[source] ? ("ready" as const) : ("needed" as const) }
 }
 
 const LINK =
@@ -290,6 +290,8 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const [queued, setQueued] = useState<{ source: ConnectSource; launched: boolean } | null>(null)
   // Powerset's sign-in in the browser, until the account is read again.
   const [signingIn, setSigningIn] = useState(false)
+  // Full Disk Access is turned on in System Settings: Working until the window comes back.
+  const [asking, setAsking] = useState(false)
 
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
   const signedIn = account.data?.signed_in === true
@@ -311,17 +313,21 @@ export function Connect({ onBack }: { onBack: () => void }) {
   const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
   const ready = signed.data
   useEffect(() => {
-    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN })
+    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN }).finally(() => setAsking(false))
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [client])
   const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
   const busy = queued !== null || running
-  // Once the run a click launched is over, ask what is signed in, then let its row show the answer.
+  // Once a run is over (the one a click launched, or one under way when the screen opened), ask what
+  // is signed in, then let its row show the answer.
+  const wasRunning = useRef(false)
   useEffect(() => {
-    if (!queued?.launched || running) return
-    void client.refetchQueries({ queryKey: SIGNED_IN }).finally(() => setQueued(null))
+    const ended = wasRunning.current && !running
+    wasRunning.current = running
+    if (ended || (queued?.launched && !running))
+      void client.refetchQueries({ queryKey: SIGNED_IN }).finally(() => setQueued(null))
   }, [queued, running, client])
   const email = mailbox ?? account.data?.email ?? ""
   const linkedin = ready?.linkedin === true
@@ -450,9 +456,22 @@ export function Connect({ onBack }: { onBack: () => void }) {
           icon={<MessagesIcon className="size-[18px]" />}
           title="Messages"
           why="iMessage and Contacts, with Full Disk Access."
-          state={ready === undefined ? "checking" : ready.imessage ? "ready" : "needed"}
-          action={{ label: "Connect", onClick: () => void installAction("permissions").catch(fail) }}
-        />
+          state={ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed"}
+          action={{
+            label: "Connect",
+            onClick: () => {
+              setAsking(true)
+              void installAction("permissions").catch((caught: unknown) => {
+                fail(caught)
+                setAsking(false)
+              })
+            },
+          }}
+        >
+          {asking && ready?.imessage === false ? (
+            <Line>Turn on Powerpacks in System Settings, then come back here.</Line>
+          ) : null}
+        </Row>
         {source(
           "linkedin",
           "LinkedIn",
