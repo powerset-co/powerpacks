@@ -4,7 +4,8 @@
 //!   install or refresh the bundled code in ~/powerpacks (source.rs)
 //!   -> `uv sync` with the bundled uv (downloads Python and packages on first launch)
 //!   -> `python -m packs.shared.web.server serve`, as this app's child (an earlier page on the
-//!      port is stopped first)
+//!      port is stopped first); when it does not start, Codex looks into it (crash.rs) and it
+//!      gets one more try
 //!   -> setup not finished: start `bin/onboard` and show /install; otherwise show the Agent.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -20,6 +21,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::children::{self, Children};
+use crate::crash::{self, Crash};
 use crate::onboard::{self, Setup};
 use crate::paths;
 use crate::source::{self, Plan};
@@ -170,7 +172,14 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         .current_dir(&root);
     stream(app, boot, sync, "Python setup")?;
 
-    serve(app, &root)?;
+    if let Err(error) = serve(app, &root) {
+        boot.step(app, "Powerpacks is fixing itself", "This takes a minute.");
+        if !crash::repair(&root, &version, &Crash::server(&root)).unwrap_or(false) {
+            return Err(error);
+        }
+        serve(app, &root)?;
+    }
+    crash::after_launch(&root, &version);
 
     // Setup runs on the user's click, never by itself.
     let setup = onboard::setup(&root);

@@ -1,7 +1,8 @@
 import { Fragment, useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { DebugMenu, EmptyState, Sidebar } from "@/components/shared"
+import { DebugMenu, EmptyState, ErrorBoundary, Sidebar } from "@/components/shared"
+import { BrokenPage } from "@/components/shared/DebugMenu"
 import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
@@ -20,14 +21,17 @@ import { TasksPage } from "@/pages/tasks/TasksPage"
 
 // The side nav, then the page: the page owns its own scrolling and any panel of its own.
 function Shell() {
-  const page = pageAt(useLocation().pathname)
+  const { pathname } = useLocation()
+  const page = pageAt(pathname)
   useEffect(() => {
     document.title = `${page.label} · Powerpacks`
   }, [page])
   return (
     <div className="page-enter grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
       <Sidebar />
-      <Outlet />
+      <ErrorBoundary at={pathname}>
+        <Outlet />
+      </ErrorBoundary>
     </div>
   )
 }
@@ -84,6 +88,7 @@ export function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            {desktop ? <Route path="/debug/broken" element={<BrokenPage />} /> : null}
             <Route path="*" element={<Navigate to={HOME.href} replace />} />
           </Route>
         </Routes>

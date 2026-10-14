@@ -25,8 +25,8 @@ mod questions;
 use questions::QuestionEvents;
 
 /// Where this app keeps Codex's sign-in, config and chat history, under the data folder.
-const CODEX_HOME: &str = ".powerpacks/desktop/codex";
-const CREDENTIALS_IN_FILE: &str = "cli_auth_credentials_store=file";
+pub const CODEX_HOME: &str = ".powerpacks/desktop/codex";
+pub const CREDENTIALS_IN_FILE: &str = "cli_auth_credentials_store=file";
 const CLIENT_NAME: &str = "powerpacks_desktop";
 const CLIENT_TITLE: &str = "Powerpacks";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);

@@ -10,6 +10,7 @@ mod auto_reply;
 mod boot;
 mod children;
 mod codex;
+mod crash;
 mod onboard;
 mod paths;
 mod source;
@@ -344,8 +345,30 @@ fn quit_on_signal(app: AppHandle) {
     });
 }
 
+/// A page threw (the web error boundary): Codex looks into it in the background.
+#[tauri::command]
+fn report_crash(boot: State<'_, Arc<Boot>>, summary: String, detail: String) -> Result<(), String> {
+    let root = boot::require_root(&boot)?;
+    let version = boot.version().ok_or("Powerpacks has not started.")?;
+    std::thread::spawn(move || {
+        let _ = crash::repair(
+            &root,
+            &version,
+            &crash::Crash {
+                kind: "page",
+                summary,
+                detail,
+            },
+        );
+    });
+    Ok(())
+}
+
 pub fn run() {
     paths::adopt_path();
+    if let Ok(root) = paths::root() {
+        crash::note_panics(root);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
@@ -379,6 +402,7 @@ pub fn run() {
             debug_reset_data,
             setup_import_source,
             setup_import,
+            report_crash,
         ])
         .setup(|app| {
             quit_on_signal(app.handle().clone());
