@@ -33,6 +33,39 @@ function seconds(durationMs: number | null): string {
   return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
 }
 
+/** `/bin/zsh -lc '…'` says nothing to a reader: the command inside it, its first line, home as ~. */
+function commandLabel(command: string): string {
+  const inner = /^\/bin\/(?:z|ba)?sh -lc (['"])([\s\S]*)\1$/.exec(command)?.[2] ?? command
+  return (inner.split("\n")[0] ?? "").replace(/\/Users\/[^/\s]+/g, "~").trim()
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
+}
+
+/** A folded panel's one line: what the work did, and how long its commands took. */
+function workSummary(entries: WorkEntry[]): string {
+  let commands = 0
+  let files = 0
+  let tools = 0
+  let ms = 0
+  for (const entry of entries) {
+    if (entry.kind === "command") {
+      commands += 1
+      ms += entry.durationMs ?? 0
+    } else if (entry.kind === "files") files += entry.paths.length
+    else if (entry.kind === "tool") tools += 1
+  }
+  const did = [
+    commands ? `ran ${plural(commands, "command")}` : "",
+    files ? `edited ${plural(files, "file")}` : "",
+    tools ? `used ${plural(tools, "tool")}` : "",
+  ].filter(Boolean)
+  if (did.length === 0) return "Thought it through"
+  const line = did.join(", ")
+  return `${line.charAt(0).toUpperCase()}${line.slice(1)}${ms >= 1000 ? ` · ${seconds(ms)}` : ""}`
+}
+
 function StatusMark({ status }: { status: ItemStatus }) {
   if (status === "running") return <Spinner className="text-muted-foreground" />
   if (status === "done") return <CheckIcon className="size-3.5 shrink-0 text-ok" />
@@ -49,8 +82,11 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
         <details className="group">
           <summary className={SUMMARY}>
             <TerminalIcon className="size-3.5 shrink-0 text-faint" />
-            <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
-              {entry.command}
+            <code
+              title={entry.command}
+              className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground"
+            >
+              {commandLabel(entry.command)}
             </code>
             <span className="tabular-nums text-faint">
               {entry.status === "failed" && entry.exitCode !== null ? `exit ${entry.exitCode} · ` : ""}
@@ -144,17 +180,40 @@ export function Transcript({ entries }: { entries: Entry[] }) {
         turn.kind === "say" ? (
           <Say key={turn.entry.id} entry={turn.entry} />
         ) : (
-          <ol
+          // Folded to one line until the reader asks for the commands behind it.
+          <details
             key={turn.id}
-            aria-label="Work"
-            className="rise-in m-0 list-none divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line bg-card p-0"
+            className="rise-in group/work overflow-hidden rounded-[var(--radius-m)] border border-line bg-card"
           >
-            {turn.entries.map((entry) => (
-              <li key={entry.id}>
-                <WorkRow entry={entry} />
-              </li>
-            ))}
-          </ol>
+            <summary className={cn(SUMMARY, "text-muted-foreground")}>
+              <TerminalIcon className="size-3.5 shrink-0 text-faint" />
+              <span className="min-w-0 flex-1 truncate">{workSummary(turn.entries)}</span>
+              {turn.entries.some((entry) => "status" in entry && entry.status === "running") ? (
+                <Spinner className="text-muted-foreground" />
+              ) : null}
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                className="size-3 shrink-0 text-faint transition-transform duration-fast group-open/work:rotate-180"
+              >
+                <path
+                  d="M4 6l4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </summary>
+            <ol aria-label="Work" className="m-0 list-none divide-y divide-line border-t border-line p-0">
+              {turn.entries.map((entry) => (
+                <li key={entry.id}>
+                  <WorkRow entry={entry} />
+                </li>
+              ))}
+            </ol>
+          </details>
         ),
       )}
     </>
