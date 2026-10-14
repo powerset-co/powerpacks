@@ -9,8 +9,21 @@ on:
   pull_request:
     paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: Build without the debug menu.
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to build.
+        type: string
+        required: true
   workflow_call:
     inputs:
+      ref:
+        description: Git ref to build.
+        type: string
+        required: true
       release:
         description: A build for people to download, without the test builds' debug menu.
         type: boolean
@@ -44,6 +57,8 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10
