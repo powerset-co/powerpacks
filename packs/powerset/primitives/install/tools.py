@@ -66,10 +66,6 @@ class ImportTools:
                 packages.append(("node", ["node"]))
             if not any(app.is_dir() for app in BROWSER_APPS):
                 packages.append(("chrome", ["--cask", "google-chrome"]))
-        # The QR page needs qrencode; the desktop app takes it only from a Homebrew already there.
-        if ImportSource.WHATSAPP in self.sources and not shutil.which("qrencode") and (
-                not desktop or shutil.which("brew")):
-            packages.append(("qrencode", ["qrencode"]))
         if packages:
             brew = shutil.which("brew")
             if not brew:

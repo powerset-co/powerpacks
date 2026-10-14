@@ -3,13 +3,16 @@
 wacli emits a linked-device pairing string on stdout (or as a `qr_code` event on
 stderr) that refreshes every ~20 seconds. `wa_qr_payload` recognizes both wire
 forms and returns EXACTLY what WhatsApp must receive; `update_qr_page` renders
-it to a PNG via `qrencode` and wraps it in a self-refreshing local HTML page.
+it to a PNG with the `qrcode` package and wraps it in a self-refreshing local
+HTML page.
 
 A pairing payload is a live credential, so `redact_qr_payloads` scrubs it out of
 every diagnostic string before any of it reaches a payload, a log line, or the
 user's terminal.
 
 Changelog:
+  2026-10-14: the PNG comes from the `qrcode` package (pure-Python PNG through pypng), not the
+    qrencode program: WhatsApp needs no Homebrew tool, on the desktop app or the CLI.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`;
     the auth flow (`auth.py`) now calls into this module for QR rendering and
     redaction. Behavior unchanged.
@@ -23,16 +26,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import qrcode
+from qrcode.image.pure import PyPNGImage
+
 # Repo-root bootstrap so `packs.*` imports work in module AND script mode
 # (script-mode never imports the package __init__, so this must be in-file).
 _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.discover.messages.wacli.runtime import (  # noqa: E402
-    PrimitiveBlocked,
-    PrimitiveFailed,
-)
 
 QR_REDACTION = "[whatsapp qr payload redacted]"
 WA_QR_URL_MARKER = "wa.me/settings/linked_devices#2@"
@@ -95,18 +97,8 @@ def write_qr_html(path: Path, png_path: Path) -> None:
 
 
 def update_qr_page(payload: str, png_path: Path, html_path: Path, *, open_page: bool) -> None:
-    qrencode = shutil.which("qrencode")
-    if not qrencode:
-        raise PrimitiveBlocked({
-            "status": "blocked_user_action",
-            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-messages.",
-            "install_command": "brew install qrencode",
-        })
     png_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        subprocess.run([qrencode, "-s", "10", "-m", "4", "-o", str(png_path), payload], check=True)
-    except subprocess.CalledProcessError as exc:
-        raise PrimitiveFailed(f"failed to render WhatsApp QR page with qrencode: {exc}") from exc
+    qrcode.make(payload, image_factory=PyPNGImage, box_size=10, border=4).save(str(png_path))
     write_qr_html(html_path, png_path)
     if open_page and shutil.which("open"):
         subprocess.run(["open", str(html_path)], check=False)

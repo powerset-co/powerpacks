@@ -220,7 +220,7 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   callers in the same repo import and call them, branching on the returned
   payload's `status` — not on a subprocess exit code through a JSON pipe.
 - Subprocess is only for genuinely external things: the `msgvault` and `wacli`
-  binaries, `gcloud`, `qrencode`, macOS `open`, and Modal re-hosting.
+  binaries, `gcloud`, macOS `open`, and Modal re-hosting.
 - The persistent UI server has its own process so it survives workflow exits.
   Start it through `review.start_server`; do not shell out to its CLI from a
   workflow. This process lifecycle is separate from executing primitives.
