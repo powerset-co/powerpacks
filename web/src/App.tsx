@@ -15,6 +15,7 @@ import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { SetsPage } from "@/pages/sets/SetsPage"
+import { SettingsPage } from "@/pages/settings/SettingsPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
 // The side nav, then the page: the page owns its own scrolling and any panel of its own.
@@ -82,6 +83,7 @@ export function App() {
             />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to={HOME.href} replace />} />
           </Route>
         </Routes>

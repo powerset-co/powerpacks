@@ -2,7 +2,8 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey = "home" | "agent" | "searches" | "people" | "sets" | "accounts" | "tasks" | "setup"
+export type PageKey =
+  "home" | "agent" | "searches" | "people" | "sets" | "accounts" | "tasks" | "setup" | "settings"
 
 export interface Page {
   key: PageKey
@@ -21,6 +22,7 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "accounts", label: "Accounts", href: "/accounts" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away.
   { key: "setup", label: "Setup", href: "/install" },
+  { key: "settings", label: "Settings", href: "/settings" },
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and

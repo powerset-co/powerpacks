@@ -12,6 +12,7 @@ import {
   CollapseIcon,
   PeopleIcon,
   SearchesIcon,
+  SettingsIcon,
   SetupIcon,
   TasksIcon,
 } from "./icons/nav"
@@ -32,6 +33,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   tasks: TasksIcon,
   accounts: AccountsIcon,
   setup: SetupIcon,
+  settings: SettingsIcon,
 }
 
 function useMedia(query: string): boolean {

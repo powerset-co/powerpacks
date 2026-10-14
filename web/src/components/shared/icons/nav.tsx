@@ -68,6 +68,16 @@ export function CollapseIcon(props: IconProps) {
   )
 }
 
+export function SettingsIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M4 7.5h8.5M16.5 7.5H20M4 16.5h3.5M11.5 16.5H20" />
+      <circle cx="14.5" cy="7.5" r="2" />
+      <circle cx="9.5" cy="16.5" r="2" />
+    </svg>
+  )
+}
+
 export function SetupIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>

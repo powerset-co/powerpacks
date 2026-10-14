@@ -6,6 +6,7 @@ import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
 import { openExternal } from "@/lib/api/install"
+import { useFeatures } from "@/lib/features"
 import {
   checkUpdate,
   dismissedVersion,
@@ -106,6 +107,7 @@ function UpdatePane({ rail }: { rail: boolean }) {
 
 function Profile({ rail }: { rail: boolean }) {
   const client = useQueryClient()
+  const features = useFeatures()
   const account = useQuery({
     queryKey: ACCOUNT_KEY,
     queryFn: ({ signal }) => fetchAccount(signal),
@@ -155,7 +157,8 @@ function Profile({ rail }: { rail: boolean }) {
       <Tip side={rail ? "right" : "above"}>{problem ?? (busy ? "Signing in…" : label)}</Tip>
     </button>
   )
-  const relay = <RelayDot tip={rail ? "right" : "above"} />
+  // The relay carries the sets' messages: no Sets, no relay to show.
+  const relay = features.sets ? <RelayDot tip={rail ? "right" : "above"} /> : null
   if (rail) {
     return (
       <div className="flex justify-center border-t border-line py-2.5">

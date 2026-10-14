@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useCallback, useMemo, useState } from "react"
 
 import type { ToastMessage } from "@/components/shared"
+import { useFeatures } from "@/lib/features"
 import { exportScoreOf, queuedScores, withScore } from "@/lib/searches/feedback"
 import { filterRows, keptRows, labelsShown, NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
 import { panelSections, rankResults } from "@/lib/searches/ranking"
@@ -33,6 +34,7 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
   const { search, ratings } = payload
   const runId = search.run_id
   const queryClient = useQueryClient()
+  const features = useFeatures()
   const tags = useSearchTags(runId, onToast)
   const [filters, setFilters] = useState<ResultFilters>(() => ({ ...NO_FILTERS, labels: labelsShown() }))
   // The table opens on the latest pond; a screened run's pond card, picked again, shows every pond.
@@ -128,7 +130,9 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       headerActions={
         <>
           <FeedbackStatus runId={runId} feedback={feedback} onToast={onToast} />
-          <BroadcastDialog runId={runId} title={search.title} pinned={pinnedCount} onToast={onToast} />
+          {features.sets && (
+            <BroadcastDialog runId={runId} title={search.title} pinned={pinnedCount} onToast={onToast} />
+          )}
           <SearchFeedbackDialog
             runId={runId}
             title={search.title}

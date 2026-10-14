@@ -121,21 +121,17 @@ function DesktopDebugMenu() {
           <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
             Local features
           </p>
-          {(["sets", "auto_reply"] as const).map((feature) => (
-            <label
-              key={feature}
-              className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary"
-            >
-              {feature === "sets" ? "Sets" : "Auto Reply"}
-              <input
-                type="checkbox"
-                checked={features[feature]}
-                disabled={updateFeatures.isPending}
-                onChange={() => updateFeatures.mutate({ ...features, [feature]: !features[feature] })}
-                className="accent-[var(--primary)]"
-              />
-            </label>
-          ))}
+          {/* Sets is in Settings, where anyone turns it on. */}
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
+            Auto Reply
+            <input
+              type="checkbox"
+              checked={features.auto_reply}
+              disabled={updateFeatures.isPending}
+              onChange={() => updateFeatures.mutate({ ...features, auto_reply: !features.auto_reply })}
+              className="accent-[var(--primary)]"
+            />
+          </label>
           {updateFeatures.error && (
             <p role="alert" className="m-0 px-2.5 py-1 text-xs text-bad">
               {errorText(updateFeatures.error)}

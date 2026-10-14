@@ -12,7 +12,7 @@ import urllib.error
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import nats
@@ -20,7 +20,7 @@ from nats.js.errors import NotFoundError
 
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.share.web.sets import Member, Sets
-from packs.shared.web import asks_loop, server
+from packs.shared.web import asks_loop, features, server
 
 REAL_PULL = asks_loop.agent_inbox.pull
 REAL_SET_MEMBERS = asks_loop._set_members
@@ -77,6 +77,7 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.env_file = self.root / ".env"
         self.owner = str(uuid4())
+        features.save(self.root, features.FeatureFlags(sets=True))
         self.worker = Mock(return_value={})
         self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"debug_request": self.worker}))
         self.members = self.enterContext(patch.object(asks_loop, "_set_members", return_value={self.owner}))
@@ -97,6 +98,22 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(message))
         return path
+
+    async def test_sets_off_in_settings_pulls_nothing_until_it_is_turned_on(self):
+        features.save(self.root, features.FeatureFlags(sets=False))
+        asks_loop.STATUS["state"] = "connected"
+        seen = []
+
+        def wait(delay):
+            seen.append((self.pull.call_count, asks_loop.STATUS["state"], delay))
+            if len(seen) == 2:
+                raise asyncio.CancelledError
+            features.save(self.root, features.FeatureFlags(sets=True))  # turned on in Settings
+
+        with patch.object(asks_loop.WAKE, "wait", side_effect=wait):
+            with self.assertRaises(asyncio.CancelledError):
+                await asks_loop._poll(repo_root=self.root, env_file=self.env_file)
+        self.assertEqual(seen, [(0, "offline", 30), (1, "connected", 30)])
 
     async def test_success_polls_immediately_then_every_thirty_seconds(self):
         wait = await self.poll(2)
@@ -353,6 +370,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.device_id = asks_loop._device_id(self.root)
         self.env_file = self.root / ".env"
+        features.save(self.root, features.FeatureFlags(sets=True))
         self.operator_id = str(uuid4())
         self.subjects = {"tasks": f"set.synthetic.op.{self.operator_id}",
                          "presence": "set.synthetic.presence", "inbox": f"op.{self.operator_id}"}
@@ -436,6 +454,33 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once_with(300)
         wait.assert_not_called()
         self.assertEqual(asks_loop.STATUS["state"], "connected")
+
+    async def test_presence_waits_for_sets_before_asking_for_a_connection(self):
+        features.save(self.root, features.FeatureFlags(sets=False))
+        with patch.object(asks_loop, "_connection", side_effect=asyncio.CancelledError) as connection, \
+                patch.object(asks_loop.WAKE, "wait", side_effect=[False, asyncio.CancelledError]) as wait:
+            with self.assertRaises(asyncio.CancelledError):
+                await asks_loop._presence(repo_root=self.root, env_file=self.env_file, device_id=self.device_id)
+        self.assertEqual([call.args[0] for call in wait.call_args_list], [30, 30])
+        connection.assert_not_called()
+
+    async def test_turning_sets_off_closes_the_relay_connection(self):
+        nc = Mock(publish=AsyncMock(), subscribe=AsyncMock(), close=AsyncMock(),
+                  jetstream=Mock(return_value=Mock(subscribe=AsyncMock())))
+
+        async def heartbeat_wait(awaitable, timeout):
+            awaitable.close()
+            if not features.read(self.root).sets:
+                raise asyncio.CancelledError  # still connected a heartbeat after Sets went off
+            features.save(self.root, features.FeatureFlags(sets=False))  # turned off in Settings
+            raise TimeoutError
+
+        with patch.object(asks_loop.nats, "connect", AsyncMock(return_value=nc)), \
+                patch.object(asks_loop.asyncio, "wait_for", side_effect=heartbeat_wait):
+            await asks_loop._connected(self.connection, repo_root=self.root, env_file=self.env_file,
+                                       device_id=self.device_id)
+        nc.publish.assert_awaited_once()
+        nc.close.assert_awaited_once()
 
     async def test_presence_refresh_gets_new_credentials_without_warning(self):
         with patch.object(asks_loop, "_connection", return_value=self.connection) as connection, \
