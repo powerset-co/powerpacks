@@ -94,6 +94,9 @@ class InstallPipelineTests(unittest.TestCase):
         self.exiting_command = ""
         self.fail_at = 0
         self.failure_after = ""
+        # (phase, done, total) a stage reports while it runs, and the page line after each.
+        self.progress = []
+        self.lines = []
 
     def open_store(self, path):
         """A real, empty v2 store with an owner row: the stage classes read it when they are built."""
@@ -120,6 +123,9 @@ class InstallPipelineTests(unittest.TestCase):
             if self.pending[command]:
                 self.paid_commands.append(command)
             self.pending[command] = False
+            for phase, done, total in self.progress:
+                node.progress(phase, done, total)
+                self.lines.append(self.status.read()["message"])
         elif command == "realize":
             self.write(self.people, self.csv)
         elif command == "operator-id":
@@ -235,6 +241,23 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][0], "search-validate")
         self.assertEqual(result["action"]["kind"], "details")  # no review offer: the page counts them live
 
+    def test_long_stages_put_their_counts_on_the_page_as_calls_come_back(self):
+        self.all_pending()
+        self.progress = [("facts", 1, 3), ("facts", 2, 3), ("facts", 3, 3), ("research", 2, 5), ("judge", 4, 4),
+                         ("unknown", 1, 1)]
+        self.run_pipeline()
+        # Each paid stage reports; synthesize's second count comes within the write interval and is
+        # not written, the last count of a phase always is, and enrich's phases have their own lines.
+        self.assertEqual(self.lines[:6], [
+            "Learning about your contacts: 1 of 3", "Learning about your contacts: 1 of 3",
+            "Learning about your contacts: 3 of 3", "Learning about your contacts: 3 of 3",
+            "Learning about your contacts: 3 of 3", "Learning about your contacts: 3 of 3"])
+        self.assertEqual(self.lines[-3:], [
+            "Enriching your contacts: 2 of 5 researched",
+            "Enriching your contacts: 4 of 4 LinkedIn matches checked",
+            "Enriching your contacts: 4 of 4 LinkedIn matches checked"])
+        self.assertEqual(self.status.read()["status"], "completed")
+
     def test_completed_index_resumes_without_rebuild_and_revalidates(self):
         self.run_pipeline()
         self.calls.clear()
@@ -336,6 +359,16 @@ class InstallPipelineTests(unittest.TestCase):
         owner = next(options for name, options in self.calls if name == "owner")
         self.assertEqual((owner["url"], owner["emails"]),
                          ("https://www.linkedin.com/in/casey-owner", ["casey@example.com"]))
+        self.assertTrue(self.did("collect"))
+
+    def test_a_saved_profile_link_stands_in_for_the_linkedin_session(self):
+        # The Connect screen's link, looked up here once setup's credentials are in.
+        (self.root / ".powerpacks/deep-context/owner.json").unlink()
+        self.retry += " --linkedin-url https://www.linkedin.com/in/casey-owner"
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
+        self.run_pipeline()
+        owner = next(options for name, options in self.calls if name == "owner")
+        self.assertEqual(owner["url"], "https://www.linkedin.com/in/casey-owner")
         self.assertTrue(self.did("collect"))
 
     def test_missing_owner_without_a_linkedin_session_hands_off(self):

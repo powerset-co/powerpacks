@@ -8,7 +8,7 @@ import { usePresenceList } from "@/hooks/usePresenceList"
 import { existingTag, normalizeTag, TAG_NAME_MAX } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
 
-import { useFloatPanel } from "../hooks/useFloatPanel"
+import { useFloatPanel } from "@/hooks/useFloatPanel"
 
 const PANEL_WIDTH = 256
 

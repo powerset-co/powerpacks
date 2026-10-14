@@ -1,25 +1,44 @@
 export { ActionBar, ActionBarRule } from "./ActionBar"
 export { Appear } from "./Appear"
+export { Avatar } from "./Avatar"
 export { ProxiedLinkedinAvatar, type AvatarSize } from "./ProxiedLinkedinAvatar"
 export { Chip } from "./Chip"
 export { CountRoll } from "./CountRoll"
+export { DebugMenu } from "./DebugMenu"
 export { DetailsSection } from "./DetailsSection"
+export { ChatGptSignIn } from "./ChatGptSignIn"
 export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
-export { FacetShell } from "./FacetShell"
+export { FeedbackFooter } from "./FeedbackFooter"
 export { Fold } from "./Fold"
-export { FacetValue } from "./FacetValue"
-export { CLOSE_MARK, FlagIcon, HiveIcon, PinIcon, PlusIcon } from "./icons/actions"
+export {
+  CLOSE_MARK,
+  BookIcon,
+  CheckIcon,
+  CopyIcon,
+  FlagIcon,
+  HiveIcon,
+  ImportIcon,
+  PinIcon,
+  PlusIcon,
+  RefreshIcon,
+  SparkIcon,
+} from "./icons/actions"
 export { CHANNEL_ICON } from "./icons/channels"
 export { initials } from "./initials"
 export { Kbd } from "./Kbd"
-export { NavTabs } from "./NavTabs"
+export { NotesField } from "./NotesField"
 export { SearchField } from "./SearchField"
+export { PowersetMark } from "./PowersetMark"
+export { ProgressBar } from "./ProgressBar"
+export { Page, PageHeader } from "./PageHeader"
+export { Select } from "./Select"
+export { Sidebar } from "./Sidebar"
 export { SortHeader, type SortDirection } from "./SortHeader"
 export { LinkedinLink } from "./LinkedinLink"
 export { SourcePill, type SourcePillSize } from "./SourcePill"
 export { SourcePills } from "./SourcePills"
-export { TabInk } from "./TabInk"
+export { Spinner } from "./Spinner"
+export { Tip } from "./Tip"
 export { Toast, type ToastAction, type ToastMessage } from "./Toast"
-export { TopBar } from "./TopBar"
 export { VirtualRows, type VirtualRowsHandle, type VirtualRowsProps } from "./VirtualRows"

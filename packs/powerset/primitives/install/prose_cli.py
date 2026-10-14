@@ -26,7 +26,7 @@ _REPO = Path(__file__).resolve().parents[4]
 # Synthetic values for every placeholder the script uses.
 _SAMPLE = {
     "email": "casey@example.com", "network": "Personal Network", "count": 328, "code": 503,
-    "read": 120, "total": 298, "connections": 294, "added": 294, "messages": 2645,
+    "read": 120, "total": 298, "done": 120, "connections": 294, "added": 294, "messages": 2645,
     "counts": source_counts({"gmail": 44, "messages": 120}), "people": 381, "follow_ups": "", "app": "Codex",
 }
 _PLAN = [*DEFAULT_PLAN, "sources", "linkedin_login", "gmail_tools", "gmail_login", "imessage_access",
@@ -54,8 +54,11 @@ _RUN = [
     ("whatsapp.downloading.count", None, {"messages": 4800}), "whatsapp.syncing", "whatsapp.synced",
     "whatsapp.importing", "whatsapp.imported",
     "discover.linkedin", "discover.owner", "discover.people", "discover.reading", "discover.estimating",
-    "discover.learning", "discover.duplicates", "discover.combining", "discover.grouping", "discover.done",
-    "enrich.running", "enrich.done",
+    "discover.learning", ("discover.learning.count", None, {"done": 40}),
+    ("discover.learning.count", None, {"done": 298}), "discover.duplicates", "discover.combining",
+    "discover.grouping", "discover.done",
+    "enrich.running", ("enrich.researching.count", None, {"done": 12, "total": 30}),
+    ("enrich.judging.count", None, {"done": 9, "total": 21}), "enrich.done",
     "index.preparing", "index.building", "index.done",
     "validate.checking", "validate.done", "search.ready",
 ]

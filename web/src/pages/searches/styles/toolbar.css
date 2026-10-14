@@ -1,24 +1,10 @@
-/* The results toolbar and the row's tag controls: group captions, the floating panels
-   (operator picker, tag editor) and the chips' motion. */
+/* The results toolbar and the row's tag controls: group captions and the chips' motion. The
+   floating panels' frame (.float-panel) is shared, in styles/index.css. */
 
 .toolbar-label {
   color: var(--faint);
   font-size: 11.5px;
   font-weight: 600;
-}
-
-.float-panel {
-  z-index: 80;
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-m);
-  background: var(--card);
-  box-shadow: var(--shadow-2);
-  color: var(--foreground);
-  font-size: 12px;
-  line-height: 16px;
 }
 
 /* A .rise chip already there when its row or group mounted arrives with it: no entrance

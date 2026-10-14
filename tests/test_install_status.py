@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 
@@ -38,6 +40,17 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["retry_command"], "bin/bootstrap")
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
+
+    def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
+        first = self.status.write("discover.learning", pid=os.getpid())
+        self.assertTrue(first["step_started_at"])
+        with patch("packs.powerset.primitives.install.status.now_iso", return_value="2099-01-01T00:00:00Z"):
+            later = self.status.write("discover.learning.count", pid=os.getpid(), done=3, total=9)
+            self.assertEqual(later["step_started_at"], first["step_started_at"])
+            self.assertEqual(later["message"], "Learning about your contacts: 3 of 9")
+            moved = self.status.write("enrich.running", pid=os.getpid())
+        self.assertEqual(moved["step_started_at"], "2099-01-01T00:00:00Z")
+        self.assertEqual(self.status.read()["step_started_at"], "2099-01-01T00:00:00Z")
 
     def test_dead_installer_is_paused_with_resume_guidance(self) -> None:
         self.status.write('tools.preparing', step=InstallStep.DEPENDENCIES, pid=99999999)
@@ -151,6 +164,63 @@ class InstallStatusTests(unittest.TestCase):
         self.status.write("gmail.syncing", pid=os.getpid())
         self.assertEqual(self.status.write("step.failed", pid=os.getpid())["step"], "gmail_sync")
 
+
+class ConnectTests(unittest.TestCase):
+    """The Connect screen signs in to one source before setup, in the background, into its own record."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.controller = InstallController(self.root)
+
+    def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
+            self.assertEqual(self.controller.connect("gmail", [" owner@gmail.com ", "work@example.com", "owner@gmail.com"]),
+                             {"status": "started", "source": "gmail"})
+        self.assertEqual(popen.call_args.args[0][1:], [
+            "-m", "packs.powerset.primitives.install.onboard", "--root", str(self.root),
+            "--source", "gmail", "--logins-only",
+            "--gmail-email", "owner@gmail.com", "--gmail-email", "work@example.com"])
+        self.assertEqual(popen.call_args.kwargs["cwd"], self.root)
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+
+    def test_connect_answers_once_the_run_has_written_its_own_status(self) -> None:
+        record = InstallStatus(self.root, "connect")
+        record.write("whatsapp.failed", pid=1, retry_command="bin/onboard --source whatsapp --logins-only")
+        # A live pid: a read reports a running record whose process is gone as paused.
+        run = MagicMock(pid=os.getpid())
+        run.poll.return_value = None
+
+        def first_write(_seconds: float) -> None:
+            record.write("whatsapp.checking", pid=run.pid, retry_command="bin/onboard --source whatsapp --logins-only")
+
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen", return_value=run), \
+                patch("packs.powerset.primitives.install.controller.time.sleep", side_effect=first_write) as sleep:
+            self.controller.connect("whatsapp")
+        sleep.assert_called_once()
+        self.assertEqual(self.controller.connection()["installer_pid"], run.pid)
+
+    def test_connect_takes_only_a_source_with_a_login(self) -> None:
+        with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
+            for source in ("imessage", "powerset", None):
+                with self.assertRaises(ValueError):
+                    self.controller.connect(source, None)
+            for emails in ([], ["not-an-address"], "owner@gmail.com"):
+                with self.assertRaises(ValueError):
+                    self.controller.connect("gmail", emails)
+        popen.assert_not_called()
+
+    def test_the_connect_record_carries_its_qr_and_leaves_setups_alone(self) -> None:
+        InstallStatus(self.root, "connect").write("whatsapp.qr", pid=os.getpid(),
+                                                  retry_command="bin/onboard --source whatsapp --logins-only")
+        qr = self.root / ".powerpacks/messages/wacli-login-qr.png"
+        qr.parent.mkdir(parents=True)
+        qr.write_bytes(b"png")
+        self.assertTrue(self.controller.connection()["action"]["qr_url"].startswith("/api/install/qr?connect=1&t="))
+        self.assertEqual(self.controller.qr_image(connect=True), b"png")
+        self.assertIsNone(self.controller.qr_image())
+        self.assertFalse((self.root / ".powerpacks/install/manifest.json").exists())
 
 if __name__ == "__main__":
     unittest.main()

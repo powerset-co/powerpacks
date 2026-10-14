@@ -37,7 +37,6 @@ from packs.ingestion.schemas.share_schema import (
     FAMILY,
     HUMAN_PRIVATE,
     HUMAN_SHARE,
-    SHARE_CONFIRM,
     SHARE_NO,
     SHARE_YES,
     WORTH_NO,
@@ -266,10 +265,10 @@ class PlanBucketTests(unittest.TestCase):
         self.assertEqual(summaries.patch_person_ids, (STALE_PERSON,))
         self.assertEqual(plan.allowed_operator_ids[STALE_PERSON], (OTHER_OPERATOR,))
 
-    def test_a_confirm_row_is_neither_uploaded_nor_tagged(self):
+    def test_a_family_kept_home_is_neither_uploaded_nor_tagged(self):
         stale = SourceRow(CLOUD_PERSON, "gmail", "casey@example.com", 3, "")
         plan = plan_for(
-            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_CONFIRM, reason=FAMILY)],
+            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=FAMILY)],
             [local_person(CLOUD_PERSON, "casey-lane")],
             cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}, operator_sources=(stale,)),
         )
@@ -599,7 +598,7 @@ class DryRunTests(unittest.TestCase):
         canonical_db = share_db(root, [
             share_row(NEW_PERSON, "jordan-bravo"),
             share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=HUMAN_PRIVATE),
-            share_row(STALE_PERSON, "riley-echo", share=SHARE_CONFIRM, reason=FAMILY, labels="is_family"),
+            share_row(STALE_PERSON, "riley-echo", share=SHARE_NO, reason=FAMILY, labels="is_family"),
         ])
         return {"db": db, "people_csv": people_csv, "share_db": canonical_db, "out_dir": root / "out"}
 

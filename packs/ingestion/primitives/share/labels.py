@@ -4,14 +4,16 @@ flags that keep a family home, and the share decision.
 Flow: `deterministic_labels(person)` -> cadence/direction/worth from metadata;
 `labels_from_saved(labels)` -> one value per Luna question and the share call; `flag(labels)`
 -> the first rule that keeps a worth-yes family home; `share_decision(row, tags)` -> the
-yes/no/confirm and reason the `share` table carries.
+yes/no and reason the `share` table carries.
 
 In order: you (the owner, then your tags), worth, the flags, then Luna's share call, which read
-every label and its confidence (worth/luna.py request 2). A call under SHARE_FLOOR asks you.
+every label and its confidence (worth/luna.py request 2). Its call stands at any confidence.
 
 Every threshold is a module constant here; nothing downstream re-derives one.
 
 Changelog:
+  2026-10-14: no confirm: Luna's call stands at any confidence; keep_private keeps them home and
+    anything else shares (a wrong share is undone with a Private tag).
   2026-10-13: Luna's share call decides a worth-yes family that no flag keeps home; minor keeps a
     family home; the clinician, automated-sender and stranger flags are gone into the call.
   2026-10-07: v2. Worth comes from the v2 store's current_worth; the row types are the share
@@ -43,7 +45,6 @@ from packs.ingestion.primitives.share.models import (
 )
 from packs.ingestion.primitives.share.questions import (
     CALL_KEEP_PRIVATE,
-    CALL_SHARE,
     CHOICE_LABELS,
     NOUL_LABELS,
     SCORE_LABELS,
@@ -56,10 +57,8 @@ from packs.ingestion.schemas.share_schema import (
     NOT_PROFESSIONAL,
     OWNER,
     ROMANTIC_PARTNER,
-    SHARE_CONFIRM,
     SHARE_NO,
     SHARE_YES,
-    UNSURE,
     WORTH_MAYBE,
     WORTH_NO,
     WOULD_VOUCH,
@@ -80,8 +79,6 @@ ACTIVE_P = 0.6
 # is_family or is_minor keeps a family home at this probability — a lower bar, because a
 # needless hold costs one click and a false share cannot be taken back.
 FLAG_P = 0.5
-# Luna's share or keep_private call decides only at this probability; under it, you do.
-SHARE_FLOOR = 0.6
 
 PRIVATE_TAG = "private"
 SHARE_TAG = "share"
@@ -197,8 +194,8 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
 
     Worth first — the same effective worth the human reviewed, human over machine. `owner`
     comes before the human tags because the mailbox owner is not a contact; no tag makes them
-    one. A flag keeps a worth-yes family home. Everyone else gets Luna's share call; a call
-    under SHARE_FLOOR, or no call, asks the human.
+    one. A flag keeps a worth-yes family home. Everyone else gets Luna's share call, whatever its
+    confidence: keep_private keeps them home, anything else shares them.
     """
     held = tags.tags if tags else frozenset()
     if row.is_owner:
@@ -214,12 +211,10 @@ def share_decision(row: LabelRow, tags: HumanTags | None, *, updated_at: str) ->
     elif row.flag:
         # Family, partners and minors stay home unless the human tags them Share (decided 2026-10-08).
         share, reason = SHARE_NO, row.flag
-    elif row.share_call == CALL_KEEP_PRIVATE and row.share_p >= SHARE_FLOOR:
+    elif row.share_call == CALL_KEEP_PRIVATE:
         share, reason = SHARE_NO, NOT_PROFESSIONAL
-    elif row.share_call == CALL_SHARE and row.share_p >= SHARE_FLOOR:
-        share, reason = SHARE_YES, WOULD_VOUCH
     else:
-        share, reason = SHARE_CONFIRM, UNSURE
+        share, reason = SHARE_YES, WOULD_VOUCH
     return ShareDecisionRow(
         person_id=row.person_id,
         public_identifier=row.public_identifier,

@@ -1,34 +1,14 @@
 import { useCallback, useState } from "react"
 
-import { setEntries, type FacetKey, type FacetSet, type SortKey } from "@/lib/people/facets"
-import { DEFAULT_VIEW, readView, type PeopleView } from "@/lib/people/view"
-import { EMPTY, toggled } from "@/lib/sets"
-import { ORDER, type Decision, type Person } from "@/types/people"
+import { setEntries, type FacetSet, type SortKey } from "@/lib/people/facets"
+import { readView, type PeopleView, type Tab } from "@/lib/people/view"
 
-// Honor a linked tab; otherwise start at the first decision with people.
-function startView(rows: readonly Person[], params: URLSearchParams): PeopleView {
-  const view = readView(params)
-  if (params.has("tab") || rows.some((row) => row.share === view.tab)) return view
-  const tab = ORDER.find((decision) => rows.some((row) => row.share === decision)) ?? DEFAULT_VIEW.tab
-  return { ...view, tab }
-}
+/** Tab, facet selections, search text and sort, initialized from the URL (All when it names none). */
+export function useFilters(params: URLSearchParams) {
+  const [view, setView] = useState<PeopleView>(() => readView(params))
 
-/** Tab, facet selections, search text and sort, initialized from the URL. */
-export function useFilters(rows: readonly Person[], params: URLSearchParams) {
-  const [view, setView] = useState<PeopleView>(() => startView(rows, params))
-
-  const setTab = useCallback((tab: Decision) => {
+  const setTab = useCallback((tab: Tab) => {
     setView((current) => (current.tab === tab ? current : { ...current, tab }))
-  }, [])
-
-  const toggleFilter = useCallback((key: FacetKey, value: string) => {
-    setView((current) => {
-      const filters = new Map(current.filters)
-      const held = toggled(filters.get(key) ?? EMPTY, value)
-      if (held.size) filters.set(key, held)
-      else filters.delete(key)
-      return { ...current, filters }
-    })
   }, [])
 
   const setFilters = useCallback((set: FacetSet) => {
@@ -46,5 +26,5 @@ export function useFilters(rows: readonly Person[], params: URLSearchParams) {
     })
   }, [])
 
-  return { view, setTab, toggleFilter, setFilters, setText, setSort }
+  return { view, setTab, setFilters, setText, setSort }
 }

@@ -1,6 +1,7 @@
 """Local onboarding reuses source outputs, preserves gates, and stops on errors."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shlex
@@ -13,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from packs.ingestion.primitives.accounts.accounts import SignedIn
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
 from packs.ingestion.primitives.setup.automations import msgvault_home
@@ -185,11 +187,11 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertNotIn('--refresh', second['retry_command'])
         self.test_users.assert_not_called()
 
-    def test_powerset_gmail_choice_survives_other_mailboxes_added_before_rerun(self):
+    def test_selected_gmail_choice_survives_other_mailboxes_added_before_rerun(self):
         InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(),
                                        account_email='casey@example.com')
         with patch.object(SourceOnboarding, '_gmail_connect', return_value=False):
-            first = SourceOnboarding(self.root, sources=('gmail',))
+            first = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',))
             first.run()
         with patch.object(accounts, 'status_payload', return_value={'accounts': [
                 {'email': 'other@example.com'}, {'email': 'casey@example.com'}]}):
@@ -419,14 +421,96 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['message'], 'Gmail: 12 contacts · Messages: 8 contacts')
         self.assertEqual(result['plan'][-5:], ['deep_context', 'enrich', 'index', 'validate', 'ready'])
 
-    def test_gmail_defaults_to_the_powerset_login_without_asking(self):
+    def test_cli_gmail_uses_the_powerset_login_default(self):
         InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(), account_email='casey@example.com')
         seen = []
-        with patch.object(SourceOnboarding, '_gmail_connect', autospec=True,
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', False), \
+             patch.object(SourceOnboarding, '_gmail_connect', autospec=True,
                           side_effect=lambda flow: seen.append(flow.gmail_emails) or False):
             result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
         self.assertEqual(seen, [('casey@example.com',)])
         self.assertNotEqual(result['event'], 'gmail.which_accounts')
+
+    def test_connect_runs_one_sources_tools_and_login_into_its_own_record(self):
+        before = InstallStatus(self.root).read()['event']
+        with patch.object(SourceOnboarding, '_linkedin_sync') as sync:
+            result = SourceOnboarding(self.root, sources=('linkedin',), record='connect').connect()
+        self.assertEqual(result['event'], 'sources.connected')
+        self.assertEqual(result['steps']['linkedin_login']['status'], 'completed')
+        sync.assert_not_called()
+        self.assertTrue((self.root / '.powerpacks/install/connect.json').is_file())
+        self.assertEqual(InstallStatus(self.root).read()['event'], before)
+
+    @staticmethod
+    def ready(*sources, mailboxes=()):
+        """What accounts.signed_in reads: the named sources signed in."""
+        return SignedIn(**{name: name in sources for name in ('linkedin', 'gmail', 'imessage', 'whatsapp')},
+                        mailboxes=tuple(mailboxes))
+
+    def test_desktop_setup_takes_only_the_sources_signed_in(self):
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch('packs.powerset.primitives.install.workflow.signed_in', return_value=self.ready('linkedin')), \
+             patch.object(SourceOnboarding, '_linkedin_sync', return_value=True) as linkedin_sync, \
+             patch.object(SourceOnboarding, '_messages_sync') as messages_sync, \
+             patch.object(SourceOnboarding, '_gmail_connect') as gmail:
+            result = SourceOnboarding(self.root, sources=('linkedin', 'gmail', 'imessage', 'whatsapp')).run()
+        gmail.assert_not_called()
+        messages_sync.assert_not_called()
+        linkedin_sync.assert_called_once()
+        self.assertEqual(result['event'], 'sources.ready')
+        self.assertEqual({step: result['steps'][step]['status'] for step in ('gmail_login', 'imessage_access', 'whatsapp_login')},
+                         {'gmail_login': 'skipped', 'imessage_access': 'skipped', 'whatsapp_login': 'skipped'})
+
+    def test_desktop_setup_takes_any_mix_of_signed_in_sources(self):
+        # The sources phase over every subset of the four sources: the signed-in ones log in and
+        # sync, the rest are skipped and never asked to. Processing's owner without LinkedIn is
+        # test_install_pipeline's saved profile link.
+        sources = ('linkedin', 'gmail', 'imessage', 'whatsapp')
+        login_steps = {'linkedin': 'linkedin_login', 'gmail': 'gmail_login', 'imessage': 'imessage_access',
+                       'whatsapp': 'whatsapp_login'}
+        for size in range(len(sources) + 1):
+            for signed in itertools.combinations(sources, size):
+                with self.subTest(signed=signed):
+                    # Each mix starts fresh: no earlier run's steps.
+                    InstallStatus(self.root).write('install.preparing_mac', pid=os.getpid())
+                    calls = []
+                    ready = self.ready(*signed, mailboxes=('casey@example.com',) if 'gmail' in signed else ())
+                    with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+                         patch('packs.powerset.primitives.install.workflow.signed_in', return_value=ready), \
+                         patch.object(SourceOnboarding, '_linkedin_login', lambda flow: calls.append('linkedin') or True), \
+                         patch.object(SourceOnboarding, '_gmail_connect', lambda flow: calls.append('gmail') or True), \
+                         patch.object(SourceOnboarding, '_imessage_access', lambda flow: calls.append('imessage') or True), \
+                         patch.object(SourceOnboarding, '_whatsapp_link', lambda flow: calls.append('whatsapp') or True), \
+                         patch.object(SourceOnboarding, '_linkedin_sync', return_value=True), \
+                         patch.object(SourceOnboarding, '_gmail_sync', return_value=True), \
+                         patch.object(SourceOnboarding, '_messages_sync', return_value=True):
+                        result = SourceOnboarding(self.root, sources=sources).run()
+                    self.assertEqual(calls, list(signed))
+                    self.assertEqual(result['event'], 'sources.ready' if signed else 'sources.all_skipped')
+                    self.assertEqual({source for source in sources if result['steps'].get(login_steps[source], {}).get('status') == 'skipped'},
+                                     set(sources) - set(signed))
+
+    def test_desktop_gmail_syncs_exactly_the_mailboxes_signed_in(self):
+        seen = []
+        ready = self.ready('gmail', mailboxes=('owner@example.com', 'work@example.com'))
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch('packs.powerset.primitives.install.workflow.signed_in', return_value=ready), \
+             patch.object(SourceOnboarding, '_gmail_connect', lambda flow: seen.append(flow.gmail_emails) or True), \
+             patch.object(SourceOnboarding, '_gmail_sync', return_value=True):
+            SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('saved@example.com',), sync_after='2023-01-01').run()
+        self.assertEqual(seen, [('owner@example.com', 'work@example.com')])
+
+    def test_desktop_leaves_out_gmail_not_signed_in(self):
+        # No mailbox, or one whose sign-in expired (Google ends a testing app's sign-ins after a
+        # week): the Connect screen's Gmail row signs it in; setup never asks.
+        InstallStatus(self.root).write('tools.ready', step=InstallStep.NETWORK, pid=os.getpid(), account_email='casey@example.com')
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch('packs.powerset.primitives.install.workflow.signed_in', return_value=self.ready(mailboxes=('casey@example.com',))), \
+             patch.object(SourceOnboarding, '_gmail_connect') as connect:
+            result = SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01').run()
+        connect.assert_not_called()
+        self.assertEqual(result['event'], 'sources.all_skipped')
+        self.assertEqual(result['steps']['gmail_login']['status'], 'skipped')
 
     def test_fresh_gmail_creates_the_oauth_app_in_process_before_any_account_sync(self):
         with patch.object(accounts, 'status_payload', return_value={

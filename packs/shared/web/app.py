@@ -1,12 +1,14 @@
 """The local UI's React app: its shell, built assets, and cached profile-image signing.
 
 Flow: the review server (and the People test server) asks `AppRoutes.get` first.
-GET `/install` (installation), `/` (the review flow), `/people`, `/searches`, `/searches/run`, `/accounts` or `/tasks` (any
+GET `/install` (installation), `/` (the review flow), `/people`, `/searches`, `/searches/run`, `/accounts`, `/tasks` or `/agent` (any
 query) -> `app.html`, a `#root` mount whose asset URLs are absolute so any nested route resolves them; GET `/app/assets/app.js|app.css` -> the build in
 the repo's `web/dist/` (see `web/README.md`). POST `/api/profile-image/sign/batch` signs
 LinkedIn CDN URLs server-side for the gateway's saved images. Everything else falls through.
 
 Changelog:
+  2026-10-13: /settings is an app page.
+  2026-10-08: the shell also answers /agent (the desktop app's Codex agent).
   2026-10-08: /sets is an app page.
   2026-10-02: the shell answers /install before project dependencies are ready.
   2026-09-26: created; replaces share/web's People page and /people/assets.
@@ -29,7 +31,7 @@ WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
 # The paths the React router owns; the server answers each with the shell page.
-PAGE_PATHS = frozenset({"/", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks"})
+PAGE_PATHS = frozenset({"/", "/home", "/install", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks", "/agent", "/settings"})
 ASSETS = {
     "app.js": (WEB_DIST / "app.js", "text/javascript; charset=utf-8"),
     "app.css": (WEB_DIST / "app.css", "text/css; charset=utf-8"),

@@ -16,6 +16,13 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
+  2026-10-13: under the desktop app, setup never asks which Gmail account (the Connect screen
+      connects it) and WhatsApp has no skip: their words are gone.
+  2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`); the page
+      counts its tasks ("3 of 7 tasks completed") where the ring was.
+  2026-10-09: under the desktop app (POWERPACKS_DESKTOP=1) no agent reads the page, so the lines
+      that speak as one get the app's words (DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE); the
+      paid stages report their counts as they go; the Skip WhatsApp and elapsed-time page words.
   2026-10-07: the events of v1's processing, the spend approval, the index recovery and the
       review row are gone with them.
   2026-10-05: created; the copy moved here from status.py, workflow.py,
@@ -23,10 +30,13 @@ Changelog:
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
 
+# Set by the desktop app: setup's waits get buttons on the page, not an agent in chat.
+DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 R, W, F, C, S = InstallState.RUNNING, InstallState.WAITING, InstallState.FAILED, InstallState.COMPLETED, InstallState.SKIPPED
 
 
@@ -77,6 +87,7 @@ PAGE = {
     "title.completed": "Powerpacks is installed",
     "title.ready": "Powerpacks is ready",
     "title.paused": "Setup paused",
+    "title.welcome": "Welcome to Powerpacks",
     "title.signing_in": "Waiting for you to sign in",
     "title.processing": "Your contacts are saved",
     "state.running": "Working",
@@ -87,12 +98,14 @@ PAGE = {
     "state.paused": "Paused",
     "state.next": "Next",
     "failed.note": "Your progress is saved. I can check this step and retry.",
+    "tasks.done": "{done} of {total} tasks completed",
     "history.folded": "{count} tasks completed",
     "history.open": "Hide completed tasks",
     "permission.button": "Open settings & show the app",
     "qr.loading": "Getting your QR code…",
     "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
     "qr.alt": "Scan this QR code to link WhatsApp",
+    "running.elapsed": "{elapsed} so far",
     "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",
     "review.offer.many": "{count} LinkedIn matches need a quick look when you have time.",
     "review.button": "Review contacts",
@@ -118,8 +131,8 @@ PROSE: dict[str, Prose] = {
     "install.unreadable": Prose(InstallStep.RUNTIME, F, "Installation status could not be read. I'm checking the installation log."),
 
     # Installing Powerpacks: the Powerset account (onboard.py)
-    "account.signing_in": Prose(InstallStep.ACCOUNT, W, "Waiting for account login. Sign in in the browser; setup will continue automatically."),
-    "account.link_expired": Prose(InstallStep.ACCOUNT, W, "The sign-in link expired. Opening a fresh one."),
+    "account.signing_in": Prose(InstallStep.ACCOUNT, W, "Waiting for you to sign in to Powerset. Setup continues as soon as you finish.", action="signin"),
+    "account.link_expired": Prose(InstallStep.ACCOUNT, W, "The sign-in link expired. Opening a fresh one.", action="signin"),
     "account.checking": Prose(InstallStep.ACCOUNT, R, "Checking your account"),
     "account.connected": Prose(InstallStep.ACCOUNT, C, "Connected as {email}"),
     "account.reused": Prose(InstallStep.ACCOUNT, S, "Already signed in as {email}. Tell me if that's the wrong account."),
@@ -148,6 +161,7 @@ PROSE: dict[str, Prose] = {
     "source.skipped": Prose(None, S, "Skipped for now"),
     "source.not_started": Prose(None, W, "Not started"),
     "sources.all_skipped": Prose(InstallStep.READY, C, "Powerpacks is installed"),
+    "sources.connected": Prose(InstallStep.SOURCES, C, "Connected"),  # a Connect screen run's end
     "gmail.which_accounts": Prose(InstallStep.GMAIL_LOGIN, W, "Which Gmail accounts should I add? The first one owns the Gmail setup.", action="gmail"),
 
     # Logging in to your accounts: tools first, then every login back to back
@@ -238,6 +252,7 @@ PROSE: dict[str, Prose] = {
     "discover.reading": Prose(InstallStep.DEEP_CONTEXT, R, "Reading your messages"),
     "discover.estimating": Prose(InstallStep.DEEP_CONTEXT, R, "Estimating context processing"),
     "discover.learning": Prose(InstallStep.DEEP_CONTEXT, R, "Learning about your contacts"),
+    "discover.learning.count": Prose(InstallStep.DEEP_CONTEXT, R, "Learning about your contacts: {done:,} of {total:,}"),
     "discover.duplicates": Prose(InstallStep.DEEP_CONTEXT, R, "Checking duplicate contacts"),
     "discover.combining": Prose(InstallStep.DEEP_CONTEXT, R, "Combining duplicate contacts"),
     "discover.grouping": Prose(InstallStep.DEEP_CONTEXT, R, "Grouping each person's contacts"),
@@ -245,6 +260,8 @@ PROSE: dict[str, Prose] = {
 
     # Enriching your contacts
     "enrich.running": Prose(InstallStep.ENRICH, R, "Enriching your contacts"),
+    "enrich.researching.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} researched"),
+    "enrich.judging.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} LinkedIn matches checked"),
     "enrich.done": Prose(InstallStep.ENRICH, C, "Your contacts are enriched"),
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
 
@@ -260,6 +277,7 @@ PROSE: dict[str, Prose] = {
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
+    "setup.ready": Prose(None, C, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
 }
 
 
@@ -273,14 +291,67 @@ def source_counts(counts: dict[str, int]) -> str:
                       for source, count in counts.items()) or _NO_SOURCE_COUNTS
 
 
-def render(event: str, values: dict) -> tuple[Prose, str, str]:
-    """The event's prose with its line and note filled from `values`."""
+# Under the desktop app no agent reads the page: the app's buttons do what the agent would.
+# These phrases are swapped wherever a line or note says them; the events after them need
+# their own words. Every other line reads the same in both.
+_DESKTOP_PHRASES = {
+    "I'm checking what happened.": "Try again to pick up from here.",
+    "I'll explain in chat.": "Try again to pick up from here.",
+    "Ask me in chat to check access and retry.": "Check your Powerset access, then try again.",
+    "Tell me in chat whether to switch accounts or connect your contacts.": "Setup continues with your contacts.",
+}
+DESKTOP_LINES = {
+    "install.stopped": "Installation stopped. Try again to pick up from here.",
+    "install.page_failed": "The progress page could not start. Check the installation log, then try again.",
+    "install.unreadable": "Installation status could not be read. Check the installation log.",
+    "account.reused": "Already signed in as {email}.",
+    "account.login_failed": "Powerset sign-in did not finish. Try again to reopen the sign-in page.",
+    "credentials.hosted_off": "Hosted search isn't enabled for {email} yet, so local setup continues.",
+    "account.error": "Setup could not finish. Check the installation log, then try again.",
+    "tools.needs_password": "Your Mac password is needed to prepare import tools.",
+    "gmail.app.stopped": "Gmail setup stopped in Google Cloud. Try again to pick up from here.",
+    "imessage.unavailable": "Messages could not be read on this Mac.",
+    "whatsapp.blocked": "WhatsApp can't link right now. Try again, or set up without it.",
+    "whatsapp.failed": "WhatsApp could not be linked. Try again, or set up without it.",
+    "linkedin.done.stalled": "LinkedIn stopped sending connections after {read:,} of {total:,}, "
+                             "so setup stopped to keep your account safe.",
+    "linkedin.done.export_requested": "LinkedIn stopped sending connections after {read:,} of {total:,}, so setup "
+                                      "stopped to keep your account safe and asked LinkedIn for your data export.",
+    "discover.owner_needed": "Add your LinkedIn profile to continue.",
+    "step.waiting": "This step needs you. Continue setup to try it again.",
+    "setup.paused": "Setup paused. Continue to pick up from here.",
+}
+DESKTOP_NOTES = {
+    "credentials.not_provisioned": "Ask Powerset to finish enabling search for this account, then continue setup.",
+    "network.unconfirmed": "Setup continues with your contacts.",
+    "network.not_searchable": "Powerset is still preparing them; setup continues with your contacts.",
+    "gmail.connect.waiting": "Finish connecting Gmail in your browser; Powerpacks continues here.",
+    "imessage.permission": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into "
+                           "Full Disk Access and turn it on; Powerpacks continues on its own.",
+    "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own.",
+    "whatsapp.qr.refreshed": "Scan the code with WhatsApp; Powerpacks continues on its own.",
+}
+DESKTOP_PAGE = {"failed.note": "Your progress is saved. Try again picks up from this step."}
+
+
+def _app_words(text: str) -> str:
+    for phrase, replacement in _DESKTOP_PHRASES.items():
+        text = text.replace(phrase, replacement)
+    return text
+
+
+def render(event: str, values: dict, *, desktop: bool = DESKTOP) -> tuple[Prose, str, str]:
+    """The event's prose with its line and note filled from `values`; under the desktop app,
+    the app's words for the lines that speak as an agent."""
     prose = PROSE[event]
-    return prose, prose.line.format(**values), prose.note.format(**values)
+    line, note = prose.line, prose.note
+    if desktop:
+        line, note = _app_words(DESKTOP_LINES.get(event, line)), _app_words(DESKTOP_NOTES.get(event, note))
+    return prose, line.format(**values), note.format(**values)
 
 
-def page_prose() -> dict:
+def page_prose(*, desktop: bool = DESKTOP) -> dict:
     """The page's rows and fixed words, sent with every status read."""
     return {"rows": [{"label": row.label, "steps": [step.value for step in row.steps],
                       "needs": row.needs.value if row.needs else ""} for row in ROWS],
-            "page": PAGE}
+            "page": {**PAGE, **DESKTOP_PAGE} if desktop else PAGE}

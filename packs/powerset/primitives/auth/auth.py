@@ -2,7 +2,8 @@
 """Auth0 PKCE login for Powerset / search-api access.
 
 Subcommands:
-    login    Reuse managed Chrome, capture Auth0 callback, save JWT to disk.
+    login    Reuse managed Chrome, capture Auth0 callback, save JWT to disk
+             with the signed-in name and picture.
     whoami   Print stored credential info (no refresh).
     token    Print a fresh access token, refreshing if needed.
     logout   Remove stored credentials.
@@ -31,7 +32,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
@@ -76,7 +77,6 @@ def emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
 
 
-
 def _missing_config_message(keys: list[str]) -> str:
     joined = ", ".join(keys)
     return (
@@ -96,6 +96,7 @@ def require_config_values(pairs: list[tuple[str, str | None]]) -> dict[str, str]
     if missing:
         raise SystemExit(_missing_config_message(missing))
     return {key: value or "" for key, value in pairs}
+
 
 def _auth0_url(domain: str, path: str) -> str:
     """Resolve a URL for an Auth0-shaped host.
@@ -314,7 +315,7 @@ _PAGE_STYLE = """
 _SUCCESS_HTML = (
     f"<!doctype html><html><head><meta charset='utf-8'><title>Powerpacks</title>{_PAGE_STYLE}</head>"
     "<body><div class='card'><div class='icon'>✅</div><h1>You're in.</h1>"
-    "<p>Authentication complete. Head back to your terminal.</p>"
+    "<p>Authentication complete. Powerpacks picks up from here.</p>"
     "<p class='subtle'>You can close this tab.</p></div></body></html>"
 )
 
@@ -394,7 +395,9 @@ def _login_in_browser(authorize_url: str, timeout: int) -> None:
                 proc.wait()
 
 
-def cmd_login(args: argparse.Namespace) -> int:
+def cmd_login(args: argparse.Namespace, on_authorize_url: "Callable[[str], None] | None" = None) -> int:
+    """Sign in through Auth0. `on_authorize_url` gets the sign-in URL once the callback server
+    listens, for a caller that shows the page itself (the desktop app) instead of a browser."""
     try:
         config = require_config_values([
             ("POWERPACKS_AUTH0_DOMAIN", args.auth0_domain),
@@ -432,10 +435,11 @@ def cmd_login(args: argparse.Namespace) -> int:
         "state": state,
     }
     if args.force_account:
-        # `prompt=login` forces Auth0 to always show its login screen, even when
-        # an SSO cookie already exists. Use this when switching between
-        # multiple Powerset/Aleph accounts on the same browser.
-        authorize_params["prompt"] = "login"
+        # `login` makes Auth0 show its login screen even when an SSO cookie
+        # exists; Auth0 passes the prompt on to Google, whose `select_account`
+        # then lists its accounts instead of reusing the one signed in. Use
+        # this when switching between Powerset/Aleph accounts in one browser.
+        authorize_params["prompt"] = "login select_account"
     authorize_url = _auth0_url(args.auth0_domain, "/authorize?") + urllib.parse.urlencode(
         authorize_params
     )
@@ -454,7 +458,9 @@ def cmd_login(args: argparse.Namespace) -> int:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        if args.no_browser:
+        if on_authorize_url is not None:
+            on_authorize_url(authorize_url)
+        elif args.no_browser:
             print(f"open this URL if your browser did not launch: {authorize_url}", file=sys.stderr)
         else:
             _login_in_browser(authorize_url, args.timeout)
@@ -513,11 +519,16 @@ def cmd_login(args: argparse.Namespace) -> int:
         return 1
 
     access_token = token_payload["access_token"]
+    # The access token names only the email; the ID token adds the name and picture the app's
+    # side nav shows (refreshes keep them).
+    identity = _decode_jwt_payload(token_payload.get("id_token", "")) or {}
     creds = {
         "access_token": access_token,
         "refresh_token": token_payload.get("refresh_token"),
         "expires_at": time.time() + int(token_payload.get("expires_in", 86400)),
         "email": _decode_jwt_email(access_token),
+        "name": identity.get("name"),
+        "picture": identity.get("picture"),
         "audience": args.audience,
         "auth0_domain": args.auth0_domain,
         "client_id": args.client_id,
@@ -671,7 +682,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--client-id", default=DEFAULT_AUTH0_CLIENT_ID)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, on_authorize_url: Callable[[str], None] | None = None) -> int:
+    """`on_authorize_url` is for a `login` whose page the caller shows itself (see `cmd_login`)."""
     parser = argparse.ArgumentParser(description="Powerset Auth0 PKCE login")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -687,8 +699,8 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("--no-browser", action="store_true",
                        help="Do not launch managed Chrome; print the URL only.")
     login.add_argument("--force-account", action="store_true",
-                       help="Force Auth0 to show the login screen even if an SSO "
-                            "cookie exists (use when switching accounts).")
+                       help="Show Auth0's login screen even if an SSO cookie exists, "
+                            "and Google's account chooser (use when switching accounts).")
     login.set_defaults(func=cmd_login)
 
     whoami = sub.add_parser("whoami", help="Print stored credential metadata")
@@ -717,6 +729,8 @@ def main(argv: list[str] | None = None) -> int:
     logout.set_defaults(func=cmd_logout)
 
     args = parser.parse_args(argv)
+    if on_authorize_url is not None:
+        return cmd_login(args, on_authorize_url=on_authorize_url)
     return args.func(args)
 
 

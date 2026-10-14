@@ -1,0 +1,112 @@
+// The Codex account: who is signed in, and ChatGPT sign-in: the app opens ChatGPT's sign-in
+// page in the system browser and Codex reports the sign-in done. Shared by the Agent page's gate and the Accounts page's Codex card.
+
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { createContext, useCallback, useContext, useEffect, useState } from "react"
+
+import {
+  cancelCodexLogin,
+  type CodexLogin,
+  fetchCodexStatus,
+  logoutCodex,
+  onAgentEvent,
+  startCodexLogin,
+} from "@/lib/api/codex"
+import { errorText } from "@/lib/api/http"
+import { focusApp, openExternal } from "@/lib/api/install"
+import type { CodexStatus } from "@/types/agent"
+
+const CODEX_KEY = ["codex"] as const
+// Codex keeps a sign-in nobody finishes open for ten minutes; the app ends it after two.
+const LOGIN_TIMEOUT_MS = 120_000
+
+export interface CodexAccountState {
+  status: CodexStatus | undefined
+  loading: boolean
+  /** The sign-in in progress; null when none. */
+  login: CodexLogin | null
+  error: string | null
+  connect: () => void
+  /** Open the sign-in page in the system browser (again). */
+  openBrowser: () => void
+  cancel: () => void
+  signOut: () => void
+  /** Ask Codex again after it failed to answer. */
+  retry: () => void
+}
+
+export const CodexAccountContext = createContext<CodexAccountState | null>(null)
+
+export function useCodexAccount(): CodexAccountState {
+  const account = useContext(CodexAccountContext)
+  if (!account) throw new Error("CodexAccountProvider is missing.")
+  return account
+}
+
+/** The native app owns sign-in, so changing pages cannot discard it. */
+export function useCodexAccountState(): CodexAccountState {
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: CODEX_KEY, queryFn: fetchCodexStatus })
+  const [login, setLogin] = useState<CodexLogin | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const refresh = useCallback(() => void client.invalidateQueries({ queryKey: CODEX_KEY }), [client])
+
+  useEffect(
+    () =>
+      onAgentEvent((event) => {
+        if (event.type === "loginCompleted") {
+          void focusApp()
+          setActionError(event.success ? null : (event.error ?? "Sign-in did not finish."))
+          // The sign-in ends once Codex's account is read again, so nothing shows Connect in between.
+          void client.invalidateQueries({ queryKey: CODEX_KEY }).finally(() => setLogin(null))
+        }
+        if (event.type === "accountUpdated") refresh()
+      }),
+    [client, refresh],
+  )
+
+  useEffect(() => {
+    if (!login) return
+    const timer = setTimeout(() => {
+      setLogin(null)
+      cancelCodexLogin(login.loginId).catch((error: unknown) => setActionError(errorText(error)))
+    }, LOGIN_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [login])
+
+  const run = (action: Promise<unknown>) => {
+    setActionError(null)
+    action.catch((error: unknown) => setActionError(errorText(error))).finally(refresh)
+  }
+
+  const failed = (error: unknown) => setActionError(errorText(error))
+
+  return {
+    status: query.data,
+    loading: query.isPending,
+    login,
+    error: actionError ?? (query.error ? errorText(query.error) : null),
+    connect: () => {
+      setActionError(null)
+      startCodexLogin()
+        .then((started) => {
+          setLogin(started)
+          return openExternal(started.authUrl)
+        })
+        .catch(failed)
+    },
+    openBrowser: () => {
+      if (login) openExternal(login.authUrl).catch(failed)
+    },
+    cancel: () => {
+      if (login) run(cancelCodexLogin(login.loginId))
+      setLogin(null)
+    },
+    signOut: () => run(logoutCodex()),
+    retry: () => {
+      setActionError(null)
+      refresh()
+    },
+  }
+}

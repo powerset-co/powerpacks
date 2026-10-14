@@ -21,7 +21,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import tiktoken
 
@@ -245,12 +245,21 @@ def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[
             "estimated_cost_usd_at_most": round(jev_usd + sol_usd, 4)}
 
 
-async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Path, owner_block: str, now: str) -> dict[str, int]:
+async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Path, owner_block: str, now: str,
+                 on_progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
     """Judge every task and write each family's rows the moment its verdicts are known, committing as it
     goes, so a stopped run keeps what it paid for. JEV answers every profile first (its own disk cache);
     Sol sees the families JEV did not settle on exactly one member id. A failed Sol call is counted and
-    the family is judged next run."""
+    the family is judged next run. `on_progress("judge", done, total)` follows the families as they
+    are decided."""
     load_env()  # the JEV key, read from the environment on a cache miss
+    decided: int = 0
+
+    def report() -> None:
+        if on_progress is not None:
+            on_progress("judge", decided, len(tasks))
+
+    report()
     pairs: list[dict[str, dict[str, Any]]] = []
     for task in tasks:
         pairs.extend(jev_pairs(task))
@@ -267,6 +276,8 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Pa
         if len(confirmed) == 1:
             _tally(counts, write(conn, task, {confirmed[0]: JEV_CONFIRMED}, now))
             conn.commit()
+            decided += 1
+            report()
             continue
         for_sol.append(task)
     config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
@@ -287,9 +298,11 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Pa
             task, verdicts = await call
             if verdicts is None:
                 counts["judge_failed"] += 1
-                continue
-            _tally(counts, write(conn, task, verdicts, now))
-            conn.commit()
+            else:
+                _tally(counts, write(conn, task, verdicts, now))
+                conn.commit()
+            decided += 1
+            report()
     return counts
 
 

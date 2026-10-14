@@ -1,7 +1,9 @@
 // The review page's routes on the Python page server: the JSON routes under /api/review/ and
 // the form routes (deep_context_v2/review/api.py), and the dossier route beside them.
 
+import { signIn } from "@/lib/api/feedback"
 import { body, failure } from "@/lib/api/http"
+import { isDesktop } from "@/lib/desktop"
 import { SAVE_FAILED } from "@/lib/review/copy"
 import { isRecord } from "@/lib/utils"
 import type {
@@ -154,8 +156,9 @@ export async function postFeedback(request: FeedbackRequest): Promise<void> {
   await post("/feedback", { ...request })
 }
 
-/** Opens the Powerset sign-in in the browser on this machine. */
+/** Opens the Powerset sign-in in the browser on this machine, or in the desktop app's pane. */
 export async function openSignIn(): Promise<void> {
+  if (isDesktop()) return signIn()
   await post("/auth/login", {})
 }
 

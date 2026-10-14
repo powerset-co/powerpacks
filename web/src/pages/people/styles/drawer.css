@@ -3,8 +3,9 @@
 
 .drawer-top .sub.sources {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 4px 12px;
   margin-top: 4px;
 }
 .drawer-top .sub.sources a {
@@ -19,6 +20,10 @@
 .drawer-actions {
   display: flex;
   gap: 8px;
+}
+/* A saved logbook's icon takes the accent: there is something to read. */
+.drawer-icon[data-logbook="saved"] {
+  color: var(--primary);
 }
 
 /* Section bodies; the folding shell is DetailsSection, and .dsec the plain loading block. */

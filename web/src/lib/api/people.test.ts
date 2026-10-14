@@ -16,7 +16,7 @@ describe("decodePeople", () => {
       parent_id: "p1",
       name: "Jordan Bravo",
       channels: ["gmail", "linkedin"],
-      share: "confirm",
+      share: "no",
       last: "< 1 year",
       warmthBucket: "Close (2–3)",
       search: "jordan bravo engineer acme ",

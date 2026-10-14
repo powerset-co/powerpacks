@@ -32,7 +32,7 @@ export const BASE: Cells = {
   warmth: null,
   labels: [],
   flag: "",
-  share: "confirm",
+  share: "no",
   reason: "",
   share_source: "machine",
   tags: [],
@@ -57,7 +57,7 @@ const PEOPLE: Partial<Cells>[] = [
     worth: "yes",
     warmth: 2.5,
     relationship_kind: "family",
-    share: "confirm",
+    share: "no",
     reason: "family",
   },
   {
@@ -69,7 +69,7 @@ const PEOPLE: Partial<Cells>[] = [
     worth: "maybe",
     relationship_kind: "close_friend",
     labels: ["is_recruiter"],
-    share: "confirm",
+    share: "no",
     reason: "worth_maybe",
   },
   {
@@ -79,7 +79,7 @@ const PEOPLE: Partial<Cells>[] = [
     interactions: 3,
     recency_days: 400,
     relationship_kind: "family",
-    share: "confirm",
+    share: "no",
     reason: "family",
     tags: ["private"],
   },
@@ -101,7 +101,7 @@ const PEOPLE: Partial<Cells>[] = [
 const COLUMNS = [...PERSON_COLUMNS].reverse()
 
 export const PAYLOAD: PeoplePayload = {
-  counts: { total: 4, upload: 1, confirm: 3, private: 0 },
+  counts: { total: 4, upload: 1, private: 3 },
   columns: COLUMNS,
   rows: PEOPLE.map((person) => {
     const cells: Cells = { ...BASE, ...person }

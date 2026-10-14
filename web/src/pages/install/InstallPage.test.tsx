@@ -228,7 +228,7 @@ describe("installation progress", () => {
       "fetch",
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByText("Enriching contacts")
     status = {
       ...INSTALL,
@@ -242,14 +242,14 @@ describe("installation progress", () => {
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText("Building search records")
-    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("0.4")
+    // The task count stands in for any bar.
+    expect(screen.queryByRole("progressbar")).toBeNull()
     status = {
       ...status,
       index_progress: { status: "failed", message: "Index download failed", payload: {} },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Setup needs a fix" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
 
   it("folds older completed steps and shows only one next step", async () => {
@@ -375,7 +375,16 @@ describe("installation progress", () => {
     expect(screen.getByText(/Drag Example into Full Disk Access/)).toBeTruthy()
   })
 
-  it("keeps the page mounted on unchanged reads and stops the progress orbit while waiting or failed", async () => {
+  it("counts the tasks done over the list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(INSTALL)))),
+    )
+    mount()
+    expect(await screen.findByText(/^\d+ of \d+ tasks completed$/)).toBeTruthy()
+  })
+
+  it("keeps the page mounted on unchanged reads, through waiting and failed", async () => {
     let status = INSTALL
     vi.stubGlobal(
       "fetch",
@@ -384,21 +393,20 @@ describe("installation progress", () => {
     const renders = vi.fn()
     const { client, container } = mount(renders)
     await screen.findByText(INSTALL.message)
-    const shape = container.querySelector(".enrich-shape")
+    const knot = container.querySelector("canvas")
+    expect(knot).not.toBeNull()
     const before = renders.mock.calls.length
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     expect(renders.mock.calls.length).toBe(before)
-    expect(container.querySelector(".enrich-shape")).toBe(shape)
+    expect(container.querySelector("canvas")).toBe(knot)
 
     status = { ...INSTALL, status: "waiting", message: "Answer in chat whether to add Gmail tools" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "One thing to finish" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
 
     status = { ...INSTALL, status: "failed", message: "Installation was interrupted" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByText(status.message)
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     expect(screen.getByText("Your progress is saved. I can check this step and retry.")).toBeTruthy()
   })
 
@@ -416,16 +424,14 @@ describe("installation progress", () => {
           : Promise.reject(new TypeError("Failed to fetch")),
       ),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByRole("heading", { name: "Powerpacks is installed" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     reachable = false
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Reconnecting to Powerpacks" })
     reachable = true
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() => expect(screen.getByRole("heading", { name: "Powerpacks is installed" })).toBeTruthy())
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
   })
 
   it("shows account waits, skipped login, and verified network without claiming early readiness", async () => {
@@ -440,9 +446,8 @@ describe("installation progress", () => {
       "fetch",
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
-    const { client, container } = mount()
+    const { client } = mount()
     await screen.findByRole("heading", { name: "Waiting for you to sign in" })
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
     expect(screen.getByText("Please sign in to Powerset")).toBeTruthy()
 
     status = {
@@ -459,9 +464,9 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("casey@example.com")
-    expect(screen.getByText("Personal Network · 0 people")).toBeTruthy()
-    expect(screen.getByText("Installing Powerpacks")).toBeTruthy()
+    await screen.findByText("Installing Powerpacks")
+    // The account and network show in the sidebar footer, not here.
+    expect(screen.queryByText("casey@example.com")).toBeNull()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
 
     status = {
@@ -473,8 +478,103 @@ describe("installation progress", () => {
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Powerpacks is ready" })
-    expect(screen.getByText("Personal Network · 4 people")).toBeTruthy()
+    expect(screen.queryByText("Personal Network · 4 people")).toBeNull()
     expect(screen.getByText(status.message)).toBeTruthy()
-    expect(container.querySelector(".enrich-orbit")).toBeNull()
+  })
+
+  it("counts how long a running step has taken, and only while it runs", async () => {
+    const started = new Date(Date.now() - 125_000).toISOString().replace(/\.\d{3}Z$/, "Z")
+    let status: InstallStatus = {
+      ...INSTALL,
+      step: "deep_context",
+      message: "Learning about your contacts: 40 of 298",
+      step_started_at: started,
+      steps: { deep_context: { status: "running", message: "Learning about your contacts: 40 of 298" } },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
+    )
+    const { client, container } = mount()
+    await screen.findByText("Learning about your contacts: 40 of 298")
+    expect(container.querySelector(".install-elapsed")?.textContent).toMatch(/^2m 0[5-9]s so far$/)
+    status = { ...status, status: "waiting", action: { kind: "owner" } }
+    await act(() => client.invalidateQueries({ queryKey: ["install"] }))
+    await waitFor(() => expect(container.querySelector(".install-elapsed")?.textContent).toBe(""))
+  })
+
+  it("keeps owner lookup busy and returns failures to the editable form", async () => {
+    let rejectLookup!: (error: Error) => void
+    const invoke = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectLookup = reject
+        }),
+    )
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke },
+      event: { listen: () => Promise.resolve(() => undefined) },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "deep_context",
+              status: "waiting",
+              action: { kind: "owner" },
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    const input = await screen.findByLabelText("Your LinkedIn profile")
+    fireEvent.change(input, { target: { value: "https://linkedin.com/in/jordan-example" } })
+    const button = screen.getByRole("button", { name: "Continue" })
+    fireEvent.click(button)
+    await waitFor(() => expect(button).toHaveProperty("disabled", true))
+    expect(input).toHaveProperty("disabled", true)
+    await act(async () => {
+      rejectLookup(new Error("Could not load that LinkedIn profile."))
+      await Promise.resolve()
+    })
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Could not load that LinkedIn profile.",
+    )
+    expect(input).toHaveProperty("disabled", false)
+    expect(input).toHaveProperty("value", "https://linkedin.com/in/jordan-example")
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it("in the desktop app, a failed step offers Try again", async () => {
+    const invoke = vi.fn(() => Promise.resolve(null))
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke },
+      event: { listen: () => Promise.resolve(() => undefined) },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ...INSTALL,
+              step: "gmail_login",
+              status: "failed",
+              event: "gmail.connect.failed",
+              installer_pid: 0,
+              action: { kind: "error" },
+            }),
+          ),
+        ),
+      ),
+    )
+    mount()
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
   })
 })

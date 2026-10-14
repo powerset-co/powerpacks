@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-debug-skip-setup"
+description = "Enables the debug_skip_setup command without any pre-configured scope."
+commands.allow = ["debug_skip_setup"]
+
+[[permission]]
+identifier = "deny-debug-skip-setup"
+description = "Denies the debug_skip_setup command without any pre-configured scope."
+commands.deny = ["debug_skip_setup"]

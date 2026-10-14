@@ -3,7 +3,7 @@
 Who to ask is worked out here: the members of this machine's sets (share/web/sets.py) who shared each
 pinned candidate into the share_v1 network (the candidate's summaries document lists them in
 allowed_operator_ids). Each of them gets one `ask` message holding the question and the candidates they
-know; their laptop answers with one `ask_answer` message (ask_worker.answer_message), which lands in
+know; their opted-in desktop answers through Codex with one `ask_answer` message, which lands in
 this machine's `.powerpacks/inbox`. The run keeps what went out in `ask.json`.
 
 The relay only carries the messages; it holds them for a member who is offline.

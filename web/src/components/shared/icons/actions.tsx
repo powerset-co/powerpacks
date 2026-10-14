@@ -44,6 +44,64 @@ export function FlagIcon(props: IconProps) {
   )
 }
 
+/** Copy to the clipboard: two sheets. */
+export function CopyIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
+    </svg>
+  )
+}
+
+/** A done mark, for a copy that landed. */
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  )
+}
+
+/** Setup's fresh start: a spark. */
+export function SparkIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6" />
+    </svg>
+  )
+}
+
+/** Setup's import: a tray taking a file in. */
+export function ImportIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M12 3v11M8 10l4 4 4-4" />
+      <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </svg>
+  )
+}
+
+/** Refresh: a circling arrow. */
+export function RefreshIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+      <path d="M20 4v5h-5" />
+    </svg>
+  )
+}
+
+/** A person's logbook: an open book. */
+export function BookIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M3 5h6a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H3z" />
+      <path d="M21 5h-6a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h7z" />
+    </svg>
+  )
+}
+
 /** The broadcast mark: the hive, filled. Its button carries the label. */
 export function HiveIcon(props: IconProps) {
   return (

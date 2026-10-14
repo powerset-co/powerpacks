@@ -9,7 +9,7 @@
 .grid-head,
 .row {
   display: grid;
-  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 84px 92px 82px;
+  grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 84px 92px 96px;
   align-items: center;
   gap: 10px;
   padding: 0 20px 0 12px;
@@ -237,4 +237,29 @@
   .row .c-sources {
     display: none;
   }
+}
+
+/* The sources cell's pills are a button: hovering or clicking them opens the person's emails
+   and numbers (table/ContactSources) in a float panel. */
+.contact-trigger {
+  display: inline-flex;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.contact-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.contact-popover {
+  width: min(260px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.contact-popover .dim {
+  color: var(--muted);
 }

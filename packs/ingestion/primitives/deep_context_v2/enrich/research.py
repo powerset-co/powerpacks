@@ -18,7 +18,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from parallel import Parallel
 from parallel.types import RunInputParam, TaskGroupStatusEvent, TaskRunEvent, TaskSpecParam
@@ -156,8 +156,10 @@ class ResearchStep(Node):
         return submit(self.conn, self.subjects())
 
 
-def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, int]:
-    """One Parallel task group for every subject; each answer is written and committed as it arrives."""
+def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
+           on_progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
+    """One Parallel task group for every subject; each answer is written and committed as it arrives.
+    `on_progress("research", done, total)` follows the answers as they come back."""
     by_handle: dict[str, ResearchSubject] = {}
     for subject in todo:
         by_handle[subject.handle] = subject
@@ -175,6 +177,9 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
     for start in range(0, len(inputs), PARALLEL_BATCH_SIZE):
         client.task_group.add_runs(group_id, inputs=inputs[start:start + PARALLEL_BATCH_SIZE], default_task_spec=PARALLEL_TASK_SPEC)
     counts: dict[str, int] = {"research_submitted": len(todo), "complete": 0, "no_match": 0, "failed": 0}
+    answered: int = 0
+    if on_progress is not None:
+        on_progress("research", answered, len(todo))
     with client.task_group.events(group_id, api_timeout=PARALLEL_STREAM_TIMEOUT, timeout=PARALLEL_STREAM_TIMEOUT + 30) as events:
         for event in events:
             if isinstance(event, TaskGroupStatusEvent) and not event.status.is_active:
@@ -192,6 +197,9 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject]) -> dict[str, i
             queries_enrich.upsert_research(conn, row)
             conn.commit()  # each answer is kept the moment it is paid for
             counts[row[2]] += 1
+            answered += 1
+            if on_progress is not None:
+                on_progress("research", answered, len(todo))
     return counts
 
 

@@ -59,7 +59,9 @@ def pull(*, repo_root: Path, env_file: Path) -> list[dict[str, Any]]:
         except Rejected as reason:
             print(f"agent-inbox: discarded {str(message.get('kind'))[:40]!r}: {reason}", file=sys.stderr)
         else:
-            write_json(inbox / f"{envelope.id}.json", message)
+            path = inbox / f"{envelope.id}.json"
+            if not path.exists():
+                write_json(path, message)
             kept.append(message)
             print(f"agent-inbox: {envelope.kind} from {envelope.from_name}", file=sys.stderr)
         _request(base, f"/v2/agent-messages/{message['id']}/ack", token, {})

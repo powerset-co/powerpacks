@@ -41,7 +41,7 @@ class ShareInProgressTests(unittest.TestCase):
                 "VALUES ('c1', 'yes', 'human', '', ?)", (NOW,))
             queries_review.insert_parent(conn, "c1", "p:1", "singleton", None, NOW)
             labels = [("c1", "old-profile", "Jordan Bravo", "yes", "", "{}", NOW)]
-            shares = [("c1", "old-profile", "confirm", "worth_maybe", "", "machine", NOW)]
+            shares = [("c1", "old-profile", "no", "worth_maybe", "", "machine", NOW)]
             queries_share.replace_share(conn, labels, shares)
             queries_review.insert_linkedin(conn, "c1", "https://www.linkedin.com/in/new-profile",
                                            "4242", "human_override", "confirmed", "f1", NOW)

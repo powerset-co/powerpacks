@@ -1,5 +1,6 @@
 <!--
 Changelog:
+- 2026-10-14: the WhatsApp QR is drawn in Python; qrencode is no longer needed.
 - 2026-09-25: iMessage group bodies are read under standing owner authorization.
 - 2026-07-16: $import-messages and $import-gmail are contact-sync only.
   Removed the OpenRouter prerequisite and the llm_review_contacts
@@ -97,8 +98,7 @@ It downloads to `~/.powerpacks/bin/wacli` and is always invoked by that absolute
 path, so a stray upstream `wacli` on `PATH` never shadows the pinned fork. The
 download stamps its pinned tag next to the binary, so when the repo later bumps
 the pin the next import detects the drift and re-downloads — `$update-powerpacks`
-alone does not refresh the binary (it only updates the repo + skills). QR
-rendering may separately request `brew install qrencode`.
+alone does not refresh the binary (it only updates the repo + skills).
 
 You'll also need WhatsApp on your phone to scan the QR code that pops up
 during the auth step.
@@ -298,7 +298,7 @@ group bodies are read under standing owner authorization. See the
 | Symptom | Fix |
 | --- | --- |
 | `messages/extract_imessage.py check` reports `chat_db.readable: false` | Grant Full Disk Access to the terminal app and restart it. |
-| `messages/extract_whatsapp.py run` cannot install `wacli` | Approve the Homebrew install when prompted; if `qrencode` is missing, install the exact dependency the primitive reports. |
+| `messages/extract_whatsapp.py run` cannot install `wacli` | Approve the Homebrew install when prompted. |
 | `$powerset env pull` reports `not_provisioned` | Ask a Powerset admin to provision the listed runtime keys, then rerun `$powerset setup`. |
 | `auth login` browser callback never returns | Make sure nothing else is listening on `127.0.0.1:9876`. |
 | Codex / Claude Code / Pi doesn't see the new skills | Restart the host. In Pi, `/reload` also reloads skills. |

@@ -567,7 +567,7 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["oauth_client_name"], "local-msg-vault")
             self.assertTrue((home / "client_secret.json").exists())
-            auth.assert_called_once_with(open_browser=True, expected_account="me@example.com")
+            auth.assert_called_once_with(open_browser=True, expected_account="me@example.com", login=mock.ANY)
 
     def test_browser_setup_skips_when_client_secret_is_already_configured(self):
         with tempfile.TemporaryDirectory() as tmp:

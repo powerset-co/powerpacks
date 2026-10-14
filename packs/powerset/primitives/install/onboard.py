@@ -1,4 +1,8 @@
-"""Resume account setup, source imports, and processing in one ordered flow."""
+"""Resume account setup, source imports, and processing in one ordered flow.
+
+`--logins-only` runs just the chosen sources' tools and logins, into the connect record: the
+desktop app's Connect screen does each source this way before setup (workflow.py `connect`).
+"""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +30,8 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as key
 from packs.shared.web.server import start_server
 
 NEEDS_YOU = 10
+# Set by the desktop app (desktop/src-tauri): sign-ins show inside the app, never in a browser.
+DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 REQUIRED_KEYS = ("OPENAI_API_KEY", "TURBOPUFFER_API_KEY", "DATABASE_URL")
 # Local processing needs only this one; the others serve hosted search.
 _PROCESSING_KEY = "OPENAI_API_KEY"
@@ -103,14 +109,18 @@ class Onboarding:
             client_id=self.config.get("POWERPACKS_AUTH0_CLIENT_ID"),
             audience=self.config.get("POWERPACKS_AUTH0_AUDIENCE"),
             scopes=auth.DEFAULT_AUTH0_SCOPES, callback_host=auth.DEFAULT_CALLBACK_HOST,
-            callback_port=auth.DEFAULT_CALLBACK_PORT, force_account=False, no_browser=False,
+            callback_port=auth.DEFAULT_CALLBACK_PORT, force_account=False, no_browser=DESKTOP,
             timeout=auth.DEFAULT_LOGIN_TIMEOUT, credentials_path=self.credentials_path)
-        # The existing login opens its own browser and prints the fallback URL to stderr.
+        # The login opens its own browser and prints the fallback URL to stderr. Under the
+        # desktop app it opens nothing: the page shows the sign-in URL inside the app instead.
         # Its JSON output is unnecessary here and may include remote error details.
+        def show(url: str) -> None:
+            self.progress("account.signing_in", action={"url": url})
+
         while True:
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                code = auth.cmd_login(args)
+                code = auth.cmd_login(args, on_authorize_url=show) if DESKTOP else auth.cmd_login(args)
             result = json.loads(output.getvalue()) if output.getvalue().strip() else {}
             if not code or result.get("error") != "login timed out":
                 break
@@ -282,6 +292,8 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--logins-only", action="store_true",
+                        help="Only the chosen sources' tools and logins, for the desktop app's Connect screen")
     args = parser.parse_args()
     root = args.root.resolve()
     status = InstallStatus(root)
@@ -293,42 +305,50 @@ def main() -> None:
         except BlockingIOError:
             print("NEEDS YOU: Setup is already running.", flush=True)
             raise SystemExit(NEEDS_YOU) from None
-        previous = status.read()
-        saved, _ = parser.parse_known_args(shlex.split(previous["retry_command"])[1:])
-        harnesses = args.harness or saved.harness or ["codex"]
-        port = args.port or saved.port or 8765
-        # Resolve saved source choices before account progress replaces retry_command.
-        flow = SourceOnboarding(root, sources=tuple(args.source),
-                                gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
-                                wacli_store=args.wacli_store, refresh=args.refresh,
-                                skip_sources=tuple(args.skip_source))
-        flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
-        flow.retry_command += f" --port {port}"
-        try:
-            page = start_server(root, port=port, stage="install")
-        except (OSError, SystemExit) as error:
-            with status.log_path.open("a") as log:
-                log.write(str(error) + "\n")
-            status.write("install.page_failed", pid=0, retry_command=flow.retry_command)
-            print("FAILED: The progress page could not start. Check the installation log.", flush=True)
-            raise SystemExit(1) from error
-        print(f"STATUS PAGE: {page['url']}", flush=True)
-        onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
-                                retry_command=flow.retry_command)
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            code = onboarding.run()
-        if code not in (0, NEEDS_YOU) or not onboarding.email:
-            print(output.getvalue(), end="", flush=True)
-            raise SystemExit(code)
-        if code == 0:
-            print("Powerset search is ready; local setup will continue.", flush=True)
-        payload = flow.run()
-        if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
-            payload = ProcessingOnboarding(root).run()
+        payload = (SourceOnboarding(root, sources=tuple(args.source), gmail_emails=tuple(args.gmail_email),
+                                    wacli_store=args.wacli_store, record="connect").connect()
+                   if args.logins_only else _setup(root, args, parser, status))
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     print(f"{prefix[payload['status']]}: {payload['message']}", flush=True)
     raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])
+
+
+def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser, status: InstallStatus) -> dict:
+    """The account, then the sources, then processing, each resuming from the saved choices."""
+    previous = status.read()
+    saved, _ = parser.parse_known_args(shlex.split(previous["retry_command"])[1:])
+    harnesses = args.harness or saved.harness or ["codex"]
+    port = args.port or saved.port or 8765
+    # Resolve saved source choices before account progress replaces retry_command.
+    flow = SourceOnboarding(root, sources=tuple(args.source),
+                            gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
+                            wacli_store=args.wacli_store, refresh=args.refresh,
+                            skip_sources=tuple(args.skip_source), linkedin_url=args.linkedin_url)
+    flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
+    flow.retry_command += f" --port {port}"
+    try:
+        page = start_server(root, port=port, stage="install")
+    except (OSError, SystemExit) as error:
+        with status.log_path.open("a") as log:
+            log.write(str(error) + "\n")
+        status.write("install.page_failed", pid=0, retry_command=flow.retry_command)
+        print("FAILED: The progress page could not start. Check the installation log.", flush=True)
+        raise SystemExit(1) from error
+    print(f"STATUS PAGE: {page['url']}", flush=True)
+    onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
+                            retry_command=flow.retry_command)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = onboarding.run()
+    if code not in (0, NEEDS_YOU) or not onboarding.email:
+        print(output.getvalue(), end="", flush=True)
+        raise SystemExit(code)
+    if code == 0:
+        print("Powerset search is ready; local setup will continue.", flush=True)
+    payload = flow.run()
+    if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
+        payload = ProcessingOnboarding(root).run()
+    return payload
 
 
 if __name__ == "__main__":

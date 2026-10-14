@@ -13,22 +13,11 @@ const BRANDS: Readonly<Record<string, string>> = {
 }
 
 export type TextKind =
-  | "share"
-  | "reason"
-  | "worth"
-  | "source"
-  | "mode"
-  | "hierarchy"
-  | "intro_source"
-  | "seniority"
-  | "function"
-  | "direction"
-  | "cadence"
-  | "labels"
+  "share" | "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
-  share: { yes: "Sharing", confirm: "Needs confirmation", no: "Not sharing" },
+  share: { yes: "Sharing", no: "Not sharing" },
   reason: {
     worth_yes: "Worth: yes",
     worth_maybe: "Worth: maybe",
@@ -41,7 +30,6 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     minor: "Minor",
     would_vouch: "Professional contact",
     not_professional: "Not a professional contact",
-    unsure: "Unsure: your call",
     // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",
@@ -50,15 +38,7 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
   },
   worth: { yes: "Yes", maybe: "Maybe", no: "No", unjudged: "Not assessed" },
   source: { human: "You", machine: "AI" },
-  mode: { professional_only: "Work only", personal_only: "Personal only", mixed: "Work and personal" },
-  hierarchy: {
-    manager: "They managed you",
-    peer: "Same level",
-    report: "You managed them",
-    none: "No reporting line",
-  },
   intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
-  seniority: { mid: "Mid-level" },
   function: { founder_exec: "Founder or executive", people: "People and recruiting" },
   direction: { they_initiate: "Mostly them", i_initiate: "Mostly you", mutual: "Both" },
   cadence: { dormant: "No contact in over 2 years", stale: "No contact in over 1 year" },
@@ -192,7 +172,7 @@ const SETS_CONNECTED = "Connected"
 
 export const SETS = {
   title: "Sets",
-  lead: "Sets live on this computer. Members see each other's shared networks; invites go through the Powerset relay.",
+  lead: "Members see each other's shared networks.",
   choose: "Choose a set",
   personalNote: "Your shared network, on this machine.",
   sharedWith: "Your sets",

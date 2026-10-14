@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-debug-reset-data"
+description = "Enables the debug_reset_data command without any pre-configured scope."
+commands.allow = ["debug_reset_data"]
+
+[[permission]]
+identifier = "deny-debug-reset-data"
+description = "Denies the debug_reset_data command without any pre-configured scope."
+commands.deny = ["debug_reset_data"]

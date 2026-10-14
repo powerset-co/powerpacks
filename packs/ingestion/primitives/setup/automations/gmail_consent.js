@@ -138,4 +138,4 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
   }
 }
 
-module.exports = { GMAIL_SCOPES, authorize, consentAction, validateRequest };
+module.exports = { GMAIL_SCOPES, authorize, consentAction, snapshot, validateRequest };

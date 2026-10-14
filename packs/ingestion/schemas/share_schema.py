@@ -1,4 +1,4 @@
-"""The share vocabulary: the three-way decision, its reasons, and its flags.
+"""The share vocabulary: the yes/no decision, its reasons, and its flags.
 
 The share row itself is a table row — `deep_context.db.models.ShareDecisionRow`
 in the canonical SQLite store — so this module owns only the words.
@@ -7,6 +7,9 @@ Flow: the share policy picks one ShareValue and one reason; the upload reads
 both back from the store.
 
 Changelog:
+  2026-10-14: no "confirm": Luna's call decides at any confidence (Arthur: "just pick"). Stores made
+    before keep `confirm` in their share CHECK; nothing writes it, and the next share run rewrites
+    any such row. The schema version stays 4: a bump would refuse every existing store.
   2026-10-13: Luna's share call decides a worth-yes person: would_vouch, unsure, not_professional.
     Family, partner and minor stay home; the other JEV flags are gone.
   2026-09-24: the share list became a SQLite table; ShareRow moved to db/models.
@@ -19,12 +22,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-ShareValue = Literal["yes", "no", "confirm"]
+ShareValue = Literal["yes", "no"]
 SHARE_YES: ShareValue = "yes"
 SHARE_NO: ShareValue = "no"
-# A worth-yes person Luna is unsure about: the human decides, nothing is uploaded.
-SHARE_CONFIRM: ShareValue = "confirm"
-SHARE_VALUES = frozenset({SHARE_YES, SHARE_NO, SHARE_CONFIRM})
+SHARE_VALUES = frozenset({SHARE_YES, SHARE_NO})
 
 # Reasons, first rule wins; the rule name is the reason.
 OWNER = "owner"
@@ -40,5 +41,4 @@ MINOR = "minor"
 
 # Luna's share call on everyone else (labels.share_decision).
 WOULD_VOUCH = "would_vouch"
-UNSURE = "unsure"
 NOT_PROFESSIONAL = "not_professional"

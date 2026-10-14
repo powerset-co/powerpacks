@@ -3,13 +3,20 @@ Searches, Accounts and Tasks, on one port.
 
 `start` detaches this server before the project's Python environment exists, so this module imports
 only the standard library and the install status modules at load; everything else mounts on the
-first request once <root>/.powerpacks/deep-context/deep-context-v2.sqlite exists. Until then `/`
+first request once the project packages import. Before the network is built, `/`
 goes to `/install` while setup runs, else to `/searches`. `serve` runs it in the foreground.
 
 The review routes are deep_context_v2's (review/api.py); the People page's are the share stage's
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
+- 2026-10-13: GET /api/install/connect reads the Connect screen's run; its QR is /api/install/qr?connect=1.
+- 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
+- 2026-10-09: GET /api/account answers who is signed in to Powerset for the side nav's footer.
+- 2026-10-09: Accounts, Tasks and Searches answer before the network store exists; only People
+  and the review wait for it.
+- 2026-10-09: `serve --exit-with PID` stops with the desktop app that runs it.
 - 2026-10-08: start the Ask the Set daemon when the store-backed routes mount.
 - 2026-10-08: GET /api/relay answers the daemon's relay state for the top bar's dot; POST
   /api/relay/connect wakes a signed-out daemon after the page's sign-in.
@@ -34,18 +41,23 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
+from packs.shared.web import account, features, feedback
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
 DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
+MAX_FEATURE_REQUEST_BYTES = 1024
+MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
@@ -72,7 +84,7 @@ def _load_project_packages(root: Path) -> None:
 
 
 def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """The full server once the v2 store exists: the app, Accounts, Tasks, Searches, People and the review."""
+    """The full server once the project packages import, with an empty store before import."""
     from packs.ingestion.primitives.accounts.api import AccountsApi
     from packs.ingestion.primitives.deep_context_v2.db.store import open_store
     from packs.ingestion.primitives.deep_context_v2.openai import load_env
@@ -80,24 +92,38 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.ingestion.primitives.refresh.api import TasksApi
     from packs.ingestion.primitives.share.web.server import share_routes
     from packs.search.primitives.deep_search.results_web.api import search_api
-    from packs.search.primitives.deep_search.results_web.server import DEFAULT_DEEP_SEARCH_ROOT, search_routes
+    from packs.search.primitives.deep_search.results_web.server import search_routes
     from packs.shared.web import asks_loop
+    from packs.shared.web.collaboration import Collaboration, CollaborationRoutes
 
     load_env()
     data_root: Path = root / ".powerpacks"
     app = AppRoutes()
     # One connection for the review and the People page, one store request at a time: both were
-    # written for one request at a time.
-    conn = open_store(root / STORE, shared=True)
-    review = ReviewApi(conn, data_root)
-    share = share_routes(conn, data_root)
+    # written for one request at a time. It opens on the first store-backed request.
     store_lock = threading.Lock()
-    searches = search_routes(DEFAULT_DEEP_SEARCH_ROOT, base="/searches")
-    searches_json = search_api(searches, share.sets, store_lock)
+    network: dict[str, tuple[ReviewApi, Any]] = {}
+    collaboration: dict[str, CollaborationRoutes] = {}
+
+    def network_routes() -> tuple[ReviewApi, Any]:
+        """Called under the store lock. The Ask the Set daemon starts with the store too."""
+        if "routes" not in network:
+            conn = open_store(root / STORE, shared=True)
+            network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
+            collaboration["routes"] = CollaborationRoutes(Collaboration(network["routes"][1].sets, searches))
+            threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
+                             name="asks", daemon=True).start()
+        return network["routes"]
+
+    class LazySets:
+        """Open the sets on the first ask; its routes hold the store lock already."""
+        def __getattr__(self, name: str) -> Any:
+            return getattr(network_routes()[1].sets, name)
+
+    searches = search_routes(data_root / "deep-search", base="/searches")
+    searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
-    threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
-                     name="asks", daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def _relay(self) -> None:
@@ -112,6 +138,8 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/relay":
+                with store_lock:
+                    network_routes()  # the daemon the dot reports on starts with the store
                 self._relay()
                 return
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
@@ -119,20 +147,24 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if searches_json.get(self, parsed) or searches.get(self, parsed):
                 return
             with store_lock:
-                if not share.get(self, parsed):
-                    review.get(self, parsed)  # answers its own 404
+                routes = network_routes()
+                if not collaboration["routes"].get(self, parsed) and not routes[1].get(self, parsed):
+                    routes[0].get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/relay/connect":
+                with store_lock:
+                    network_routes()
                 asks_loop.WAKE.set()
                 self._relay()
                 return
             if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
-                if not share.post(self, parsed):
-                    review.post(self, parsed)
+                routes = network_routes()
+                if not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
+                    routes[0].post(self, parsed)
 
         def log_message(self, fmt: str, *args: object) -> None:
             print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
@@ -141,20 +173,20 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
 
 def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
-    """Serve the built app and setup progress at once; mount the rest once the store exists."""
+    """Serve the built app and setup progress at once; mount the rest once its packages import."""
     app = AppRoutes()
     install = InstallController(root)
     identity = {"primitive": PRIMITIVE, "repo_root": str(root), "pid": os.getpid()}
     mounted: dict[str, type[BaseHTTPRequestHandler]] = {}
     lock = threading.Lock()
 
-    def mount() -> type[BaseHTTPRequestHandler] | None:
-        """The full handler, built on the first request after the store appears; None before that."""
+    def mount() -> type[BaseHTTPRequestHandler]:
+        """The full handler, built on the first request once the project packages import."""
         with lock:
-            if "handler" not in mounted and (root / STORE).is_file():
+            if "handler" not in mounted:
                 _load_project_packages(root)
                 mounted["handler"] = mounted_handler(root)
-            return mounted.get("handler")
+            return mounted["handler"]
 
     class Handler(BaseHTTPRequestHandler):
         def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -178,10 +210,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 self._json({"error": "Powerpacks is still being installed. Run bin/setup-python if installation stopped.",
                             "retry_command": "bin/setup-python"}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
-            if handler is None:
-                self._json({"error": "No network yet. Run bin/deep-context-v2 run first.",
-                            "retry_command": "bin/deep-context-v2 run"}, HTTPStatus.SERVICE_UNAVAILABLE)
-                return
             # The mounted handler owns dispatch; it shares this request's socket state.
             request = handler.__new__(handler)
             request.__dict__ = self.__dict__
@@ -201,8 +229,14 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
                 self._json(record)
                 return
+            if parsed.path == "/api/install/preflight":
+                self._json(install.preflight())
+                return
+            if parsed.path == "/api/install/connect":
+                self._json(install.connection())
+                return
             if parsed.path == "/api/install/qr":
-                body = install.qr_image()
+                body = install.qr_image(connect="connect=1" in parsed.query.split("&"))
                 if body is None:
                     self._json({"error": "Waiting for a fresh QR code"}, HTTPStatus.NOT_FOUND)
                     return
@@ -212,6 +246,12 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if parsed.path == "/api/account":
+                self._json(account.read(root))
+                return
+            if parsed.path == "/api/features":
+                self._json(asdict(features.read(root)))
                 return
             if parsed.path == "/api/status":
                 stage = "linkedin" if (root / STORE).is_file() else "install"
@@ -226,6 +266,30 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if parsed.path in ("/api/features", "/api/feedback"):
+                origin = self.headers.get("Origin")
+                if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
+                    self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
+                    return
+            if parsed.path == "/api/feedback":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_FEEDBACK_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    self._json(*feedback.send(root, self.rfile.read(length)))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/features":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_FEATURE_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    flags = features.FeatureFlags.parse(json.loads(self.rfile.read(length)))
+                    self._json(features.save(root, flags))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
             if app.post(self, parsed):
                 return
             _load_project_packages(root)
@@ -327,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stage", choices=STAGES, default="", help="the page the printed URL opens")
     parser.add_argument("--run", default="", help="with --stage searches: open this saved search")
     parser.add_argument("--open", action="store_true", help="open the URL in the browser")
+    parser.add_argument("--exit-with", type=int, default=0, metavar="PID",
+                        help="with serve: stop when this process (the desktop app) is gone")
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     if args.command == "start":
@@ -344,11 +410,26 @@ def main(argv: list[str] | None = None) -> int:
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
             webbrowser.open(url)
+        if args.exit_with:
+            threading.Thread(target=_follow, args=(args.exit_with, server), daemon=True).start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\nshutting down", file=sys.stderr)
     return 0
+
+
+def _follow(pid: int, server: ThreadingHTTPServer) -> None:
+    """Stop the server once `pid` (the desktop app) is gone, however it went."""
+    while True:
+        time.sleep(2)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            server.shutdown()
+            return
+        except PermissionError:
+            continue
 
 
 if __name__ == "__main__":

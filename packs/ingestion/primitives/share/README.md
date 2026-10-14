@@ -67,7 +67,7 @@ One row per person in each; the node rewrites both in one transaction.
 
 ## The share decision
 
-`share.share` is `yes | no | confirm`; the first rule that fires names the row's `reason`:
+`share.share` is `yes | no`; the first rule that fires names the row's `reason`:
 
 | # | Rule | share | reason |
 |---|---|---|---|
@@ -77,14 +77,12 @@ One row per person in each; the node rewrites both in one transaction.
 | 4 | worth `no` | no | `worth_no` |
 | 5 | worth not `yes` (maybe / unjudged) | no | `worth_maybe` |
 | 6 | a flag keeps them home | no | `family`, `romantic_partner` or `minor` |
-| 7 | Luna's call `keep_private` at `SHARE_FLOOR` (0.6) or more | no | `not_professional` |
-| 8 | Luna's call `share` at `SHARE_FLOOR` or more | yes | `would_vouch` |
-| 9 | otherwise: `ask`, a weaker call, or no call | confirm | `unsure` |
+| 7 | Luna's call `keep_private`, at any confidence | no | `not_professional` |
+| 8 | otherwise: Luna's call `share`, or no call | yes | `would_vouch` |
 
 Luna's share call (worth's request 2) reads every label and its confidence; its keep-private
 option spells out the easy no's: the owner's clinician, lawyer, accountant or lender, HR and
 benefits contacts, support and billing desks, landlords and vendors, automated senders and
-strangers. A `confirm` row leaves the laptop no more than a `no` does
-until the human answers; the UI records that answer as a tag through `TagStore`,
-and the manifest's `confirm` count is what it surfaces. Tags follow merged
-identities through `superseded_person_ids`.
+strangers. Nobody is asked to confirm a call: a wrong share is undone with a `private` tag,
+which the UI records through `TagStore`. Tags follow merged identities through
+`superseded_person_ids`.

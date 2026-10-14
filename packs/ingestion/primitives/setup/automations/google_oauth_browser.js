@@ -15,6 +15,8 @@
  *     to several Google accounts still opens the project owner's Console.
  *   2026-10-04: the login is checked once, up front, and again after the
  *     headless relaunch; the form steps no longer wait for a login no one can see.
+ *   2026-10-09: --mode gcloud-login approves `gcloud auth login` in this profile
+ *     (gcloud_consent.js), so Google is signed in to once for the whole setup.
  */
 
 const fs = require("fs");
@@ -23,6 +25,7 @@ const { chromium } = require("playwright-core");
 const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
 
 const { GMAIL_SCOPES, authorize } = require("./gmail_consent.js");
+const { loginGcloud } = require("./gcloud_consent.js");
 const HUMAN_LOGIN_ACCOUNT_RETRY_MS = 60000;
 
 class StepError extends Error {
@@ -814,6 +817,11 @@ async function main() {
   if (mode === "authorize") {
     const request = JSON.parse(fs.readFileSync(0, "utf8"));
     result(await authorize(request, { launchChrome, progress, returnFocus }));
+    return;
+  }
+  if (mode === "gcloud-login") {
+    const request = JSON.parse(fs.readFileSync(0, "utf8"));
+    result(await loginGcloud(request, { launchChrome, progress, returnFocus }));
     return;
   }
   const project = args.project;

@@ -1,4 +1,4 @@
-"""Exercise the owner's ask worker with a synthetic store and stubbed HTTP/model calls.
+"""Exercise passive Codex ask preparation and delivery with a synthetic store and relay.
 
 Changelog:
   2026-10-09: patch auth at the shared relay sender.
@@ -7,25 +7,21 @@ Changelog:
 """
 from __future__ import annotations
 
-import copy
-import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stderr
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from packs.ingestion.primitives.ask_worker import ask_worker
-from packs.powerset.primitives.agent_inbox import agent_inbox
-from packs.powerset.primitives.agent_inbox.messages import Verdict
 from packs.ingestion.primitives.deep_context_v2.db import queries, queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesConfig
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SharedContextFact, SynthesizedFacts
 
 NOW = "2026-10-08T12:00:00Z"
+ASKER = "00000000-0000-4000-8000-000000000001"
 SLUG = "jordan-bravo-1a2b"
 URL = f"https://www.linkedin.com/in/{SLUG}"
 ANSWER = {"verdict": "recommend", "reason": "Relevant engineering experience.", "can_intro": True,
@@ -73,132 +69,125 @@ class AskWorkerTests(unittest.TestCase):
             "experiences": [{"title": "Engineer", "company_name": "Example Labs"}],
             "email": "casey@example.com"}}))
         self.message = self._message(SLUG)
-        self.posts = []
-        self.http = self.enterContext(patch("urllib.request.urlopen", side_effect=self._http))
-        self.enterContext(patch.object(agent_inbox.auth, "bearer_token", return_value="synthetic-token"))
-        self.enterContext(patch.object(agent_inbox.auth, "api_base", return_value="http://localhost:8769"))
-        self.enterContext(patch.object(OpenAIResponsesConfig, "resolve", return_value=OpenAIResponsesConfig(
-            model="synthetic-model", effort="low", concurrency=1, timeout=120, max_retries=0)))
-        self.enterContext(patch("packs.ingestion.primitives.deep_context_v2.openai.AsyncOpenAI", return_value=AsyncMock()))
-        self.model = self.enterContext(patch.object(ask_worker.OpenAIResponsesCaller, "call",
-                                                    new_callable=AsyncMock, return_value=ANSWER))
-        self.stderr = io.StringIO()
-        self.enterContext(redirect_stderr(self.stderr))
+        self.relay = Mock()
+        self.sets = SimpleNamespace(data_root=self.data, known_operators=lambda: {ASKER}, message=self.relay)
+        self.worker = ask_worker.AskWorker(self.sets)
+        self.path = self.data / "inbox" / f"{self.message['id']}.json"
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps(self.message))
 
-    def _message(self, *slugs: str) -> dict:
+    def _message(self, *slugs):
         return {"id": str(uuid4()), "kind": "ask", "created_at": NOW,
-                "from": {"operator_id": "op-asker", "name": "Casey Delta"},
-                "payload": {"ask_id": "ask-1", "question": "Who can advise on engineering?",
+                "from": {"operator_id": ASKER, "name": "Casey Delta"},
+                "payload": {"ask_id": str(uuid4()), "question": "Who can advise on engineering?",
                             "role": {"title": "Founding engineer", "company": "Acme", "job_description": "Build it."},
                             "candidates": [{"public_identifier": slug, "linkedin_url": f"https://www.linkedin.com/in/{slug}",
                                             "name": "Jordan Bravo"} for slug in slugs]}}
 
-    def _http(self, request, *, timeout):
-        self.assertEqual(request.get_header("Authorization"), "Bearer synthetic-token")
-        self.posts.append((request.full_url, json.loads(request.data)))
-        return io.BytesIO(b'{"id":"m-reply","status":"sent"}')
+    def batch(self, answer=ANSWER, slug=SLUG):
+        return {"answers": [{"public_identifier": slug, "answer": answer}]}
 
-    def _run(self):
-        (self.data / "inbox").mkdir(parents=True, exist_ok=True)
-        (self.data / "inbox" / f"{self.message['id']}.json").write_text(json.dumps(self.message))
-        return ask_worker.answer_message(self.message, repo_root=self.root, env_file=self.root / ".env")
+    def thread(self):
+        self.worker.thread(self.message["id"], "synthetic-thread")
 
-    def _reply(self) -> dict:
-        self.assertEqual(len(self.posts), 1)
-        url, body = self.posts[0]
-        self.assertEqual((url, body["to"], body["kind"]), ("http://localhost:8769/v2/agent-messages", "op-asker", "ask_answer"))
-        return body["payload"]
-
-    def _audits(self):
-        return list((self.data / "asks").glob("*.json"))
-
-    def test_found_answers_the_asker_and_audits_only_evidence_identifiers(self) -> None:
-        self._run()
-        self.assertEqual(self._reply(), {"ask_id": "ask-1", "answers": [{"public_identifier": SLUG, "answer": ANSWER}]})
-        self.model.assert_awaited_once()
-        request = self.model.call_args.kwargs
-        prompt = json.loads(request["user_prompt"])
-        self.assertEqual(prompt["role"]["title"], "Founding engineer")
-        evidence = prompt["evidence"]
+    def test_pending_is_passive_and_uses_filtered_family_evidence(self):
+        before = self.path.read_bytes()
+        pending = self.worker.pending()[0]
+        self.assertEqual(pending["id"], self.message["id"])
+        self.assertEqual(pending["context"]["role"]["title"], "Founding engineer")
+        evidence = pending["context"]["candidates"][0]["evidence"]
         self.assertEqual(evidence["facts"]["title"], "Engineer")
         self.assertEqual(evidence["profile"]["headline"], "Engineer")
-        self.assertEqual(evidence["channels"], {
-            "source_channels": ["gmail_msgvault", "imessage"], "interaction_counts": {"gmail_msgvault": 1, "imessage": 1},
-            "first_message_at": "2026-09-01T12:00:00Z", "last_message_at": NOW, "last_interaction": NOW,
-            "from_me": 1, "from_them": 1, "group_count": 2})
-        audit = json.loads(self._audits()[0].read_text())
+        self.assertEqual(evidence["channels"]["interaction_counts"], {"gmail_msgvault": 1, "imessage": 1})
+        self.assertIn("answers", pending["output_schema"]["properties"])
+        self.assertNotIn("SECRET", json.dumps(pending))
+        self.assertNotIn("casey@example.com", json.dumps(pending))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.relay.assert_not_called()
+
+    def test_thread_required_and_completed_answer_preserves_legacy_reply(self):
+        with self.assertRaises(ValueError):
+            self.worker.finish(self.message["id"], self.batch())
+        self.thread()
+        self.worker.finish(self.message["id"], self.batch())
+        self.relay.assert_called_once_with(ASKER, "ask_answer", {"ask_id": self.message["payload"]["ask_id"], **self.batch()})
+        self.assertEqual(self.worker.pending(), [])
+        audit = json.loads(next((self.data / "asks").glob("*.json")).read_text())
         self.assertEqual(audit["answer"], ANSWER)
         self.assertEqual(audit["evidence_used"][0]["candidate_ids"], ["c1", "c2"])
-        self.assertIn("title", audit["evidence_used"][0]["fact_keys"])
-        for text in (request["user_prompt"], json.dumps(audit), json.dumps(self.posts)):
-            self.assertNotIn("SECRET", text)
-            self.assertNotIn("casey@example.com", text)
-        self.assertNotIn("Former colleagues", json.dumps(audit))
-        self.assertIn(f"{SLUG} recommend", self.stderr.getvalue())
+        self.assertNotIn("SECRET", json.dumps(audit))
+        self.worker.finish(self.message["id"], self.batch())
+        self.assertEqual(self.relay.call_count, 1)
 
-    def test_a_failed_reply_is_resent_without_a_second_model_call(self) -> None:
-        self.http.side_effect = OSError("relay down")
+    def test_delivery_retry_uses_saved_batch_and_never_changes_thread_or_answer(self):
+        self.thread()
+        self.relay.side_effect = OSError("relay offline")
         with self.assertRaises(OSError):
-            self._run()
-        self.http.side_effect = self._http
-        self._run()
-        self.model.assert_awaited_once()
-        self.assertEqual(self._reply()["answers"][0]["answer"], ANSWER)
+            self.worker.finish(self.message["id"], self.batch())
+        with patch.object(self.worker, "_prepare", side_effect=AssertionError("saved outcome must win")):
+            pending = self.worker.pending()[0]
+        self.assertEqual(pending["answer"], self.batch())
+        self.assertEqual(pending["thread_id"], "synthetic-thread")
+        with self.assertRaises(ValueError):
+            self.worker.thread(self.message["id"], "different-thread")
+        self.relay.side_effect = None
+        self.worker.finish(self.message["id"], self.batch(ANSWER | {"reason": "Must not replace saved result"}))
+        self.assertEqual(self.relay.call_args.args[2]["answers"], self.batch()["answers"])
 
-    def test_not_found_declines_without_model_or_audit(self) -> None:
-        self.message = self._message("casey-delta-3c4d")
-        self._run()
-        self.assertEqual(self._reply()["answers"][0]["answer"], {"declined": True, "reason": "not_in_store"})
-        self.model.assert_not_called()
-        self.assertEqual(self._audits(), [])
-
-    def test_human_rejection_overrides_confirmed_linkedin(self) -> None:
-        queries_enrich.insert_linkedin(self.conn, ("c1", URL, "42", "human_override", "wrong_person", "human",
-                                                   "f2", 1.0, "", NOW))
+    def test_not_found_is_resolved_without_a_codex_thread(self):
+        queries_enrich.insert_linkedin(self.conn, ("c1", URL, "42", "human_override", "wrong_person", "human", "f2", 1.0, "", NOW))
         self.conn.commit()
-        self._run()
-        self.assertEqual(self._reply()["answers"][0]["answer"], {"declined": True, "reason": "not_in_store"})
-        self.model.assert_not_called()
+        pending = self.worker.pending()[0]
+        expected = self.batch({"declined": True, "reason": "not_in_store"})
+        self.assertEqual(pending["answer"], expected)
+        self.worker.finish(self.message["id"], expected)
+        self.assertEqual(self.relay.call_args.args[2]["answers"], expected["answers"])
 
-    def test_invalid_model_answers_never_leave_the_laptop(self) -> None:
-        for field, value in [("verdict", "yes"), ("reason", "Email casey@example.com"),
-                             ("relationship", "casey@example.com"), ("confidence", -0.1), ("confidence", 1.1),
-                             ("confidence", float("nan")), ("confidence", True), ("can_intro", "true"),
-                             ("last_contact", "2026-13"), ("last_contact", "2026-10-08"), ("extra", "text")]:
-            with self.subTest(field=field, value=value):
-                self.posts.clear()
-                self.model.return_value = ANSWER | {field: value}
-                self._run()
-                self.assertEqual(self._reply()["answers"][0]["answer"], {"declined": True, "reason": "failed"})
-                self.assertEqual(self._audits(), [])
-        self.assertNotIn("casey@example.com", self.stderr.getvalue())
+    def test_existing_paid_audit_is_reused_without_a_thread(self):
+        audit = self.data / "asks" / f"{self.message['id']}-{SLUG}.json"
+        audit.parent.mkdir(parents=True)
+        audit.write_text(json.dumps({"answer": ANSWER}))
+        with patch.object(ask_worker, "_evidence", side_effect=AssertionError("paid cache must win")):
+            self.assertEqual(self.worker.pending()[0]["answer"], self.batch())
+            self.worker.finish(self.message["id"], self.batch())
+        self.assertEqual(json.loads(audit.read_text()), {"answer": ANSWER})
 
-    def test_long_text_is_cut_to_what_the_asker_accepts(self) -> None:
-        self.model.return_value = ANSWER | {"reason": "r" * 900, "relationship": "w" * 600}
-        self._run()
-        answer = self._reply()["answers"][0]["answer"]
-        self.assertEqual((answer["reason"], answer["relationship"]), ("r" * 500, "w" * 500))
-        Verdict.parse(answer)
+    def test_invalid_batch_never_leaves_the_laptop(self):
+        self.thread()
+        bad_answers = [self.batch(ANSWER | {"reason": "Email casey@example.com"}),
+                       self.batch(ANSWER | {"confidence": True}), self.batch(ANSWER | {"last_contact": "2026-13"}),
+                       self.batch(ANSWER | {"extra": "private"}), self.batch(slug="someone-else"), {"answers": []},
+                       {"answers": self.batch()["answers"] * 2}]
+        for answer in bad_answers:
+            with self.subTest(answer=answer), self.assertRaises(ValueError):
+                self.worker.finish(self.message["id"], answer)
+        self.relay.assert_not_called()
+        self.assertEqual(list((self.data / "asks").glob("*.json")), [])
 
-    def test_one_model_failure_does_not_stop_the_next_candidate(self) -> None:
-        queries_enrich.insert_linkedin(self.conn, ("c3", "https://www.linkedin.com/in/casey-delta-3c4d", "43",
-                                                   "human_override", "confirmed", "human", "f", 1.0, "", NOW))
-        self.conn.execute("INSERT INTO candidate_parent (candidate_id, parent_id, reason, created_at) "
-                          "VALUES ('c3', 'li:43', 'human', ?)", (NOW,))
-        self.conn.commit()
-        self.message = self._message(SLUG, "casey-delta-3c4d")
-        self.model.side_effect = [RuntimeError("private model output"), ANSWER]
-        self._run()
-        self.assertEqual([item["answer"] for item in self._reply()["answers"]],
-                         [{"declined": True, "reason": "failed"}, ANSWER])
-        self.assertNotIn("private model output", self.stderr.getvalue())
+    def test_unknown_sender_cannot_start_or_finish(self):
+        self.sets.known_operators = lambda: set()
+        self.assertEqual(self.worker.pending(), [])
+        with self.assertRaises(PermissionError):
+            self.thread()
+        with self.assertRaises(PermissionError):
+            self.worker.finish(self.message["id"], self.batch())
+        self.relay.assert_not_called()
 
-    def test_answer_allows_null_contact_and_boundary_values(self) -> None:
-        for verdict, confidence in [("unsure", 0), ("not_fit", 1)]:
-            with self.subTest(verdict=verdict):
-                answer = copy.deepcopy(ANSWER)
-                answer.update(verdict=verdict, confidence=confidence, last_contact=None, reason="x" * 240)
-                self.assertEqual(ask_worker._Answer.model_validate(answer).model_dump(), answer)
+    def test_failure_before_thread_is_saved_and_delivered_only_once(self):
+        from packs.powerset.primitives.agent_inbox.collaboration_messages import Failure
+        self.relay.side_effect = OSError("relay offline")
+        with self.assertRaises(OSError):
+            self.worker.finish(self.message["id"], Failure(error="Codex unavailable"))
+        pending = self.worker.pending()[0]
+        self.assertEqual(pending["error"], "Codex unavailable")
+        self.assertEqual(pending["answer"], self.batch({"declined": True, "reason": "failed"}))
+        with self.assertRaises(ValueError):
+            self.thread()
+        self.relay.side_effect = None
+        self.worker.finish(self.message["id"], Failure(error="Must not replace saved failure"))
+        self.worker.finish(self.message["id"], Failure(error="Must not replace saved failure"))
+        self.assertEqual(self.relay.call_count, 2)
+        self.assertEqual(self.relay.call_args.args[2]["answers"], self.batch({"declined": True, "reason": "failed"})["answers"])
 
 
 if __name__ == "__main__":

@@ -7,11 +7,14 @@ import type { Decision, Person, PersonDetail } from "@/types/people"
 
 import type { SectionProps } from "./sections"
 
-const BADGE: Record<Decision, "ok" | "warn" | "muted"> = { yes: "ok", confirm: "warn", no: "muted" }
+const BADGE: Record<Decision, "ok" | "muted"> = { yes: "ok", no: "muted" }
 
 function worthLine(row: Person): string {
+  const yours = row.worth_source === "human"
+  // A worth reason already names worth in the line above: then only whose call it was.
+  if (row.reason.startsWith("worth_")) return yours ? "Your call" : ""
   const worth = `Worth: ${label("worth", row.worth || "unjudged").toLowerCase()}`
-  return row.worth_source === "human" ? `${worth} · your call` : worth
+  return yours ? `${worth} · your call` : worth
 }
 
 // Why this person is where they are: the reason, the worth call, and any notes. The badge
@@ -22,6 +25,7 @@ export function DecisionSection({
   ...section
 }: SectionProps & { row: Person; detail: PersonDetail | null }) {
   const [opened] = useState(row.share)
+  const why = [worthLine(row), detail?.worth_reason ?? ""].filter(Boolean).join(": ")
   return (
     <DetailsSection
       sectionKey="decision"
@@ -38,10 +42,7 @@ export function DecisionSection({
       {...section}
     >
       <p>{label("reason", row.reason)}</p>
-      <p className="dim">
-        {worthLine(row)}
-        {detail?.worth_reason ? `: ${detail.worth_reason}` : ""}
-      </p>
+      {why ? <p className="dim">{why}</p> : null}
       {detail?.worth_note ? <p className="note">{detail.worth_note}</p> : null}
       {detail?.note ? <p className="note">{detail.note}</p> : null}
     </DetailsSection>

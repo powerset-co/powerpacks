@@ -3,7 +3,6 @@ import { eventDate } from "@/lib/people/copy"
 import type { Person, PersonDetail } from "@/types/people"
 
 import { ConfidenceSection } from "./ConfidenceSection"
-import { ContactSection } from "./ContactSection"
 import { FactsSection } from "./FactsSection"
 import { RelationshipSection } from "./RelationshipSection"
 import type { SectionState } from "./sections"
@@ -56,7 +55,6 @@ export function DetailSections({ row, detail, section }: DetailSectionsProps) {
           <div className="dossier" dangerouslySetInnerHTML={{ __html: detail.dossier_html }} />
         </DetailsSection>
       ) : null}
-      <ContactSection row={row} detail={detail} {...section("contact")} />
       <ConfidenceSection detail={detail} {...section("confidence")} />
     </>
   )

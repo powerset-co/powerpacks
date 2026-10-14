@@ -7,7 +7,7 @@ import { CHANNELS, toChannel, type Channel } from "@/lib/channels"
 import { sourceFamilies, type SourceFamily } from "@/lib/searches/sources"
 import type { NetworkOperator, PersonAttribution } from "@/types/searches"
 
-import { useFloatPanel } from "../hooks/useFloatPanel"
+import { useFloatPanel } from "@/hooks/useFloatPanel"
 import { ConnectedVia, Operators } from "./Operators"
 
 const POPOVER_WIDTH = 288

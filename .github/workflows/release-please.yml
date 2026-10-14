@@ -13,6 +13,9 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -28,3 +31,31 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
       - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-rc') }}
         run: git push --force origin "${{ steps.release.outputs.tag_name }}^{commit}:refs/heads/stable"
+
+  # Each release carries the Mac app, built without the debug menu, under one fixed name so
+  # releases/latest/download/Powerpacks-macos-arm64.dmg is always the newest (README.md). A
+  # release made with github.token fires no `release` event, so the build is chained here.
+  desktop:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    uses: ./.github/workflows/desktop.yml
+    with:
+      release: true
+    secrets: inherit
+
+  attach-desktop:
+    needs: [release-please, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Powerpacks-macos-arm64
+          path: dmg
+      - run: |
+          cp dmg/*.dmg Powerpacks-macos-arm64.dmg
+          gh release upload "$TAG" Powerpacks-macos-arm64.dmg --clobber --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}

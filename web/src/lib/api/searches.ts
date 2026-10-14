@@ -1,6 +1,7 @@
 // The Searches page's JSON routes and saved tags on the Python review server.
 
 import { body, failure } from "@/lib/api/http"
+import { refusal } from "@/lib/api/sets"
 import type { CatalogPayload, SearchRunPayload, Tagged, TagsPayload } from "@/types/searches"
 
 const API = "/searches"
@@ -80,13 +81,13 @@ export interface AskStatus {
 
 export async function fetchAskPreview(runId: string): Promise<AskPreview> {
   const response = await fetch(`${API}/api/ask/preview?run_id=${encodeURIComponent(runId)}`)
-  if (!response.ok) throw await failure(response, "Couldn't load who would be asked.")
+  if (!response.ok) throw await refusal(response, "Couldn't load who would be asked.")
   return body<AskPreview>(response)
 }
 
 export async function fetchAskStatus(runId: string): Promise<AskStatus> {
   const response = await fetch(`${API}/api/ask/status?run_id=${encodeURIComponent(runId)}`)
-  if (!response.ok) throw await failure(response, "Couldn't load the answers.")
+  if (!response.ok) throw await refusal(response, "Couldn't load the answers.")
   return body<AskStatus>(response)
 }
 
@@ -96,6 +97,6 @@ export async function sendAsk(runId: string, question: string): Promise<{ status
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ run_id: runId, question }),
   })
-  if (!response.ok) throw await failure(response, "Couldn't send the ask.")
+  if (!response.ok) throw await refusal(response, "Couldn't send the ask.")
   return body(response)
 }

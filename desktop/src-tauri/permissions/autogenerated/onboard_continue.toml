@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-onboard-continue"
+description = "Enables the onboard_continue command without any pre-configured scope."
+commands.allow = ["onboard_continue"]
+
+[[permission]]
+identifier = "deny-onboard-continue"
+description = "Denies the onboard_continue command without any pre-configured scope."
+commands.deny = ["onboard_continue"]

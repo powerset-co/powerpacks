@@ -1,10 +1,18 @@
 // POST /searches/feedback on the Python review server (results_web/server.py _save_feedback),
-// and POST /searches/auth/login, which runs `$powerset login` on this machine when Powerset
-// answers that it needs a sign-in.
+// POST /api/feedback for the People drawer's flag (shared/web/feedback.py), and POST
+// /searches/auth/login, which runs `$powerset login` on this machine when Powerset answers that
+// it needs a sign-in. In the desktop app the app opens the login's page in the default browser
+// instead: /auth/login/start hands over its URL, /auth/login/finish its outcome.
 
 import { body, failure } from "@/lib/api/http"
+import { focusApp, openExternal } from "@/lib/api/install"
+import { isDesktop } from "@/lib/desktop"
 import { formValues } from "@/lib/searches/feedback"
+import type { Person } from "@/types/people"
 import type { FeedbackRecord, FeedbackReply } from "@/types/searches"
+
+const LOGIN = "/searches/auth/login"
+const NOT_SIGNED_IN = "Sign-in did not complete. Try again."
 
 export async function postFeedback(record: FeedbackRecord): Promise<FeedbackReply> {
   const response = await fetch("/searches/feedback", {
@@ -16,8 +24,49 @@ export async function postFeedback(record: FeedbackRecord): Promise<FeedbackRepl
   return body<FeedbackReply>(response)
 }
 
-/** Runs the Powerset sign-in on the server; throws the server's message when it did not complete. */
+/** A note about one person for the Powerset team, with who they are and the worth and share call
+ *  the drawer showed; throws why it did not go out. */
+export async function sendPersonFeedback(comment: string, row: Person): Promise<void> {
+  const person = {
+    parent_id: row.parent_id,
+    name: row.name,
+    public_identifier: row.public_identifier,
+    title: row.title,
+    company: row.company,
+    worth: row.worth,
+    worth_source: row.worth_source,
+    share: row.share,
+    share_source: row.share_source,
+    reason: row.reason,
+    labels: row.labels,
+    confidence: row.confidence,
+  }
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment, person }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't send feedback. Try again.")
+}
+
+/** Runs the Powerset sign-in on the server; throws the server's message when it did not complete.
+ *  In the desktop app the page opens in the default browser, then the app comes back forward. */
 export async function signIn(): Promise<void> {
-  const response = await fetch("/searches/auth/login", { method: "POST" })
-  if (!response.ok) throw await failure(response, "Sign-in did not complete. Try again.")
+  if (isDesktop()) return signInFromApp()
+  const response = await fetch(LOGIN, { method: "POST" })
+  if (response.status === 409) location.assign("/install")
+  if (!response.ok) throw await failure(response, NOT_SIGNED_IN)
+}
+
+// macOS keeps a Mac's passkeys to the browsers: a view inside the app gets none, so Google there
+// asks for a phone over Bluetooth. The browser has them; the app comes forward once it is done.
+async function signInFromApp(): Promise<void> {
+  const started = await fetch(`${LOGIN}/start`, { method: "POST" })
+  if (started.status === 409) location.assign("/install")
+  if (!started.ok) throw await failure(started, NOT_SIGNED_IN)
+  const { url } = await body<{ url: string }>(started)
+  await openExternal(url)
+  const finished = await fetch(`${LOGIN}/finish`, { method: "POST" })
+  await focusApp()
+  if (!finished.ok) throw await failure(finished, NOT_SIGNED_IN)
 }

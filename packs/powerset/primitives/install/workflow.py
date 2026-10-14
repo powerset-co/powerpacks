@@ -5,6 +5,11 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-13: `connect()` runs only the chosen sources' tools and logins, into the connect
+      record: the desktop app's Connect screen connects each source this way before setup.
+      Under the desktop app, setup leaves out every source not signed in (accounts.signed_in,
+      what the Connect screen shows), so it never waits on the user (Gmail no longer asks which
+      mailbox there).
   2026-10-05: every write names a status_prose event; a primitive's own text goes
       to the action's details. Google Cloud stages, the LinkedIn count and the
       WhatsApp download count show on the page as they happen.
@@ -39,7 +44,9 @@ import traceback
 from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
+from packs.ingestion.primitives.accounts.accounts import signed_in
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.discover.gmail.discover import GmailDiscovery
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD, LinkedInConnections
@@ -89,6 +96,7 @@ _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
 _PERMISSION_POLL_SECONDS = 2
+DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
 
@@ -97,9 +105,10 @@ class SourceOnboarding:
     def __init__(self, root: Path, *, sources: tuple[str, ...],
                  gmail_emails: tuple[str, ...] = (), sync_after: str = "",
                  wacli_store: Path | None = None, refresh: bool = False,
-                 skip_sources: tuple[str, ...] = ()) -> None:
+                 skip_sources: tuple[str, ...] = (), record: str = "manifest", linkedin_url: str = "") -> None:
         self.root = root.resolve()
-        self.status = InstallStatus(self.root)
+        # `record`: "connect" for the Connect screen's runs, which leave setup's own record alone.
+        self.status = InstallStatus(self.root, record)
         previous = self.status.read()
         command = shlex.split(previous["retry_command"])
         saved, _ = _parser().parse_known_args(command[1:] if Path(command[0]).name == "onboard" else [])
@@ -110,8 +119,8 @@ class SourceOnboarding:
         if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
-        # Mailboxes msgvault already holds are reused; otherwise Gmail uses the
-        # Powerset login (in run()), and asks only without one.
+        # Reuse imported mailboxes or saved choices. Native setup asks before defaulting
+        # to the Powerset login; the CLI skill explains that default before setup.
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
             home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
             self.gmail_emails = tuple(sorted(
@@ -121,6 +130,8 @@ class SourceOnboarding:
         wacli_store = wacli_store or saved.wacli_store
         self.wacli_store = wacli_store or self.root / DEFAULT_STORE
         self.refresh = refresh
+        # Processing's owner step reads it from the saved command when LinkedIn's sign-in is unused.
+        self.linkedin_url = linkedin_url or saved.linkedin_url
         self.step = InstallStep.SOURCES
         if all(source in self.skip_sources for source in self.sources):
             next_steps = (InstallStep.READY,)
@@ -146,6 +157,8 @@ class SourceOnboarding:
             args.append("--refresh")
         for source in self.skip_sources:
             args.extend(("--skip-source", source.value))
+        if self.linkedin_url:
+            args.extend(("--linkedin-url", self.linkedin_url))
         self.retry_command = shlex.join(args)
 
     def _write(self, event: str, *, step: InstallStep | None = None, action: dict | None = None,
@@ -266,6 +279,7 @@ class SourceOnboarding:
         app = Path(permission_app() or "").stem or "the app running this session"
         if access["status"] == "blocked_user_action" and chat.get("exists") and not chat.get("missing_tables"):
             self._write("imessage.permission", app=app, details=access, action=settings)
+            # Under the desktop app this never waits: iMessage is taken only once access is on.
             while (access["status"] == "blocked_user_action" and access["chat_db"].get("exists")
                    and not access["chat_db"].get("missing_tables")):
                 time.sleep(_PERMISSION_POLL_SECONDS)
@@ -332,8 +346,9 @@ class SourceOnboarding:
 
     def _linkedin_login(self) -> bool:
         self._write("linkedin.login.checking")
-        return self._result(LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login(), "linkedin.login.done",
-                            waiting="linkedin.login.waiting", failed="linkedin.login.failed")
+        payload = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).login()
+        return self._result(payload, "linkedin.login.done", failed="linkedin.login.failed",
+                            waiting="linkedin.login.waiting")
 
     def _linkedin_sync(self) -> bool:
         if self._linkedin_current():
@@ -342,53 +357,25 @@ class SourceOnboarding:
         self._write("linkedin.reading")
         result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
             on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total))
-        return self._result(result, f"linkedin.done.{result.get('outcome')}", waiting="linkedin.waiting",
-                            failed="linkedin.failed",
+        return self._result(result, f"linkedin.done.{result.get('outcome')}", failed="linkedin.failed",
+                            waiting="linkedin.waiting",
                             **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})
 
     def run(self) -> dict:
-        previous = self.status.read()
+        return self._guarded(self._run)
+
+    def connect(self) -> dict:
+        """The chosen sources' tools and logins, nothing after: the desktop app's Connect screen
+        runs each source this way, so the setup run after it never waits on the user."""
+        return self._guarded(lambda: self._write("sources.connected", handed_back=True)
+                             if self._connect(list(self.sources)) else self.status.read())
+
+    def _guarded(self, work: Callable[[], dict]) -> dict:
+        """`work`'s record; a blocked primitive waits on the user, anything else fails the step."""
         try:
             if Path.cwd() != self.root:
                 raise ValueError(f"Run bin/onboard from {self.root}")
-            self._write("sources.selected")
-            for source in self.sources:
-                for step in _SOURCE_STEPS[source]:
-                    if source in self.skip_sources:
-                        self._write("source.skipped", step=step)
-                    elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
-                        self._write("source.not_started", step=step)
-            if all(source in self.skip_sources for source in self.sources):
-                return self._write("sources.all_skipped")
-            active = [source for source in self.sources if source not in self.skip_sources]
-            if Source.GMAIL in active and not self.gmail_emails:
-                account = previous.get("account_email") or ""
-                if not account:
-                    return self._write("gmail.which_accounts", handed_back=True)
-                self.gmail_emails = (account,)
-                self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
-            # Tools first (Homebrew can take minutes), then every login back to back while
-            # the user is here, then the syncs and imports run without them.
-            for source in active:
-                if source is Source.LINKEDIN and self._linkedin_current():
-                    continue
-                if source in _TOOL_STEPS and not self._tools(source, _TOOL_STEPS[source]):
-                    return self.status.read()
-            logins = {Source.LINKEDIN: self._linkedin_login, Source.GMAIL: self._gmail_connect,
-                      Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
-            for source in active:
-                if not logins[source]():
-                    return self.status.read()
-            for source in active:
-                synced = (self._linkedin_sync() if source is Source.LINKEDIN else self._gmail_sync()
-                          if source is Source.GMAIL else self._messages_sync(source))
-                if not synced:
-                    return self.status.read()
-            imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
-            counts = {item.source: item.stats["people"] for item in imports
-                      if item.status == "completed" and "people" in item.stats}
-            return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context-v2 run"},
-                               details={"counts": counts}, handed_back=True)
+            return work()
         except PrimitiveBlocked as exc:
             return self._write("step.waiting", details=exc.payload, handed_back=True,
                                action={"command": exc.payload["install_command"]} if exc.payload.get("install_command") else None)
@@ -397,6 +384,57 @@ class SourceOnboarding:
             with self.status.log_path.open("a", encoding="utf-8") as log:
                 traceback.print_exc(file=log)
             return self._write("step.failed", details={"error_type": type(exc).__name__, "error": str(exc)})
+
+    def _connect(self, active: list[Source]) -> bool:
+        """Tools first (Homebrew can take minutes), then every login back to back while the user
+        is here; whatever comes after runs without them."""
+        for source in active:
+            if source is Source.LINKEDIN and self._linkedin_current():
+                continue
+            if source in _TOOL_STEPS and not self._tools(source, _TOOL_STEPS[source]):
+                return False
+        logins = {Source.LINKEDIN: self._linkedin_login, Source.GMAIL: self._gmail_connect,
+                  Source.IMESSAGE: self._imessage_access, Source.WHATSAPP: self._whatsapp_link}
+        return all(logins[source]() for source in active)
+
+    def _run(self) -> dict:
+        previous = self.status.read()
+        self._write("sources.selected")
+        # Under the desktop app every sign-in happens on the Connect screen first: setup takes the
+        # sources signed in (accounts.signed_in, the answer that screen shows) and leaves the rest
+        # out, so it never waits on the user; Gmail syncs exactly the mailboxes signed in.
+        if DESKTOP:
+            ready = signed_in()
+            self.skip_sources = tuple(dict.fromkeys(
+                [*self.skip_sources, *(source for source in self.sources if not getattr(ready, source.value))]))
+            self.gmail_emails = ready.mailboxes
+        for source in self.sources:
+            for step in _SOURCE_STEPS[source]:
+                if source in self.skip_sources:
+                    self._write("source.skipped", step=step)
+                elif previous.get("steps", {}).get(step.value, {}).get("status") == InstallState.SKIPPED:
+                    self._write("source.not_started", step=step)
+        if all(source in self.skip_sources for source in self.sources):
+            return self._write("sources.all_skipped")
+        active = [source for source in self.sources if source not in self.skip_sources]
+        if Source.GMAIL in active and not self.gmail_emails:
+            account = previous.get("account_email") or ""
+            if not account:
+                return self._write("gmail.which_accounts", handed_back=True)
+            self.gmail_emails = (account,)
+            self.retry_command = shlex.join([*shlex.split(self.retry_command), "--gmail-email", account])
+        if not self._connect(active):
+            return self.status.read()
+        for source in active:
+            synced = (self._linkedin_sync() if source is Source.LINKEDIN else self._gmail_sync()
+                      if source is Source.GMAIL else self._messages_sync(source))
+            if not synced:
+                return self.status.read()
+        imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
+        counts = {item.source: item.stats["people"] for item in imports
+                  if item.status == "completed" and "people" in item.stats}
+        return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context-v2 run"},
+                           details={"counts": counts}, handed_back=True)
 
 
 def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
@@ -408,4 +446,6 @@ def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--sync-after", default="")
     parser.add_argument("--wacli-store", type=Path)
     parser.add_argument("--refresh", action="store_true", help="Sync selected sources instead of reusing imported contacts")
+    parser.add_argument("--linkedin-url", default="",
+                        help="The owner's LinkedIn profile, for a setup without LinkedIn's sign-in")
     return parser

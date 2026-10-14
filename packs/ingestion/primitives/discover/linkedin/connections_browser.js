@@ -35,6 +35,9 @@
  * stickerdaniel/linkedin-mcp-server#170).
  * Changelog: 2026-10-05: returns LinkedIn's "N connections" count; --export
  * requests and downloads LinkedIn's data export after a stalled read.
+ * 2026-10-13: the signed-in check answers at once without LinkedIn's session
+ * cookie, and as soon as LinkedIn sends the browser to sign in, instead of
+ * waiting 15 s for a list that never shows.
  */
 
 const fs = require("fs");
@@ -42,6 +45,8 @@ const { chromium } = require("playwright-core");
 const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
+// Where LinkedIn sends a browser whose session is missing, expired or challenged.
+const SIGN_IN_URL = /\/(login|checkpoint|uas|authwall|signup)/;
 const CARD_LINK = 'main a[href*="/in/"]';
 const LOGIN_POLL_MS = 2000;
 const PAUSE_MIN_MS = 500;
@@ -87,10 +92,16 @@ function launch(profileDir, headless) {
   });
 }
 
+// Signed in: the profile holds LinkedIn's session cookie and LinkedIn takes it, listing the
+// connections instead of sending the browser to sign in. Without the cookie there is nothing to ask.
 async function signedIn(page) {
+  const cookies = await page.context().cookies("https://www.linkedin.com");
+  if (!cookies.some((cookie) => cookie.name === "li_at")) return false;
   await page.goto(CONNECTIONS_URL, { waitUntil: "domcontentloaded" });
-  return page.locator(CARD_LINK).first().waitFor({ state: "visible", timeout: 15000 })
-    .then(() => true, () => false);
+  return Promise.race([
+    page.locator(CARD_LINK).first().waitFor({ state: "visible", timeout: 15000 }).then(() => true),
+    page.waitForURL(SIGN_IN_URL, { waitUntil: "commit", timeout: 15000 }).then(() => false),
+  ]).catch(() => false);
 }
 
 // LinkedIn's own count at the top of the list ("1,234 connections"), read once.
@@ -131,7 +142,7 @@ async function waitForConnections(page, deadline) {
   while (Date.now() < deadline) {
     if (await page.locator(CARD_LINK).first().isVisible().catch(() => false)) return true;
     const url = page.url();
-    const signingIn = /\/(login|checkpoint|uas|authwall|signup)/.test(url);
+    const signingIn = SIGN_IN_URL.test(url);
     if (!signingIn && !url.startsWith(CONNECTIONS_URL)) {
       await page.goto(CONNECTIONS_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
     }

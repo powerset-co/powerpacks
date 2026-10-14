@@ -1,8 +1,8 @@
 import { Button } from "@/components/ui/button"
-import type { Decision } from "@/types/people"
+import type { Tab } from "@/lib/people/view"
 
-const NOBODY: Record<Decision, string> = {
-  confirm: "No one needs confirmation.",
+const NOBODY: Record<Tab, string> = {
+  all: "No people yet.",
   yes: "No people marked for sharing.",
   no: "No people marked as not sharing.",
 }
@@ -10,17 +10,12 @@ const NOBODY: Record<Decision, string> = {
 interface EmptyTextProps {
   hasPeople: boolean
   filtered: boolean
-  tab: Decision
+  tab: Tab
   onClear: () => void
 }
 
 export function EmptyText({ hasPeople, filtered, tab, onClear }: EmptyTextProps) {
-  if (!hasPeople)
-    return (
-      <>
-        No people to review yet. Run <code>bin/deep-context-v2 share</code>, then reload.
-      </>
-    )
+  if (!hasPeople) return <>No people yet. Ask your agent to build your network.</>
   if (!filtered) return <>{NOBODY[tab]}</>
   return (
     <>

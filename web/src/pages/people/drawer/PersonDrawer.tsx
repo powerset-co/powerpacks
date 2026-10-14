@@ -10,8 +10,10 @@ import "../styles/drawer.css"
 import { DecisionSection } from "./DecisionSection"
 import { DetailSections } from "./DetailSections"
 import { DetailFailed, DetailLoading } from "./DetailStatus"
-import { DrawerActions } from "./DrawerActions"
+import { RefreshSignals } from "../head/RefreshSignals"
+import { DrawerActions, LogbookButton } from "./DrawerActions"
 import { DrawerHeader } from "./DrawerHeader"
+import { PersonFeedback } from "./PersonFeedback"
 import type { SectionState } from "./sections"
 
 interface PersonDrawerProps {
@@ -47,17 +49,31 @@ export function PersonDrawer(props: PersonDrawerProps) {
     >
       {row ? (
         <>
-          <DrawerHeader row={row} detail={ready} onClose={onClose} />
+          <DrawerHeader
+            row={row}
+            detail={ready}
+            action={
+              <>
+                <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
+                <LogbookButton
+                  row={row}
+                  disabled={saving || swap.leaving || row.in_progress}
+                  building={building}
+                  onBuild={onLogbook}
+                  onView={() => {
+                    if (row.logbook) onView([row.logbook])
+                  }}
+                />
+                <PersonFeedback row={row} />
+              </>
+            }
+            onClose={onClose}
+          />
           {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
           <DrawerActions
             row={row}
             saving={saving}
             disabled={saving || swap.leaving || row.in_progress}
-            building={building}
-            onLogbook={onLogbook}
-            onView={() => {
-              if (row.logbook) onView([row.logbook])
-            }}
             onAction={onAction}
           />
           <DecisionSection row={row} detail={ready} {...section("decision")} />

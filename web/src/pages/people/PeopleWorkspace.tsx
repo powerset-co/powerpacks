@@ -2,22 +2,21 @@ import { useQuery } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { Toast } from "@/components/shared"
+import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { nextOpenIndex } from "@/lib/advance"
-import type { FacetKey, FacetSet, QuickFilter, TagAction } from "@/lib/people/facets"
+import type { FacetSet, TagAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
-import { writeView } from "@/lib/people/view"
-import { personKey, type Decision, type Person } from "@/types/people"
+import { writeView, type Tab } from "@/lib/people/view"
+import { personKey, type Person } from "@/types/people"
 
 import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
 import { FilterBar } from "./filters/FilterBar"
-import { QuickFilters } from "./filters/QuickFilters"
-import { DecisionTabs } from "./head/DecisionTabs"
+import { RefreshSignals } from "./head/RefreshSignals"
 import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
 import { useFilters } from "./hooks/useFilters"
@@ -25,7 +24,6 @@ import type { useLogbook } from "./hooks/useLogbook"
 import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
 import { PeopleShell } from "./PeopleShell"
 import { entriesQuery } from "./logbook/queries"
-import { FacetRail } from "./rail/FacetRail"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
 import { ShareUpload } from "./upload/ShareUpload"
@@ -49,12 +47,12 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   )
   const [params, setParams] = useSearchParams()
   const initialParams = reading ? new URLSearchParams() : params
-  const filters = useFilters(rows, initialParams)
+  const filters = useFilters(initialParams)
   const { view } = filters
-  const { matching, counts, quickCounts } = useMemo(() => filterRows(rows, view), [rows, view])
+  const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
-    const counts: Record<Decision, number> = { confirm: 0, yes: 0, no: 0 }
+    const counts: Record<Tab, number> = { all: rows.length, yes: 0, no: 0 }
     for (const row of rows) counts[row.share] += 1
     return counts
   }, [rows])
@@ -134,8 +132,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
       : null
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
-  // Each handler keeps one identity, so j/k and the drawer never re-render the rail or bars.
-  const { setTab: pickTab, toggleFilter: pickFilter, setFilters: pickFilters, setText: pickText } = filters
+  // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
+  const { setTab: pickTab, setFilters: pickFilters, setText: pickText } = filters
   const startOver = useCallback(() => {
     clearSelection()
     setFocus(-1)
@@ -143,19 +141,12 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   }, [clearSelection])
   // The tab already shown keeps its selection, focus and scroll.
   const setTab = useCallback(
-    (tab: Decision) => {
+    (tab: Tab) => {
       if (tab === view.tab) return
       pickTab(tab)
       startOver()
     },
     [view.tab, pickTab, startOver],
-  )
-  const toggleFilter = useCallback(
-    (key: FacetKey, value: string) => {
-      pickFilter(key, value)
-      startOver()
-    },
-    [pickFilter, startOver],
   )
   const setFilters = useCallback(
     (set: FacetSet) => {
@@ -172,8 +163,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     [pickText, startOver],
   )
   const clearFilters = useCallback(() => setFilters({}), [setFilters])
-  const pickQuick = useCallback(
-    (quick: QuickFilter | null) => setFilters(quick ? quick.set : {}),
+  const setRelationship = useCallback(
+    (kind: string) => setFilters(kind ? { relationship_kind: [kind] } : {}),
     [setFilters],
   )
 
@@ -202,27 +193,34 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   })
 
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
+  // The search line's right end; it changes with the selection, never with j/k.
+  const { showToast } = decisions
+  const actions = useMemo(
+    () => (
+      <>
+        <RefreshSignals people={[...selection.selected]} onDone={refresh} />
+        <ShareUpload onToast={(message) => showToast({ message })} />
+      </>
+    ),
+    [selection.selected, refresh, showToast],
+  )
   return (
     <PeopleShell
-      rail={<FacetRail filters={view.filters} counts={counts} onValue={toggleFilter} />}
       main={
         <>
-          <DecisionTabs
-            tab={view.tab}
-            totals={totals}
-            onTab={setTab}
-            action={<ShareUpload onToast={(message) => decisions.showToast({ message })} />}
-          />
-          <QuickFilters filters={view.filters} counts={quickCounts} onPick={pickQuick} />
+          <PageHeader title="People" data-head />
           <FilterBar
             ref={search}
             text={view.text}
-            filters={view.filters}
+            tab={view.tab}
+            totals={totals}
+            relationship={[...(view.filters.get("relationship_kind") ?? [])][0] ?? ""}
+            kinds={kinds}
             shown={matching.length}
-            inTab={totals[view.tab]}
             onText={setText}
-            onRemove={toggleFilter}
-            onClear={clearFilters}
+            onTab={setTab}
+            onRelationship={setRelationship}
+            actions={actions}
             notice={
               catalog.error ? (
                 <span className="bar-notice" data-logbook-unread>

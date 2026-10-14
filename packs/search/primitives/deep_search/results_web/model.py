@@ -5,6 +5,8 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
+  2026-10-09: `record_quick_search` saves a quick search as a one-pond run, its
+      rows ranked by the reranker's score and trait scores, no screen.
   2026-09-26: explicit catalog registration and cached counts; one-run loads
       follow the summary's referenced runs instead of dropping their pond rows.
 """
@@ -782,4 +784,25 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
     if run_id not in catalog:
         return
     catalog[run_id]["pinned"] = _pinned_count(tagged)
+    write_json(root / CATALOG_FILE, catalog)
+
+
+def record_quick_search(root: Path, run_id: str, *, query: str, created_at: str,
+                        jsonl: str, profiles_path: str) -> None:
+    """Save a finished quick search as a one-pond run beside the deep ones, and list it."""
+    rows = len(tuple(_jsonl_rows(_artifact_path(root, jsonl))))
+    artifacts = {"jsonl": jsonl, "profiles_path": profiles_path}
+    payload = {
+        "title": query,
+        "created_at": created_at,
+        "iterations": [{"pond_n": 1, "query": query, "arm": {"artifacts": artifacts}}],
+        "summary": {"pond_chain": [{"run": run_id, "pond_n": 1, "query": query, "result_count": rows}],
+                    "groups": {}, "total_cost_usd": 0},
+    }
+    write_json(root / run_id / "results.json", payload)
+    card = SearchCard(run_id=run_id, title=query, company="", status="completed",
+                      created_at=created_at, updated_at=created_at, search_version="quick",
+                      candidates=rows, ponds_run=1, cost_usd=0.0)
+    catalog = _payload(root / CATALOG_FILE) or {}
+    catalog[run_id] = asdict(card)
     write_json(root / CATALOG_FILE, catalog)

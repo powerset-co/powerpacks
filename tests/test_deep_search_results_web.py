@@ -1451,7 +1451,7 @@ class ResultsWebTest(unittest.TestCase):
 
             def login(argv):
                 nonlocal signed_in
-                self.assertEqual(argv, ["login"])
+                self.assertEqual(argv[0], "login")
                 signed_in = True
                 return 0
 
@@ -1503,6 +1503,69 @@ class ResultsWebTest(unittest.TestCase):
                     urllib.request.urlopen(request)
                 self.assertEqual(error.exception.code, 403)
                 self.assertEqual(login.call_count, 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_app_login_failure_after_showing_url_is_not_authenticated(self):
+        def login(argv, on_authorize_url=None):
+            on_authorize_url("https://synthetic.invalid/authorize")
+            return 1
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Path("."), lambda: ()))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_address[1]}/auth/login"
+            with patch("packs.powerset.primitives.auth.auth.main", side_effect=login):
+                with urllib.request.urlopen(base + "/start", data=b"") as response:
+                    self.assertEqual(json.load(response)["url"], "https://synthetic.invalid/authorize")
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(base + "/finish", data=b"")
+                self.assertEqual(error.exception.code, 401)
+                self.assertIn("Sign-in did not complete", json.load(error.exception)["error"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_app_login_hands_the_page_its_url_and_finishes_at_the_callback(self):
+        """The desktop app shows the sign-in page itself: start answers the URL once the login
+        listens, a second start joins the same login, and finish waits for its outcome."""
+        callback = threading.Event()
+
+        def login(argv, on_authorize_url=None):
+            self.assertEqual(argv[0], "login")
+            on_authorize_url("https://auth.example/authorize?state=abc")
+            self.assertTrue(callback.wait(timeout=5))
+            return 0
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Path("."), lambda: ()))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_address[1]}/auth/login"
+            with patch("packs.powerset.primitives.auth.auth.main", side_effect=login) as main:
+                with urllib.request.urlopen(base + "/start", data=b"") as response:
+                    started = json.load(response)
+                self.assertEqual(started, {"status": "sign_in", "url": "https://auth.example/authorize?state=abc"})
+                with urllib.request.urlopen(base + "/start", data=b"") as response:
+                    self.assertEqual(json.load(response)["url"], started["url"])
+                self.assertEqual(main.call_count, 1)
+                outcome: list[dict] = []
+                waiter = threading.Thread(
+                    target=lambda: outcome.append(json.load(urllib.request.urlopen(base + "/finish", data=b""))))
+                waiter.start()
+                self.assertTrue(waiter.is_alive())
+                callback.set()
+                waiter.join(timeout=5)
+                self.assertEqual(outcome, [{"ok": True, "status": "authenticated"}])
+            with patch("packs.powerset.primitives.auth.auth.main", side_effect=SystemExit("no config")):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(base + "/start", data=b"")
+                self.assertEqual(error.exception.code, 401)
+                self.assertIn("Couldn't start the sign-in", json.load(error.exception)["error"])
         finally:
             server.shutdown()
             server.server_close()

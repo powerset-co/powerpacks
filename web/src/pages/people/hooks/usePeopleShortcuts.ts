@@ -2,7 +2,8 @@ import type { RefObject } from "react"
 
 import type { useSelection } from "@/hooks/useSelection"
 import type { TagAction } from "@/lib/people/facets"
-import { ORDER, type Decision, type Person } from "@/types/people"
+import { TABS, type Tab } from "@/lib/people/view"
+import type { Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
 import type { useDecisions } from "./useDecisions"
@@ -17,7 +18,7 @@ interface ShortcutTargets {
   matching: readonly Person[]
   focus: number
   setFocus: (index: number) => void
-  setTab: (tab: Decision) => void
+  setTab: (tab: Tab) => void
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
   decisions: ReturnType<typeof useDecisions>
@@ -26,7 +27,7 @@ interface ShortcutTargets {
   targets: readonly string[]
 }
 
-// The People page's keys wired to its state; the Keyboard shortcuts list in the rail names them.
+// The People page's keys wired to its state.
 export function usePeopleShortcuts({
   active,
   search,
@@ -51,8 +52,7 @@ export function usePeopleShortcuts({
       search.current?.focus()
       search.current?.select()
     },
-    focusFacets: () => document.querySelector<HTMLButtonElement>("[data-rail] [data-facet-value]")?.focus(),
-    switchTab: (position) => setTab(ORDER[position] ?? "confirm"),
+    switchTab: (position) => setTab(TABS[position] ?? "all"),
     move: (step) => {
       if (!matching.length) return
       const next = Math.min(matching.length - 1, Math.max(0, focus + step))

@@ -115,14 +115,20 @@ motion timings are our existing product choices, not copied Carbon branding.
 
 ## People and Logbook
 
-Top navigation order: Searches, People, Scheduled tasks, Accounts. Logbook belongs
-inside People: use the Has logbook filter and a person's View logbook action,
-not another top-level tab. An existing archive offers View logbook; Refresh
-logbook lives in the reader.
+Navigation is a side nav (`web/src/components/shared/Sidebar.tsx`): Chat (desktop app only),
+Searches, People, Scheduled tasks, Accounts, with a collapse toggle that leaves an icon rail.
+At its foot, who is signed in: their picture, then their name and email, each on one line.
+A page's own panel (the chat list, saved searches) sits beside the nav, inside that page.
+Every page's title sits in one `PageHeader` (one height, gutter and type) so it never moves
+between pages; document pages share one left-aligned 960px column.
 
-Keep only the share action beside the decision tabs; those tabs already show
-the totals. Quick filters omit zero counts and sort by descending count within
-the selected tab. Has logbook stays last when available, regardless of count.
+People is the title, then one line: the search box, a Sharing select (All, then each decision,
+with counts) and a Relationship select (the kinds in that choice, with counts), with Refresh
+signals and Share network at its right end. No tabs, no chips. Logbook belongs inside People, not
+another top-level tab: a book icon beside the drawer's Close (View once saved, Build otherwise)
+and the selection bar's button; the reader lists every saved logbook, and Refresh logbook lives
+there. A flag beside Close sends the Powerset team a note about that person, as a search's drawer
+does for a candidate.
 
 The reader URL includes the selected conversation, so refresh and copied links
 open the same thread. Email participants show names and addresses inline under

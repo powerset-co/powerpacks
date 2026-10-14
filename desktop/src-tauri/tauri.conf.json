@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Powerpacks",
+  "version": "3.22.2",
+  "identifier": "co.powerset.powerpacks",
+  "build": {
+    "frontendDist": "../splash"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Search your network and build context about people",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/powerpacks.tar.gz": "powerpacks.tar.gz",
+      "resources/powerpacks.version": "powerpacks.version"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
+    },
+    "externalBin": [
+      "binaries/uv",
+      "binaries/node",
+      "binaries/codex",
+      "binaries/codex-code-mode-host",
+      "binaries/rg"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

@@ -325,13 +325,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             f"before\n{qr.QR_REDACTION}\n{qr.QR_REDACTION}\nafter",
         )
 
-    def test_auth_requires_qrencode_for_browser_qr(self) -> None:
-        with mock.patch.object(auth.shutil, "which", return_value=None), \
-                self.assertRaises(runtime.PrimitiveBlocked) as ctx:
-            auth.run_auth(Path("/tmp/wacli-store"), timeout=1, idle_exit="1s")
-
-        self.assertEqual(ctx.exception.payload["install_command"], "brew install qrencode")
-        self.assertIn("qrencode is required", ctx.exception.payload["message"])
+    def test_qr_page_draws_the_payload_as_a_png_with_nothing_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch("shutil.which", return_value=None):
+            png, page = Path(td) / "whatsapp-qr.png", Path(td) / "whatsapp-qr.html"
+            qr.update_qr_page("https://wa.me/settings/linked_devices#2@synthetic", png, page, open_page=False)
+            self.assertEqual(png.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertIn('<img src="whatsapp-qr.png"', page.read_text())
 
     def run_fake_auth(self, lines: list[str], *, exits: int | None = None, **options):
         """Run `run_auth` against a wacli that writes `lines` to its log, then keeps
@@ -357,7 +356,6 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         procs: list[FakeProc] = []
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
-                mock.patch.object(auth.shutil, "which", return_value="/opt/homebrew/bin/qrencode"), \
                 mock.patch.object(auth.subprocess, "Popen",
                                   side_effect=lambda cmd, **kw: procs.append(FakeProc(cmd, **kw)) or procs[-1]), \
                 mock.patch.object(qr, "update_qr_page") as update_qr_page:

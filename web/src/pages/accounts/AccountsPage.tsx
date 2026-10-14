@@ -2,13 +2,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
 
-import { EmptyState, SourcePill } from "@/components/shared"
+import { EmptyState, Page, SourcePill, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { fetchAccounts, reconnectGmail, syncAccount } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { ago, stamp } from "@/lib/copy"
+import { isDesktop } from "@/lib/desktop"
 import type { Account, AccountHealth, Job, JobsPayload } from "@/types/accounts"
+
+import { CodexCard } from "./CodexCard"
 
 const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
   ok: { label: "Healthy", variant: "ok" },
@@ -20,6 +24,10 @@ const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "w
 // While a sync or sign-in runs, re-read the accounts (and their jobs) this often.
 const JOB_POLL_MS = 2_000
 const LINKEDIN_EXPORT_URL = "https://www.linkedin.com/mypreferences/d/download-my-data"
+
+// Shared by the real schedule line and card and their loading shapes.
+const SCHEDULE_BOX = "m-0 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-2.5 text-xs"
+const CARD_BOX = "rounded-[var(--radius-l)] border border-line bg-card p-4 shadow-[var(--shadow-1)]"
 
 function busy(job: Job | undefined): boolean {
   return job?.state === "running"
@@ -51,32 +59,69 @@ export function AccountsPage() {
   }
 
   return (
-    <main className="overflow-y-auto px-5 py-6 max-[680px]:px-4">
-      <div className="mx-auto flex max-w-[860px] flex-col gap-4">
-        <h1 className="m-0 text-lg font-semibold">Accounts</h1>
-        {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
-        {accounts.isPending && <EmptyState>Loading accounts…</EmptyState>}
-        {accounts.data && <ScheduleLine scheduled={accounts.data.scheduled} />}
-        {actionError && <p className="m-0 text-xs text-bad">{actionError}</p>}
-        <ul className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Accounts">
-          {accounts.data?.accounts.map((account) => (
-            <AccountCard
-              key={`${account.source}:${account.name}`}
-              account={account}
-              job={jobFor(account, accounts.data.jobs)}
-              onReconnect={() => start(reconnectGmail(account.name))}
-              onSync={() => start(syncAccount(account))}
-            />
-          ))}
-        </ul>
+    <Page title="Accounts">
+      {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
+      {accounts.isPending && <ScheduleLineSkeleton />}
+      {accounts.data && <ScheduleLine scheduled={accounts.data.scheduled} />}
+      {actionError && <p className="m-0 text-xs text-bad">{actionError}</p>}
+      <ul
+        className="m-0 flex list-none flex-col gap-3 p-0"
+        aria-label="Accounts"
+        aria-busy={accounts.isPending}
+      >
+        {isDesktop() && <CodexCard />}
+        {accounts.isPending && [0, 1].map((card) => <AccountCardSkeleton key={card} />)}
+        {accounts.data?.accounts.map((account) => (
+          <AccountCard
+            key={`${account.source}:${account.name}`}
+            account={account}
+            job={jobFor(account, accounts.data.jobs)}
+            onReconnect={() => start(reconnectGmail(account.name))}
+            onSync={() => start(syncAccount(account))}
+          />
+        ))}
+      </ul>
+    </Page>
+  )
+}
+
+// The schedule line's and an account card's shapes while the accounts first load, so the
+// Codex card above them never moves and the real cards rise in where these stood.
+function ScheduleLineSkeleton() {
+  return (
+    <div className={SCHEDULE_BOX}>
+      <Skeleton className="h-4 w-48 bg-surface-2" />
+      <span className="sr-only">Loading accounts…</span>
+    </div>
+  )
+}
+
+function AccountCardSkeleton() {
+  return (
+    <li aria-hidden className={CARD_BOX}>
+      <div className="flex items-center gap-2.5">
+        <Skeleton className="h-6 w-20 rounded-full bg-surface-2" />
+        <Skeleton className="h-4 w-40 bg-surface-2" />
+        <Skeleton className="ml-auto h-5 w-16 rounded-full bg-surface-2" />
       </div>
-    </main>
+      <div className="mb-3 mt-2 flex min-h-7 items-center">
+        <Skeleton className="h-3 w-56 max-w-full bg-surface-2" />
+      </div>
+      <div className="grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
+        {[0, 1, 2, 3].map((stat) => (
+          <div key={stat} className="flex flex-col gap-0.5">
+            <Skeleton className="my-0.5 h-3 w-16 bg-surface-2" />
+            <Skeleton className="my-0.5 h-4 w-12 bg-surface-2" />
+          </div>
+        ))}
+      </div>
+    </li>
   )
 }
 
 function ScheduleLine({ scheduled }: { scheduled: boolean }) {
   return (
-    <p className="m-0 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
+    <p className={`${SCHEDULE_BOX} text-muted-foreground`}>
       {scheduled ? (
         "Refreshes daily at 6:00 AM."
       ) : (
@@ -107,7 +152,7 @@ function AccountCard({ account, job, onReconnect, onSync }: AccountCardProps) {
     <li
       data-account={account.source}
       data-health={account.health}
-      className="rounded-[var(--radius-l)] border border-line bg-card p-4 shadow-[var(--shadow-1)] data-[health=error]:border-[color-mix(in_srgb,var(--bad)_45%,transparent)] data-[health=warning]:border-[color-mix(in_srgb,var(--warn)_40%,transparent)]"
+      className={`rise-in ${CARD_BOX} data-[health=error]:border-[color-mix(in_srgb,var(--bad)_45%,transparent)] data-[health=warning]:border-[color-mix(in_srgb,var(--warn)_40%,transparent)]`}
     >
       <div className="flex items-center gap-2.5">
         <SourcePill channel={account.source} size="md" />
@@ -172,15 +217,6 @@ function CardAction({ account, onReconnect, onSync }: Omit<AccountCardProps, "jo
     <Button size="sm" onClick={onSync}>
       Sync
     </Button>
-  )
-}
-
-function Spinner() {
-  return (
-    <span
-      aria-hidden
-      className="inline-block size-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent"
-    />
   )
 }
 

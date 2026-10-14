@@ -27,6 +27,8 @@ aliases resolve the API base, `bearer_token()` mints a fresh Auth0 token via
 signed out.
 
 Changelog:
+- 2026-10-13: the token is minted with `env_file` too, as the API base is: the app's
+  server sends before its environment is loaded.
 - 2026-08-31: `default_set_id` moved here — the one home for the env-derived
   set id used by every automated feedback composer.
 - 2026-07-31: inline artifact attachments (`--artifact`, gzip+base64).
@@ -212,7 +214,7 @@ class SendFeedback:
         # never a dead request thread.
         base = api_base(self.env_file)
         try:
-            token = bearer_token()
+            token = bearer_token(self.env_file)
         except SystemExit as exc:
             return {"status": "needs_auth", "error": str(exc)}
         try:

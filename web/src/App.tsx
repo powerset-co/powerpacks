@@ -1,56 +1,94 @@
-import { useEffect } from "react"
+import { Fragment, useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { TopBar } from "@/components/shared"
+import { DebugMenu, EmptyState, Sidebar } from "@/components/shared"
+import { useFeatureSettings } from "@/lib/features"
+import { isDesktop } from "@/lib/desktop"
+import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
+import { AgentPage } from "@/pages/agent/AgentPage"
+import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { SetsPage } from "@/pages/sets/SetsPage"
+import { SettingsPage } from "@/pages/settings/SettingsPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
-// The top bar row, then the page: the page owns its own scrolling inside the second row.
+// The side nav, then the page: the page owns its own scrolling and any panel of its own.
 function Shell() {
   const page = pageAt(useLocation().pathname)
   useEffect(() => {
     document.title = `${page.label} · Powerpacks`
   }, [page])
   return (
-    <div className="grid h-dvh grid-rows-[var(--topbar-height)_1fr] overflow-hidden">
-      <TopBar page={page} />
+    <div className="page-enter grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
+      <Sidebar />
       <Outlet />
     </div>
   )
 }
 
 // The paths the server answers with this app (packs/shared/web/app.py PAGE_PATHS). /searches
-// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. The
+// is a layout route, so picking a run (/searches/run?run_id=…) keeps the page mounted. Setup
+// (/install) sits in the shell too, so the other pages are a click away while it runs. The
 // review flow at / stands outside the shell: it is the user's entry point, with its own top
-// bar and no page tabs. Any other client-side path lands on HOME.
+// bar. Any other client-side path lands on HOME.
 export function App() {
+  const features = useFeatureSettings()
+  // The desktop app has no browser bar to leave the review by: there it keeps the side nav.
+  const desktop = isDesktop()
+  const AccountProvider = desktop ? CodexAccountProvider : Fragment
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<ReviewPage />} />
-        <Route path="/install" element={<InstallPage />} />
-        <Route element={<Shell />}>
-          <Route path="/people" element={<PeoplePage />}>
-            <Route index element={null} />
-            <Route path="logbook" element={<LogbookReader />} />
+      <AccountProvider>
+        <Routes>
+          {desktop ? null : <Route path="/" element={<ReviewPage />} />}
+          <Route element={<Shell />}>
+            {desktop ? (
+              <Route
+                path="/"
+                element={
+                  <div className="min-h-0 overflow-y-auto">
+                    <ReviewPage />
+                  </div>
+                }
+              />
+            ) : null}
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/install" element={<InstallPage />} />
+            <Route path="/agent" element={<AgentPage />} />
+            <Route path="/people" element={<PeoplePage />}>
+              <Route index element={null} />
+              <Route path="logbook" element={<LogbookReader />} />
+            </Route>
+            <Route path="/searches" element={<SearchesPage />}>
+              <Route index element={null} />
+              <Route path="run" element={null} />
+            </Route>
+            <Route
+              path="/sets"
+              element={
+                features.isPending ? (
+                  <EmptyState>Loading…</EmptyState>
+                ) : features.data?.sets ? (
+                  <SetsPage />
+                ) : (
+                  <Navigate to={HOME.href} replace />
+                )
+              }
+            />
+            <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to={HOME.href} replace />} />
           </Route>
-          <Route path="/searches" element={<SearchesPage />}>
-            <Route index element={null} />
-            <Route path="run" element={null} />
-          </Route>
-          <Route path="/sets" element={<SetsPage />} />
-          <Route path="/accounts" element={<AccountsPage />} />
-          <Route path="/tasks" element={<TasksPage />} />
-          <Route path="*" element={<Navigate to={HOME.href} replace />} />
-        </Route>
-      </Routes>
+        </Routes>
+        <DebugMenu />
+      </AccountProvider>
     </BrowserRouter>
   )
 }

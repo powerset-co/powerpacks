@@ -38,7 +38,7 @@ export function ReviewPage() {
 
   return (
     <div className="review-page" data-stage={screen?.page.view} data-preview={screen?.preview}>
-      <header className="topbar">
+      <header className="topbar" data-tauri-drag-region>
         <Link className="brand" to={REVIEW_PATH}>
           {BRAND}
         </Link>

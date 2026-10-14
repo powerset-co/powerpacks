@@ -6,10 +6,10 @@ export type LastBucket = (typeof LAST)[number]
 export const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "Inner circle (3–4)"] as const
 export type WarmthBucket = (typeof WARMTH)[number]
 
-export type Decision = "confirm" | "yes" | "no"
+export type Decision = "yes" | "no"
 
-/** The decision tabs, in page order: where the human is needed first. */
-export const ORDER: readonly Decision[] = ["confirm", "yes", "no"]
+/** The decision tabs, in page order. */
+export const ORDER: readonly Decision[] = ["yes", "no"]
 
 /** The worth call; "" when no one judged it. */
 export type Worth = "yes" | "maybe" | "no" | ""
@@ -114,7 +114,6 @@ export type PersonCell = Person[PersonColumn]
 export interface ShareCounts {
   total: number
   upload: number
-  confirm: number
   private: number
 }
 

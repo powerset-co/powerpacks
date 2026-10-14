@@ -1,11 +1,17 @@
 """Accounts page health and the scheduled refresh's run status."""
 
 import json
+import sqlite3
 import tempfile
+import time
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from packs.ingestion.primitives.accounts import accounts
 from packs.ingestion.primitives.accounts.accounts import _GmailRow, _gmail_health
 from packs.ingestion.primitives.accounts.api import AccountsApi, Job
 from packs.ingestion.primitives.refresh.refresh_sources import SourceResult, _run_status
@@ -72,3 +78,72 @@ class AccountsJobsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SignedInTest(unittest.TestCase):
+    """accounts.signed_in: each source's sign-in, read where it lives (setup and Connect share it)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.profile = Path(self.tmp.name) / "linkedin"
+        patch.object(accounts, "BROWSER_PROFILE", self.profile).start()
+        patch.object(accounts, "gmail_signins", return_value={}).start()
+        patch.object(accounts.msgvault_home, "load_setup_state",
+                     return_value=accounts.msgvault_home.SetupState(email="owner@example.com")).start()
+        patch.object(accounts, "_messages_readable", return_value=False).start()
+        patch.object(accounts.wacli_auth, "auth_status", side_effect=OSError("wacli not installed")).start()
+        self.addCleanup(patch.stopall)
+
+    def cookie(self, *, expires_in_days: float) -> None:
+        (self.profile / "Default").mkdir(parents=True)
+        expires = int((time.time() + expires_in_days * 86_400 + accounts.CHROME_EPOCH_SECONDS) * 1_000_000)
+        with closing(sqlite3.connect(self.profile / "Default" / "Cookies")) as conn:
+            conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER)")
+            conn.execute("INSERT INTO cookies VALUES ('.www.linkedin.com', 'li_at', ?)", (expires,))
+            conn.commit()
+
+    def test_nothing_signed_in_on_a_fresh_mac(self):
+        self.assertEqual(accounts.signed_in(), accounts.SignedIn(linkedin=False, gmail=False, imessage=False,
+                                                                 whatsapp=False, mailboxes=()))
+
+    def test_reading_a_profile_chrome_has_not_written_cookies_to_leaves_it_as_is(self):
+        (self.profile / "Default").mkdir(parents=True)
+        self.assertFalse(accounts.signed_in().linkedin)
+        self.assertFalse((self.profile / "Default" / "Cookies").exists())
+
+    def test_linkedin_is_the_sign_in_browsers_unexpired_session(self):
+        self.cookie(expires_in_days=300)
+        self.assertTrue(accounts.signed_in().linkedin)
+
+    def test_an_expired_linkedin_session_is_signed_out(self):
+        self.cookie(expires_in_days=-1)
+        self.assertFalse(accounts.signed_in().linkedin)
+
+    def test_gmail_needs_every_mailbox_signed_in_now_and_puts_the_apps_owner_first(self):
+        with patch.object(accounts, "gmail_signins",
+                          return_value={"work@example.com": "healthy", "owner@example.com": "healthy"}):
+            ready = accounts.signed_in()
+        self.assertTrue(ready.gmail)
+        self.assertEqual(ready.mailboxes, ("owner@example.com", "work@example.com"))
+        with patch.object(accounts, "gmail_signins",
+                          return_value={"owner@example.com": "healthy", "work@example.com": "reauthorization_required"}):
+            self.assertFalse(accounts.signed_in().gmail)
+
+    def test_messages_and_whatsapp_read_macos_and_wacli(self):
+        with patch.object(accounts, "_messages_readable", return_value=True), \
+             patch.object(accounts.wacli_auth, "auth_status", return_value=SimpleNamespace(authenticated=True)):
+            ready = accounts.signed_in()
+        self.assertEqual((ready.imessage, ready.whatsapp), (True, True))
+
+
+class MessagesReadableTest(unittest.TestCase):
+    def test_messages_is_read_in_a_fresh_process_each_time(self):
+        # macOS answers a process once: a child process per check sees a grant made since.
+        with tempfile.TemporaryDirectory() as tmp:
+            chat = Path(tmp) / "chat.db"
+            with patch.object(accounts, "DEFAULT_CHAT_DB", chat):
+                self.assertFalse(accounts._messages_readable())
+                with closing(sqlite3.connect(chat)) as conn:
+                    conn.execute("CREATE TABLE message (date INTEGER)")
+                self.assertTrue(accounts._messages_readable())

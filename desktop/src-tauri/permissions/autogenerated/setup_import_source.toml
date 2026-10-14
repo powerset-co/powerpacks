@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-setup-import-source"
+description = "Enables the setup_import_source command without any pre-configured scope."
+commands.allow = ["setup_import_source"]
+
+[[permission]]
+identifier = "deny-setup-import-source"
+description = "Denies the setup_import_source command without any pre-configured scope."
+commands.deny = ["setup_import_source"]

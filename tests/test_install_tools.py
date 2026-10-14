@@ -17,6 +17,24 @@ class ImportToolsTests(unittest.TestCase):
             tools.ImportTools(sources=()).run()
             self.assertEqual(os.environ["PATH"].split(os.pathsep)[0], "/selected/python/bin")
 
+    @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
+    @patch.object(shell, "run_command")
+    @patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True})
+    @patch("shutil.which", side_effect=lambda name: "/fixture/tmux" if name == "tmux" else None)
+    @patch("pathlib.Path.is_dir", return_value=True)
+    def test_desktop_skips_node_browser_gcloud_brew(self, _directory, _which, msgvault, run):
+        self.assertEqual(tools.ImportTools(sources=("gmail", "linkedin")).run()["status"], "ok")
+        run.assert_not_called()
+        msgvault.assert_called_once_with(install=True)
+        self.assertIn(str(tools.Path.home() / ".powerpacks/google-cloud-sdk/bin"), os.environ["PATH"].split(os.pathsep))
+        self.assertEqual(os.environ["CLOUDSDK_PYTHON"], tools.sys.executable)
+
+    @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
+    @patch("shutil.which", return_value=None)
+    def test_desktop_needs_no_homebrew(self, _which):
+        result = tools.ImportTools(sources=("linkedin",)).run()
+        self.assertEqual(result["status"], "ok")
+
     @patch.object(shell, "run_command")
     @patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True})
     @patch.object(binary, "ensure_wacli_report", return_value={"status": "ok", "action": "current"})
@@ -62,9 +80,18 @@ class ImportToolsTests(unittest.TestCase):
         self.assertEqual(tools.ImportTools(sources=("gmail",)).run()["status"], "ok")
         run.assert_called_once_with(["/fixture/bin/brew", "install", "node"], timeout=900)
 
+    @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
+    @patch.object(shell, "run_command")
+    @patch.object(binary, "ensure_wacli_report", return_value={"status": "ok", "action": "current"})
+    @patch("shutil.which", side_effect=lambda name: "/fixture/bin/brew" if name == "brew" else None)
+    def test_whatsapp_on_the_desktop_app_needs_no_homebrew(self, _which, _wacli, run):
+        # The QR code is drawn in Python (wacli/qr.py): nothing is installed for it, Homebrew or not.
+        self.assertEqual(tools.ImportTools(sources=("whatsapp",)).run()["status"], "ok")
+        run.assert_not_called()
+
     @patch.object(shell, "run_command", return_value=shell.CommandResult(ok=False, stderr="download interrupted"))
     @patch.object(binary, "ensure_wacli_report", return_value={"status": "ok", "action": "current"})
-    @patch("shutil.which", side_effect=lambda name: None if name == "qrencode" else "/fixture/bin/" + name)
+    @patch("shutil.which", side_effect=lambda name: None if name == "tmux" else "/fixture/bin/" + name)
     def test_brew_download_failure_does_not_send_user_to_terminal(self, _which, _wacli, _run):
         result = tools.ImportTools(sources=("whatsapp",)).run()
         self.assertEqual(result["status"], "failed")

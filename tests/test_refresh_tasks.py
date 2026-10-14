@@ -18,11 +18,10 @@ from packs.ingestion.primitives.refresh import tasks
 
 
 class ScheduleTests(unittest.TestCase):
-    def test_prompt_runs_ask_worker_after_refresh(self):
-        command = "uv run --no-sync --project . python packs/ingestion/primitives/ask_worker/ask_worker.py run"
-        self.assertIn(f"After the refresh, run `{command}`.", tasks.PROMPT)
-        self.assertLess(tasks.PROMPT.index(tasks.REFRESH_COMMAND), tasks.PROMPT.index(command))
-        self.assertNotIn("nothing else", tasks.PROMPT)
+    def test_refresh_prompt_does_not_answer_questions(self):
+        self.assertIn(tasks.REFRESH_COMMAND, tasks.PROMPT)
+        self.assertNotIn("ask_worker", tasks.PROMPT)
+        self.assertNotIn("answer asks", tasks.PROMPT)
 
     def test_cadence_and_clock_time_roundtrip(self):
         for cadence, day in (("daily", "MO"), ("weekdays", "MO"), ("weekly", "SU")):

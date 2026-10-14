@@ -43,21 +43,19 @@ function note(state: ShareState, status: UploadStatus | undefined): string | und
 export function ShareButton({ status, busy }: { status: UploadStatus | undefined; busy: boolean }) {
   const state = shareState(status, busy)
   return (
-    <div className="head-share">
-      <DialogTrigger asChild>
-        <Button
-          aria-label={UPLOAD.share}
-          aria-description={note(state, status)}
-          title={note(state, status)}
-          data-state={state}
-        >
-          {UPLOAD.share}
-          {state === "running" && <Spinner />}
-          {state === "current" && <CheckMark />}
-          {state === "pending" && <Warning />}
-        </Button>
-      </DialogTrigger>
-    </div>
+    <DialogTrigger asChild>
+      <Button
+        aria-label={UPLOAD.share}
+        aria-description={note(state, status)}
+        title={note(state, status)}
+        data-state={state}
+      >
+        {UPLOAD.share}
+        {state === "running" && <Spinner />}
+        {state === "current" && <CheckMark />}
+        {state === "pending" && <Warning />}
+      </Button>
+    </DialogTrigger>
   )
 }
 

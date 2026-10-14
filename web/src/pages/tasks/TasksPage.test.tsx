@@ -50,10 +50,16 @@ it.each(["codex", "claude"])("%s opens the modal before submitting its selected 
     await screen.findByRole("button", { name: runner === "codex" ? "Install Codex" : "Install Claude" }),
   )
   expect(fetch.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false)
-  fireEvent.change(await screen.findByLabelText("Repeat"), { target: { value: "weekly" } })
-  fireEvent.change(screen.getByLabelText("Day"), { target: { value: "FR" } })
-  fireEvent.change(screen.getByLabelText("Time"), { target: { value: "09:30" } })
+  const dialog = await screen.findByRole("dialog")
+  expect(screen.getByRole("radio", { name: "Daily" }).getAttribute("aria-checked")).toBe("true")
+  expect(screen.queryByRole("radiogroup", { name: "Day" })).toBeNull()
+  fireEvent.click(screen.getByRole("radio", { name: "Weekly" }))
+  fireEvent.click(screen.getByRole("radio", { name: "Friday" }))
+  fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "9" } })
+  fireEvent.change(screen.getByLabelText("Minute"), { target: { value: "30" } })
+  expect(screen.getByRole("radio", { name: "AM" }).getAttribute("aria-checked")).toBe("true")
   fireEvent.click(screen.getByRole("button", { name: "Create" }))
+  await waitFor(() => expect(dialog.isConnected).toBe(false))
   await waitFor(() => expect(fetch.mock.calls.some(([, options]) => options?.method === "POST")).toBe(true))
   const options = fetch.mock.calls.find(([, options]) => options?.method === "POST")?.[1]
   const body = options?.body
@@ -71,6 +77,45 @@ it.each(["codex", "claude"])("%s opens the modal before submitting its selected 
     )
   else expect(screen.queryByRole("link", { name: "Open chat" })).toBeNull()
   expect(screen.queryByText(/prefilled/)).toBeNull()
+})
+
+it("edits the time as hour, minute and half of the day; junk in a cell leaves the time alone", async () => {
+  const fetch = vi.fn((_url: string, options?: RequestInit) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify(
+          options?.method === "POST"
+            ? { ...task, installs: ["codex"], codex_install_status: "installed" }
+            : {
+                ...task,
+                installs: ["codex"],
+                codex_install_status: "installed",
+                codex_thread_url: "codex://t",
+              },
+        ),
+      ),
+    ),
+  )
+  vi.stubGlobal("fetch", fetch)
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "Edit schedule" }))
+  expect(await screen.findByRole("dialog", { name: "Edit schedule" })).toBeTruthy()
+  const hour = screen.getByLabelText<HTMLInputElement>("Hour")
+  const minute = screen.getByLabelText<HTMLInputElement>("Minute")
+  expect(hour.value).toBe("6")
+  expect(minute.value).toBe("00")
+  fireEvent.change(hour, { target: { value: "13" } })
+  fireEvent.blur(hour)
+  expect(hour.value).toBe("6")
+  fireEvent.keyDown(minute, { key: "ArrowDown" })
+  expect(minute.value).toBe("59")
+  fireEvent.click(screen.getByRole("radio", { name: "PM" }))
+  fireEvent.click(screen.getByRole("button", { name: "Save" }))
+  await waitFor(() => expect(fetch.mock.calls.some(([, options]) => options?.method === "POST")).toBe(true))
+  const body = fetch.mock.calls.find(([, options]) => options?.method === "POST")?.[1]?.body
+  if (!(body instanceof URLSearchParams)) throw new Error("Missing schedule request")
+  expect(body.get("time")).toBe("18:59")
+  expect(body.get("cadence")).toBe("daily")
 })
 
 it("does not call a pending native import installed", async () => {

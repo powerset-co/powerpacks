@@ -6,6 +6,8 @@ downloads the client secret JSON, the add-test-users flow, and msgvault account
 consent. Sign-in and challenges use a visible window in the same profile.
 
 Changelog:
+  2026-10-09: login_gcloud approves `gcloud auth login` in the saved profile; one Google sign-in.
+  2026-10-09: Use the bundled playwright-core before command-line npm dependencies.
   2026-09-23 (typed rows): `browser_status` / `browser_client_secret_path` are the
     named boundary for the browser script's JSON fields, so `browser_flows` reads
     typed values instead of `.get`-ing the payload; the subprocess result reads
@@ -49,6 +51,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     config_path,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
+    CommandResult,
     command_error,
     parse_json_fragment,
     progress,
@@ -61,8 +64,44 @@ from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
 DEFAULT_BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/google-oauth")
 DEFAULT_DOWNLOAD_DIR = Path("~/.msgvault/oauth-downloads")
 DEFAULT_NODE_DEPS = Path("~/.powerpacks/browser-node")
+VENDORED_NODE_MODULES = _REPO_ROOT / "vendor/browser-node/node_modules"
 DEFAULT_OAUTH_CLIENT_NAME = "local-msg-vault"
 BROWSER_SCRIPT = Path(__file__).with_name("google_oauth_browser.js")
+
+
+def login_gcloud(cmd: list[str], email: str, *, profile_dir: Path = DEFAULT_BROWSER_PROFILE.expanduser(),
+                 timeout_seconds: int = 900) -> CommandResult:
+    """Run `gcloud auth login` with its consent in the saved Google profile, the sign-in the
+    Console automation then reuses, so setup asks for Google once. gcloud opens its URL
+    through Python's webbrowser, which runs $BROWSER: `true` opens nothing, and gcloud
+    still prints the URL and waits on its localhost callback."""
+    deps = ensure_playwright_core()
+    if deps["status"] != "ok":
+        return CommandResult(ok=False, message=deps["message"])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            env={**os.environ, "BROWSER": "true"})
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if not line.strip().startswith("https://accounts.google.com/o/oauth2/auth"):
+                continue
+            request = {"url": line.strip(), "email": email, "profileDir": str(profile_dir),
+                       "timeoutSeconds": timeout_seconds}
+            browser = run_streaming_command(
+                ["node", str(BROWSER_SCRIPT), "--mode", "gcloud-login"], input_text=json.dumps(request),
+                timeout=timeout_seconds + 45, env={**os.environ, "NODE_PATH": deps["node_path"]})
+            payload = parse_json_fragment(browser.stdout) if browser.stdout.strip() else {
+                "status": "error", "message": command_error(browser)}
+            if payload["status"] != "ok":
+                return CommandResult(ok=False, message=payload["message"])
+            break
+        returncode = proc.wait(timeout=60)
+        return CommandResult(ok=returncode == 0, returncode=returncode)
+    except subprocess.TimeoutExpired:
+        return CommandResult(ok=False, returncode=124, message="gcloud login did not finish")
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
 
 
 def authorize_account(
@@ -163,7 +202,9 @@ def authorize_account(
 
 
 def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> dict[str, Any]:
-    """Ensure playwright-core is npm-installed under the node deps prefix."""
+    """Use bundled playwright-core, or install command-line dependencies with npm."""
+    if (VENDORED_NODE_MODULES / "playwright-core").is_dir():
+        return {"status": "ok", "installed": False, "node_path": str(VENDORED_NODE_MODULES)}
     if not shutil.which("node"):
         return {"status": "error", "message": "node is not installed"}
     if not shutil.which("npm"):

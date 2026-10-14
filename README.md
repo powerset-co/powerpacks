@@ -1,6 +1,7 @@
 # Powerpacks
 
-<!-- Changelog: 2026-07-10 — distinguish the install URL from the Powerset provisioning API. -->
+<!-- Changelog: 2026-10-14 — download link for the Mac app (each release carries it).
+     2026-07-10 — distinguish the install URL from the Powerset provisioning API. -->
 
 `powerpacks` is a portable bundle of skills + deterministic primitives +
 check-in data contracts that turn a coding-agent host (Codex, Claude Code,
@@ -31,6 +32,15 @@ Existing networks are checked first. Importing LinkedIn, Gmail, or messages is
 separate work when you ask for it; it does not delay first use. First-time
 downloads and sign-in can take more than a minute. If installation fails, the
 agent reads the saved error and retries without deleting your data.
+
+### Mac app
+
+[Download Powerpacks for Mac](https://github.com/powerset-co/powerpacks/releases/latest/download/Powerpacks-macos-arm64.dmg)
+(Apple silicon, the newest release). Open the `.dmg` and drag Powerpacks to Applications. The
+app runs setup itself: connect your accounts, or bring over the Powerpacks you already have.
+
+The app is not notarized yet, so macOS stops it the first time: open System Settings →
+Privacy & Security and click Open Anyway.
 
 ### Other install paths
 

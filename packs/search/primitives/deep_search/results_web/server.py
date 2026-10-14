@@ -8,6 +8,10 @@ with or without a deep-context store; `make_handler` serves them alone for
 tests.
 
 Changelog:
+  2026-10-13: the app's sign-in passes --force-account: Auth0's screen shows and Google lists its
+      accounts, so signing in again can pick another.
+  2026-10-09: POST /auth/login/start and /auth/login/finish: the desktop app shows the Powerset
+      sign-in page in its own pane and the server finishes the login at the callback.
   2026-09-26: routes became mountable under a base path; the list page reads
       the catalog; runs load one at a time; the standalone `main()` went, the
       review server is the one local server.
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
@@ -24,10 +29,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.indexing.lib.io import write_json
+from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
+from packs.shared.web import account
 
 from . import RESULTS_CSS, RESULTS_JS
-from .feedback import ENV_FILE, build_feedback_request, record_fit_label, submit_results_feedback
+from .feedback import build_feedback_request, record_fit_label, submit_results_feedback
 from ..search_harness import ROOT
 from .model import FIT_LABELS_FILE, SearchCard, SearchResult, load_catalog, load_search, update_catalog_pins
 from .rendering import render_catalog, render_page, render_search_body
@@ -64,13 +71,61 @@ def _read_tagged(path: Path) -> dict[str, Any] | None:
     return _validate_tagged(json.loads(text))
 
 
-def _login() -> int:
-    from dotenv import load_dotenv
-
-    load_dotenv(ENV_FILE)
+def _login(on_authorize_url: Callable[[str], None] | None = None) -> int:
     from packs.powerset.primitives.auth.auth import main
 
-    return main(["login"])
+    values = account.config(ROOT)
+    args = ["login", "--auth0-domain", values.get("POWERPACKS_AUTH0_DOMAIN", ""),
+            "--client-id", values.get("POWERPACKS_AUTH0_CLIENT_ID", ""),
+            "--audience", values.get("POWERPACKS_AUTH0_AUDIENCE", ""),
+            "--credentials-path", str(account.credentials_path(ROOT)),
+            # Signing in again from the app may be to another account: Google lists them.
+            "--force-account"]
+    if on_authorize_url is None:
+        return main(args)
+    return main(args, on_authorize_url=on_authorize_url)
+
+
+class AppLogin:
+    """A Powerset sign-in whose page the desktop app shows in its sign-in pane instead of a
+    browser: `start` runs the login on a thread and hands back the authorize URL once its callback
+    server listens; `finish` waits for the callback and answers like the browser login (0 is signed
+    in). One login at a time: a second `start` while one waits returns the same URL."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._shown = threading.Event()
+        self._url = ""
+        self._code = 1
+
+    def start(self) -> str:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._shown.clear()
+                self._url, self._code = "", 1
+                self._thread = threading.Thread(target=self._run, name="powerset-login", daemon=True)
+                self._thread.start()
+        self._shown.wait()
+        return self._url
+
+    def _run(self) -> None:
+        try:
+            self._code = _login(self._show)
+        except (OSError, SystemExit, ValueError):
+            self._code = 1
+        finally:
+            self._shown.set()  # a login that failed before its URL frees `start` too
+
+    def _show(self, url: str) -> None:
+        self._url = url
+        self._shown.set()
+
+    def finish(self) -> int:
+        thread = self._thread
+        if thread is not None:
+            thread.join()
+        return self._code
 
 
 def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
@@ -104,6 +159,7 @@ class SearchRoutes:
         self.catalog = catalog
         self.load_one = load_one
         self.base = base.rstrip("/")
+        self.app_login = AppLogin()
 
     def one(self, run_id: str) -> SearchResult | None:
         if self.load_one is not None:
@@ -171,17 +227,35 @@ class SearchRoutes:
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         path = self._relative(parsed.path)
-        if path not in {"/feedback", "/auth/login", "/tags"}:
+        if path not in {"/feedback", "/auth/login", "/auth/login/start", "/auth/login/finish", "/tags"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
             _send(handler, b"cross-origin request rejected", "text/plain", status=403)
             return True
-        if path == "/auth/login":
-            try:
-                code = _login()
-            except (OSError, SystemExit, ValueError):
-                code = 1
+        if path in {"/auth/login", "/auth/login/start"}:
+            action = InstallStatus(ROOT).read().get("action") or {}
+            if action.get("kind") == "signin":
+                _send_json(handler, {"status": "needs_auth", "error": "Finish signing in on Setup.",
+                                     "setup_url": "/install"}, status=HTTPStatus.CONFLICT)
+                return True
+        if path == "/auth/login/start":
+            # The desktop app shows the page itself; it posts /auth/login/finish for the outcome.
+            url = self.app_login.start()
+            if url:
+                _send_json(handler, {"status": "sign_in", "url": url})
+            else:
+                _send_json(handler, {"status": "needs_auth", "error": "Couldn't start the sign-in. Try again."},
+                           status=HTTPStatus.UNAUTHORIZED)
+            return True
+        if path in {"/auth/login", "/auth/login/finish"}:
+            if path == "/auth/login/finish":
+                code = self.app_login.finish()
+            else:
+                try:
+                    code = _login()
+                except (OSError, SystemExit, ValueError):
+                    code = 1
             if code == 0:
                 _send_json(handler, {"ok": True, "status": "authenticated"})
             else:
@@ -324,11 +398,11 @@ def search_routes(root: Path, *, base: str = "", run_id: str | None = None) -> S
     load_one = _run_loader(root)
 
     def catalog() -> tuple[SearchCard, ...]:
-        cards = tuple(card for card in load_catalog(root) if card.ce_scored)
+        # A deep run counts the people its screen scored; a quick one, every person it found.
+        cards = tuple(card for card in load_catalog(root) if card.candidates)
         return tuple(card for card in cards if card.run_id == run_id) if run_id else cards
 
     def load() -> tuple[SearchResult, ...]:
         return tuple(search for card in catalog() if (search := load_one(card.run_id)) is not None)
 
     return SearchRoutes(root, load, catalog=catalog, load_one=load_one, base=base)
-

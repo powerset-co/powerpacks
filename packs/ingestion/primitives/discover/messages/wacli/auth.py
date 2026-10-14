@@ -9,6 +9,9 @@ retain typed fields until report serialization; the pairing state is the typed
 `PairingStatus`.
 
 Changelog:
+  2026-10-14: no qrencode check: qr.py draws the QR in Python, so nothing is installed for it.
+  2026-10-09: a new QR attempt stops the wacli an ended setup run left waiting on an
+      unlinked store; it held the lock and every retry failed.
   2026-10-05: linking returns at the scan; the history download it starts runs
     on detached, and callers that read the store `wait_for_history` first.
     (`--link-only` lost the history: the phone does not queue it for a device
@@ -24,7 +27,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -91,14 +94,32 @@ class AuthRunResult:
         }
 
 
+def stop_unlinked_holder(store: Path) -> None:
+    """Stop the wacli an earlier QR attempt left holding this store. The store is not linked
+    yet, so no history download can be running in it: the holder is a QR wait whose setup run
+    ended, and it would keep every new attempt out."""
+    lock = store / "LOCK"
+    text = lock.read_text(encoding="utf-8") if lock.is_file() else ""
+    pid = next((int(line[4:]) for line in text.splitlines() if line.startswith("pid=")), None)
+    if pid is None:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    with lock.open("a") as handle:
+        for _ in range(50):
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle, fcntl.LOCK_UN)
+                return
+            except BlockingIOError:
+                time.sleep(0.1)
+
+
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
-    if not shutil.which("qrencode"):
-        raise PrimitiveBlocked({
-            "status": "blocked_user_action",
-            "message": "qrencode is required to render the WhatsApp QR page. Install it with `brew install qrencode`, then rerun $import-messages.",
-            "install_command": "brew install qrencode",
-        })
     runtime.emit_status("WhatsApp needs a QR scan.")
+    stop_unlinked_holder(store)
     qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
     cmd = [
         binary.wacli_bin() or "wacli",

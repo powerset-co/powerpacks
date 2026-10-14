@@ -58,6 +58,7 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
 )
 from packs.ingestion.primitives.setup.automations.oauth_browser import (  # noqa: E402
     DEFAULT_OAUTH_CLIENT_NAME,
+    login_gcloud,
 )
 from packs.ingestion.primitives.setup.automations.shell import expand, progress  # noqa: E402
 
@@ -195,6 +196,7 @@ class BrowserSetup:
         auth = gcloud_project.ensure_gcloud_auth(
             open_browser=self.open_browser,
             expected_account=self.email,
+            login=lambda cmd: login_gcloud(cmd, self.email, profile_dir=self.profile_dir),
         )
         if auth["status"] != "ok":
             return {"status": "error", "message": "Google login failed.", "gcloud_auth": auth}
@@ -380,7 +382,10 @@ class TestUsers:
         if not self.test_users:
             return {"status": "error", "message": "Provide at least one OAuth test user email."}
 
-        auth = gcloud_project.ensure_gcloud_auth(open_browser=self.open_browser)
+        auth = gcloud_project.ensure_gcloud_auth(
+            open_browser=self.open_browser,
+            login=lambda cmd: login_gcloud(cmd, self.login_email, profile_dir=self.profile_dir),
+        )
         if auth["status"] != "ok":
             return {"status": "error", "message": "Google login failed.", "gcloud_auth": auth}
 
