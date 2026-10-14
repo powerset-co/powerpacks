@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.25.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.24.0...powerpacks-v3.25.0) (2026-10-14)
+
+
+### Features
+
+* **app:** when Powerpacks breaks, Codex looks into it, repairs what stops it, and reports ([#805](https://github.com/powerset-co/powerpacks/issues/805)) ([317f0f9](https://github.com/powerset-co/powerpacks/commit/317f0f981ae02e059b92c850c4a02e0483aa69b6))
+
 ## [3.24.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.23.0...powerpacks-v3.24.0) (2026-10-14)
 
 
