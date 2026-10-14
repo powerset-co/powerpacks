@@ -1,13 +1,16 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
-import { Select } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
 import { SEARCH_SCOPE_KEY as KEY, useSearchScope } from "@/lib/agent/useSearchScope"
 import { LOCAL_SCOPE, saveSearchScope } from "@/lib/api/searches"
 import type { SearchScope as Scope, SearchSet } from "@/types/searches"
 
-function label(set: SearchSet): string {
-  return `${set.is_personal && set.owned ? "Personal network" : set.name} · ${set.person_count.toLocaleString()}`
+function name(set: SearchSet): string {
+  return set.is_personal && set.owned ? "Personal network" : set.name
+}
+
+function people(set: SearchSet): string {
+  return ` · ${set.person_count.toLocaleString()}`
 }
 
 /** Where chat searches: one of your Powerset sets, or this Mac's local index when it has one. */
@@ -27,36 +30,58 @@ export function SearchScope() {
     onSuccess: (next) => client.setQueryData(KEY, next),
   })
   if (!scope.data || (scope.data.sets.length === 0 && !scope.data.local)) return null
+  const { sets, local, selected } = scope.data
+  const picked = sets.find(({ set_id }) => set_id === selected)
+  const shown = selected === LOCAL_SCOPE ? "Local index" : picked ? name(picked) : "Pick a set"
+  // The pill is as wide as the pick; a native select is as wide as its longest option, so it sits
+  // invisibly over the pill and opens the usual menu.
   return (
     <span className="relative inline-flex">
-      <Select
-        aria-label="Search in"
-        title="Where searches look"
-        value={scope.data.selected}
-        onChange={(event) => save.mutate(event.target.value)}
-        className="h-[26px] rounded-full border-line bg-transparent pl-2.5 pr-7 text-[11px] text-muted-foreground"
-      >
-        {/* Signed out with a local index not picked yet. */}
-        {scope.data.selected === "" && (
-          <option value="" disabled hidden>
-            Pick a set
-          </option>
-        )}
-        {scope.data.sets.length > 0 && (
-          <optgroup label="Powerset">
-            {scope.data.sets.map((set) => (
-              <option key={set.set_id} value={set.set_id}>
-                {label(set)}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {scope.data.local && (
-          <optgroup label="This Mac">
-            <option value={LOCAL_SCOPE}>Local index</option>
-          </optgroup>
-        )}
-      </Select>
+      <span className="relative inline-flex h-[26px] max-w-[240px] items-center gap-1.5 rounded-full border border-line pl-2.5 pr-2 text-[11px] text-muted-foreground transition-colors duration-fast ease-out focus-within:border-line-strong hover:text-foreground">
+        {/* A long name gives way before its count does. */}
+        <span aria-hidden className="flex min-w-0">
+          <span className="truncate">{shown}</span>
+          {picked && <span className="shrink-0 whitespace-pre">{people(picked)}</span>}
+        </span>
+        <svg viewBox="0 0 16 16" aria-hidden="true" className="size-3 shrink-0">
+          <path
+            d="M4 6l4 4 4-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <select
+          aria-label="Search in"
+          title="Where searches look"
+          value={selected}
+          onChange={(event) => save.mutate(event.target.value)}
+          className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0"
+        >
+          {/* Signed out with a local index not picked yet. */}
+          {selected === "" && (
+            <option value="" disabled hidden>
+              Pick a set
+            </option>
+          )}
+          {sets.length > 0 && (
+            <optgroup label="Powerset">
+              {sets.map((set) => (
+                <option key={set.set_id} value={set.set_id}>
+                  {name(set) + people(set)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {local && (
+            <optgroup label="This Mac">
+              <option value={LOCAL_SCOPE}>Local index</option>
+            </optgroup>
+          )}
+        </select>
+      </span>
       {save.error && (
         <span
           role="alert"

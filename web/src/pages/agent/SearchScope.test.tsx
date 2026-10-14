@@ -50,8 +50,11 @@ it("lists the Powerset sets with their people and this Mac's local index, and sh
     "Powerset",
     "This Mac",
   ])
+  // The pill shows only the pick, so it is as wide as the pick rather than the longest set.
+  expect(screen.getByText("Team", { selector: "span" }).parentElement?.textContent).toBe("Team · 40,795")
   fireEvent.change(select, { target: { value: "local" } })
   await waitFor(() => expect(select.value).toBe("local"))
+  expect(screen.getByText("Local index", { selector: "span" })).toBeTruthy()
   expect(saveSearchScope).toHaveBeenCalledWith("local", expect.anything())
   answer({ ...SCOPE, selected: "local" })
   await waitFor(() => expect(select.value).toBe("local"))
