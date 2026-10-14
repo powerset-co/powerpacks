@@ -1,8 +1,7 @@
 # desktop
 
 The Powerpacks desktop app (Tauri 2). One installer: open it, sign in. The app carries everything
-it runs: uv, Codex, and a snapshot of this repo. macOS is the product; the Windows build is for
-trying the UI, Chat and sign-in there, since setup's imports run on macOS only.
+it runs: uv, Codex, and a snapshot of this repo. It is built for macOS only.
 
 ```mermaid
 flowchart LR
@@ -61,7 +60,7 @@ web assets into the runtime folder alone is not an app release. Existing `.power
 ## Build
 
 Needs Rust, Node 22 and pnpm. CI (`.github/workflows/desktop.yml`) builds the Apple Silicon
-`.dmg` and the Windows installer on every change and keeps them as run artifacts. Each release
+`.dmg` on every change and keeps it as a run artifact. Each release
 (`release-please.yml`) builds the `.dmg` without the debug menu and attaches it to the release as
 `Powerpacks-macos-arm64.dmg`, the README's download link; the app's version (tauri.conf.json,
 Cargo.toml, package.json) moves with the release, which is what its update check compares. Gmail needs
