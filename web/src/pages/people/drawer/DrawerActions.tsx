@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-import { BookIcon, Spinner } from "@/components/shared"
+import { BookIcon, DrawerIconTip, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { LOGBOOK } from "@/lib/people/copy"
 import type { TagAction } from "@/lib/people/facets"
@@ -71,27 +71,27 @@ export function LogbookButton({ row, disabled, building, onBuild, onView }: Logb
     return (
       <button
         type="button"
-        className="drawer-icon"
+        className="drawer-icon group"
         data-logbook="saved"
         aria-label={LOGBOOK.view}
-        title={LOGBOOK.view}
         disabled={disabled}
         onClick={onView}
       >
         <BookIcon className="size-[15px]" />
+        <DrawerIconTip name={LOGBOOK.view}>{LOGBOOK.explainer}</DrawerIconTip>
       </button>
     )
   const label = building ? LOGBOOK.building : LOGBOOK.build
   return (
     <button
       type="button"
-      className="drawer-icon"
+      className="drawer-icon group"
       aria-label={label}
-      title={`${label}. ${LOGBOOK.explainer}`}
       disabled={building || disabled}
       onClick={onBuild}
     >
       {building ? <Spinner /> : <BookIcon className="size-[15px]" />}
+      <DrawerIconTip name={label}>{LOGBOOK.explainer}</DrawerIconTip>
     </button>
   )
 }

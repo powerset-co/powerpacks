@@ -3,11 +3,13 @@ import type { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
 // Where the label sits: at the side nav's bottom-left corner, where the window's edges are near,
-// above the control (left-aligned) or to its right (bottom-aligned); elsewhere below it.
+// above the control (left-aligned) or to its right (bottom-aligned); at the drawer's top-right
+// corner, below it and opening to its left (right-aligned); elsewhere below it.
 const SIDE = {
   above: "bottom-[calc(100%+8px)] left-0",
   right: "bottom-0 left-[calc(100%+10px)]",
   below: "top-[calc(100%+6px)] left-0",
+  "below-left": "top-[calc(100%+6px)] right-0",
 } as const
 
 // A hover label for a `group` control.

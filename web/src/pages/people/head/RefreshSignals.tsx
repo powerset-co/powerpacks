@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
-import { ProgressBar, RefreshIcon, Spinner } from "@/components/shared"
+import { DrawerIconTip, ProgressBar, RefreshIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -130,13 +130,15 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
         {icon ? (
           <button
             type="button"
-            className="drawer-icon"
+            className="drawer-icon group"
             aria-label={TITLE}
-            title={TITLE}
             disabled={checking}
             onClick={openOrCheck}
           >
             {running ? <Spinner /> : <RefreshIcon className="size-[15px]" />}
+            <DrawerIconTip name={TITLE}>
+              Re-runs worth and the share call on saved facts. Asks before anything costs money.
+            </DrawerIconTip>
           </button>
         ) : (
           <Button disabled={checking} onClick={openOrCheck}>
