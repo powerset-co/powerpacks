@@ -22,7 +22,6 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "accounts", label: "Accounts", href: "/accounts" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away.
   { key: "setup", label: "Setup", href: "/install" },
-  { key: "settings", label: "Settings", href: "/settings" },
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and
@@ -37,5 +36,7 @@ export const PAGES: readonly Page[] = isDesktop()
  *  which the router's catch-all redirects to. */
 export function pageAt(pathname: string): Page {
   if (pathname === "/home") return { key: "home", label: "Home", href: "/home" }
+  // Out of the side nav for now; the debug menu opens it.
+  if (pathname === "/settings") return { key: "settings", label: "Settings", href: "/settings" }
   return PAGES.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`)) ?? HOME
 }

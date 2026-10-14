@@ -10,7 +10,7 @@ import { desktopPlatform, isDesktop } from "@/lib/desktop"
 
 const DEBUG_KEY = ["desktop-debug"] as const
 
-// Every page the app shows, including the two outside the top bar.
+// Every page the app shows, including the ones outside the side nav.
 const PAGES = [
   { label: "Home", href: "/home" },
   { label: "Setup", href: "/install" },
@@ -20,6 +20,7 @@ const PAGES = [
   { label: "People", href: "/people" },
   { label: "Accounts", href: "/accounts" },
   { label: "Scheduled tasks", href: "/tasks" },
+  { label: "Settings", href: "/settings" },
 ] as const
 
 const ITEM =
@@ -121,7 +122,7 @@ function DesktopDebugMenu() {
           <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
             Local features
           </p>
-          {/* Sets is in Settings, where anyone turns it on. */}
+          {/* Sets is on the Settings page, listed above. */}
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
             Auto Reply
             <input
