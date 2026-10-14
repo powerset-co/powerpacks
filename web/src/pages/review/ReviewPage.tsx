@@ -5,7 +5,7 @@ import { useEffect } from "react"
 import { Link } from "react-router-dom"
 
 import { Toast } from "@/components/shared"
-import { BRAND, documentTitle, LOAD_FAILED } from "@/lib/review/copy"
+import { documentTitle, LOAD_FAILED } from "@/lib/review/copy"
 import { REVIEW_PATH } from "@/lib/review/links"
 
 import { useReviewToast } from "./hooks/useReviewToast"
@@ -40,7 +40,7 @@ export function ReviewPage() {
     <div className="review-page" data-stage={screen?.page.view} data-preview={screen?.preview}>
       <header className="topbar" data-tauri-drag-region>
         <Link className="brand" to={REVIEW_PATH}>
-          {BRAND}
+          POWER<span className="text-primary">SET</span>
         </Link>
         <h1 className="topbar-title">{title}</h1>
         <span />

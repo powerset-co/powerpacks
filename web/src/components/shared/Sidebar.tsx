@@ -80,13 +80,13 @@ export function Sidebar() {
       >
         <NavLink
           to="/home"
-          aria-label="Powerpacks home"
+          aria-label="Powerset home"
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-s)]"
         >
           <PowersetMark className="size-7 rounded-[7px] shadow-[var(--shadow-1)]" />
           {!rail && (
             <span className="min-w-0 flex-1 truncate text-[12px] font-extrabold tracking-[.14em] text-foreground">
-              POWER<span className="text-primary">PACKS</span>
+              POWER<span className="text-primary">SET</span>
             </span>
           )}
         </NavLink>

@@ -26,13 +26,6 @@ import { useCollaboration } from "./collaboration/useCollaboration"
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
 
-const STARTERS = [
-  { title: "Find people", prompt: "Who in my network has founded a developer tools company?" },
-  { title: "Catch up", prompt: "Who are the most interesting people I talked to this month?" },
-  { title: "Find a company's people", prompt: "Who do I know at Stripe?" },
-  { title: "Find an intro", prompt: "Who can introduce me to a partner at a seed fund?" },
-] as const
-
 function Welcome() {
   return (
     <div className="rise-in flex flex-col items-center gap-7 pt-[14vh] text-center max-[680px]:pt-[6vh]">
@@ -43,23 +36,6 @@ function Welcome() {
           Ask about people, companies and intros across your network.
         </p>
       </div>
-      <ul
-        className="m-0 grid w-full list-none grid-cols-2 gap-2.5 p-0 max-[680px]:grid-cols-1"
-        aria-label="Suggestions"
-      >
-        {STARTERS.map(({ title, prompt }) => (
-          <li key={title}>
-            <button
-              type="button"
-              onClick={() => void send(prompt)}
-              className="flex h-full w-full cursor-pointer flex-col gap-1 rounded-[var(--radius-m)] border border-line bg-card px-3.5 py-3 text-left transition-[border-color,background-color] duration-fast ease-out hover:border-line-strong hover:bg-surface-2"
-            >
-              <span className="text-[13px] font-semibold">{title}</span>
-              <span className="text-xs text-muted-foreground">{prompt}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }
