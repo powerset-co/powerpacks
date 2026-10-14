@@ -61,7 +61,6 @@ Paths below are relative to the installed checkout.
 | People search, job description, shortlist, named person or dossier lookup | `packs/search/skills/search/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
-| Browse personal or network contacts | `packs/contacts/skills/search-contacts/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |
 | Gmail archive/OAuth setup | `packs/ingestion/skills/msgvault/SKILL.md` |
 | Import iMessage or WhatsApp contacts | `packs/ingestion/skills/import-messages/SKILL.md` |

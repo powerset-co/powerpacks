@@ -12,7 +12,6 @@ surface, candidate backend, and search depth before dispatching.
 | People | `$search <query-or-JD>` |
 | Companies or company lookup | `$search-company <query>` |
 | Relationships or aggregate questions | `$search-sql <query>` |
-| Known contacts | `$search-contacts <query>` |
 
 Older traces and integrations may use `/search-network <query>` or
 `/search-company <query>`. Those strings are historical aliases, not the

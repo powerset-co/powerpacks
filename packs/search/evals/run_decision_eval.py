@@ -46,7 +46,7 @@ RULES_END = "<!-- decision-rules:end -->"
 
 FIELDS = ("surface", "backend", "depth", "mode")
 ENUMS = {
-    "surface": {"people", "company", "sql", "contacts"},
+    "surface": {"people", "company", "sql"},
     "backend": {"powerset", "local"},
     "depth": {"fast", "deep"},
     "mode": {"interactive", "auto"},

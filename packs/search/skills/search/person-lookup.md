@@ -4,8 +4,7 @@ Find the person, read their saved parent and child dossiers, and answer the user
 This is a free lookup, not a ranked search or a request to build deep context.
 Run from the installed checkout identified by the skill; its `.powerpacks/`
 holds the user's data. Do not look in the chat's unrelated working directory.
-For an explicit hosted-network request, start with the contacts section below.
-Otherwise read the local dossier first. Local-only requests never use hosted data.
+A lookup reads this local store only.
 
 ## Read the saved facts
 
@@ -34,8 +33,8 @@ No Markdown export or search index is required.
 - **No match:** try useful name parts, known aliases, or supplied identifiers
   before asking for help. If a plausible match appears, show its identifying
   details and ask "Did you mean this person?" Similar spelling is not identity.
-- **No local database:** this installation has no local facts. Continue to
-  available profile/contact lookup below; do not start setup or import data.
+- **No local database:** this installation has no local facts. Say so; do not
+  start setup or import data.
 - **Unreadable database:** report the access/setup error; do not treat it as an
   empty database or replace it. Use `powerpacks-doctor` for an unclear setup error.
 
@@ -52,25 +51,11 @@ Inspect the stored fields rather than inventing columns. Similar text alone does
 not prove identity. Keep dossier reads in this store, without `index.json`,
 Markdown-folder scans, or the separate search index.
 
-## When only a profile is available
+## When nobody is found
 
-For an explicit Powerset/network lookup, start with
-`packs/contacts/skills/search-contacts/SKILL.md`. Also use it when local lookup
-finds no person and the request permits hosted access. Preserve a named network;
-otherwise search the signed-in user's own contacts. Report which account/network
-was searched. The contacts API returns profile/contact fields, not a private
-local dossier. Use a returned email or phone to find the same local parent when
-the user also wants their dossier. Do not join people on a similar name alone.
-
-If contacts tools are unavailable or login expired, follow the existing
-`packs/powerset/skills/powerset/SKILL.md` connection/login recovery and resume the
-lookup. An inaccessible source is not "person not found".
-
-For local-only requests, use only the SQLite lookup above. Never run semantic
-retrieval for a person's name or require an index build. If the available sources
-find nobody, say where you looked and offer another
-identifier. When hosted access is allowed, another available network/account
-can be an option; name it and never invent access. Local-only stays local.
+Use only the SQLite lookup above. Never run semantic retrieval for a person's name
+or require an index build. If the store finds nobody, say where you looked and
+offer another identifier.
 
 ## Answer
 

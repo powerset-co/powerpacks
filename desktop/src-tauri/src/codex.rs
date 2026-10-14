@@ -45,9 +45,8 @@ pub const PAGE_METHODS: &[&str] = &[
 ];
 /// The in-app agent gets every pack's skills but Powerset's own (install, sign-in, update,
 /// doctor), which run from the app's pages.
-const SKILL_ROOTS: [&str; 6] = [
+const SKILL_ROOTS: [&str; 5] = [
     "packs/search/skills",
-    "packs/contacts/skills",
     "packs/ingestion/skills",
     "packs/indexing/skills",
     "packs/sales-nav/skills",

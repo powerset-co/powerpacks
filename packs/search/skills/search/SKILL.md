@@ -65,7 +65,7 @@ record them, and only then act.
 Decide `surface`, `backend`, `depth`, and `mode` for the query:
 
 1. **surface** — where the query belongs:
-   - `people` — any search for people. The default when unsure.
+   - `people` — any search for people, "my contacts" included. The default when unsure.
    - `company` — the subject is companies (lookup / IDs / investors / funding / sector) and
      no people are asked for. "Engineers at companies backed by Sequoia" is `people`.
    - `sql` — the predicate needs cross-row or cross-person logic: per-person aggregates
@@ -73,7 +73,6 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      another person ("overlapped with Jane at Stripe"). A person's name alone is NOT sql:
      "look up Jane Doe" and "who is Jane Doe" are `people` lookups. Common words like
      "career" or "worked with <a technology>" do not make a query sql.
-   - `contacts` — "my contacts" / "set contacts" plus contact-field filtering.
 2. **backend** — which index runs the search. The user's explicit words always win:
    - `powerset` — the user says "powerset", names a set, or says "team/shared network"
      (even if they also say "my network": "search my Powerset network" is `powerset`).
@@ -83,7 +82,7 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
      configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
      which you picked in one line so the user can flip it.
-   - Forced values: `sql` is always `local`; `company` and `contacts` are always `powerset`.
+   - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
      deep/thorough/judged run or names the deliverable ("recruit ...", "build a shortlist",
@@ -128,7 +127,6 @@ Then dispatch — this table is the whole routing contract:
 |---|---|
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
-| surface `contacts` | load `packs/contacts/skills/search-contacts/SKILL.md` (decision.json still written first) |
 | `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
 | `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
