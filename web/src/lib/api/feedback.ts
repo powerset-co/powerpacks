@@ -1,5 +1,6 @@
 // POST /searches/feedback on the Python review server (results_web/server.py _save_feedback),
-// POST /api/feedback for the People drawer's flag (shared/web/feedback.py), and POST
+// POST /api/feedback for the People drawer's flag and the side nav's Send feedback
+// (shared/web/feedback.py), and POST
 // /searches/auth/login, which runs `$powerset login` on this machine when Powerset answers that
 // it needs a sign-in. In the desktop app the app opens the login's page in the default browser
 // instead: /auth/login/start hands over its URL, /auth/login/finish its outcome.
@@ -45,6 +46,17 @@ export async function sendPersonFeedback(comment: string, row: Person): Promise<
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ comment, person }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't send feedback. Try again.")
+}
+
+/** A note about the app for the Powerset team, with the page it was sent from; throws why it did
+ *  not go out. */
+export async function sendAppFeedback(comment: string, page: string): Promise<void> {
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment, page }),
   })
   if (!response.ok) throw await failure(response, "Couldn't send feedback. Try again.")
 }

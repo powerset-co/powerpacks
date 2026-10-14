@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState, type SVGProps } from "react"
+import { useCallback, useRef, useState, type ReactNode, type SVGProps } from "react"
+import { useNavigate } from "react-router-dom"
 
 import { fetchAccount } from "@/lib/api/account"
 import { signIn as authenticate } from "@/lib/api/feedback"
@@ -16,11 +17,14 @@ import {
   type Update,
 } from "@/lib/api/update"
 import { isDesktop } from "@/lib/desktop"
+import { useDismiss } from "@/hooks/useDismiss"
 import { cn } from "@/lib/utils"
 
 import { Button } from "../ui/button"
+import { AppFeedback } from "./AppFeedback"
 import { Avatar } from "./Avatar"
 import { CLOSE_MARK } from "./icons/actions"
+import { SettingsIcon } from "./icons/nav"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
 
@@ -29,7 +33,8 @@ const UPDATE_KEY = ["update"]
 // While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000
 
-/** The side nav's bottom: the update pane when a newer app is out, then who is signed in. */
+/** The side nav's bottom: the update pane when a newer app is out, then who is signed in, whose
+ *  row opens the account menu (Settings, Send feedback, Reconnect). */
 export function SidebarFooter({ rail }: { rail: boolean }) {
   return (
     <div className="mt-auto flex flex-col">
@@ -105,8 +110,28 @@ function UpdatePane({ rail }: { rail: boolean }) {
   )
 }
 
+const ITEM =
+  "flex w-full cursor-pointer items-center rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary disabled:cursor-default disabled:opacity-50"
+
+function MenuItem({
+  onClick,
+  disabled,
+  children,
+}: {
+  onClick: () => void
+  disabled?: boolean
+  children: ReactNode
+}) {
+  return (
+    <button type="button" role="menuitem" className={ITEM} onClick={onClick} disabled={disabled}>
+      {children}
+    </button>
+  )
+}
+
 function Profile({ rail }: { rail: boolean }) {
   const client = useQueryClient()
+  const navigate = useNavigate()
   const features = useFeatures()
   const account = useQuery({
     queryKey: ACCOUNT_KEY,
@@ -120,6 +145,12 @@ function Profile({ rail }: { rail: boolean }) {
     },
     onSettled: () => client.invalidateQueries({ queryKey: ACCOUNT_KEY }),
   })
+  const [menu, setMenu] = useState(false)
+  const [feedback, setFeedback] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setMenu(false), [])
+  useDismiss(menu, panel, anchor, close)
 
   const data = account.data
   const signedIn = data?.signed_in === true
@@ -131,20 +162,9 @@ function Profile({ rail }: { rail: boolean }) {
   const title = data === undefined ? "Checking who is signed in…" : signedIn ? name : "Not signed in"
   const detail = problem ?? email ?? (signedIn || data === undefined ? null : "Powerset")
 
-  const label = signedIn ? "Reconnect Powerset" : "Sign in to Powerset"
-  const avatar = (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={busy || data === undefined}
-      onClick={() => signIn.mutate()}
-      className={cn(
-        "group relative block cursor-pointer rounded-full border-0 bg-transparent p-0 disabled:cursor-default",
-        signedIn
-          ? "hover:[&>span]:opacity-80"
-          : "hover:[&>span]:border-foreground/60 hover:[&>span]:text-foreground",
-      )}
-    >
+  // The relay carries the sets' messages: no Sets, no relay to show.
+  const face = (
+    <span className="relative shrink-0">
       <Avatar
         name={name}
         src={picture}
@@ -154,58 +174,114 @@ function Profile({ rail }: { rail: boolean }) {
             "border-0 bg-gradient-to-br from-[#f2502a] to-[#f87171] text-[12px] font-semibold text-white",
         )}
       />
-      <Tip side={rail ? "right" : "above"}>{problem ?? (busy ? "Signing in…" : label)}</Tip>
-    </button>
+      {features.sets ? <RelayDot tip={rail ? "right" : "above"} /> : null}
+    </span>
   )
-  // The relay carries the sets' messages: no Sets, no relay to show.
-  const relay = features.sets ? <RelayDot tip={rail ? "right" : "above"} /> : null
+  const items = menu && (
+    <div
+      ref={panel}
+      role="menu"
+      aria-label="Account"
+      className={cn(
+        "rise-in absolute z-50 rounded-[var(--radius-m)] border border-line-strong bg-card p-1.5 shadow-[var(--shadow-2)]",
+        rail ? "bottom-2 left-full ml-2 w-[200px]" : "inset-x-2 bottom-full mb-1",
+      )}
+    >
+      <MenuItem
+        onClick={() => {
+          close()
+          void navigate("/settings")
+        }}
+      >
+        Settings
+      </MenuItem>
+      <MenuItem
+        onClick={() => {
+          close()
+          setFeedback(true)
+        }}
+      >
+        Send feedback
+      </MenuItem>
+      <div className="my-1.5 border-t border-line" />
+      <MenuItem
+        disabled={busy || data === undefined}
+        onClick={() => {
+          close()
+          signIn.mutate()
+        }}
+      >
+        {busy ? "Signing in…" : signedIn ? "Reconnect Powerset" : "Sign in to Powerset"}
+      </MenuItem>
+    </div>
+  )
+  const trigger = {
+    ref: anchor,
+    type: "button" as const,
+    "aria-label": "Account",
+    "aria-expanded": menu,
+    onClick: () => setMenu(!menu),
+  }
   if (rail) {
     return (
-      <div className="flex justify-center border-t border-line py-2.5">
-        <span className="relative">
-          {avatar}
-          {relay}
-        </span>
+      <div className="relative flex justify-center border-t border-line py-2.5">
+        <button
+          {...trigger}
+          className="group relative block cursor-pointer rounded-full border-0 bg-transparent p-0 hover:opacity-80"
+        >
+          {face}
+          {menu ? null : <Tip side="right">{problem ?? title}</Tip>}
+        </button>
+        {items}
         {problem && (
           <span role="alert" className="sr-only">
             {problem}
           </span>
         )}
+        <AppFeedback open={feedback} onOpenChange={setFeedback} />
       </div>
     )
   }
   return (
-    <div className="flex items-center gap-2.5 border-t border-line py-2.5 pr-2 pl-3">
-      <span className="relative shrink-0">
-        {avatar}
-        {relay}
-      </span>
-      <div className="min-w-0 flex-1 leading-[1.25]">
-        {/* One line each: an email standing in for the name is set smaller and lighter to fit. */}
-        <div
-          className={cn(
-            "truncate text-foreground",
-            signedIn && data.name === null ? "text-[12px] font-medium" : "text-[13px] font-semibold",
-          )}
-          title={title ?? undefined}
-        >
-          {title}
-        </div>
-        {detail !== null && (
-          <div
-            className={cn("text-[11px] text-muted-foreground", problem === null ? "truncate" : "text-bad")}
-            title={problem === null ? detail : undefined}
-            role={problem ? "alert" : undefined}
+    <div className="relative flex items-center gap-2 border-t border-line py-2 pr-2 pl-2">
+      <button
+        {...trigger}
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-[var(--radius-s)] border-0 bg-transparent px-1 py-0.5 text-left transition-colors duration-fast ease-out hover:bg-secondary aria-expanded:bg-secondary"
+      >
+        {face}
+        <span className="min-w-0 flex-1 leading-[1.25]">
+          {/* One line each: an email standing in for the name is set smaller and lighter to fit. */}
+          <span
+            className={cn(
+              "block truncate text-foreground",
+              signedIn && data.name === null ? "text-[12px] font-medium" : "text-[13px] font-semibold",
+            )}
+            title={title ?? undefined}
           >
-            {detail}
-          </div>
-        )}
-      </div>
+            {title}
+          </span>
+          {detail !== null && (
+            <span
+              className={cn(
+                "block text-[11px] text-muted-foreground",
+                problem === null ? "truncate" : "text-bad",
+              )}
+              title={problem === null ? detail : undefined}
+              role={problem ? "alert" : undefined}
+            >
+              {detail}
+            </span>
+          )}
+        </span>
+        <SettingsIcon className="size-4 shrink-0 text-faint" />
+      </button>
       {data !== undefined && !signedIn && (
         <Button size="sm" onClick={() => signIn.mutate()} disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}
         </Button>
       )}
+      {items}
+      <AppFeedback open={feedback} onOpenChange={setFeedback} />
     </div>
   )
 }
