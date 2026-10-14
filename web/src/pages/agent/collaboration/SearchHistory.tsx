@@ -169,9 +169,9 @@ export function SearchHistory({
           <span className="text-faint">{group?.name}</span>
         </div>
         {owner && <p className="mb-1 mt-2 text-xs text-info">@{owner.name}</p>}
-        <p className="m-0 whitespace-pre-wrap break-words">{message.text}</p>
+        <p className="m-0 whitespace-pre-wrap break-words text-[15px] leading-[1.65]">{message.text}</p>
         {message.request_id && (
-          <div className="mt-3 border-l-2 border-line pl-3 text-[13px]">
+          <div className="mt-3 border-l-2 border-line pl-3 text-[15px]">
             <p className="mb-2 mt-0 text-xs font-semibold">
               {owner?.name}’s assistant{" "}
               <span className="ml-1 font-normal text-faint">
