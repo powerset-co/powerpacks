@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.23.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.2...powerpacks-v3.23.0) (2026-10-14)
+
+
+### Features
+
+* **share:** recruiters are shared, even one who only reached out ([#796](https://github.com/powerset-co/powerpacks/issues/796)) ([bcfcd65](https://github.com/powerset-co/powerpacks/commit/bcfcd6576c53fd2c21afc39c86fde2673e8a07b7))
+* **signals:** worth, labels and the share call on OpenAI's Luna Decisions ([#795](https://github.com/powerset-co/powerpacks/issues/795)) ([6060b38](https://github.com/powerset-co/powerpacks/commit/6060b38056fa363091ac80d14c186e497babb1f0))
+* the Powerpacks Mac app, Settings with the Sets opt-in, and setup's Connect screen ([#798](https://github.com/powerset-co/powerpacks/issues/798)) ([30702ca](https://github.com/powerset-co/powerpacks/commit/30702cab1b9f62dd5e1ed73390a4fd3343d2ed66))
+* **worth:** a merge asks nothing; a person is judged once per question version ([#797](https://github.com/powerset-co/powerpacks/issues/797)) ([ed904a5](https://github.com/powerset-co/powerpacks/commit/ed904a574069f5dd4ac3f0f5d6d89ff9713c14e7))
+
+
+### Bug Fixes
+
+* **searches:** the ask dialog shows the question under Question, not Answers ([#791](https://github.com/powerset-co/powerpacks/issues/791)) ([cc28021](https://github.com/powerset-co/powerpacks/commit/cc28021735d9a0639959e2c1fe3e525ae2611777))
+
 ## [3.22.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.1...powerpacks-v3.22.2) (2026-10-09)
 
 
