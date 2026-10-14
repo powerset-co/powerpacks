@@ -24,12 +24,15 @@ class SearchPolishTest(unittest.TestCase):
             self.assertIn(f'{score} / 5 <b>{count}</b>', page)
         self.assertIn('Search Complete', page)
 
-    def test_routes_hide_pending_and_non_ce_searches(self):
+    def test_routes_list_searches_that_found_people(self):
         from pathlib import Path
         from unittest.mock import patch
         from packs.search.primitives.deep_search.results_web.server import search_routes
         card = SearchCard('example-role', 'Engineer', 'Example', 'completed', '', '', '3.1.0', 2, 1, 0,
                           ce_scored=2)
+        # A quick search lists everyone it found without a screen; a pending one has found no one.
+        quick = replace(card, run_id='quick', ce_scored=0)
+        pending = replace(card, run_id='pending', candidates=0, ce_scored=0)
         with patch('packs.search.primitives.deep_search.results_web.server.load_catalog',
-                   return_value=(card, replace(card, run_id='pending', ce_scored=0))):
-            self.assertEqual(search_routes(Path('/unused')).catalog(), (card,))
+                   return_value=(card, quick, pending)):
+            self.assertEqual(search_routes(Path('/unused')).catalog(), (card, quick))
