@@ -10,6 +10,26 @@
           "type": "toml",
           "path": "uv.lock",
           "jsonpath": "$.package[?(@.name.value=='powerpacks')].version"
+        },
+        {
+          "type": "json",
+          "path": "desktop/src-tauri/tauri.conf.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "desktop/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "toml",
+          "path": "desktop/src-tauri/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "desktop/src-tauri/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value=='powerpacks-desktop')].version"
         }
       ]
     }

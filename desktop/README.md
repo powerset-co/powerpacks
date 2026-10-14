@@ -61,7 +61,10 @@ web assets into the runtime folder alone is not an app release. Existing `.power
 ## Build
 
 Needs Rust, Node 22 and pnpm. CI (`.github/workflows/desktop.yml`) builds the Apple Silicon
-`.dmg` and the Windows installer on every change and keeps them as run artifacts. Gmail needs
+`.dmg` and the Windows installer on every change and keeps them as run artifacts. Each release
+(`release-please.yml`) builds the `.dmg` without the debug menu and attaches it to the release as
+`Powerpacks-macos-arm64.dmg`, the README's download link; the app's version (tauri.conf.json,
+Cargo.toml, package.json) moves with the release, which is what its update check compares. Gmail needs
 Powerpacks' Google OAuth client baked in: CI reads `POWERPACKS_GOOGLE_CLIENT_ID` and
 `POWERPACKS_GOOGLE_CLIENT_SECRET` from its secrets.
 
@@ -72,9 +75,8 @@ scripts/bundle-runtime.sh          # uv, Codex, and this repo at HEAD
 POWERPACKS_DEBUG_MENU=1 pnpm tauri build --bundles app,dmg
 ```
 
-The app is ad-hoc signed, not notarized. On first open, macOS asks to confirm an app from an
-unidentified developer: right-click the app, choose Open, then Open again. Notarizing needs an
-Apple Developer ID.
+The app is ad-hoc signed, not notarized. On first open macOS stops it: open System Settings →
+Privacy & Security and click Open Anyway. Notarizing needs an Apple Developer ID.
 
 ## Signing
 
