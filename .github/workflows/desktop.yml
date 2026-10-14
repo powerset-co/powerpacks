@@ -1,8 +1,7 @@
 name: desktop
 
-# Builds the desktop app (desktop/) with the bundled runtime: the macOS .dmg, and a Windows
-# installer for trying the UI there (setup itself runs on macOS only). release-please.yml calls
-# it for each release and attaches the .dmg to the release.
+# Builds the desktop app (desktop/) with the bundled runtime: the macOS .dmg. release-please.yml
+# calls it for each release and attaches the .dmg to the release.
 on:
   push:
     paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
@@ -34,24 +33,8 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS dmg
-            os: macos-latest
-            triple: aarch64-apple-darwin
-            bundles: app,dmg
-            artifact: Powerpacks-macos-arm64
-            path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
-          - name: Windows installer
-            os: windows-latest
-            triple: x86_64-pc-windows-msvc
-            bundles: nsis
-            artifact: Powerpacks-windows-x64
-            path: desktop/src-tauri/target/release/bundle/nsis/*.exe
-    runs-on: ${{ matrix.os }}
+    name: Build macOS dmg
+    runs-on: macos-latest
     defaults:
       run:
         working-directory: desktop
@@ -72,7 +55,7 @@ jobs:
         with:
           workspaces: desktop/src-tauri
       - run: pnpm install --frozen-lockfile
-      - run: scripts/bundle-runtime.sh ${{ matrix.triple }}
+      - run: scripts/bundle-runtime.sh aarch64-apple-darwin
         shell: bash
       # With the Apple secrets set (desktop/README.md "Signing"), the macOS build is signed with
       # the Developer ID certificate and notarized, so it opens without a Gatekeeper warning.
@@ -86,15 +69,14 @@ jobs:
           # Test builds carry the debug menu (page jumps, skip setup); release builds do not.
           [ "$RELEASE" = "true" ] || export POWERPACKS_DEBUG_MENU=1
           config=()
-          if [ "$RUNNER_OS" = "macOS" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+          if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
             printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
             config=(--config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$APPLE_SIGNING_IDENTITY\"}}}")
           fi
-          pnpm tauri build --bundles "$BUNDLES" "${config[@]}"
+          pnpm tauri build --bundles app,dmg "${config[@]}"
         shell: bash
         env:
-          BUNDLES: ${{ matrix.bundles }}
           RELEASE: ${{ inputs.release }}
           # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
           # Cloud project as search.powerset.dev), baked into the app; unset builds skip Gmail.
@@ -110,6 +92,6 @@ jobs:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.path }}
+          name: Powerpacks-macos-arm64
+          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
