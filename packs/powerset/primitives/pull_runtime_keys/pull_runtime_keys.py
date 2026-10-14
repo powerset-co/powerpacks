@@ -27,6 +27,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
@@ -124,8 +125,8 @@ def _quote(value: str) -> str:
     return f'"{value}"' if any(c in value for c in ' \t#"\'') else value
 
 
-def write_env(path: Path, updates: dict[str, str]) -> list[str]:
-    """Upsert keys, preserving comments/order/other keys. Mode 0600, atomic."""
+def write_env(path: Path, updates: Mapping[str, str | None]) -> list[str]:
+    """Upsert keys, preserving comments/order/other keys; None removes a key. Mode 0600, atomic."""
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     index: dict[str, int] = {}
     for i, line in enumerate(lines):
@@ -133,6 +134,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
         if s and not s.startswith("#") and "=" in s:
             key = s.split("=", 1)[0].strip().removeprefix("export ").strip()
             index[key] = i
+    removed = {index[key] for key, value in updates.items() if value is None and key in index}
     written: list[str] = []
     for key, value in updates.items():
         if not value:
@@ -145,6 +147,7 @@ def write_env(path: Path, updates: dict[str, str]) -> list[str]:
                 lines.append("")
             lines.append(rendered)
         written.append(key)
+    lines = [line for i, line in enumerate(lines) if i not in removed]
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

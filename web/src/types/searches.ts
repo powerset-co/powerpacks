@@ -255,3 +255,21 @@ export interface FeedbackRecord {
  *  not, and `api` carries the sender's status ("needs_auth" when Powerset needs a sign-in). */
 export type FeedbackReply =
   { ok: boolean; status: "submitted" } | { ok: boolean; status: "saved_locally"; api: { status: string } }
+
+// search_scope.py: where chat searches by default.
+export interface SearchSet {
+  set_id: string
+  name: string
+  is_personal: boolean
+  /** The signed-in account created it. */
+  owned: boolean
+  member_count: number
+}
+
+export interface SearchScope {
+  sets: SearchSet[]
+  /** This Mac has a local index to search. */
+  local: boolean
+  /** A set_id, or "local". */
+  selected: string
+}

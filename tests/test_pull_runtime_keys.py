@@ -254,6 +254,14 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertEqual(set(written), {"OPENAI_API_KEY", "MODAL_TOKEN_ID"})
             self.assertEqual(oct(env.stat().st_mode)[-3:], "600")
 
+    def test_write_env_none_removes_a_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("# header\nA=1\nGONE=/x\nB=2\n")
+            written = stage.write_env(env, {"GONE": None, "A": "3", "NEVER_SET": None})
+            self.assertEqual(env.read_text(), "# header\nA=3\nB=2\n")
+            self.assertEqual(written, ["A"])
+
     def test_pull_writes_all_keys_on_ok(self):
         def fake_fetch(base, path, token, timeout=30):
             if "modal" in path:
