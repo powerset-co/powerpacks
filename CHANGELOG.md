@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.24.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.23.0...powerpacks-v3.24.0) (2026-10-14)
+
+
+### Features
+
+* **app:** pick where chat searches: one of your Powerset sets, or the local index ([#802](https://github.com/powerset-co/powerpacks/issues/802)) ([5aed078](https://github.com/powerset-co/powerpacks/commit/5aed078d26a8ed5912c58930060e1a97e2053348))
+* **app:** POWERSET wordmark; no chat suggestion cards; Settings out of the nav ([#799](https://github.com/powerset-co/powerpacks/issues/799)) ([43e821a](https://github.com/powerset-co/powerpacks/commit/43e821a20518102ee60f54afda091cd55592bf83))
+* **app:** the search picker shows each set's people, largest first, and a pick shows at once ([#803](https://github.com/powerset-co/powerpacks/issues/803)) ([7269a20](https://github.com/powerset-co/powerpacks/commit/7269a202f88cb7e8bb201efebe141d88a61682ff))
+* **search:** drop set contacts browsing; "my contacts" is a people search ([#800](https://github.com/powerset-co/powerpacks/issues/800)) ([dbd19b3](https://github.com/powerset-co/powerpacks/commit/dbd19b39f3be1e14c6fc0498eb1b024c1e41ea39))
+
+
+### Bug Fixes
+
+* **app:** the search picker is as wide as the pick, not the longest set ([#804](https://github.com/powerset-co/powerpacks/issues/804)) ([bcb3730](https://github.com/powerset-co/powerpacks/commit/bcb3730fce909eeb92502856b92cb835ad10cec2))
+
 ## [3.23.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.22.2...powerpacks-v3.23.0) (2026-10-14)
 
 
