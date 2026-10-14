@@ -129,6 +129,15 @@ class AccountRoutesTests(unittest.TestCase):
                          {"source": "powerpacks-people", "powerpacks_version": "3.22.2", "person": PERSON})
         self.assertEqual(sender.call_args.kwargs["env_file"], self.root / ".env")
 
+    def test_feedback_about_the_app_carries_its_page(self) -> None:
+        sender = self._sender({"status": "submitted", "feedback_id": "row-2"})
+        status, payload = self._post("/api/feedback", {"comment": "The picker is slow.", "page": "/agent"})
+        self.assertEqual((status, payload["feedback_id"]), (HTTPStatus.OK, "row-2"))
+        request = sender.call_args.args[0]
+        self.assertEqual((request.comment, request.category), ("The picker is slow.", "app"))
+        self.assertEqual(request.metadata,
+                         {"source": "powerpacks-app", "page": "/agent", "powerpacks_version": "3.22.2"})
+
     def test_feedback_needs_a_note(self) -> None:
         sender = self._sender({"status": "submitted"})
         self.assertEqual(self._post("/api/feedback", {"comment": " ", "person": PERSON})[0], HTTPStatus.BAD_REQUEST)

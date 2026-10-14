@@ -11,6 +11,7 @@ export { Drawer, DrawerClose } from "./Drawer"
 export { EmptyState } from "./EmptyState"
 export { ErrorBoundary } from "./ErrorBoundary"
 export { FeedbackFooter } from "./FeedbackFooter"
+export { FeedbackForm } from "./FeedbackForm"
 export { Fold } from "./Fold"
 export {
   CLOSE_MARK,

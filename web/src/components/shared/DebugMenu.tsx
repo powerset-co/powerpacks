@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom"
 import { useDismiss } from "@/hooks/useDismiss"
 import { fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
+import { connectRelay } from "@/lib/api/relay"
 import { useFeatures, useUpdateFeatures } from "@/lib/features"
 import { desktopPlatform, isDesktop } from "@/lib/desktop"
 
@@ -138,7 +139,22 @@ function DesktopDebugMenu() {
           <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
             Local features
           </p>
-          {/* Sets is on the Settings page, listed above. */}
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
+            Sets
+            <input
+              type="checkbox"
+              checked={features.sets}
+              disabled={updateFeatures.isPending}
+              onChange={() =>
+                updateFeatures.mutate(
+                  { ...features, sets: !features.sets },
+                  // Wakes the relay connection to follow the switch now, not at its next 30 s check.
+                  { onSuccess: () => void connectRelay().catch(() => undefined) },
+                )
+              }
+              className="accent-[var(--primary)]"
+            />
+          </label>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
             Auto Reply
             <input
