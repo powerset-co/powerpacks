@@ -1,13 +1,20 @@
 name: desktop
 
 # Builds the desktop app (desktop/) with the bundled runtime: the macOS .dmg, and a Windows
-# installer for trying the UI there (setup itself runs on macOS only).
+# installer for trying the UI there (setup itself runs on macOS only). release-please.yml calls
+# it for each release and attaches the .dmg to the release.
 on:
   push:
     paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
   pull_request:
     paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        description: A build for people to download, without the test builds' debug menu.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,8 +61,15 @@ jobs:
         shell: bash
       # With the Apple secrets set (desktop/README.md "Signing"), the macOS build is signed with
       # the Developer ID certificate and notarized, so it opens without a Gatekeeper warning.
-      # Without them it is signed ad hoc (tauri.conf.json) and needs "Open Anyway" once.
+      # Without them it is signed ad hoc (tauri.conf.json) and needs "Open Anyway" once: an unset
+      # secret reads as an empty string, and Tauri tries to import any APPLE_* it finds.
       - run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_CONTENT; do
+            [ -n "${!name}" ] || unset "$name"
+          done
+          # Test builds carry the debug menu (page jumps, skip setup); release builds do not.
+          [ "$RELEASE" = "true" ] || export POWERPACKS_DEBUG_MENU=1
           config=()
           if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
             printf '%s' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
@@ -66,8 +80,7 @@ jobs:
         shell: bash
         env:
           BUNDLES: ${{ matrix.bundles }}
-          # Test builds carry the debug menu (page jumps, skip setup).
-          POWERPACKS_DEBUG_MENU: "1"
+          RELEASE: ${{ inputs.release }}
           # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
           # Cloud project as search.powerset.dev), baked into the app; unset builds skip Gmail.
           POWERPACKS_GOOGLE_CLIENT_ID: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_ID }}
