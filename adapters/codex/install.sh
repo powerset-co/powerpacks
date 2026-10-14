@@ -11,7 +11,7 @@ SKILLS_DIR="${1:-$HOME/.agents/skills}"
 LEGACY_SKILLS_DIR="$CODEX_HOME/skills"
 
 MANAGED_SKILLS=(
-  search search-company search-sql search-contacts build-local-search-index
+  search search-company search-sql build-local-search-index
   powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound
   msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
@@ -24,7 +24,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv setup
+  linkedin-sync-mcp linkedin-sync-csv setup search-contacts
 )
 
 "$REPO_ROOT/bin/setup-python"
@@ -47,7 +47,6 @@ install_skill() {
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
-install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
@@ -83,4 +82,4 @@ else
   echo "warning: agent-bootstrap failed; local Codex profile was not refreshed" >&2
 fi
 
-echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
+echo "installed Powerpacks skills into $SKILLS_DIR: search search-company search-sql build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"

@@ -9,7 +9,7 @@
   "properties": {
     "surface": {
       "type": "string",
-      "enum": ["people", "company", "sql", "contacts"]
+      "enum": ["people", "company", "sql"]
     },
     "backend": {
       "type": "string",

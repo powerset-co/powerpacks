@@ -23,7 +23,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv setup
+  linkedin-sync-mcp linkedin-sync-csv setup search-contacts
 )
 for skill in "${RETIRED_SKILLS[@]}"; do
   rm -f "$SKILLS_DIR/$skill/SKILL.md"
@@ -38,7 +38,6 @@ install_skill() {
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
-install_skill search-contacts "$REPO_ROOT/packs/contacts/skills/search-contacts/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
 install_skill powerset "$REPO_ROOT/packs/powerset/skills/powerset/SKILL.md"
 install_skill powerset-login "$REPO_ROOT/packs/powerset/skills/powerset-login/SKILL.md"
@@ -64,6 +63,6 @@ install_skill build-outbound "$REPO_ROOT/packs/apollo/skills/build-outbound/SKIL
 "$REPO_ROOT/bin/powerpacks-install-stamp" "$REPO_ROOT" claude-code "$SKILLS_DIR/.powerpacks-install.json"
 
 echo "installed Powerpacks skills into $SKILLS_DIR:"
-echo "  search search-company search-sql search-contacts build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
+echo "  search search-company search-sql build-local-search-index powerset powerset-login powerset-set feedback update-powerpacks install-powerpacks fix-powerpacks powerpacks-doctor sales-nav-search build-outbound"
 echo "  import-messages msgvault import-gmail deep-context clean-slate logbook import-twitter"
 echo

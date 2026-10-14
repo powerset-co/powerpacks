@@ -1,48 +1,54 @@
 {
-  "cases": 68,
+  "cases": 71,
   "errors": 0,
-  "strict_accuracy": 0.9853,
+  "strict_accuracy": 0.9859,
   "lenient_accuracy": 1.0,
   "field_accuracy": {
     "surface": 1.0,
     "backend": 1.0,
-    "depth": 0.9762
+    "depth": 0.9811,
+    "mode": 1.0
   },
   "confusion": {
     "surface": {
       "people": {
-        "people": 42
+        "people": 53
       },
       "company": {
         "company": 9
       },
       "sql": {
         "sql": 9
-      },
-      "contacts": {
-        "contacts": 8
       }
     },
     "backend": {
       "powerset": {
-        "powerset": 52
+        "powerset": 54
       },
       "local": {
-        "local": 16
+        "local": 17
       }
     },
     "depth": {
       "fast": {
-        "fast": 28,
-        "deep": 1
+        "fast": 37
       },
       "deep": {
-        "deep": 13
+        "deep": 15,
+        "fast": 1
+      }
+    },
+    "mode": {
+      "interactive": {
+        "interactive": 1
+      },
+      "auto": {
+        "auto": 1
       }
     }
   },
   "misses": [],
   "harness": "codex",
   "reasoning_effort": "low",
-  "generated_at": "2026-07-02T03:01:27+00:00"
+  "generated_at": "2026-10-14T15:44:36+00:00"
 }

@@ -45,7 +45,6 @@ flowchart TD
 
     SURFACE -->|Companies| COMPANY[$search-company]
     SURFACE -->|Relationships or aggregates| SQL[$search-sql]
-    SURFACE -->|Known contacts| CONTACTS[$search-contacts]
     SURFACE -->|People| DEPTH{4. How much search?}
 
     DEPTH -->|Standard| INTERPRET[5A. Interpret one query<br/>depth: fast]
@@ -109,15 +108,14 @@ sequential ponds, and human scoring.
 | `surface: people` | Default for a request whose output is people. | Fast or deep `$search`. |
 | `surface: company` | The requested output is companies, funding, investors, sectors, or company IDs. | `$search-company`. |
 | `surface: sql` | The predicate requires joins, ordering, or per-person aggregates. | `$search-sql`, always local. |
-| `surface: contacts` | The user asks for their contacts or set-contact fields. | `$search-contacts`, currently Powerset-backed. |
 | `backend: powerset` | Explicit `Powerset`, set, team, or shared-network wording wins. Otherwise it is the default when cloud credentials are configured. | TurboPuffer retrieval plus Postgres hydration, scoped to the selected set. |
 | `backend: local` | Explicit `local`, `offline`, or imported-network wording wins. It is also the fallback environment default when only the local index exists. | DuckDB at `--db`; no set resolution, TurboPuffer, or Postgres retrieval. |
 | `depth: fast` | Ordinary people lookup or search. | One prepare/Review/run cycle through `search_network_pipeline.py`. |
 | `depth: deep` | JD or posting URL, detailed role brief, shortlist/source/recruit ask, explicit deep search, or strongest-candidate ask with a stated role or domain. | `deep_search_loop.py`. |
 
 Explicit user wording binds the route. The agent does not silently switch
-between local and Powerset search, nor between the people, SQL, company, and
-contacts surfaces as a recovery tactic.
+between local and Powerset search, nor between the people, SQL, and company
+surfaces as a recovery tactic.
 
 ## Query and geography review
 

@@ -38,13 +38,13 @@
   { "id": "sql-most-common-employer", "query": "most common previous employer among people in my network", "surface": "sql", "backend": "local", "depth": null },
   { "id": "sql-director-before-30", "query": "engineers who had a director title before age 30", "surface": "sql", "backend": "local", "depth": null },
 
-  { "id": "con-contacts-at-openai", "query": "search my contacts at OpenAI", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-contacts-phone", "query": "my contacts with a phone number", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-set-contacts-investors", "query": "which of my set contacts are tagged as investors", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-filter-company", "query": "filter my contacts by company Google", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-contacts-email", "query": "show contacts in my network who have an email on file", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-contacts-healthcare", "query": "my contacts who work in healthcare", "surface": "contacts", "backend": "powerset", "depth": null },
-  { "id": "con-contacts-recent-email", "query": "my contacts I've talked to recently that have an email on file", "surface": "contacts", "backend": "powerset", "depth": null },
+  { "id": "con-contacts-at-openai", "query": "search my contacts at OpenAI", "surface": "people", "backend": "powerset", "depth": "fast", "note": "\"my contacts\" is a people search" },
+  { "id": "con-contacts-phone", "query": "my contacts with a phone number", "surface": "people", "backend": "powerset", "depth": "fast" },
+  { "id": "con-set-contacts-investors", "query": "which of my set contacts are tagged as investors", "surface": "people", "backend": "powerset", "depth": "fast" },
+  { "id": "con-filter-company", "query": "filter my contacts by company Google", "surface": "people", "backend": "powerset", "depth": "fast" },
+  { "id": "con-contacts-email", "query": "show contacts in my network who have an email on file", "surface": "people", "backend": "powerset", "depth": "fast" },
+  { "id": "con-contacts-healthcare", "query": "my contacts who work in healthcare", "surface": "people", "backend": "powerset", "depth": "fast" },
+  { "id": "con-contacts-recent-email", "query": "my contacts I've talked to recently that have an email on file", "surface": "people", "backend": "powerset", "depth": "fast" },
 
   { "id": "adv-engineers-at-sequoia-cos", "query": "who are the engineers at companies backed by Sequoia", "surface": "people", "backend": "powerset", "depth": "fast", "note": "people filtered by a company attribute -> people search, not company resolution" },
   { "id": "adv-shortlist-companies", "query": "shortlist the fintech companies that raised a Series B", "surface": "company", "backend": "powerset", "depth": null, "note": "SEAM: 'shortlist' is a deep verb but the subject is companies" },
@@ -53,7 +53,7 @@
   { "id": "adv-bare-linkedin-url", "query": "https://www.linkedin.com/in/janedoe", "surface": "people", "backend": "powerset", "depth": "fast", "note": "bare profile URL is a person lookup; raw profile-to-role deep intake is not shipped" },
   { "id": "adv-overlap-now-founders", "query": "people who overlapped at Stripe and are now founders", "surface": "sql", "backend": "local", "depth": null },
   { "id": "adv-my-network-infra", "query": "search my network for infra people", "surface": "people", "backend": "powerset", "depth": "fast", "acceptable_backend": ["local"], "note": "'my network' != 'my contacts'; bare 'my network' is not a local trigger" },
-  { "id": "adv-contacts-in-fintech", "query": "who are my contacts in fintech", "surface": "contacts", "backend": "powerset", "depth": null },
+  { "id": "adv-contacts-in-fintech", "query": "who are my contacts in fintech", "surface": "people", "backend": "powerset", "depth": "fast" },
 
   { "id": "exp-powerset-staff-sf", "query": "search in powerset for staff engineers in SF", "surface": "people", "backend": "powerset", "depth": "fast" },
   { "id": "exp-powerset-quick", "query": "search powerset for recruiters in Austin", "surface": "people", "backend": "powerset", "depth": "fast" },
@@ -61,7 +61,7 @@
   { "id": "exp-powerset-set-name", "query": "search the acme-portfolio set for CTOs", "surface": "people", "backend": "powerset", "depth": "fast" },
   { "id": "exp-local-pms-nyc", "query": "search local: product managers in nyc", "surface": "people", "backend": "local", "depth": "fast" },
   { "id": "exp-local-offline", "query": "offline search for designers in my imported network", "surface": "people", "backend": "local", "depth": "fast" },
-  { "id": "exp-local-imported-contacts", "query": "from my imported contacts, senior backend engineers", "surface": "people", "backend": "local", "depth": "fast", "acceptable_surface": ["contacts"], "note": "'imported contacts' = the local index, not Powerset contacts" },
+  { "id": "exp-local-imported-contacts", "query": "from my imported contacts, senior backend engineers", "surface": "people", "backend": "local", "depth": "fast", "note": "'imported contacts' = the local index" },
 
   { "id": "env-local-only", "query": "senior data engineers in Berlin", "surface": "people", "backend": "local", "depth": "fast", "env": { "local_db": true, "remote_creds": false }, "note": "unstated backend, only local configured" },
   { "id": "env-remote-only", "query": "senior data engineers in Berlin", "surface": "people", "backend": "powerset", "depth": "fast", "env": { "local_db": false, "remote_creds": true }, "note": "unstated backend, only remote configured" },

@@ -3,8 +3,8 @@
 Use `$search` as the single people-search door. Before dispatch, record the
 requested result surface, candidate backend, and search depth in `decision.json`.
 
-- Route company output to `$search-company`, relational or aggregate questions
-  to `$search-sql`, and known-contact queries to `$search-contacts`.
+- Route company output to `$search-company` and relational or aggregate
+  questions to `$search-sql`.
 - Treat explicit Powerset, set, team, or shared-network wording as binding to
   the Powerset backend. Treat explicit local, offline, or imported-network
   wording as binding to the local DuckDB backend. Never change retrieval

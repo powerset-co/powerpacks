@@ -3,6 +3,8 @@
 _Created: 2026-07-01 (supersedes routing_eval.md)._
 
 _Changelog:_
+- _2026-10-14: the `contacts` surface left with the `$search-contacts` skill; its 8 cases are
+  relabeled `people` / `fast` ("my contacts" is a people search). Baseline re-recorded._
 - _2026-07-01: rewritten as the agent decision eval. `route_query.py` is deleted — the model
   IS the router — so the eval now runs a REAL agent (codex/claude CLI) per case against the
   SKILL's own decision rules, and scores the recorded `decision.json` axes
@@ -18,7 +20,7 @@ Each labeled query is sent to a real agent together with the decision rules extr
 `<!-- decision-rules:start/end -->` markers — the eval can never drift from what production
 agents read). The agent returns the Step-1 decision JSON; we score three axes against labels:
 
-- **surface** — `people | company | sql | contacts`
+- **surface** — `people | company | sql`
 - **backend** — `powerset | local` (explicit user words win; unstated falls to the case's
   `env` assumptions, default `{local_db: true, remote_creds: true}` → `powerset`)
 - **depth** — `fast | deep` (JD / job-posting URL / explicit deep asks → `deep`; depth is
@@ -31,7 +33,7 @@ count as misses, never dropped.
 
 ## Fixture
 
-`packs/search/evals/decision/cases.json` — 68 labeled queries:
+`packs/search/evals/decision/cases.json` — 71 labeled queries:
 
 - every surface ≥ 8 cases; each backend condition ≥ 6; `deep` ≥ 6 (enforced by
   `tests/test_search_decision.py::TestCasesIntegrity`)
@@ -46,7 +48,7 @@ count as misses, never dropped.
 ## Run it
 
 ```bash
-# codex (default; subscription auth, no per-call cash; ~68 cases in a few minutes)
+# codex (default; subscription auth, no per-call cash; ~71 cases in a few minutes)
 uv run --project . python packs/search/evals/run_decision_eval.py --harness codex
 
 # claude CLI
@@ -66,11 +68,13 @@ Agent decisions are nondeterministic, so the floor is recorded from **two** cons
 runs: floor = min(run1, run2) strict, minus one case's worth (~1.5%). The old classifier's
 0.9375 route accuracy is the reference bar the surface axis must not regress.
 
-**Recorded baseline (codex, reasoning_effort=low, 2026-07-01):** two consecutive runs both
-scored **strict 0.9853 / lenient 1.0000** (surface 1.0, backend 1.0, depth 0.9762; 0 errors).
-The single strict miss both times was an ambiguous under-specified case predicting `deep`
-where `fast` is labeled with `deep` acceptable. **Floor: strict ≥ 0.97** (min-run minus one
-case). Committed report: `packs/search/evals/decision/report.json`.
+**Recorded baseline (codex, reasoning_effort=low, 2026-10-14, 71 cases, no `contacts` surface):**
+the committed run scored **strict 0.9859 / lenient 1.0000** (surface 1.0, backend 1.0, depth
+0.9811; 0 errors); its single strict miss is again a `deep` pick where `fast` is labeled with
+`deep` acceptable. Two more runs that day had 3 and 5 Codex timeouts (no answer in 180 s) and
+every case that answered was right on all axes. **Floor: strict ≥ 0.97** on a run with no
+errors. Committed report: `packs/search/evals/decision/report.json`. (2026-07-01, 68 cases:
+two runs both strict 0.9853 / lenient 1.0000.)
 
 Rerun and re-record **before merging any change to the SKILL's decision-rules block** or the
 fixture. CI never spawns agents; the deterministic contract (schema, fixture integrity, SKILL
