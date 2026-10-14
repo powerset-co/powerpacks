@@ -1,7 +1,5 @@
 // The review page's words that more than one screen shows; a stage's own live beside the stage.
 
-export const BRAND = "POWERPACKS"
-
 /** The browser tab: "Add People · Powerpacks". */
 export function documentTitle(title: string): string {
   return `${title} · Powerpacks`

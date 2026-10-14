@@ -106,7 +106,7 @@ describe("ReviewPage: the screen", () => {
     const { container } = renderPage("/?stage=linkedin")
     await waitFor(() => expect(probe()).toBeTruthy())
     const brand = must(container.querySelector(".topbar .brand"))
-    expect(brand.textContent).toBe("POWERPACKS")
+    expect(brand.textContent).toBe("POWERSET")
     expect(brand.getAttribute("href")).toBe("/")
     expect(container.querySelector("[data-nav]")).toBeNull()
     expect(screen.queryAllByRole("navigation")).toHaveLength(0)
