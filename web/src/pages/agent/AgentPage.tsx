@@ -19,6 +19,7 @@ import { CodexGate } from "./CodexGate"
 import { Composer } from "./Composer"
 import { FullAccessTip } from "./FullAccessTip"
 import { ComposeIcon, SidebarIcon } from "./icons"
+import { SearchScope } from "./SearchScope"
 import { Transcript } from "./Transcript"
 import { SearchHistory } from "./collaboration/SearchHistory"
 import { useCollaboration } from "./collaboration/useCollaboration"
@@ -179,6 +180,7 @@ function Conversation({
         onSend={(text) => void send(text)}
         onStop={() => void stop()}
         onFullAccess={fullAccess}
+        footer={<SearchScope />}
       />
     </section>
   )

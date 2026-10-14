@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-14: GET/POST /api/search/scope: where chat searches, a Powerset set or the local index (search_scope.py).
 - 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
 - 2026-10-13: GET /api/install/connect reads the Connect screen's run; its QR is /api/install/qr?connect=1.
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
@@ -50,13 +51,14 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account, features, feedback
+from packs.shared.web import account, features, feedback, search_scope
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
 DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
 MAX_FEATURE_REQUEST_BYTES = 1024
+MAX_SCOPE_REQUEST_BYTES = 1024
 MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
@@ -253,6 +255,13 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/features":
                 self._json(asdict(features.read(root)))
                 return
+            if parsed.path == "/api/search/scope":
+                _load_project_packages(root)
+                try:
+                    self._json(search_scope.read(root))
+                except Exception as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+                return
             if parsed.path == "/api/status":
                 stage = "linkedin" if (root / STORE).is_file() else "install"
                 self._json({**identity, "stage": stage})
@@ -266,7 +275,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path in ("/api/features", "/api/feedback"):
+            if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope"):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
                     self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
@@ -289,6 +298,22 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     self._json(features.save(root, flags))
                 except ValueError as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/search/scope":
+                _load_project_packages(root)
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_SCOPE_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    payload = json.loads(self.rfile.read(length))
+                    selected = payload.get("selected") if isinstance(payload, dict) else None
+                    if not isinstance(selected, str) or not selected:
+                        raise ValueError("selected is a set id or local")
+                    self._json(search_scope.save(root, selected))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                except Exception as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
                 return
             if app.post(self, parsed):
                 return
