@@ -41,6 +41,7 @@ jobs:
     uses: ./.github/workflows/desktop.yml
     with:
       release: true
+      ref: ${{ needs.release-please.outputs.tag_name }}
     secrets: inherit
 
   attach-desktop:
