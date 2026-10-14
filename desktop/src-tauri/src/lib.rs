@@ -200,9 +200,9 @@ fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
 /// page, bring its data over, start the page again (the page lists them, DesktopWelcome.tsx).
 const IMPORT_STEP_EVENT: &str = "import://step";
 
-/// Import the command-line install's data; true when setup is already done with it.
+/// Import the command-line install's data.
 #[tauri::command]
-async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool, String> {
+async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<(), String> {
     let root = boot::require_root(&boot)?;
     tauri::async_runtime::spawn_blocking(move || {
         let done = |count: usize| {
@@ -220,7 +220,7 @@ async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<bool
         boot::serve(&app, &root)?;
         imported?;
         done(4);
-        Ok(onboard::setup(&root) == onboard::Setup::Done)
+        Ok(())
     })
     .await
     .map_err(|error| error.to_string())?

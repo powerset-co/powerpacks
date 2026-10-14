@@ -273,8 +273,9 @@ function Mailboxes({
 
 /** The desktop app's setup before it starts: every sign-in, one row each, so setup itself never
  *  waits on the user. Only Powerset is needed; a source left unconnected is left out of setup.
- *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app. */
-export function Connect({ onBack }: { onBack: () => void }) {
+ *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app.
+ *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back. */
+export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () => void }) {
   const client = useQueryClient()
   const codex = useCodexAccount()
   const [error, setError] = useState<string | null>(null)
@@ -477,7 +478,7 @@ export function Connect({ onBack }: { onBack: () => void }) {
           "LinkedIn",
           <LinkedInIcon className="size-[18px]" />,
           "Your LinkedIn connections.",
-          !linkedin && (processed || profile !== null) ? (
+          !linkedin && !onDone && (processed || profile !== null) ? (
             <ProfileLink url={profile} onChange={setProfile} />
           ) : null,
         )}
@@ -500,33 +501,41 @@ export function Connect({ onBack }: { onBack: () => void }) {
           "Your WhatsApp chats, by scanning a code.",
         )}
       </ul>
-      <div className="flex items-center justify-between gap-3">
-        <Button disabled={starting} onClick={onBack}>
-          Back
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          {signedIn && needsProfile
-            ? "Sign in to LinkedIn or add your profile link."
-            : "Anything left unconnected is skipped."}
-        </span>
-        <Button
-          variant="primary"
-          disabled={!signedIn || ready === undefined || needsProfile || busy || starting}
-          onClick={() => {
-            setStarting(true)
-            setError(null)
-            // Without LinkedIn's sign-in, setup's owner step reads the profile from its link.
-            void continueSetup(linkedin || profile === null ? {} : { linkedinUrl: profile }).catch(
-              (caught: unknown) => {
-                fail(caught)
-                setStarting(false)
-              },
-            )
-          }}
-        >
-          {starting ? "Starting setup…" : "Set up"}
-        </Button>
-      </div>
+      {onDone ? (
+        <div className="flex justify-end">
+          <Button variant="primary" disabled={busy} onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <Button disabled={starting} onClick={onBack}>
+            Back
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {signedIn && needsProfile
+              ? "Sign in to LinkedIn or add your profile link."
+              : "Anything left unconnected is skipped."}
+          </span>
+          <Button
+            variant="primary"
+            disabled={!signedIn || ready === undefined || needsProfile || busy || starting}
+            onClick={() => {
+              setStarting(true)
+              setError(null)
+              // Without LinkedIn's sign-in, setup's owner step reads the profile from its link.
+              void continueSetup(linkedin || profile === null ? {} : { linkedinUrl: profile }).catch(
+                (caught: unknown) => {
+                  fail(caught)
+                  setStarting(false)
+                },
+              )
+            }}
+          >
+            {starting ? "Starting setup…" : "Set up"}
+          </Button>
+        </div>
+      )}
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
           {error}

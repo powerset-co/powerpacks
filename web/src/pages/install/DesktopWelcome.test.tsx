@@ -1,18 +1,32 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { MemoryRouter } from "react-router-dom"
+import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { DesktopWelcome } from "./DesktopWelcome"
+
+vi.mock("@/lib/agent/useCodexAccount", () => ({
+  useCodexAccount: () => ({
+    status: { installed: true, account: null },
+    loading: false,
+    login: null,
+    error: null,
+    connect: vi.fn(),
+  }),
+}))
+
+function reply(body: unknown) {
+  return Promise.resolve(new Response(JSON.stringify(body)))
+}
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
 
-it.each([true, false])("lists the import's steps as the app reports them (setup done: %s)", async (done) => {
-  let finish!: (done: boolean) => void
-  const imported = new Promise<boolean>((resolve) => {
+it("lists the import's steps as the app reports them, then Connect for what did not come over", async () => {
+  let finish!: () => void
+  const imported = new Promise<void>((resolve) => {
     finish = resolve
   })
   const invoke = vi.fn((command: string) =>
@@ -29,14 +43,42 @@ it.each([true, false])("lists the import's steps as the app reports them (setup 
     return Promise.resolve(() => undefined)
   })
   vi.stubGlobal("__TAURI__", { core: { invoke }, event: { listen } })
-  const fetch = vi.fn()
+  // What the imported install brings: Powerset and Gmail signed in.
+  const fetch = vi.fn((url: string) =>
+    url === "/api/account"
+      ? reply({ signed_in: true, email: "casey@example.com", name: null, picture: null })
+      : url === "/accounts/api/signed-in"
+        ? reply({
+            linkedin: false,
+            gmail: true,
+            imessage: false,
+            whatsapp: false,
+            mailboxes: ["casey@example.com"],
+          })
+        : url === "/api/install/connect"
+          ? reply({
+              step: "runtime",
+              status: "waiting",
+              installer_pid: 0,
+              message: "",
+              steps: {},
+              action: null,
+            })
+          : reply({
+              browser: { ok: true, name: "Chrome", install: null },
+              gcloud: { ok: true, install: null },
+            }),
+  )
   vi.stubGlobal("fetch", fetch)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   client.setQueryData(["people"], [])
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <DesktopWelcome />
+      <MemoryRouter initialEntries={["/install"]}>
+        <Routes>
+          <Route path="/install" element={<DesktopWelcome />} />
+          <Route path="/people" element={<p>People page</p>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -49,19 +91,18 @@ it.each([true, false])("lists the import's steps as the app reports them (setup 
   expect(listen).toHaveBeenCalledWith("import://step", expect.any(Function))
   act(() => step?.({ payload: 2 }))
   expect(screen.getByText("2 of 4 tasks completed")).toBeTruthy()
+  // The local page is down while the data moves: nothing asks it anything.
+  expect(fetch).not.toHaveBeenCalled()
   await act(async () => {
     step?.({ payload: 4 })
-    finish(done)
+    finish()
     await imported
   })
   await waitFor(() => expect(client.getQueryState(["people"])?.isInvalidated).toBe(true))
-  expect(await screen.findByRole("heading", { name: "Your data is here" })).toBeTruthy()
-  expect(screen.getByText("4 of 4 tasks completed")).toBeTruthy()
-  const next = screen.getByRole("button", { name: done ? "Open People" : "Continue setup" })
+  expect(await screen.findByText("Your data is here. Connect anything that didn't come over.")).toBeTruthy()
+  const done = await screen.findByRole("button", { name: "Done" })
+  expect(screen.queryByRole("button", { name: "Back" })).toBeNull()
+  fireEvent.click(done)
+  expect(await screen.findByText("People page")).toBeTruthy()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
-  if (!done) {
-    fireEvent.click(next)
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
-  }
-  expect(fetch).not.toHaveBeenCalled()
 })

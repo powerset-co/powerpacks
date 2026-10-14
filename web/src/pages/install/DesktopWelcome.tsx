@@ -1,12 +1,10 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useState } from "react"
-
 import { useNavigate } from "react-router-dom"
 
 import { ImportIcon, SparkIcon } from "@/components/shared"
-import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import { continueSetup, importData, importSource } from "@/lib/api/install"
+import { importData, importSource } from "@/lib/api/install"
 import { listen } from "@/lib/desktop"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
@@ -40,12 +38,18 @@ function tilde(path: string): string {
 }
 
 /** Import existing data directly; only a new setup needs the prerequisite check. */
-function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active: boolean) => void }) {
+function Choice({
+  onStart,
+  onImport,
+  onImported,
+}: {
+  onStart: () => void
+  onImport?: (active: boolean) => void
+  onImported: () => void
+}) {
   const client = useQueryClient()
-  const navigate = useNavigate()
   const [clicked, setClicked] = useState<"import" | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [imported, setImported] = useState<boolean | null>(null)
   // How many of the import's steps are done.
   const [done, setDone] = useState(0)
   const chosen = error ? null : clicked
@@ -71,14 +75,11 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
   if (chosen === "import") {
     return (
       <div role="status" aria-live="polite" className="rise-in flex w-full flex-col items-center gap-5">
-        <Heading
-          title={imported === null ? "Bringing over your data" : "Your data is here"}
-          line={`${done} of ${IMPORT_STEPS.length} tasks completed`}
-        />
+        <Heading title="Bringing over your data" line={`${done} of ${IMPORT_STEPS.length} tasks completed`} />
         <ol className="install-steps m-0 w-full max-w-[420px] p-0" aria-label="Import steps">
           {IMPORT_STEPS.map((label, index) => {
             const finished = index < done
-            const current = index === done && imported === null
+            const current = index === done
             return (
               <li key={label} data-done={finished} aria-current={current ? "step" : undefined}>
                 <div className="install-step-row">
@@ -95,18 +96,6 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
           })}
         </ol>
         {source ? <p className="m-0 text-xs text-muted-foreground">{tilde(source)}</p> : null}
-        {imported !== null && (
-          <Button
-            variant="primary"
-            onClick={() => {
-              if (imported) void navigate(HOME.href)
-              // The imported install brings its sign-ins: setup goes on without the Connect list.
-              else void continueSetup({}).then(() => onImport?.(false), fail)
-            }}
-          >
-            {imported ? "Open People" : "Continue setup"}
-          </Button>
-        )}
       </div>
     )
   }
@@ -133,9 +122,9 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
           disabled={!source}
           onClick={() =>
             choose(async () => {
-              const done = await importData()
+              await importData()
               await client.invalidateQueries()
-              setImported(done)
+              onImported()
             })
           }
           data-import-source={source ?? ""}
@@ -163,22 +152,33 @@ function Choice({ onStart, onImport }: { onStart: () => void; onImport?: (active
 }
 
 /** The desktop app's setup before it starts: import, or connect every account for a new setup.
- *  The third screen, the installation status, is the install page itself once setup runs. */
+ *  The third screen, the installation status, is the install page itself once setup runs. An
+ *  import ends on the same Connect list, for what did not come over, with no setup to run. */
 export function DesktopWelcome({ onImport }: { onImport?: (active: boolean) => void }) {
-  const [stage, setStage] = useState<0 | 1>(0)
+  const navigate = useNavigate()
+  const [stage, setStage] = useState<"choose" | "connect" | "imported">("choose")
   return (
     <div className="flex w-full flex-col items-center gap-6">
       <div key={stage} className="rise-in flex w-full flex-col items-center gap-5">
         {/* The knot greets a new install and stays through an import; connecting is a plain list. */}
-        {stage === 0 ? (
+        {stage === "choose" ? (
           <>
             <SetupKnot />
-            <Choice onStart={() => setStage(1)} onImport={onImport} />
+            <Choice
+              onStart={() => setStage("connect")}
+              onImport={onImport}
+              onImported={() => setStage("imported")}
+            />
+          </>
+        ) : stage === "connect" ? (
+          <>
+            <Heading title="Setup" line="Connect your accounts. Setup does the rest on its own." />
+            <Connect onBack={() => setStage("choose")} />
           </>
         ) : (
           <>
-            <Heading title="Setup" line="Connect your accounts. Setup does the rest on its own." />
-            <Connect onBack={() => setStage(0)} />
+            <Heading title="Setup" line="Your data is here. Connect anything that didn't come over." />
+            <Connect onDone={() => void navigate(HOME.href)} />
           </>
         )}
       </div>

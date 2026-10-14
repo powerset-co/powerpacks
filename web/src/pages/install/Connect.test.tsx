@@ -82,11 +82,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount() {
+function mount(props: { onBack?: () => void; onDone?: () => void } = { onBack: vi.fn() }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <Connect onBack={vi.fn()} />
+      <Connect {...props} />
     </QueryClientProvider>,
   )
 }
@@ -150,6 +150,22 @@ it("with nothing connected, setup starts without a profile link", async () => {
   await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
   fireEvent.click(setUp)
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+})
+
+it("after an import, ends with Done: no Back, no setup to start, no profile link", async () => {
+  // Gmail came over without LinkedIn: a new setup would ask for the profile link here.
+  state.signed = { ...NONE, gmail: true, mailboxes: ["casey@example.com"] }
+  const onDone = vi.fn()
+  mount({ onDone })
+  const done = await screen.findByRole("button", { name: "Done" })
+  expect(await within(row("Gmail")).findByText("Connected")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Back" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Set up" })).toBeNull()
+  expect(screen.queryByText("Anything left unconnected is skipped.")).toBeNull()
+  expect(within(row("LinkedIn")).queryByRole("button", { name: "Add your profile link" })).toBeNull()
+  fireEvent.click(done)
+  expect(onDone).toHaveBeenCalledOnce()
+  expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
 
 it("without LinkedIn's sign-in, setup starts from the profile link", async () => {

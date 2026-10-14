@@ -60,9 +60,9 @@ export async function importSource(): Promise<string | null> {
   return typeof path === "string" ? path : null
 }
 
-/** Import that install's data; true when setup is already done with it (the app can open). */
-export async function importData(): Promise<boolean> {
-  return (await invoke("setup_import")) === true
+/** Import that install's data: the app then uses its network, imports and account. */
+export async function importData(): Promise<void> {
+  await invoke("setup_import")
 }
 
 /** One preflight item: whether it is ready, and its background install once one was asked for. */
