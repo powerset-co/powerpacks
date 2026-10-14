@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.26.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.25.0...powerpacks-v3.26.0) (2026-10-14)
+
+
+### Features
+
+* **app:** chat folds each turn's commands into one line you can open ([#809](https://github.com/powerset-co/powerpacks/issues/809)) ([bd9c555](https://github.com/powerset-co/powerpacks/commit/bd9c55500ed44f4aaecb610040e969d433d24e19))
+* **app:** the account row opens a menu: Settings, Send feedback, Reconnect ([#810](https://github.com/powerset-co/powerpacks/issues/810)) ([6fd4841](https://github.com/powerset-co/powerpacks/commit/6fd4841767f9415707d4eb3b9a74da13aaee4b04))
+
 ## [3.25.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.24.0...powerpacks-v3.25.0) (2026-10-14)
 
 
