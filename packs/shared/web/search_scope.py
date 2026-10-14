@@ -2,10 +2,12 @@
 
 `.env` holds the choice the way `$search` already reads it: POWERPACKS_DEFAULT_SET_ID names the
 set, and POWERPACKS_LOCAL_SEARCH_DB, when set, makes the local index the default. The sets are the
-signed-in user's, straight from Postgres (DATABASE_URL); with no sign-in there are none. A set in
-`.env` that isn't one of them (an import can bring one from another account) shows as no choice.
+signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no sign-in there are
+none. With no set of theirs in `.env` (none yet, or one an import brought from another account),
+searches default to their largest set, written to `.env` so search and picker agree.
 
 Changelog:
+  2026-10-14: no set of yours in .env defaults to your largest set; counts come with the sets.
   2026-10-14: created; the chat's search picker reads and writes it through /api/search/scope.
 """
 
@@ -34,10 +36,14 @@ def read(root: Path) -> dict[str, Any]:
     env = _read_env_file(root / ".env")
     subject = postgres_client.credentials_subject()
     sets = postgres_client.fetch_member_sets(subject, env["DATABASE_URL"]) if subject and env.get("DATABASE_URL") else []
-    # Unset, search falls back to the user's own personal set (postgres_client.fetch_default_set_id).
-    personal = next((row["set_id"] for row in sets if row["is_personal"] and row["owned"]), "")
-    current = env.get(SET_KEY) or personal
-    selected = LOCAL if env.get(LOCAL_KEY) else current if current in {row["set_id"] for row in sets} else ""
+    if env.get(LOCAL_KEY):
+        selected = LOCAL
+    elif env.get(SET_KEY) in {row["set_id"] for row in sets}:
+        selected = env[SET_KEY]
+    elif sets:
+        return save(root, sets[0]["set_id"])
+    else:
+        selected = ""
     return {"sets": sets, "local": (root / LOCAL_INDEX).is_file(), "selected": selected}
 
 

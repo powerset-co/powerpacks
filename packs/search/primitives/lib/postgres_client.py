@@ -136,25 +136,27 @@ def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | 
 
 
 def fetch_member_sets(subject: str, dsn: str) -> list[dict[str, Any]]:
-    """The active sets an Auth0 user created or belongs to, personal first, then by name."""
+    """The active sets an Auth0 user created or belongs to, largest first: how many people each
+    reaches comes from the set_person_counts_mv view the Powerset API reads (a materialized view,
+    so not in the column contract, whose live check reads information_schema)."""
     assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
     assert_columns_in_contract("set_members", ["set_id", "user_id"])
     psycopg2 = ensure_psycopg2()
     query = """
-        SELECT s.id::text, s.name, s.is_personal, s.created_by = %(subject)s,
-               (SELECT count(*) FROM set_members m WHERE m.set_id = s.id)
+        SELECT s.id::text, s.name, s.is_personal, s.created_by = %(subject)s, coalesce(c.person_count, 0)
         FROM sets s
+        LEFT JOIN set_person_counts_mv c ON c.set_id = s.id
         WHERE s.is_active IS TRUE
           AND (s.created_by = %(subject)s
                OR EXISTS (SELECT 1 FROM set_members m WHERE m.set_id = s.id AND m.user_id = %(subject)s))
-        ORDER BY s.is_personal DESC, lower(s.name)
+        ORDER BY coalesce(c.person_count, 0) DESC, lower(s.name)
     """
     with psycopg2.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(query, {"subject": subject})
             rows = cur.fetchall()
     return [{"set_id": row[0], "name": row[1], "is_personal": bool(row[2]), "owned": bool(row[3]),
-             "member_count": int(row[4])} for row in rows]
+             "person_count": int(row[4])} for row in rows]
 
 
 def fetch_set_operator_ids(

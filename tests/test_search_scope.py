@@ -13,9 +13,10 @@ from unittest.mock import patch
 
 from packs.shared.web.server import persistent_handler
 
+# Largest first, as fetch_member_sets orders them.
 SETS = [
-    {"set_id": "p-1", "name": "Personal Connections", "is_personal": True, "owned": True, "member_count": 1},
-    {"set_id": "t-1", "name": "Powerset", "is_personal": False, "owned": False, "member_count": 6},
+    {"set_id": "t-1", "name": "Powerset", "is_personal": False, "owned": False, "person_count": 40795},
+    {"set_id": "p-1", "name": "Personal Connections", "is_personal": True, "owned": True, "person_count": 15},
 ]
 
 
@@ -49,9 +50,12 @@ class SearchScopeTests(unittest.TestCase):
     def env(self) -> str:
         return (self.root / ".env").read_text()
 
-    def test_lists_the_sets_and_searches_the_personal_set_until_one_is_picked(self) -> None:
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "p-1"}))
+    def test_with_no_pick_searches_default_to_the_largest_set(self) -> None:
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "t-1"}))
         self.fetch_member_sets.assert_called_with("auth0|me", "postgresql://db")
+        self.assertIn("POWERPACKS_DEFAULT_SET_ID=t-1", self.env())
+        (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=p-1\n")
+        self.assertEqual(self.request()[1]["selected"], "p-1")
 
     def test_picking_the_local_index_then_a_set_rewrites_env(self) -> None:
         index = self.root / ".powerpacks/search-index/local-search.duckdb"
@@ -60,15 +64,16 @@ class SearchScopeTests(unittest.TestCase):
         status, scope = self.request({"selected": "local"})
         self.assertEqual((status, scope["local"], scope["selected"]), (HTTPStatus.OK, True, "local"))
         self.assertIn(f"POWERPACKS_LOCAL_SEARCH_DB={index}", self.env())
-        status, scope = self.request({"selected": "t-1"})
-        self.assertEqual((status, scope["selected"]), (HTTPStatus.OK, "t-1"))
-        self.assertIn("POWERPACKS_DEFAULT_SET_ID=t-1", self.env())
+        status, scope = self.request({"selected": "p-1"})
+        self.assertEqual((status, scope["selected"]), (HTTPStatus.OK, "p-1"))
+        self.assertIn("POWERPACKS_DEFAULT_SET_ID=p-1", self.env())
         self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", self.env())
         self.assertIn("DATABASE_URL=postgresql://db", self.env())
 
-    def test_a_set_in_env_that_is_not_yours_is_no_choice(self) -> None:
+    def test_a_set_in_env_that_is_not_yours_gives_way_to_your_largest(self) -> None:
         (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=elsewhere\n")
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": ""}))
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "t-1"}))
+        self.assertIn("POWERPACKS_DEFAULT_SET_ID=t-1", self.env())
 
     def test_signed_out_has_no_sets(self) -> None:
         self.credentials_subject.return_value = None
