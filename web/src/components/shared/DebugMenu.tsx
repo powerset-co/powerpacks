@@ -26,6 +26,11 @@ const PAGES = [
 const ITEM =
   "flex w-full cursor-pointer items-center rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary"
 
+/** A page that throws, so a test build can see the error screen and the crash report (crash.rs). */
+export function BrokenPage(): never {
+  throw new Error("A page broke on purpose (debug menu).")
+}
+
 /** Test builds of the desktop app: jump to any page, and skip setup to try the rest first. */
 export function DebugMenu() {
   if (!isDesktop()) return null
@@ -96,6 +101,17 @@ function DesktopDebugMenu() {
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            role="menuitem"
+            className={ITEM}
+            onClick={() => {
+              close()
+              void navigate("/debug/broken")
+            }}
+          >
+            Break a page
+          </button>
           <button
             type="button"
             role="menuitem"

@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "debug_reset_data",
     "setup_import_source",
     "setup_import",
+    "report_crash",
 ];
 
 fn main() {
