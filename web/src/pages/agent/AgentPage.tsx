@@ -147,7 +147,7 @@ function Conversation({
         }}
       >
         <div
-          className="mx-auto flex max-w-[760px] flex-col gap-5 px-5 pb-10 pt-2 max-[680px]:px-3"
+          className="mx-auto flex max-w-[680px] flex-col gap-7 px-5 pb-10 pt-2 max-[680px]:px-3"
           aria-live="polite"
         >
           {agent.loading ? (

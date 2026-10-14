@@ -72,7 +72,7 @@ export function Composer({
 
   return (
     <form
-      className="mx-auto w-full max-w-[760px] px-5 pb-5 max-[680px]:px-3 max-[680px]:pb-3"
+      className="mx-auto w-full max-w-[680px] px-5 pb-5 max-[680px]:px-3 max-[680px]:pb-3"
       onSubmit={(event) => {
         event.preventDefault()
         void submit()

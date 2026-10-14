@@ -63,7 +63,7 @@
   grid-template-columns: var(--result-cols);
   gap: 12px;
   align-items: start;
-  padding: 10px 12px;
+  padding: 16px 12px;
   cursor: pointer;
 }
 .result-row[data-open="true"] .result-line::before {
@@ -192,16 +192,22 @@
   gap: 5px;
   min-width: 0;
 }
-.result-reason p,
-.result-noscore {
+/* A row is the summary: two lines of the reasoning, or of each trait's reason in a pond; the
+   drawer has the rest. */
+.result-reason p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.result-noscore {
-  font-size: 11px;
+.result-reason > p:not(.result-noscore) {
+  color: var(--foreground);
+  font-size: 13px;
 }
 .result-badges {
   display: flex;
@@ -492,8 +498,8 @@ section.review-sections {
 
 /* A narrow pane stacks the reasoning under the person, as rendering.py's rows do. */
 /* Narrow (beside a chat): one block per person. Who they are on top with a smaller avatar,
-   the score and reasoning right under the name, indented to it, clamped to three lines (the
-   drawer has the rest); Score sits at the end of the reasoning, not on a line of its own. */
+   the score and reasoning right under the name, indented to it; Score sits at the end of the
+   reasoning, not on a line of its own. */
 @container run (max-width: 880px) {
   .results {
     --result-cols: minmax(0, 1fr);
@@ -503,7 +509,6 @@ section.review-sections {
   }
   .result-line {
     gap: 6px;
-    padding: 10px 12px;
   }
   .result-tags {
     top: 0;
@@ -534,11 +539,5 @@ section.review-sections {
   .result-actions {
     position: static;
     order: 1;
-  }
-  .result-reason p {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    overflow: hidden;
   }
 }

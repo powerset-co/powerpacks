@@ -161,7 +161,7 @@ export function SearchHistory({
     return (
       <article
         data-message-id={message.id}
-        className={`mx-auto max-w-[760px] px-5 py-3 ${message.reply_to ? "pl-12" : ""}`}
+        className={`mx-auto max-w-[680px] px-5 py-3 ${message.reply_to ? "pl-12" : ""}`}
       >
         <div className="flex items-center gap-2 text-xs">
           <Avatar name={message.author_name} />
@@ -169,9 +169,9 @@ export function SearchHistory({
           <span className="text-faint">{group?.name}</span>
         </div>
         {owner && <p className="mb-1 mt-2 text-xs text-info">@{owner.name}</p>}
-        <p className="m-0 whitespace-pre-wrap break-words">{message.text}</p>
+        <p className="m-0 whitespace-pre-wrap break-words text-[15px] leading-[1.65]">{message.text}</p>
         {message.request_id && (
-          <div className="mt-3 border-l-2 border-line pl-3 text-[13px]">
+          <div className="mt-3 border-l-2 border-line pl-3 text-[15px]">
             <p className="mb-2 mt-0 text-xs font-semibold">
               {owner?.name}’s assistant{" "}
               <span className="ml-1 font-normal text-faint">
@@ -277,7 +277,7 @@ export function SearchHistory({
             row.message ? (
               renderMessage(row.message)
             ) : (
-              <div className="mx-auto flex max-w-[760px] flex-col gap-5 px-5 pb-5 pt-2">{children}</div>
+              <div className="mx-auto flex max-w-[680px] flex-col gap-7 px-5 pb-5 pt-2">{children}</div>
             )
           }
         />

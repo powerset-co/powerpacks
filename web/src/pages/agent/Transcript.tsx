@@ -75,6 +75,11 @@ function StatusMark({ status }: { status: ItemStatus }) {
 const SUMMARY =
   "flex cursor-pointer list-none items-center gap-2.5 px-3 py-2 text-xs transition-colors duration-fast ease-out hover:bg-surface-2 [&::-webkit-details-marker]:hidden"
 
+// A turn's work folded to one quiet line, its icon on the text's edge; the commands open in a box
+// under it.
+const WORK_LINE =
+  "-ml-1.5 flex w-fit max-w-full cursor-pointer list-none items-center gap-2 rounded-[var(--radius-s)] px-1.5 py-1 text-[13px] text-muted-foreground transition-colors duration-fast ease-out hover:bg-surface-2 hover:text-foreground [&::-webkit-details-marker]:hidden"
+
 function WorkRow({ entry }: { entry: WorkEntry }) {
   switch (entry.kind) {
     case "command":
@@ -150,7 +155,7 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   switch (entry.kind) {
     case "user":
       return (
-        <div className="rise-in group -mb-4 flex flex-col">
+        <div className="rise-in group -mb-4 flex flex-col text-[15px] leading-[1.65]">
           <div className="max-w-[82%] self-end whitespace-pre-wrap rounded-[var(--radius-l)] rounded-br-[var(--radius-s)] border border-line bg-surface-2 px-3.5 py-2.5">
             {entry.text}
           </div>
@@ -159,7 +164,7 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
       )
     case "agent":
       return (
-        <div className="rise-in group -mb-4 flex flex-col text-[13.5px]">
+        <div className="rise-in group -mb-4 flex flex-col text-[15px]">
           <Markdown text={entry.text} />
           <CopyButton text={entry.text} className={cn(COPY, "-ml-1.5 self-start")} />
         </div>
@@ -181,13 +186,10 @@ export function Transcript({ entries }: { entries: Entry[] }) {
           <Say key={turn.entry.id} entry={turn.entry} />
         ) : (
           // Folded to one line until the reader asks for the commands behind it.
-          <details
-            key={turn.id}
-            className="rise-in group/work overflow-hidden rounded-[var(--radius-m)] border border-line bg-card"
-          >
-            <summary className={cn(SUMMARY, "text-muted-foreground")}>
+          <details key={turn.id} className="rise-in group/work">
+            <summary className={WORK_LINE}>
               <TerminalIcon className="size-3.5 shrink-0 text-faint" />
-              <span className="min-w-0 flex-1 truncate">{workSummary(turn.entries)}</span>
+              <span className="min-w-0 truncate">{workSummary(turn.entries)}</span>
               {turn.entries.some((entry) => "status" in entry && entry.status === "running") ? (
                 <Spinner className="text-muted-foreground" />
               ) : null}
@@ -206,7 +208,10 @@ export function Transcript({ entries }: { entries: Entry[] }) {
                 />
               </svg>
             </summary>
-            <ol aria-label="Work" className="m-0 list-none divide-y divide-line border-t border-line p-0">
+            <ol
+              aria-label="Work"
+              className="m-0 mt-2 list-none divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line bg-card p-0"
+            >
               {turn.entries.map((entry) => (
                 <li key={entry.id}>
                   <WorkRow entry={entry} />
