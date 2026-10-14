@@ -7,6 +7,7 @@ import { useFullAccessTip } from "@/lib/agent/fullAccessTip"
 import { answer, newChat, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
 import { chatRun } from "@/lib/agent/searchRun"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
+import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
 import { cn } from "@/lib/utils"
@@ -196,6 +197,7 @@ export function AgentPage() {
 
 function SignedInAgent() {
   const codex = useCodexAccount()
+  useSearchScope()
   if (!codex.status?.installed || !codex.status.account) {
     return (
       <main className="overflow-y-auto px-5">

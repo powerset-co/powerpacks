@@ -263,13 +263,14 @@ export interface SearchSet {
   is_personal: boolean
   /** The signed-in account created it. */
   owned: boolean
-  member_count: number
+  /** People a search of this set reaches. */
+  person_count: number
 }
 
 export interface SearchScope {
   sets: SearchSet[]
   /** This Mac has a local index to search. */
   local: boolean
-  /** A set_id, or "local". */
+  /** A set_id, or "local"; "" only with no sets (signed out) and the local index unpicked. */
   selected: string
 }

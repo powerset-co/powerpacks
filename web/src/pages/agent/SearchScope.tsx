@@ -1,22 +1,29 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { Select } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
-import { fetchSearchScope, LOCAL_SCOPE, saveSearchScope } from "@/lib/api/searches"
-import type { SearchSet } from "@/types/searches"
-
-const KEY = ["search-scope"] as const
+import { SEARCH_SCOPE_KEY as KEY, useSearchScope } from "@/lib/agent/useSearchScope"
+import { LOCAL_SCOPE, saveSearchScope } from "@/lib/api/searches"
+import type { SearchScope as Scope, SearchSet } from "@/types/searches"
 
 function label(set: SearchSet): string {
-  return set.is_personal && set.owned ? "Personal network" : set.name
+  return `${set.is_personal && set.owned ? "Personal network" : set.name} · ${set.person_count.toLocaleString()}`
 }
 
 /** Where chat searches: one of your Powerset sets, or this Mac's local index when it has one. */
 export function SearchScope() {
   const client = useQueryClient()
-  const scope = useQuery({ queryKey: KEY, queryFn: ({ signal }) => fetchSearchScope(signal), retry: false })
+  const scope = useSearchScope()
+  // The pick shows at once; the server's answer replaces it, or the old pick returns on failure.
   const save = useMutation({
     mutationFn: saveSearchScope,
+    onMutate: async (selected: string) => {
+      await client.cancelQueries({ queryKey: KEY })
+      const before = client.getQueryData<Scope>(KEY)
+      client.setQueryData<Scope>(KEY, (old) => old && { ...old, selected })
+      return before
+    },
+    onError: (_error, _selected, before) => client.setQueryData(KEY, before),
     onSuccess: (next) => client.setQueryData(KEY, next),
   })
   if (!scope.data || (scope.data.sets.length === 0 && !scope.data.local)) return null
@@ -26,11 +33,10 @@ export function SearchScope() {
         aria-label="Search in"
         title="Where searches look"
         value={scope.data.selected}
-        disabled={save.isPending}
         onChange={(event) => save.mutate(event.target.value)}
         className="h-[26px] rounded-full border-line bg-transparent pl-2.5 pr-7 text-[11px] text-muted-foreground"
       >
-        {/* .env names no set of yours (or none, signed out): searches keep using it until a pick. */}
+        {/* Signed out with a local index not picked yet. */}
         {scope.data.selected === "" && (
           <option value="" disabled hidden>
             Pick a set
