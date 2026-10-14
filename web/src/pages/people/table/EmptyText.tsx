@@ -3,7 +3,6 @@ import type { Tab } from "@/lib/people/view"
 
 const NOBODY: Record<Tab, string> = {
   all: "No people yet.",
-  confirm: "No one needs confirmation.",
   yes: "No people marked for sharing.",
   no: "No people marked as not sharing.",
 }

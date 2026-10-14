@@ -75,8 +75,8 @@ class AppRoutesTests(unittest.TestCase):
 
 # A person as the People drawer's flag sends them (web/src/lib/api/feedback.ts sendPersonFeedback).
 PERSON = {"parent_id": "p1", "name": "Jordan Bravo", "public_identifier": "jordan-bravo", "title": "Engineer",
-          "company": "Acme", "worth": "yes", "worth_source": "model", "share": "confirm",
-          "share_source": "model", "reason": "unsure", "labels": ["coworker"], "confidence": 0.55}
+          "company": "Acme", "worth": "yes", "worth_source": "model", "share": "yes",
+          "share_source": "model", "reason": "would_vouch", "labels": ["coworker"], "confidence": 0.55}
 
 
 def _token(claims: dict[str, str]) -> str:

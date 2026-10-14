@@ -89,7 +89,6 @@ class SharePerson:
 @dataclass(frozen=True)
 class ShareCounts:
     people: int
-    confirm: int
     yes: int
     no: int
 
@@ -97,7 +96,6 @@ class ShareCounts:
     def of(cls, rows: tuple[SharePerson, ...]) -> "ShareCounts":
         return cls(
             people=len(rows),
-            confirm=sum(row.share == "confirm" for row in rows),
             yes=sum(row.share == "yes" for row in rows),
             no=sum(row.share == "no" for row in rows),
         )

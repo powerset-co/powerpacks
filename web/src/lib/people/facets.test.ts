@@ -11,7 +11,7 @@ import { DEFAULT_VIEW, type PeopleView } from "./view"
 
 // Casey has a saved logbook.
 const rows = withLogbooks(decodePeople(PAYLOAD), [savedEntry()])
-const view: PeopleView = { ...DEFAULT_VIEW, tab: "confirm", sort: { key: "name", dir: 1 } }
+const view: PeopleView = { ...DEFAULT_VIEW, tab: "no", sort: { key: "name", dir: 1 } }
 
 describe("lastBucket", () => {
   it("splits at a year and two years", () => {

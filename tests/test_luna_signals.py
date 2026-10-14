@@ -231,11 +231,12 @@ class ShareRuleTests(unittest.TestCase):
         self.assertEqual(decided(saved(relationship_kind="romantic_partner")), ("no", "romantic_partner"))
         self.assertEqual(decided(saved(is_minor=0.7)), ("no", "minor"))
 
-    def test_lunas_call_decides_the_rest_and_a_weak_call_asks_you(self) -> None:
+    def test_lunas_call_decides_the_rest_at_any_confidence(self) -> None:
         self.assertEqual(decided(saved()), ("yes", "would_vouch"))
         self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.8)), ("no", "not_professional"))
-        self.assertEqual(decided(saved(share_call_p=0.55)), ("confirm", "unsure"))
-        self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.55)), ("confirm", "unsure"))
+        # A coin-flip call still decides: nobody is asked to confirm (a wrong share takes a Private tag).
+        self.assertEqual(decided(saved(share_call_p=0.52)), ("yes", "would_vouch"))
+        self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.52)), ("no", "not_professional"))
 
 
 if __name__ == "__main__":

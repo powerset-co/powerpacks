@@ -205,17 +205,16 @@ afterEach(() => {
 })
 
 describe("PeoplePage", () => {
-  it("opens on the confirm decision with each decision's total", async () => {
+  it("opens on All with each decision's total", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
-    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
     const sharing = screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" })
-    expect(sharing.value).toBe("confirm")
+    expect(sharing.value).toBe("all")
     expect([...sharing.options].map((option) => option.textContent)).toEqual([
       "All · 4",
-      "Needs confirmation · 3",
       "Sharing · 1",
-      "Not sharing · 0",
+      "Not sharing · 3",
     ])
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
@@ -223,7 +222,7 @@ describe("PeoplePage", () => {
 
   it("shows everyone under All, whatever the decision", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.change(screen.getByRole("combobox", { name: "Sharing" }), { target: { value: "all" } })
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
@@ -232,7 +231,7 @@ describe("PeoplePage", () => {
 
   it("restores filters, sort, person and open sections from the URL after remounting", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
-    const first = renderPage()
+    const first = renderPage("/people?tab=no")
     await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.change(screen.getByRole("combobox", { name: "Relationship" }), { target: { value: "family" } })
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
@@ -291,14 +290,14 @@ describe("PeoplePage", () => {
       return serve(url, init)
     })
     vi.stubGlobal("fetch", fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByText("3 selected")).toBeTruthy()
     fireEvent.click(within(bar).getByRole("button", { name: "Share S" }))
     await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
-    expect(screen.getByText("No one needs confirmation.")).toBeTruthy()
+    expect(screen.getByText("No people marked as not sharing.")).toBeTruthy()
     expect(
       fetch.mock.calls.filter(
         ([url]) =>
@@ -366,7 +365,7 @@ describe("PeoplePage", () => {
       url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
     )
     vi.stubGlobal("fetch", fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const updating = must(container.querySelector<HTMLElement>('.row[data-id="p1"]'))
     expect(within(updating).getByText("Updating")).toBeTruthy()
@@ -388,7 +387,7 @@ describe("PeoplePage", () => {
 
   it("opens the drawer on a row click and closes it on the next", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const drawer = must(container.querySelector("[data-drawer]"))
     const row = must(container.querySelector<HTMLElement>(".row"))
@@ -401,7 +400,7 @@ describe("PeoplePage", () => {
 
   it("shows the bar for an open person and moves on to the next one after a label", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const names = () => [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     const heading = () => container.querySelector("[data-drawer] h2")?.textContent
@@ -453,7 +452,7 @@ const list = (container: HTMLElement) => must(container.querySelector<HTMLElemen
 describe("PeoplePage logbook", () => {
   it("has no download in the head: the share button follows the count", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     expect(screen.queryByRole("link", { name: /download/i })).toBeNull()
     expect(screen.queryByRole("button", { name: /download/i })).toBeNull()
@@ -466,7 +465,7 @@ describe("PeoplePage logbook", () => {
       done,
     )
     vi.stubGlobal("fetch", route.fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     // A filtered, re-sorted list, scrolled, with everyone selected.
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), { target: { value: "e" } })
@@ -511,7 +510,7 @@ describe("PeoplePage logbook", () => {
   it("views a saved logbook from the drawer and Back returns to the open drawer", async () => {
     saved = [savedEntry()]
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
@@ -538,7 +537,7 @@ describe("PeoplePage logbook", () => {
   it("offers one logbook action: View once saved, Build otherwise, on the bar only for a selection", async () => {
     saved = [savedEntry()]
     vi.stubGlobal("fetch", vi.fn(serve))
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const rows = () => [...container.querySelectorAll<HTMLElement>(".row")]
     const row = (name: string) => must(rows().find((each) => each.textContent.includes(name)))
@@ -575,7 +574,7 @@ describe("PeoplePage logbook", () => {
     const done = logbookStatus({ status: "completed", people: ["p2"], result: RESULT })
     const route = serveLogbook(respond(done), done)
     vi.stubGlobal("fetch", route.fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
     fireEvent.click(await screen.findByRole("button", { name: "View logbook" }))
@@ -600,7 +599,7 @@ describe("PeoplePage logbook", () => {
           : serve(url, init),
       ),
     )
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const notice = await waitFor(() => must(container.querySelector<HTMLElement>("[data-logbook-unread]")))
     expect(notice.textContent).toContain("Couldn't read saved logbooks.")
@@ -753,7 +752,7 @@ describe("PeoplePage logbook", () => {
     const done = logbookStatus({ status: "completed", people: ["p2"], result: RESULT })
     const route = serveLogbook(respond(done), done)
     vi.stubGlobal("fetch", route.fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
@@ -770,7 +769,7 @@ describe("PeoplePage logbook", () => {
     const empty = { ...RESULT, entries: [], messages: 0, files: 0 }
     const done = logbookStatus({ status: "completed", people: ["p2"], result: empty })
     vi.stubGlobal("fetch", serveLogbook(respond(done), done).fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
     fireEvent.click(
@@ -787,7 +786,7 @@ describe("PeoplePage logbook", () => {
       status: 409,
     })
     vi.stubGlobal("fetch", serveLogbook(refused).fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
@@ -803,7 +802,7 @@ describe("PeoplePage logbook", () => {
   it("reports a build that failed while it ran", async () => {
     const failed = logbookStatus({ status: "failed", people: ["p2"], error: "disk full" })
     vi.stubGlobal("fetch", serveLogbook(respond(failed), failed).fetch)
-    const { container } = renderPage()
+    const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector<HTMLElement>(".row")))
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))

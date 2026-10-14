@@ -27,7 +27,7 @@ from packs.ingestion.primitives.share.evidence import ShareEvidence
 from packs.ingestion.primitives.share.labels import deterministic_labels, flag, labels_from_saved, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, LabelRow, Labels, PersonEvidence, label_payload
 from packs.ingestion.primitives.share.store import TagStore
-from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
+from packs.ingestion.schemas.share_schema import SHARE_NO, SHARE_YES
 
 
 def decide(person: PersonEvidence, held: HumanTags | None, reference_date: str, now: str) -> tuple[list[LabelTableRow], list[ShareTableRow]]:
@@ -65,7 +65,7 @@ class Share(Node):
         now: str = now_iso()
         labels: list[LabelTableRow] = []
         shares: list[ShareTableRow] = []
-        counts: dict[str, int] = {"families": len(people), "with_labels": 0, SHARE_YES: 0, SHARE_NO: 0, SHARE_CONFIRM: 0}
+        counts: dict[str, int] = {"families": len(people), "with_labels": 0, SHARE_YES: 0, SHARE_NO: 0}
         for person in people:
             label_rows, share_rows = decide(person, tags.get(person.person_id), reference_date, now)
             labels.extend(label_rows)

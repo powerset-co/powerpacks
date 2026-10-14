@@ -2,8 +2,8 @@ import type { RefObject } from "react"
 
 import type { useSelection } from "@/hooks/useSelection"
 import type { TagAction } from "@/lib/people/facets"
-import type { Tab } from "@/lib/people/view"
-import { ORDER, type Person } from "@/types/people"
+import { TABS, type Tab } from "@/lib/people/view"
+import type { Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
 import type { useDecisions } from "./useDecisions"
@@ -52,7 +52,7 @@ export function usePeopleShortcuts({
       search.current?.focus()
       search.current?.select()
     },
-    switchTab: (position) => setTab(ORDER[position] ?? "confirm"),
+    switchTab: (position) => setTab(TABS[position] ?? "all"),
     move: (step) => {
       if (!matching.length) return
       const next = Math.min(matching.length - 1, Math.max(0, focus + step))

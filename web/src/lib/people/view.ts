@@ -16,7 +16,7 @@ export interface PeopleView {
 }
 
 export const DEFAULT_VIEW: PeopleView = {
-  tab: "confirm",
+  tab: "all",
   filters: new Map(),
   text: "",
   sort: { key: "name", dir: 1 },

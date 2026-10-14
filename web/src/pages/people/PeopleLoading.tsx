@@ -1,6 +1,6 @@
 import { PageHeader, SearchField, Select } from "@/components/shared"
 import { Skeleton } from "@/components/ui/skeleton"
-import { label, SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
+import { SEARCH_LABEL, SEARCH_PLACEHOLDER } from "@/lib/people/copy"
 
 import { PeopleShell } from "./PeopleShell"
 import "./styles/table.css"
@@ -24,7 +24,7 @@ export function PeopleLoading() {
               disabled
             />
             <Select aria-label="Sharing" disabled>
-              <option>{label("share", "confirm")}</option>
+              <option>All</option>
             </Select>
             <Select aria-label="Relationship" disabled>
               <option>All relationships</option>

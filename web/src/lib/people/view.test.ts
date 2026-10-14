@@ -25,6 +25,6 @@ describe("view query parameters", () => {
       DEFAULT_VIEW,
       new URLSearchParams("filter.worth=yes&q=acme&sort=last&dir=desc&person=p1"),
     )
-    expect(params.toString()).toBe("person=p1&tab=confirm")
+    expect(params.toString()).toBe("person=p1&tab=all")
   })
 })

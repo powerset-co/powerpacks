@@ -7,7 +7,7 @@ import type { Decision, Person, PersonDetail } from "@/types/people"
 
 import type { SectionProps } from "./sections"
 
-const BADGE: Record<Decision, "ok" | "warn" | "muted"> = { yes: "ok", confirm: "warn", no: "muted" }
+const BADGE: Record<Decision, "ok" | "muted"> = { yes: "ok", no: "muted" }
 
 function worthLine(row: Person): string {
   const yours = row.worth_source === "human"

@@ -17,7 +17,7 @@ export type TextKind =
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
-  share: { yes: "Sharing", confirm: "Needs confirmation", no: "Not sharing" },
+  share: { yes: "Sharing", no: "Not sharing" },
   reason: {
     worth_yes: "Worth: yes",
     worth_maybe: "Worth: maybe",
@@ -30,7 +30,6 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     minor: "Minor",
     would_vouch: "Professional contact",
     not_professional: "Not a professional contact",
-    unsure: "Unsure: your call",
     // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",

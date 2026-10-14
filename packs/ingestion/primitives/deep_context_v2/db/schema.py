@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from packs.ingestion.schemas.share_schema import SHARE_CONFIRM, SHARE_NO, SHARE_YES
+from packs.ingestion.schemas.share_schema import SHARE_NO, SHARE_YES
 
 SCHEMA_VERSION = 4
 MINTED_PARENT_PREFIX = "p:"
@@ -99,10 +99,9 @@ class Verdict(StrEnum):
 
 
 class ShareValue(StrEnum):
-    """The share stage's three-way decision, the words of schemas/share_schema.py."""
+    """The share stage's decision, the words of schemas/share_schema.py."""
     YES = SHARE_YES
     NO = SHARE_NO
-    CONFIRM = SHARE_CONFIRM
 
 
 class ResearchStatus(StrEnum):

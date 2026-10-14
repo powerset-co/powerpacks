@@ -104,7 +104,7 @@ class SignalsRefreshTests(StoreTests):
 
     def test_a_family_luna_refuses_keeps_its_old_signals_and_share_still_runs(self) -> None:
         # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
-        # both are worth yes, so the settle rule leaves them alone.
+        # both are worth yes, so the settle rule leaves them alone. With no call of Luna's, p:a shares.
         self.conn.execute(
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES ('c1', 'yes', 'machine', 'old', ?, 'an-older-version-key', '2026-10-08')",
@@ -120,7 +120,7 @@ class SignalsRefreshTests(StoreTests):
         manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
         self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
         share = dict(self.conn.execute("SELECT candidate_id, reason FROM share").fetchall())
-        self.assertEqual(share, {"c1": "unsure", "c2": "family"})
+        self.assertEqual(share, {"c1": "would_vouch", "c2": "family"})
 
     def test_a_refresh_keeps_the_settle_rule(self) -> None:
         # Luna says p:a is worth yes; with no profile and no messages, settle still makes it no.
