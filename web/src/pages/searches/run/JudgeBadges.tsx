@@ -8,22 +8,16 @@ interface JudgeBadgesProps {
   shown: boolean
 }
 
-// rendering.py _judge_badges: taste, the pin judge's suggestion and team similarity, none of
-// which changes the score.
+// rendering.py _judge_badges: taste when it was scored, the pin judge's suggestion and team
+// similarity, none of which changes the score.
 export function JudgeBadges({ candidate, shown }: JudgeBadgesProps) {
   const similarity = candidate?.team_similarity
   return (
     <span className="result-badges" data-labels={shown}>
-      {candidate?.candidate_judgment ? (
-        candidate.taste_score === null ? (
-          <Badge variant="muted" title="No taste score on file">
-            Taste N/A
-          </Badge>
-        ) : (
-          <Badge variant="muted" title="Reporting taste score">
-            Taste {candidate.taste_score.toFixed(1)}
-          </Badge>
-        )
+      {candidate?.candidate_judgment && candidate.taste_score !== null ? (
+        <Badge variant="muted" title="Reporting taste score">
+          Taste {candidate.taste_score.toFixed(1)}
+        </Badge>
       ) : null}
       {candidate?.pin_judgment?.decision === "introduce" ? (
         <Badge variant="info" title={`Pin confidence ${String(candidate.pin_confidence ?? "unscored")}/100`}>

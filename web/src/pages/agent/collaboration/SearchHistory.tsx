@@ -161,7 +161,7 @@ export function SearchHistory({
     return (
       <article
         data-message-id={message.id}
-        className={`mx-auto max-w-[760px] px-5 py-3 ${message.reply_to ? "pl-12" : ""}`}
+        className={`mx-auto max-w-[680px] px-5 py-3 ${message.reply_to ? "pl-12" : ""}`}
       >
         <div className="flex items-center gap-2 text-xs">
           <Avatar name={message.author_name} />
@@ -277,7 +277,7 @@ export function SearchHistory({
             row.message ? (
               renderMessage(row.message)
             ) : (
-              <div className="mx-auto flex max-w-[760px] flex-col gap-5 px-5 pb-5 pt-2">{children}</div>
+              <div className="mx-auto flex max-w-[680px] flex-col gap-7 px-5 pb-5 pt-2">{children}</div>
             )
           }
         />

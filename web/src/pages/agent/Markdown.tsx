@@ -54,7 +54,7 @@ function render(block: Block, key: number): ReactNode {
   switch (block.kind) {
     case "heading":
       return (
-        <h3 key={key} className="m-0 mt-1 text-sm font-semibold">
+        <h3 key={key} className="m-0 mt-1 text-base font-semibold">
           <Inline text={block.text} />
         </h3>
       )
@@ -122,5 +122,5 @@ function render(block: Block, key: number): ReactNode {
 }
 
 export function Markdown({ text }: { text: string }) {
-  return <div className="flex flex-col gap-3 leading-[1.6]">{blocks(text).map(render)}</div>
+  return <div className="flex flex-col gap-3 leading-[1.65]">{blocks(text).map(render)}</div>
 }
