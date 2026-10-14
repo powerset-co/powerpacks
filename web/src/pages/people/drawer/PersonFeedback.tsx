@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 
-import { FeedbackForm, FlagIcon } from "@/components/shared"
+import { DrawerIconTip, FeedbackForm, FlagIcon } from "@/components/shared"
 import {
   Dialog,
   DialogContent,
@@ -19,12 +19,9 @@ export function PersonFeedback({ row }: { row: Person }) {
   const notes = useRef<HTMLTextAreaElement>(null)
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        className="drawer-icon"
-        aria-label={`Send feedback about ${row.name}`}
-        title="Send feedback"
-      >
+      <DialogTrigger className="drawer-icon group" aria-label={`Send feedback about ${row.name}`}>
         <FlagIcon className="size-[15px]" />
+        <DrawerIconTip name="Send feedback">A note about this person for the Powerset team.</DrawerIconTip>
       </DialogTrigger>
       <DialogContent
         className="w-[min(448px,calc(100%-32px))] gap-5 p-6"

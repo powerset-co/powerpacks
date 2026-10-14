@@ -4,6 +4,7 @@ import { useInert } from "@/hooks/useInert"
 
 import "./Drawer.css"
 import { CLOSE_MARK } from "./icons/actions"
+import { Tip } from "./Tip"
 
 interface DrawerProps {
   open: boolean
@@ -65,5 +66,16 @@ export function DrawerClose({ onClose }: { onClose: () => void }) {
     >
       {CLOSE_MARK}
     </button>
+  )
+}
+
+// What an icon beside Close does, on hover: its name, then a line on what it does. The icon's
+// button carries `group`.
+export function DrawerIconTip({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <Tip side="below-left" className="w-60 whitespace-normal leading-relaxed">
+      <span className="block">{name}</span>
+      <span className="block font-normal text-muted-foreground">{children}</span>
+    </Tip>
   )
 }

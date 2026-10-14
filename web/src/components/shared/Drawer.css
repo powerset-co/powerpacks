@@ -95,11 +95,15 @@
   background: var(--secondary);
 }
 .drawer-icon {
+  position: relative;
   display: grid;
   place-items: center;
   padding: 0;
 }
 .drawer-icon:disabled {
   cursor: default;
+}
+/* A disabled icon dims; its hover label (DrawerIconTip) does not. */
+.drawer-icon:disabled > :not([role="tooltip"]) {
   opacity: 0.6;
 }
