@@ -16,8 +16,8 @@ One user, one process. Jobs live in memory, keyed by card, so a reloaded page st
 sees a running sync (a server restart forgets it; msgvault resumes on the next sync).
 Starting a job that is already running is a no-op. The sync functions take turns on
 refresh_sources' lock file (shared with the scheduled run); a Reconnect waits for the
-browser sign-in before that, so an abandoned sign-in never blocks other syncs. While a job runs, the
-page's polls reuse the last Gmail sign-in checks instead of asking Google each time.
+browser sign-in before that, so an abandoned sign-in never blocks other syncs. Accounts polls reuse
+Gmail sign-in checks until a job ends, the stored mailbox list changes, or signed-in refreshes them.
 
 Changelog:
   2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
@@ -69,12 +69,12 @@ class AccountsApi:
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path == SIGNED_IN_PATH:
-            _send_json(handler, asdict(signed_in()))
+            self._signins = gmail_signins()
+            _send_json(handler, asdict(signed_in(self._signins)))
             return True
         if parsed.path != ACCOUNTS_PATH:
             return False
-        if not any(job.state in BUSY for job in self.jobs.values()) or self._signins is None:
-            self._signins = gmail_signins()
+        self._signins = gmail_signins(self._signins)
         _send_json(handler, {
             "accounts": [asdict(account) for account in read_accounts(self._signins)],
             "jobs": {key: asdict(job) for key, job in self.jobs.items()},

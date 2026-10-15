@@ -12,7 +12,7 @@ import threading
 import unittest
 import urllib.parse
 import urllib.request
-from dataclasses import replace
+from dataclasses import asdict, replace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -288,10 +288,12 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(candidate.location, "Oakland, California")
         self.assertEqual(candidate.avatar_url, "https://example.com/prior.jpg")
         self.assertEqual(candidate.found_run, "jordan-role-prior")
-        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).traits[0].name,
-                         "Works across teams")
-        self.assertEqual(candidate.in_pond("jordan-role", 1).final_score, 0.72)
-        self.assertEqual(candidate.in_pond("jordan-role-prior", 1).final_score, 0.88)
+        self.assertEqual(set(asdict(candidate.ponds[0])), {"run_id", "pond_n", "query"})
+        rows = {pond.run_id: next(row for row in pond.candidates if row.person_id == candidate.person_id)
+                for pond in search.ponds}
+        self.assertEqual(rows["jordan-role-prior"].traits[0].name, "Works across teams")
+        self.assertEqual(rows["jordan-role"].final_score, 0.72)
+        self.assertEqual(rows["jordan-role-prior"].final_score, 0.88)
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -469,12 +471,14 @@ class ResultsWebTest(unittest.TestCase):
             root = self._fixture(directory, cross_encoder=True)
             search = load_searches(root)[0]
             candidate = search.candidate(self.PERSON)
-            candidate = replace(candidate, ponds=tuple(
-                replace(source, candidate=replace(source.candidate, cross_encoder_score=0))
-                for source in candidate.ponds))
+            search = replace(search, ponds=tuple(
+                replace(pond, candidates=tuple(replace(row, cross_encoder_score=0) for row in pond.candidates))
+                for pond in search.ponds))
             request = build_feedback_request(search, "Reviewed", candidate, environ={},
                                              human_judgment={"score": 3, "scale": 5})
             self.assertEqual(request.metadata["cross_encoder_score"], 0)
+            self.assertEqual(request.metadata["final_score"], 0.88)
+            self.assertEqual(request.metadata["traits"][0]["name"], "Works across teams")
             path = record_fit_label(root / "jordan-role", request)
             saved = json.loads(path.read_text().splitlines()[-1])
             self.assertEqual(saved["human"]["score"], 3)

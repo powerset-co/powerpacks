@@ -71,6 +71,11 @@ describe("rankResults", () => {
     expect(overallScore(jev, undefined)).toBeNull()
   })
 
+  it("a run without a JD shows its ponds even when its rows are rated; a JD run is ranked", () => {
+    expect(rankResults({ ...search, jd_text: "" }).mode).toBe("ponds")
+    expect(rankResults(search).mode).toBe("ranked")
+  })
+
   it("no screen at all falls back to one table per pond; a failed screen says so", () => {
     const unscreened = withRows((row) => ({ ...row, cross_encoder_score: null, cross_encoder_status: "" }))
     expect(rankResults(unscreened).mode).toBe("ponds")

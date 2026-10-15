@@ -101,10 +101,11 @@ class SignedIn:
     mailboxes: tuple[str, ...]
 
 
-def signed_in() -> SignedIn:
+def signed_in(signins: dict[str, SignIn] | None = None) -> SignedIn:
     """Each source's sign-in, read where it lives. Gmail counts once every stored mailbox's
     sign-in is healthy now: an expired one would open Google's consent mid-setup."""
-    signins = gmail_signins()
+    if signins is None:
+        signins = gmail_signins()
     owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower()
     return SignedIn(
         linkedin=_linkedin_session(),
@@ -144,16 +145,19 @@ def _whatsapp_linked() -> bool:
 
 
 def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:
-    """Every account. `signins` reuses earlier Gmail sign-in checks (the page does
-    while a sync runs, instead of asking Google every poll); None checks now."""
+    """Every account. `signins` reuses earlier Gmail sign-in checks; None checks now."""
     return [*_gmail_accounts(signins), _imessage_account(), _whatsapp_account(), _linkedin_account()]
 
 
-def gmail_signins() -> dict[str, SignIn]:
-    """Each stored Gmail account's sign-in, from msgvault's zero-download verify probe."""
+def gmail_signins(signins: dict[str, SignIn] | None = None) -> dict[str, SignIn]:
+    """Probe stored Gmail sign-ins unless the cached mailbox list still matches."""
     if not DEFAULT_MSGVAULT_DB.exists():
         return {}
-    emails = [row.email for row in _gmail_rows(DEFAULT_MSGVAULT_DB)]
+    with sqlite3.connect(f"file:{DEFAULT_MSGVAULT_DB}?mode=ro", uri=True) as conn:
+        emails = [row[0] for row in conn.execute(
+            "SELECT identifier FROM sources WHERE source_type = 'gmail' ORDER BY identifier")]
+    if signins is not None and signins.keys() == set(emails):
+        return signins
     with ThreadPoolExecutor(max_workers=len(emails) or 1) as pool:
         checks = pool.map(lambda email: check_account(MSGVAULT_HOME, email, stored=True).status, emails)
     return dict(zip(emails, checks))
@@ -176,7 +180,7 @@ def _gmail_accounts(signins: dict[str, SignIn] | None) -> list[Account]:
     if not DEFAULT_MSGVAULT_DB.exists():
         return [Account("gmail", "Gmail", "off", "Not connected", 0, 0, None, None)]
     rows = _gmail_rows(DEFAULT_MSGVAULT_DB)
-    if signins is None or any(row.email not in signins for row in rows):
+    if signins is None:
         signins = gmail_signins()
     contacts = _gmail_contacts()
     return [_gmail_account(row, signins[row.email], contacts.get(row.email, 0)) for row in rows]

@@ -100,7 +100,6 @@ export interface CandidatePond {
   run_id: string
   pond_n: number
   query: string
-  candidate: PondCandidate
 }
 
 export interface MoveLikelihood {

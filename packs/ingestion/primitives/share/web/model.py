@@ -156,12 +156,13 @@ def _facts_title(facts: dict[str, Any]) -> tuple[str, str]:
 
 class SharePeople:
     """The families joined to the store. Construct once; `load()` re-reads the store (it changes as the
-    human tags); the export rows are rebuilt when the store file changes."""
+    human tags); export rows and family facts are rebuilt when the store file changes."""
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
         self.data_root = data_root
         self._rows: dict[str, dict[str, str]] = {}
+        self._family_facts: dict[str, dict[str, Any]] = {}
         self._stamp: int | tuple[int, int] = 0
 
     def export_rows(self) -> dict[str, dict[str, str]]:
@@ -170,6 +171,7 @@ class SharePeople:
         if stamp != self._stamp:
             rows, _counts = Realize(self.conn, self.data_root).build()
             self._rows = {row["id"]: row for row in rows}
+            self._family_facts = self._facts()
             self._stamp = stamp
         return self._rows
 
@@ -193,13 +195,12 @@ class SharePeople:
         worth: dict[str, sqlite3.Row] = {}
         for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
             worth[row["parent_id"]] = row
-        facts = self._facts()
         people: list[SharePerson] = []
         for parent_id, decision in decisions.items():
             row = rows[parent_id]
             label = labels[decision.candidate_id]
             cells = parse_json_object(label.labels_json)
-            fact = facts[parent_id]
+            fact = self._family_facts[parent_id]
             fact_title, fact_company = _facts_title(fact)
             held = tags.get(parent_id)
             people.append(SharePerson(
