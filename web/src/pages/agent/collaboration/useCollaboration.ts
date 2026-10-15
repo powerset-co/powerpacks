@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
 import {
+  type Conversation,
   fetchCollaboration,
   fetchQuestions,
   postConversation,
@@ -10,6 +11,12 @@ import {
 import { invoke } from "@/lib/desktop"
 
 const KEY = ["collaboration"]
+
+/** The side nav's searches shared with you, as last fetched: the Searches page polls, this doesn't. */
+export function useSharedSearches(enabled: boolean): Conversation[] {
+  const state = useQuery({ queryKey: KEY, queryFn: fetchCollaboration, enabled })
+  return enabled ? (state.data?.conversations ?? []) : []
+}
 
 export function useCollaboration(enabled = true) {
   const client = useQueryClient()

@@ -1,10 +1,10 @@
 import { useFeatures } from "@/lib/features"
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef } from "react"
 
 import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
 import { useFullAccessTip } from "@/lib/agent/fullAccessTip"
-import { answer, newChat, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
+import { answer, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
 import { chatRun } from "@/lib/agent/searchRun"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
@@ -15,11 +15,9 @@ import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { RunColumn } from "@/pages/searches/RunColumn"
 
 import { ApprovalCard } from "./ApprovalCard"
-import { ChatSidebar } from "./ChatSidebar"
 import { CodexGate } from "./CodexGate"
 import { Composer } from "./Composer"
 import { FullAccessTip } from "./FullAccessTip"
-import { ComposeIcon, SidebarIcon } from "./icons"
 import { SearchScope } from "./SearchScope"
 import { Transcript } from "./Transcript"
 import { SearchHistory } from "./collaboration/SearchHistory"
@@ -42,40 +40,22 @@ function Welcome() {
   )
 }
 
-function ChatHeader({ onToggle, runTitle }: { onToggle: () => void; runTitle: string | null }) {
+function ChatHeader({ runTitle }: { runTitle: string | null }) {
   const agent = useAgent()
   const threads = useThreads()
   const title = runTitle ?? threads.data?.find(({ id }) => id === agent.threadId)?.title ?? "New chat"
   return (
-    <header className="flex h-12 items-center gap-2 px-4">
-      <button
-        type="button"
-        aria-label="Chats"
-        onClick={onToggle}
-        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden group-data-[run]/agent:max-[1100px]:grid"
-      >
-        <SidebarIcon className="size-4" />
-      </button>
+    <header className="flex h-12 items-center px-4">
       <h2 className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-muted-foreground">{title}</h2>
-      <button
-        type="button"
-        aria-label="New chat"
-        onClick={newChat}
-        className="grid size-8 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground min-[861px]:hidden group-data-[run]/agent:max-[1100px]:grid"
-      >
-        <ComposeIcon className="size-4" />
-      </button>
     </header>
   )
 }
 
 function Conversation({
-  onToggle,
   runTitle,
   runId,
   collaboration,
 }: {
-  onToggle: () => void
   runTitle: string | null
   runId: string | null
   collaboration: ReturnType<typeof useCollaboration>
@@ -100,7 +80,7 @@ function Conversation({
   if (runId && features.sets)
     return (
       <section className="flex min-h-0 min-w-0 flex-col">
-        <ChatHeader onToggle={onToggle} runTitle={runTitle} />
+        <ChatHeader runTitle={runTitle} />
         <SearchHistory
           key={runId}
           searchId={runId}
@@ -137,7 +117,7 @@ function Conversation({
 
   return (
     <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
-      <ChatHeader onToggle={onToggle} runTitle={runTitle} />
+      <ChatHeader runTitle={runTitle} />
       <div
         ref={scroller}
         className="overflow-y-auto"
@@ -208,14 +188,14 @@ function SignedInAgent() {
   return <Workspace />
 }
 
-/** The chats, the open chat, and the search it ran beside it (a quick search is one pond). */
+/** The open chat, and the search it ran beside it (a quick search is one pond); the side nav lists
+ *  the chats. */
 function Workspace() {
   const agent = useAgent()
   const features = useFeatures()
   const collaboration = useCollaboration(features.sets)
   const catalog = useCatalog()
   const client = useQueryClient()
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const listed = useMemo(() => new Set(catalog.data?.map(({ run_id }) => run_id)), [catalog.data])
   const runId = chatRun(agent.entries, listed) ?? agent.searchRun
   const runTitle =
@@ -228,37 +208,15 @@ function Workspace() {
     if (!agent.running) void client.invalidateQueries({ queryKey: ["searches", "catalog"] })
   }, [agent.running, client])
 
-  // The chats list is an overlay below 860px, and below 1100px once a run takes the third
-  // column (the window goes down to 960px); the list and the header's buttons read `data-run`.
+  // Chat and results split the room evenly; the results keep 380px at the narrowest window (960px).
   return (
     <main
-      data-run={runId && listed.has(runId) ? "" : undefined}
       className={cn(
-        "group/agent grid min-h-0 grid-cols-[260px_minmax(0,1fr)] max-[860px]:grid-cols-1",
-        runId &&
-          listed.has(runId) &&
-          "grid-cols-[260px_minmax(340px,420px)_minmax(0,1fr)] max-[1100px]:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]",
+        "grid min-h-0 grid-cols-[minmax(0,1fr)]",
+        runId && listed.has(runId) && "grid-cols-[minmax(0,1fr)_minmax(380px,1fr)]",
       )}
     >
-      <ChatSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        sharedSearches={collaboration.data?.conversations ?? []}
-      />
-      {sidebarOpen && (
-        <button
-          type="button"
-          aria-label="Close chats"
-          onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-30 cursor-default border-0 bg-black/40 min-[861px]:hidden group-data-[run]/agent:max-[1100px]:block"
-        />
-      )}
-      <Conversation
-        onToggle={() => setSidebarOpen((open) => !open)}
-        runTitle={runTitle}
-        runId={runId}
-        collaboration={collaboration}
-      />
+      <Conversation runTitle={runTitle} runId={runId} collaboration={collaboration} />
       {runId && listed.has(runId) && (
         <div className="searches-main border-l border-line" aria-label="Search results">
           <RunColumn runId={runId} />

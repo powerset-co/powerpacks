@@ -1,30 +1,39 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
+import { useMatch, useNavigate } from "react-router-dom"
 
-import { CLOSE_MARK } from "@/components/shared"
+import { CLOSE_MARK } from "@/components/shared/icons/actions"
 import { groupThreads } from "@/lib/agent/groups"
 import { newChat, openChat, openSearch, useAgent } from "@/lib/agent/store"
+import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { THREADS_KEY, useThreads } from "@/lib/agent/useThreads"
-import type { Conversation } from "@/lib/api/collaboration"
 import { archiveThread } from "@/lib/api/codex"
+import { useFeatures } from "@/lib/features"
+import { AGENT } from "@/lib/nav"
 import { runDate } from "@/lib/searches/copy"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 
+import { useSharedSearches } from "./collaboration/useCollaboration"
 import { ComposeIcon } from "./icons"
 
-interface ChatSidebarProps {
-  sharedSearches: Conversation[]
-  open: boolean
-  onClose: () => void
+/** The side nav's chats once Codex is signed in (the Searches page's own gate): New chat, the past
+ *  chats by date and the saved searches; picking one opens it on Searches. The rail keeps New chat. */
+export function Chats({ rail }: { rail: boolean }) {
+  const codex = useCodexAccount()
+  if (!codex.status?.installed || !codex.status.account) return null
+  return <ChatList rail={rail} />
 }
 
-/** New chat and the past chats by date. A column on wide windows, a drawer on narrow ones. */
-export function ChatSidebar({ open, onClose, sharedSearches }: ChatSidebarProps) {
+function ChatList({ rail }: { rail: boolean }) {
   const agent = useAgent()
   const client = useQueryClient()
+  const navigate = useNavigate()
+  const here = useMatch(AGENT.href) !== null
+  const features = useFeatures()
   const threads = useThreads()
   const searches = useCatalog()
+  const shared = useSharedSearches(features.sets)
 
   // A chat appears once its first turn starts, and moves up when a turn ends.
   useEffect(() => {
@@ -33,50 +42,56 @@ export function ChatSidebar({ open, onClose, sharedSearches }: ChatSidebarProps)
 
   const pick = (action: () => void) => {
     action()
-    onClose()
+    void navigate(AGENT.href)
   }
   const remove = (threadId: string) => {
     if (threadId === agent.threadId) newChat()
     void archiveThread(threadId).finally(() => client.invalidateQueries({ queryKey: THREADS_KEY }))
   }
 
+  if (rail) {
+    return (
+      <div className="border-t border-line p-2">
+        <button
+          type="button"
+          aria-label="New chat"
+          title="New chat"
+          onClick={() => pick(newChat)}
+          className="grid h-9 w-full cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-primary transition-colors duration-fast ease-out hover:bg-secondary"
+        >
+          <ComposeIcon className="size-[18px]" />
+        </button>
+      </div>
+    )
+  }
   return (
-    <aside
-      aria-label="Chats"
-      data-open={open}
-      // An overlay below 860px, and below 1100px when the page (`group/agent`) shows a run.
-      className={cn(
-        "z-40 flex min-h-0 w-[260px] flex-col border-r border-line bg-[color-mix(in_srgb,var(--card)_55%,var(--background))]",
-        "max-[860px]:fixed max-[860px]:bottom-0 max-[860px]:left-0 max-[860px]:top-0 max-[860px]:-translate-x-full max-[860px]:shadow-[var(--shadow-2)] max-[860px]:transition-transform max-[860px]:duration-med max-[860px]:ease-out max-[860px]:data-[open=true]:translate-x-0",
-        "group-data-[run]/agent:max-[1100px]:fixed group-data-[run]/agent:max-[1100px]:bottom-0 group-data-[run]/agent:max-[1100px]:left-0 group-data-[run]/agent:max-[1100px]:top-0 group-data-[run]/agent:max-[1100px]:-translate-x-full group-data-[run]/agent:max-[1100px]:shadow-[var(--shadow-2)] group-data-[run]/agent:max-[1100px]:transition-transform group-data-[run]/agent:max-[1100px]:duration-med group-data-[run]/agent:max-[1100px]:ease-out group-data-[run]/agent:max-[1100px]:data-[open=true]:translate-x-0",
-      )}
-    >
-      <div className="p-3">
+    <section aria-label="Chats" className="flex min-h-0 flex-1 flex-col border-t border-line">
+      <div className="p-2">
         <button
           type="button"
           onClick={() => pick(newChat)}
-          className="flex w-full cursor-pointer items-center gap-2.5 rounded-[var(--radius-m)] border border-line bg-card px-3 py-2 text-[13px] font-semibold text-foreground transition-colors duration-fast ease-out hover:border-line-strong hover:bg-surface-2"
+          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 text-left text-[13px] font-medium text-foreground transition-colors duration-fast ease-out hover:bg-secondary"
         >
-          <ComposeIcon className="size-4 text-primary" />
+          <ComposeIcon className="size-[18px] shrink-0 text-primary" />
           New chat
         </button>
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {threads.data?.length === 0 && (
-          <p className="m-0 px-3 py-2 text-xs text-faint">Your chats will show up here.</p>
+          <p className="m-0 px-2.5 py-2 text-xs text-faint">Your chats will show up here.</p>
         )}
         {groupThreads(threads.data ?? [], new Date()).map((group) => (
           <section key={group.label} className="mb-2">
-            <h2 className="m-0 px-3 pb-1 pt-3 text-[11px] font-semibold text-faint">{group.label}</h2>
+            <h2 className="m-0 px-2.5 pb-1 pt-3 text-[11px] font-semibold text-faint">{group.label}</h2>
             <ul className="m-0 flex list-none flex-col gap-px p-0">
               {group.threads.map((thread) => (
                 <li key={thread.id} className="group relative">
                   <button
                     type="button"
-                    aria-current={thread.id === agent.threadId ? "page" : undefined}
+                    aria-current={here && thread.id === agent.threadId ? "page" : undefined}
                     onClick={() => pick(() => void openChat(thread.id))}
                     className={cn(
-                      "block w-full cursor-pointer truncate rounded-[var(--radius-s)] border-0 bg-transparent py-1.5 pl-3 pr-8 text-left text-[13px] text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground",
+                      "block w-full cursor-pointer truncate rounded-[var(--radius-s)] border-0 bg-transparent py-1.5 pl-2.5 pr-8 text-left text-[13px] text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground",
                       "aria-[current=page]:bg-surface-2 aria-[current=page]:text-foreground",
                     )}
                   >
@@ -95,34 +110,34 @@ export function ChatSidebar({ open, onClose, sharedSearches }: ChatSidebarProps)
             </ul>
           </section>
         ))}
-        {sharedSearches
+        {shared
           .filter(
             (item, index) =>
               !searches.data?.some((card) => card.run_id === item.search_id) &&
-              sharedSearches.findIndex((other) => other.search_id === item.search_id) === index,
+              shared.findIndex((other) => other.search_id === item.search_id) === index,
           )
           .map((item) => (
             <button
               key={item.search_id}
               type="button"
               onClick={() => pick(() => openSearch(item.search_id))}
-              className="block w-full truncate rounded-[var(--radius-s)] border-0 bg-transparent px-3 py-2 text-left text-[13px] hover:bg-secondary"
+              className="block w-full truncate rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-2 text-left text-[13px] hover:bg-secondary"
             >
               {item.title}
             </button>
           ))}
         {searches.data?.length ? (
           <section className="mb-2">
-            <h2 className="m-0 px-3 pb-1 pt-3 text-[11px] font-semibold text-faint">Searches</h2>
+            <h2 className="m-0 px-2.5 pb-1 pt-3 text-[11px] font-semibold text-faint">Saved searches</h2>
             <ul className="m-0 flex list-none flex-col gap-px p-0">
               {searches.data.map((card) => (
                 <li key={card.run_id}>
                   <button
                     type="button"
-                    aria-current={card.run_id === agent.searchRun ? "page" : undefined}
+                    aria-current={here && card.run_id === agent.searchRun ? "page" : undefined}
                     onClick={() => pick(() => openSearch(card.run_id))}
                     className={cn(
-                      "flex w-full cursor-pointer flex-col rounded-[var(--radius-s)] border-0 bg-transparent px-3 py-1.5 text-left transition-colors duration-fast ease-out hover:bg-secondary",
+                      "flex w-full cursor-pointer flex-col rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left transition-colors duration-fast ease-out hover:bg-secondary",
                       "aria-[current=page]:bg-surface-2",
                     )}
                   >
@@ -136,7 +151,7 @@ export function ChatSidebar({ open, onClose, sharedSearches }: ChatSidebarProps)
             </ul>
           </section>
         ) : null}
-      </nav>
-    </aside>
+      </div>
+    </section>
   )
 }
