@@ -5,6 +5,7 @@ import { isDesktop } from "@/lib/desktop"
 import { useFeatures } from "@/lib/features"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
+import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
 import { Chats } from "@/pages/agent/Chats"
 
@@ -49,11 +50,13 @@ function useMedia(query: string): boolean {
   return matches
 }
 
-/** The app's side nav: the brand with the collapse toggle, one item per page, the desktop app's
- *  chats, and at the bottom the update pane and who is signed in. Collapsed it is an icon rail
- *  with the labels as tooltips; the choice is remembered on this machine. */
+/** The app's side nav: the brand with the collapse toggle, one item per page (Setup only until
+ *  it is done; Settings then offers Repair setup), the desktop app's chats, and at the bottom the
+ *  update pane and who is signed in. Collapsed it is an icon rail with the labels as tooltips;
+ *  the choice is remembered on this machine. */
 export function Sidebar() {
   const features = useFeatures()
+  const done = useSetupDone()
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -106,7 +109,9 @@ export function Sidebar() {
         </button>
       </div>
       <ul className="m-0 flex shrink-0 list-none flex-col gap-0.5 p-2">
-        {PAGES.filter((page) => page.key !== "sets" || features.sets).map((page) => (
+        {PAGES.filter(
+          (page) => (page.key !== "sets" || features.sets) && (page.key !== "setup" || !done),
+        ).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} />
           </li>

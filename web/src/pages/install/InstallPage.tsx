@@ -8,6 +8,7 @@ import { fetchInstall, installAction } from "@/lib/api/install"
 import { fetchLinkedinCard } from "@/lib/api/review"
 import { isDesktop } from "@/lib/desktop"
 import { errorText } from "@/lib/api/http"
+import { useSetupDone } from "@/hooks/useSetupDone"
 import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
@@ -93,10 +94,12 @@ export function InstallPage() {
     retry: false,
   })
   const [importing, setImporting] = useState(false)
+  const done = useSetupDone()
   const [expanded, setExpanded] = useState(false)
   const [actionError, setActionError] = useState("")
-  // Before the first click: only the welcome and the choice, none of the progress furniture.
-  const welcome = importing || (!error && data?.event === "setup.ready")
+  // Before the first click: only the welcome and the choice, none of the progress furniture. Once
+  // setup is done (an import counts) the choice never comes back, whatever the record says.
+  const welcome = importing || (!done && !error && data?.event === "setup.ready")
   const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
