@@ -1,6 +1,7 @@
 // Which people a run shows and in what order: rendering.py _cross_encoder_table,
 // _overall_score, _is_qualification_score and _pond_table, rule for rule. Qualification
-// (Jev) and rating scales are never compared; a missing score is never a zero.
+// (Jev) and rating scales are never compared; a missing score is never a zero. One rule is
+// the page's own: a run without a JD shows its ponds, never a rating.
 
 import type { Candidate, Pond, PondCandidate, SearchResult } from "@/types/searches"
 
@@ -125,6 +126,8 @@ function rankedSection(
 }
 
 export function rankResults(search: SearchResult): Results {
+  // A plain search is ranked by each pond's own score and traits; a rating needs a JD.
+  if (search.jd_text === "") return { mode: "ponds" }
   const byId = candidatesById(search)
   const everyRow = search.ponds.flatMap((pond) => pond.candidates)
   const screened = everyRow.filter((row) => row.cross_encoder_score !== null)

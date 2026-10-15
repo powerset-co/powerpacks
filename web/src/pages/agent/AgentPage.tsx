@@ -94,7 +94,7 @@ function Conversation({
             onStop: () => void stop(),
           }}
         >
-          {agent.entries.length > 0 && <Transcript entries={agent.entries} />}
+          {agent.entries.length > 0 && <Transcript entries={agent.entries} running={agent.running} />}
           {tip.shown && agent.approvals.length > 0 && !agent.fullAccess && (
             <FullAccessTip onEnable={() => fullAccess(true)} onDismiss={tip.dismiss} />
           )}
@@ -135,7 +135,7 @@ function Conversation({
           ) : agent.entries.length === 0 ? (
             <Welcome />
           ) : (
-            <Transcript entries={agent.entries} />
+            <Transcript entries={agent.entries} running={agent.running} />
           )}
           {tip.shown && agent.approvals.length > 0 && !agent.fullAccess && (
             <FullAccessTip onEnable={() => fullAccess(true)} onDismiss={tip.dismiss} />

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -54,4 +54,30 @@ it("holds the cards' shapes under Codex while the accounts load, then shows them
   expect(screen.getByText("Refreshes daily at 6:00 AM.")).toBeTruthy()
   expect(screen.queryByText("Loading accounts…")).toBeNull()
   expect(container.querySelectorAll("li[aria-hidden]")).toHaveLength(0)
+})
+
+it("shows a card's stats on a click on it and folds them on the next", async () => {
+  api.fetchAccounts.mockResolvedValue(PAYLOAD)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <AccountsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+
+  const name = await screen.findByText("casey@example.com")
+  const card = name.closest("details")
+  if (!card) throw new Error("Expected the card to fold")
+  const stats = screen.getByText("Messages").closest("dl")
+  expect(stats?.parentElement).toBe(card)
+  expect(card.open).toBe(false)
+  expect(card.querySelector("summary")?.textContent).toBe("casey@example.comHealthyUp to date.")
+
+  fireEvent.click(name)
+  expect(card.open).toBe(true)
+  expect(screen.getByText("120")).toBeTruthy()
+  fireEvent.click(name)
+  expect(card.open).toBe(false)
 })

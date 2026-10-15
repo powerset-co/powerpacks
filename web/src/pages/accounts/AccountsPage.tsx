@@ -104,16 +104,8 @@ function AccountCardSkeleton() {
         <Skeleton className="h-4 w-40 bg-surface-2" />
         <Skeleton className="ml-auto h-5 w-16 rounded-full bg-surface-2" />
       </div>
-      <div className="mb-3 mt-2 flex min-h-7 items-center">
+      <div className="mt-2 flex min-h-7 items-center">
         <Skeleton className="h-3 w-56 max-w-full bg-surface-2" />
-      </div>
-      <div className="grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
-        {[0, 1, 2, 3].map((stat) => (
-          <div key={stat} className="flex flex-col gap-0.5">
-            <Skeleton className="my-0.5 h-3 w-16 bg-surface-2" />
-            <Skeleton className="my-0.5 h-4 w-12 bg-surface-2" />
-          </div>
-        ))}
       </div>
     </li>
   )
@@ -154,39 +146,44 @@ function AccountCard({ account, job, onReconnect, onSync }: AccountCardProps) {
       data-health={account.health}
       className={`rise-in ${CARD_BOX} data-[health=error]:border-[color-mix(in_srgb,var(--bad)_45%,transparent)] data-[health=warning]:border-[color-mix(in_srgb,var(--warn)_40%,transparent)]`}
     >
-      <div className="flex items-center gap-2.5">
-        <SourcePill channel={account.source} size="md" />
-        <span className="min-w-0 truncate text-sm font-semibold">{account.name}</span>
-        <Badge variant={health.variant} className="ml-auto">
-          {health.label}
-        </Badge>
-      </div>
-      <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
-        <p
-          data-tone={tone}
-          aria-live="polite"
-          className="m-0 flex items-center gap-2 text-xs text-muted-foreground data-[tone=error]:text-bad data-[tone=warning]:text-warn"
-        >
-          {running && <Spinner />}
-          {note}
-        </p>
-        {!running && <CardAction account={account} onReconnect={onReconnect} onSync={onSync} />}
-      </div>
-      <dl className="m-0 grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
-        {account.source === "linkedin" ? (
-          <>
-            <Stat label="Connections" value={account.contacts.toLocaleString()} />
-            <Stat label="Export saved" value={stamp(account.last_sync_at)} />
-          </>
-        ) : (
-          <>
-            <Stat label="Messages" value={account.messages.toLocaleString()} />
-            <Stat label="Contacts" value={account.contacts.toLocaleString()} />
-            <Stat label="Newest message" value={ago(account.latest_message_at)} />
-            <Stat label="Last sync" value={stamp(account.last_sync_at)} />
-          </>
-        )}
-      </dl>
+      {/* The stats open on a click on the card and fold on the next. */}
+      <details>
+        <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-2.5">
+            <SourcePill channel={account.source} size="md" />
+            <span className="min-w-0 truncate text-sm font-semibold">{account.name}</span>
+            <Badge variant={health.variant} className="ml-auto">
+              {health.label}
+            </Badge>
+          </span>
+          <span className="mt-2 flex min-h-7 items-center justify-between gap-3">
+            <span
+              data-tone={tone}
+              aria-live="polite"
+              className="flex items-center gap-2 text-xs text-muted-foreground data-[tone=error]:text-bad data-[tone=warning]:text-warn"
+            >
+              {running && <Spinner />}
+              {note}
+            </span>
+            {!running && <CardAction account={account} onReconnect={onReconnect} onSync={onSync} />}
+          </span>
+        </summary>
+        <dl className="m-0 mt-3 grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
+          {account.source === "linkedin" ? (
+            <>
+              <Stat label="Connections" value={account.contacts.toLocaleString()} />
+              <Stat label="Export saved" value={stamp(account.last_sync_at)} />
+            </>
+          ) : (
+            <>
+              <Stat label="Messages" value={account.messages.toLocaleString()} />
+              <Stat label="Contacts" value={account.contacts.toLocaleString()} />
+              <Stat label="Newest message" value={ago(account.latest_message_at)} />
+              <Stat label="Last sync" value={stamp(account.last_sync_at)} />
+            </>
+          )}
+        </dl>
+      </details>
     </li>
   )
 }

@@ -1,14 +1,18 @@
 import { Spinner } from "@/components/shared"
+import { preparedSearch, type PreparedSearch } from "@/lib/agent/preparedSearch"
 import { cn } from "@/lib/utils"
 import type { Entry, ItemStatus } from "@/types/agent"
 
 import { CopyButton } from "./CopyButton"
 import { CheckIcon, CrossIcon, FileIcon, SparkIcon, TerminalIcon } from "./icons"
 import { Markdown } from "./Markdown"
+import { SearchCard } from "./SearchCard"
 
 type WorkEntry = Extract<Entry, { kind: "command" | "files" | "tool" | "reasoning" }>
 type Turn =
-  { kind: "say"; entry: Exclude<Entry, WorkEntry> } | { kind: "work"; id: string; entries: WorkEntry[] }
+  | { kind: "say"; entry: Exclude<Entry, WorkEntry> }
+  | { kind: "work"; id: string; entries: WorkEntry[] }
+  | { kind: "search"; id: string; search: PreparedSearch }
 
 function isWork(entry: Entry): entry is WorkEntry {
   return (
@@ -16,12 +20,17 @@ function isWork(entry: Entry): entry is WorkEntry {
   )
 }
 
-/** Consecutive work (commands, edits, tools, thinking) folds into one panel between messages. */
+/**
+ * Consecutive work (commands, edits, tools, thinking) folds into one panel between messages. A
+ * command that prepared a search is a search card in its place, between the panels around it.
+ */
 function group(entries: Entry[]): Turn[] {
   const out: Turn[] = []
   for (const entry of entries) {
     const last = out.at(-1)
-    if (!isWork(entry)) out.push({ kind: "say", entry })
+    const search = preparedSearch(entry)
+    if (search) out.push({ kind: "search", id: entry.id, search })
+    else if (!isWork(entry)) out.push({ kind: "say", entry })
     else if (last?.kind === "work") last.entries.push(entry)
     else out.push({ kind: "work", id: entry.id, entries: [entry] })
   }
@@ -178,13 +187,22 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   }
 }
 
-export function Transcript({ entries }: { entries: Entry[] }) {
+export function Transcript({ entries, running }: { entries: Entry[]; running: boolean }) {
+  const turns = group(entries)
+  // Only the newest search card asks Execute or Modify, while the agent waits and until a command
+  // runs after it: then the search has run and the card is its record.
+  const newest = turns.filter((turn) => turn.kind === "search").at(-1)
+  const ranSince = turns
+    .slice(newest ? turns.indexOf(newest) + 1 : turns.length)
+    .some((turn) => turn.kind === "work" && turn.entries.some((entry) => entry.kind === "command"))
+  const asking = !running && !ranSince
   return (
     <>
-      {group(entries).map((turn) =>
-        turn.kind === "say" ? (
-          <Say key={turn.entry.id} entry={turn.entry} />
-        ) : (
+      {turns.map((turn) => {
+        if (turn.kind === "say") return <Say key={turn.entry.id} entry={turn.entry} />
+        if (turn.kind === "search")
+          return <SearchCard key={turn.id} search={turn.search} actions={asking && turn === newest} />
+        return (
           // Folded to one line until the reader asks for the commands behind it.
           <details key={turn.id} className="rise-in group/work">
             <summary className={WORK_LINE}>
@@ -219,8 +237,8 @@ export function Transcript({ entries }: { entries: Entry[] }) {
               ))}
             </ol>
           </details>
-        ),
-      )}
+        )
+      })}
     </>
   )
 }
