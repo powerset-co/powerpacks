@@ -71,15 +71,6 @@ export function SparkIcon(props: IconProps) {
   )
 }
 
-export function SidebarIcon(props: IconProps) {
-  return (
-    <svg {...STROKED} {...props}>
-      <rect x="3" y="4" width="18" height="16" rx="3" />
-      <path d="M9 4v16" />
-    </svg>
-  )
-}
-
 export function ComposeIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>

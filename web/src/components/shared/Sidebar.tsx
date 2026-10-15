@@ -1,10 +1,12 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from "react"
 import { NavLink } from "react-router-dom"
 
+import { isDesktop } from "@/lib/desktop"
 import { useFeatures } from "@/lib/features"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
+import { Chats } from "@/pages/agent/Chats"
 
 import {
   AccountsIcon,
@@ -47,9 +49,9 @@ function useMedia(query: string): boolean {
   return matches
 }
 
-/** The app's side nav: the brand with the collapse toggle, one item per page, and at the bottom
- *  the update pane and who is signed in. Collapsed it is an icon rail with the labels as
- *  tooltips; the choice is remembered on this machine. */
+/** The app's side nav: the brand with the collapse toggle, one item per page, the desktop app's
+ *  chats, and at the bottom the update pane and who is signed in. Collapsed it is an icon rail
+ *  with the labels as tooltips; the choice is remembered on this machine. */
 export function Sidebar() {
   const features = useFeatures()
   const [collapsed, setCollapsed] = useState(
@@ -66,8 +68,9 @@ export function Sidebar() {
       aria-label="Pages"
       data-collapsed={rail}
       className={cn(
-        "relative z-10 flex h-full flex-col border-r border-line bg-[var(--sidebar-bg)] transition-[width] duration-med ease-out",
-        rail ? "w-14" : "w-[220px]",
+        // min-h-0: the window's height bounds the nav, so a long chat list scrolls inside it.
+        "relative z-10 flex h-full min-h-0 flex-col border-r border-line bg-[var(--sidebar-bg)] transition-[width] duration-med ease-out",
+        rail ? "w-14" : "w-[260px]",
       )}
     >
       <div
@@ -102,13 +105,14 @@ export function Sidebar() {
           <CollapseIcon className={cn("size-4", collapsed && "-scale-x-100")} />
         </button>
       </div>
-      <ul className="m-0 flex list-none flex-col gap-0.5 p-2">
+      <ul className="m-0 flex shrink-0 list-none flex-col gap-0.5 p-2">
         {PAGES.filter((page) => page.key !== "sets" || features.sets).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} />
           </li>
         ))}
       </ul>
+      {isDesktop() ? <Chats rail={rail} /> : null}
       <SidebarFooter rail={rail} />
     </nav>
   )
