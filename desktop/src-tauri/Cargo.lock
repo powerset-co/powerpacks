@@ -2745,7 +2745,7 @@ checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "powerpacks-desktop"
-version = "3.26.0"
+version = "3.27.0"
 dependencies = [
  "dirs 6.0.0",
  "reqwest",

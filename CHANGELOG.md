@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.27.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.26.0...powerpacks-v3.27.0) (2026-10-15)
+
+
+### Features
+
+* **app:** one sidebar; chat and results split the page ([#817](https://github.com/powerset-co/powerpacks/issues/817)) ([2908ec8](https://github.com/powerset-co/powerpacks/commit/2908ec81f63f44083bb49fda0b38a1ad0895762a))
+* **app:** Setup leaves the side nav once setup is done; Settings offers Repair setup ([#819](https://github.com/powerset-co/powerpacks/issues/819)) ([40db95e](https://github.com/powerset-co/powerpacks/commit/40db95e47c3bae67c1159767a3771d4a6de2c963))
+* **app:** the person drawer's icons say what they do on hover ([#812](https://github.com/powerset-co/powerpacks/issues/812)) ([36eedd7](https://github.com/powerset-co/powerpacks/commit/36eedd73b95b33fdbccb4aa11a9a6f085d4603f7))
+
+
+### Bug Fixes
+
+* **app:** an app with data of its own goes on to Connect instead of an import error ([#818](https://github.com/powerset-co/powerpacks/issues/818)) ([7504c1e](https://github.com/powerset-co/powerpacks/commit/7504c1e30135863a3cff08c7038366670f7ae6fd))
+* **search:** results point only at the local viewer; the Powerset upload stays quiet ([#815](https://github.com/powerset-co/powerpacks/issues/815)) ([76560fa](https://github.com/powerset-co/powerpacks/commit/76560fa5ceb5dde6f31a5b344450f10c1619666f))
+* **ui:** give search results and chat room ([#816](https://github.com/powerset-co/powerpacks/issues/816)) ([36515b2](https://github.com/powerset-co/powerpacks/commit/36515b27f9069a9fa8eb26866ec9e99c884d1bd7))
+
 ## [3.26.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.25.0...powerpacks-v3.26.0) (2026-10-14)
 
 
