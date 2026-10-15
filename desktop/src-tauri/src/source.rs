@@ -164,6 +164,12 @@ with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True
     Ok(())
 }
 
+/// True once `import_cli_data` linked a command-line install's data folder here: its setup is that
+/// install's, finished (it has a network), so the app runs none of its own.
+pub fn imported(root: &Path) -> bool {
+    fs::symlink_metadata(root.join(DATA_DIR)).is_ok_and(|metadata| metadata.is_symlink())
+}
+
 /// Forget everything the app holds (debug menu): its data folder, or the link to the
 /// command-line install's (that install keeps its data), and `.env`. The code stays.
 pub fn reset_data(root: &Path, version: &str) -> Result<(), String> {

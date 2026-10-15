@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { Profiler } from "react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { useSetupDone } from "@/hooks/useSetupDone"
 import type { InstallStatus } from "@/types/install"
 
 import { InstallPage } from "./InstallPage"
@@ -22,6 +24,8 @@ const INSTALL: InstallStatus = {
     dependencies: { status: "running", message: "Installing what Powerpacks needs" },
   },
 }
+
+vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: vi.fn(() => false) }))
 
 function mount(onRender = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -576,5 +580,44 @@ describe("installation progress", () => {
     mount()
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
+  })
+})
+
+describe("the desktop app's welcome", () => {
+  // A finished setup, or an import, whose record still says "ready to set up" (one the app wrote
+  // into an imported install before it knew better).
+  const READY = { ...INSTALL, status: "completed" as const, step: "skills" as const, event: "setup.ready" }
+  // The welcome navigates, so it renders inside a router.
+  function desktop() {
+    vi.stubGlobal("__TAURI__", {
+      core: { invoke: vi.fn(() => Promise.resolve(null)) },
+      event: { listen: vi.fn(() => Promise.resolve(() => undefined)) },
+    })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(READY)))),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/install"]}>
+          <InstallPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it("offers the choice while setup is not done", async () => {
+    desktop()
+    await screen.findByRole("button", { name: /Start setup/ })
+  })
+
+  it("never offers the choice again once setup is done", async () => {
+    vi.mocked(useSetupDone).mockReturnValue(true)
+    desktop()
+    await screen.findByRole("heading", { name: PROSE.page["title.welcome"] })
+    expect(screen.queryByRole("button", { name: /Start setup/ })).toBeNull()
+    expect(screen.queryByText("Start fresh, or bring over what you already have on this Mac.")).toBeNull()
+    vi.mocked(useSetupDone).mockReturnValue(false)
   })
 })

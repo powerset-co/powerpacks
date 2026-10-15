@@ -190,6 +190,13 @@ fn debug_reset_data(
     boot::reset(&app, &boot)
 }
 
+/// Whether setup is done (run here, skipped, or imported): the side nav drops Setup then.
+#[tauri::command]
+fn setup_done(boot: State<'_, Arc<Boot>>) -> bool {
+    boot.root()
+        .is_some_and(|root| onboard::setup(&root) == onboard::Setup::Done)
+}
+
 /// The command-line install the setup page can import, as a path to show.
 #[tauri::command]
 fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
@@ -400,6 +407,7 @@ pub fn run() {
             debug_state,
             debug_skip_setup,
             debug_reset_data,
+            setup_done,
             setup_import_source,
             setup_import,
             report_crash,

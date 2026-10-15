@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 
 use crate::children;
 use crate::paths;
+use crate::source;
 
 const MANIFEST: &str = ".powerpacks/install/manifest.json";
 /// Set from the debug menu: launch treats setup as done, so the other pages can be tried first.
@@ -37,7 +38,7 @@ pub enum Setup {
 }
 
 pub fn setup(root: &Path) -> Setup {
-    if root.join(SKIP_MARKER).exists() {
+    if root.join(SKIP_MARKER).exists() || source::imported(root) {
         return Setup::Done;
     }
     let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
@@ -220,6 +221,20 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_data_is_a_finished_setup_without_any_record() {
+        let temporary =
+            std::env::temp_dir().join(format!("powerpacks-setup-state-{}", std::process::id()));
+        let own = temporary.join("own");
+        fs::create_dir_all(own.join(".powerpacks")).unwrap();
+        assert_eq!(setup(&own), Setup::New);
+        let imported = temporary.join("imported");
+        fs::create_dir_all(&imported).unwrap();
+        std::os::unix::fs::symlink(own.join(".powerpacks"), imported.join(".powerpacks")).unwrap();
+        assert_eq!(setup(&imported), Setup::Done);
+        fs::remove_dir_all(temporary).unwrap();
+    }
 
     #[test]
     fn a_profile_link_goes_to_setup_as_its_owner_choice() {

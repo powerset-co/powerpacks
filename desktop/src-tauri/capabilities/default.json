@@ -31,6 +31,7 @@
     "allow-debug-skip-setup",
     "allow-debug-reset-data",
     "allow-report-crash",
+    "allow-setup-done",
     "allow-setup-import-source",
     "allow-setup-import",
     "allow-app-focus",
