@@ -112,7 +112,8 @@ fn cli_install_in(home: &Path, root: &Path) -> Option<PathBuf> {
 
 /// Share that install's data folder (a link, so both see the same files: the network, imports,
 /// searches and account) and take over its `.env`. The app's own data folder, holding only
-/// what this launch recorded, is backed up; one with a network or sets of its own is kept.
+/// what this launch recorded, is backed up; one with a network or sets of its own is kept, and
+/// setup goes on to Connect as after an import.
 pub fn import_cli_data(root: &Path, cli: &Path) -> Result<(), String> {
     if root.join(NETWORK_STORE).is_file() {
         const PROBE: &str = r#"
@@ -129,12 +130,7 @@ with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True
             .map_err(|error| format!("Could not inspect this app's data: {error}"))?;
         match status.code() {
             Some(0) => {}
-            Some(2) => {
-                return Err(
-                    "This app's existing network or set data was kept. Importing would replace it."
-                        .into(),
-                )
-            }
+            Some(2) => return Ok(()),
             _ => return Err("Could not inspect this app's data; it was kept.".into()),
         }
     }
@@ -413,7 +409,7 @@ with open_store(Path(sys.argv[1])) as conn:
                     stored
                 );
             } else {
-                assert!(result.is_err(), "{fixture} must be retained");
+                result.unwrap();
                 assert_eq!(fs::read(root.join(NETWORK_STORE)).unwrap(), stored);
                 assert_eq!(fs::read_to_string(root.join(".env")).unwrap(), held_env);
                 assert!(!fs::symlink_metadata(root.join(DATA_DIR))
