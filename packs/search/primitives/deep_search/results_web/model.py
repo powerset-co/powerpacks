@@ -121,7 +121,6 @@ class CandidatePond:
     run_id: str
     pond_n: int
     query: str
-    candidate: PondCandidate
 
 
 @dataclass(frozen=True)
@@ -287,10 +286,6 @@ class Candidate:
     def suggested_pin(self) -> bool:
         """The pin judge recommended an introduction; shown as a Suggested Pin badge under the overall reasoning."""
         return self.pin_judgment is not None and self.pin_judgment.decision == "introduce"
-
-    def in_pond(self, run_id: str, pond_n: int) -> PondCandidate | None:
-        return next((row.candidate for row in self.ponds
-                     if row.run_id == run_id and row.pond_n == pond_n), None)
 
 
 @dataclass(frozen=True)
@@ -542,6 +537,8 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
     person_id = _text(raw.get("person"))
     found_by = raw.get("found_by") or []
     sources: list[CandidatePond] = []
+    best: CandidatePond | None = None
+    pond_row: PondCandidate | None = None
     queries: list[str] = []
     for found in found_by:
         run_id = _text(found.get("run"))
@@ -556,10 +553,12 @@ def _candidate(raw: dict[str, Any], raw_runs: dict[str, _RawRun],
             if iteration.pond_n != pond_n:
                 continue
             hit = iteration.candidate(person_id)
-            if hit is not None:
-                sources.append(CandidatePond(run_id, pond_n, query or iteration.query, hit))
-    best = max(sources, key=lambda item: item.candidate.final_score, default=None)
-    pond_row = best.candidate if best else None
+            if hit is None:
+                continue
+            source = CandidatePond(run_id, pond_n, query or iteration.query)
+            sources.append(source)
+            if pond_row is None or hit.final_score > pond_row.final_score:
+                best, pond_row = source, hit
     move = raw.get("move_likelihood")
     return Candidate(
         person_id=person_id,

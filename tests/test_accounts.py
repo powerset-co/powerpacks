@@ -1,6 +1,7 @@
 """Accounts page health and the scheduled refresh's run status."""
 
 import json
+import io
 import sqlite3
 import tempfile
 import time
@@ -10,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import Mock
+from urllib.parse import urlparse
 
 from packs.ingestion.primitives.accounts import accounts
 from packs.ingestion.primitives.accounts.accounts import _GmailRow, _gmail_health
@@ -68,6 +71,53 @@ class TaskHistoryTest(unittest.TestCase):
 
 
 class AccountsJobsTest(unittest.TestCase):
+    def test_accounts_reuse_signins_and_signed_in_refreshes_the_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE sources (source_type TEXT, identifier TEXT)")
+                conn.execute("INSERT INTO sources (source_type, identifier) VALUES ('gmail', 'casey@example.com')")
+            api = AccountsApi()
+            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db), \
+                 patch.object(accounts, "check_account", return_value=SimpleNamespace(status="reauthorization_required")) as probe, \
+                 patch("packs.ingestion.primitives.accounts.api.read_accounts", return_value=[]), \
+                 patch("packs.ingestion.primitives.accounts.api.installed_runners", return_value=[]), \
+                 patch.object(accounts, "_linkedin_session", return_value=False), \
+                 patch.object(accounts, "_messages_readable", return_value=False), \
+                 patch.object(accounts, "_whatsapp_linked", return_value=False):
+                def get(path):
+                    handler = Mock(wfile=io.BytesIO())
+                    self.assertTrue(api.get(handler, urlparse(path)))
+                    return json.loads(handler.wfile.getvalue())
+
+                get("/accounts/api/accounts")
+                get("/accounts/api/accounts")
+                self.assertEqual(probe.call_count, 1)
+                self.assertEqual(api._signins, {"casey@example.com": "reauthorization_required"})
+                probe.return_value = SimpleNamespace(status="healthy")
+                self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["casey@example.com"])
+                self.assertEqual(probe.call_count, 2)
+                self.assertEqual(api._signins, {"casey@example.com": "healthy"})
+                get("/accounts/api/accounts")
+                self.assertEqual(probe.call_count, 2)
+                api.jobs["whatsapp"] = Job("running", "Syncing…")
+                get("/accounts/api/accounts")
+                self.assertEqual(probe.call_count, 2)
+                with sqlite3.connect(db) as conn:
+                    conn.execute("INSERT INTO sources (source_type, identifier) VALUES ('gmail', 'jordan@example.com')")
+                get("/accounts/api/accounts")
+                self.assertEqual(set(api._signins), {"casey@example.com", "jordan@example.com"})
+                self.assertEqual(probe.call_count, 4)
+                get("/accounts/api/accounts")
+                self.assertEqual(probe.call_count, 4)
+                with sqlite3.connect(db) as conn:
+                    conn.execute("DELETE FROM sources WHERE identifier = 'casey@example.com'")
+                self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["jordan@example.com"])
+                self.assertEqual(probe.call_count, 5)
+                api._sync("whatsapp", lambda: [])
+                get("/accounts/api/accounts")
+                self.assertEqual(probe.call_count, 6)
+
     def test_a_finished_reconnect_rechecks_sign_ins_while_another_sync_still_runs(self):
         api = AccountsApi()
         api.jobs["whatsapp"] = Job("running", "Syncing…")

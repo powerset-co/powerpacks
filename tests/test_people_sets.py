@@ -9,6 +9,10 @@ from unittest import mock
 
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+from packs.ingestion.primitives.deep_context_v2.db import queries, queries_review, queries_share
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
+from packs.ingestion.primitives.share.web.model import SharePeople
 from packs.ingestion.primitives.share.web.sets import NeedsSignIn, Sets, payload
 
 ACCOUNTS = {"jordan": {"email": "jordan@example.com", "operator_id": "op-jordan"},
@@ -16,6 +20,49 @@ ACCOUNTS = {"jordan": {"email": "jordan@example.com", "operator_id": "op-jordan"
             "riley": {"email": "riley@example.com", "operator_id": "op-riley"}}
 # People each operator shared into share_v1; a set's people are its members' union.
 SHARED = {"op-jordan": 5, "op-casey": 5, "op-riley": 5}
+
+
+class PeopleCacheTests(unittest.TestCase):
+    def test_facts_rebuild_only_when_the_store_changes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conn = open_store(root / "store.sqlite")
+            self.addCleanup(conn.close)
+            now = "2026-10-15T00:00:00Z"
+            queries.upsert_candidates(conn, [("c1", "Jordan Bravo", 0, "{}", now)])
+            conn.execute("INSERT INTO candidate_identifiers VALUES ('c1', 'email', 'jordan@example.com', 'jordan@example.com')")
+            conn.execute("INSERT INTO candidate_sources VALUES ('c1', 'gmail_msgvault')")
+            queries_review.insert_parent(conn, "c1", "p:1", "singleton", None, now)
+            facts = SynthesizedFacts(
+                canonical_name="Jordan Bravo", aliases=(), employers=(), title="", school="",
+                field_of_study="", location="", relationship_to_owner="", relationship_category="",
+                topics=(), notable_events=(), identifiers=(), owned_identifiers=OwnedIdentifiers((), (), ()),
+                shared_context=(), confidence=1.0, is_owner=False)
+            conn.execute("INSERT INTO facts VALUES ('c1', ?, 'f', 'test', '', ?)",
+                         (json.dumps(facts.to_payload()), now))
+            conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
+                         "VALUES ('c1', 'yes', 'human', '', ?)", (now,))
+            queries_share.replace_share(conn, [("c1", "", "Jordan Bravo", "yes", "", "{}", now)],
+                                        [("c1", "", "yes", "", "", "machine", now)])
+            conn.commit()
+            people = SharePeople(conn, root)
+            with mock.patch.object(people, "_facts", wraps=people._facts) as build, \
+                 mock.patch("packs.ingestion.primitives.share.web.model.Realize.build", wraps=Realize(conn, root).build) as export:
+                self.assertEqual(people.load()[0].name, "Jordan Bravo")
+                people.load()
+                self.assertEqual(build.call_count, 1)
+                queries_share.decide_share(conn, [("c1", "private", "", now)], [])
+                self.assertEqual(people.load()[0].tags, ("private",))
+                self.assertEqual(build.call_count, 1)
+                self.assertEqual(export.call_count, 1)
+                with open_store(root / "store.sqlite") as writer:
+                    writer.execute("UPDATE facts SET facts_json = json_set(facts_json, '$.canonical_name', 'Casey Delta')")
+                self.assertEqual(people.load()[0].name, "Casey Delta")
+                self.assertEqual(build.call_count, 2)
+                with open_store(root / "store.sqlite") as writer:
+                    writer.execute("UPDATE facts SET facts_json = json_set(facts_json, '$.canonical_name', 'Riley Echo')")
+                self.assertEqual(people.load()[0].name, "Riley Echo")
+                self.assertEqual(build.call_count, 3)
 
 
 class RelayInviteTests(unittest.TestCase):

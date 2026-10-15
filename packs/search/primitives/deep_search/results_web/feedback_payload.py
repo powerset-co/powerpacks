@@ -38,7 +38,9 @@ def build_feedback_payload(search: SearchResult, comment: str,
     }
     if candidate:
         group = search.group_of(candidate.person_id)
-        pond_row = candidate.in_pond(candidate.found_run, candidate.found_pond)
+        pond_row = next((row for pond in search.ponds
+                         if pond.run_id == candidate.found_run and pond.pond_n == candidate.found_pond
+                         for row in pond.candidates if row.person_id == candidate.person_id), None)
         reviewed = _human_judgment(human_judgment)
         if "score" in reviewed:
             reviewed["note"] = comment
