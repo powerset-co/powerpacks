@@ -215,6 +215,17 @@ it("sends no traits for a search that came with none and still has none", () => 
   expect(sent()).toEqual({ filters: { seniority_bands: ["vice-president"] } })
 })
 
+it("sends a changed end of a select pair, the other end untouched", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: [...SEARCH.filters, { key: "funding_stage_min", value: "seed" }],
+  }
+  render(<SearchCard search={search} actions={true} />)
+  fireEvent.change(screen.getByRole("combobox", { name: "Stage max" }), { target: { value: "series_b" } })
+  execute()
+  expect(sent().filters).toEqual({ funding_stage_max: "series_b" })
+})
+
 it("sends an empty traits list when every trait is removed", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.click(screen.getByRole("button", { name: "Remove VP of Finance" }))

@@ -72,8 +72,16 @@ export interface ExpandedFilters {
   set_interaction_max: number | null
 }
 
+/** The modal's fields by their value's shape: entity lists, and the scalars (text, number, date). */
+type ListField = {
+  [K in keyof ExpandedFilters]: ExpandedFilters[K] extends EntityItem[] ? K : never
+}[keyof ExpandedFilters]
+type ScalarField = {
+  [K in keyof ExpandedFilters]: ExpandedFilters[K] extends string | number | null ? K : never
+}[keyof ExpandedFilters]
+
 /** The modal's list fields and the payload key each one holds. */
-const LISTS: Record<string, string> = {
+const LIST_KEY: Record<ListField, string> = {
   company_ids: "company_names",
   role_ids: "role_ids",
   education_ids: "education_names",
@@ -100,7 +108,7 @@ const LISTS: Record<string, string> = {
 }
 
 /** The modal's scalar fields and the payload key each one holds. */
-const SCALARS: Record<string, string> = {
+const SCALAR_KEY: Record<ScalarField, string> = {
   funding_stage_min: "funding_stage_min",
   funding_stage_max: "funding_stage_max",
   funding_amount_min: "funding_amount_min",
@@ -139,7 +147,8 @@ const SCALARS: Record<string, string> = {
 /** The modal's money fields, in millions on screen and dollars in the payload. */
 const MILLIONS = new Set(["funding_amount_min", "funding_amount_max", "valuation_min", "valuation_max"])
 
-const KINDS: Record<string, string> = {
+/** The location lists' kind; every other list's kind is its field name. */
+const KINDS: Partial<Record<ListField, string>> = {
   cities: "city",
   states: "state",
   countries: "country",
@@ -166,19 +175,19 @@ export function toExpanded(
   values: Map<string, FilterValue | null>,
   labels: Record<string, Record<string, string>> = {},
 ): ExpandedFilters {
-  const list = (field: string) =>
-    items(names(values.get(LISTS[field] ?? field)), KINDS[field] ?? field, labels[field])
-  const text = (field: string) => {
-    const value = values.get(SCALARS[field] ?? field)
+  const list = (field: ListField) =>
+    items(names(values.get(LIST_KEY[field])), KINDS[field] ?? field, labels[field])
+  const text = (field: ScalarField) => {
+    const value = values.get(SCALAR_KEY[field])
     return typeof value === "string" ? value : null
   }
   // The modal's money fields read in millions; the payload holds dollars.
-  const millions = (field: string) => {
+  const millions = (field: ScalarField) => {
     const value = number(field)
     return value === null ? null : value / 1_000_000
   }
-  const number = (field: string) => {
-    const value = values.get(SCALARS[field] ?? field)
+  const number = (field: ScalarField) => {
+    const value = values.get(SCALAR_KEY[field])
     return typeof value === "number" ? value : null
   }
   return {
@@ -248,27 +257,30 @@ export function fromExpanded(
   values: Map<string, FilterValue | null>,
 ): Map<string, FilterValue | null> {
   const next = new Map(values)
-  const record: Record<string, unknown> = { ...filters }
-  for (const [field, key] of Object.entries(LISTS)) {
-    const list = record[field]
-    const names = Array.isArray(list)
-      ? list
-          .filter((item): item is EntityItem => typeof item === "object" && item !== null)
-          .map((item) => item.id)
-      : []
+  for (const field of Object.keys(LIST_KEY).filter(isListField)) {
+    const key = LIST_KEY[field]
+    const names = filters[field].map((item) => item.id)
     if (names.length > 0 || next.has(key)) next.set(key, names.length > 0 ? names : null)
   }
-  for (const [field, key] of Object.entries(SCALARS)) {
-    const value = record[field]
-    const scalar =
-      typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null
-    const dollars = MILLIONS.has(field) && typeof scalar === "number" ? scalar * 1_000_000 : scalar
-    if (scalar !== null || next.has(key)) next.set(key, dollars)
+  for (const field of Object.keys(SCALAR_KEY).filter(isScalarField)) {
+    const key = SCALAR_KEY[field]
+    const value = filters[field]
+    const dollars = MILLIONS.has(field) && typeof value === "number" ? value * 1_000_000 : value
+    if (value !== null || next.has(key)) next.set(key, dollars)
   }
-  const keywords = Array.isArray(filters.role_bm25_queries) ? filters.role_bm25_queries : []
+  const keywords = filters.role_bm25_queries ?? []
   if (keywords.length > 0 || next.has("bm25_queries"))
     next.set("bm25_queries", keywords.length > 0 ? keywords : null)
   return next
+}
+
+// Object.keys gives strings; the records above say which are fields.
+function isListField(field: string): field is ListField {
+  return field in LIST_KEY
+}
+
+function isScalarField(field: string): field is ScalarField {
+  return field in SCALAR_KEY
 }
 
 // Locations are edited as one list labeled by kind, then split back into their keys.

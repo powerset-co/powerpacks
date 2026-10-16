@@ -821,7 +821,7 @@ export function EditFiltersModalV2({
                   value={filters.founded_year_min ?? ""}
                   onChange={(e) => {
                     const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
-                    if (v === null || (!isNaN(v) && v >= 1900)) onUpdate("founded_year_min", v)
+                    if (v === null || !isNaN(v)) onUpdate("founded_year_min", v)
                   }}
                   className={RANGE_INPUT_CLASS}
                 />
@@ -834,7 +834,7 @@ export function EditFiltersModalV2({
                   value={filters.founded_year_max ?? ""}
                   onChange={(e) => {
                     const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
-                    if (v === null || (!isNaN(v) && v >= 1900)) onUpdate("founded_year_max", v)
+                    if (v === null || !isNaN(v)) onUpdate("founded_year_max", v)
                   }}
                   className={RANGE_INPUT_CLASS}
                 />

@@ -88,42 +88,6 @@ export const FUNDING_STAGES: Record<string, string> = {
   exited: "Exited/Acquired",
 }
 
-// Ordered list of funding stage IDs (for range validation)
-export const FUNDING_STAGE_ORDER: string[] = [
-  "pre_seed",
-  "seed",
-  "series_a",
-  "series_b",
-  "series_c",
-  "series_d",
-  "series_e",
-  "series_f",
-  "series_g",
-  "series_h",
-  "ipo",
-  "exited",
-]
-
-export const FUNDING_STAGE_OPTIONS: EntityItem[] = Object.entries(FUNDING_STAGES).map(
-  ([id, display_value]) => ({
-    id,
-    display_value,
-    type: "funding_stage",
-    score: 0,
-    metadata: null,
-  }),
-)
-
-// Headcount range presets for quick selection
-export const HEADCOUNT_RANGES = [
-  { label: "1-10 (Startup)", min: 1, max: 10 },
-  { label: "11-50 (Small)", min: 11, max: 50 },
-  { label: "51-200 (Medium)", min: 51, max: 200 },
-  { label: "201-500 (Growth)", min: 201, max: 500 },
-  { label: "501-1000 (Scale-up)", min: 501, max: 1000 },
-  { label: "1000+ (Enterprise)", min: 1000, max: null },
-]
-
 // Convert to EntityItem arrays for autocomplete
 export const ENTITY_TYPE_OPTIONS: EntityItem[] = Object.entries(ENTITY_TYPES).map(([id, display_value]) => ({
   id,
@@ -156,37 +120,6 @@ export const SENIORITY_BANDS: EntityItem[] = [
   { id: "c-suite", display_value: "C-Suite", type: "seniority_band", score: 0, metadata: null },
   { id: "partner", display_value: "Partner", type: "seniority_band", score: 0, metadata: null },
   { id: "owner", display_value: "Owner", type: "seniority_band", score: 0, metadata: null },
-]
-
-// Role tracks for functional areas
-export const ROLE_TRACKS: EntityItem[] = [
-  { id: "business_dev", display_value: "Business Development", type: "role_track", score: 0, metadata: null },
-  { id: "communications", display_value: "Communications", type: "role_track", score: 0, metadata: null },
-  { id: "consulting", display_value: "Consulting", type: "role_track", score: 0, metadata: null },
-  { id: "customer_service", display_value: "Customer Service", type: "role_track", score: 0, metadata: null },
-  { id: "data", display_value: "Data", type: "role_track", score: 0, metadata: null },
-  { id: "design", display_value: "Design", type: "role_track", score: 0, metadata: null },
-  { id: "education", display_value: "Education", type: "role_track", score: 0, metadata: null },
-  { id: "engineering", display_value: "Engineering", type: "role_track", score: 0, metadata: null },
-  { id: "finance", display_value: "Finance", type: "role_track", score: 0, metadata: null },
-  { id: "general", display_value: "General", type: "role_track", score: 0, metadata: null },
-  { id: "health", display_value: "Health", type: "role_track", score: 0, metadata: null },
-  { id: "hospitality", display_value: "Hospitality", type: "role_track", score: 0, metadata: null },
-  { id: "human_resources", display_value: "Human Resources", type: "role_track", score: 0, metadata: null },
-  { id: "legal", display_value: "Legal", type: "role_track", score: 0, metadata: null },
-  { id: "marketing", display_value: "Marketing", type: "role_track", score: 0, metadata: null },
-  { id: "marketplace", display_value: "Marketplace", type: "role_track", score: 0, metadata: null },
-  { id: "media", display_value: "Media", type: "role_track", score: 0, metadata: null },
-  { id: "operations", display_value: "Operations", type: "role_track", score: 0, metadata: null },
-  { id: "product", display_value: "Product", type: "role_track", score: 0, metadata: null },
-  { id: "public_relations", display_value: "Public Relations", type: "role_track", score: 0, metadata: null },
-  { id: "real_estate", display_value: "Real Estate", type: "role_track", score: 0, metadata: null },
-  { id: "retail", display_value: "Retail", type: "role_track", score: 0, metadata: null },
-  { id: "sales", display_value: "Sales", type: "role_track", score: 0, metadata: null },
-  { id: "security", display_value: "Security", type: "role_track", score: 0, metadata: null },
-  { id: "strategy", display_value: "Strategy", type: "role_track", score: 0, metadata: null },
-  { id: "technology", display_value: "Technology", type: "role_track", score: 0, metadata: null },
-  { id: "trades", display_value: "Trades", type: "role_track", score: 0, metadata: null },
 ]
 
 // Fuzzy search function for client-side matching
