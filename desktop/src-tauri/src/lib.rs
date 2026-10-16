@@ -85,7 +85,17 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 /// The latest Powerpacks release against this app's version, for the side nav's update pane.
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<update::Update, String> {
-    update::check(&app.package_info().version.to_string()).await
+    update::check(&app).await
+}
+
+#[tauri::command]
+async fn update_install(app: AppHandle) -> Result<(), String> {
+    update::install(&app).await
+}
+
+#[tauri::command]
+fn update_restart(app: AppHandle) {
+    app.restart();
 }
 
 #[tauri::command]
@@ -385,6 +395,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Boot::default()))
         .manage(Codex::default())
         .manage(children::Children::default())
@@ -403,6 +414,8 @@ pub fn run() {
             app_focus,
             open_external,
             update_check,
+            update_install,
+            update_restart,
             onboard_continue,
             debug_state,
             debug_skip_setup,

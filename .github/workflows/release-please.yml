@@ -54,9 +54,22 @@ jobs:
         with:
           name: Powerpacks-macos-arm64
           path: dmg
+      - uses: actions/download-artifact@v4
+        with:
+          name: Powerpacks-macos-arm64-updater
+          path: updater
       - run: |
           cp dmg/*.dmg Powerpacks-macos-arm64.dmg
-          gh release upload "$TAG" Powerpacks-macos-arm64.dmg --clobber --repo "$GITHUB_REPOSITORY"
+          cp updater/*.app.tar.gz Powerpacks-macos-arm64.app.tar.gz
+          jq -n \
+            --arg version "${TAG#powerpacks-v}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile signature updater/*.app.tar.gz.sig \
+            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Powerpacks-macos-arm64.app.tar.gz" \
+            '{version: $version, pub_date: $pub_date, platforms: {"darwin-aarch64": {signature: ($signature | rtrimstr("\n")), url: $url}}}' \
+            > latest.json
+          gh release upload "$TAG" Powerpacks-macos-arm64.dmg Powerpacks-macos-arm64.app.tar.gz latest.json \
+            --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
