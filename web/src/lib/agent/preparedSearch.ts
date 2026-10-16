@@ -33,7 +33,7 @@ export interface PreparedSearch {
   notes: string[]
   /** Why the search cannot run as prepared; set only on a blocked prepare, which is never executed. */
   blockers: string[]
-  /** Prepared on the local index (`mode: local_duckdb`): no investors or interaction filters. */
+  /** Prepared on the local index (`mode: local_duckdb`): no investors and no set interactions. */
   local: boolean
 }
 

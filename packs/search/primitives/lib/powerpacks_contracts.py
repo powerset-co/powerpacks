@@ -150,6 +150,8 @@ TURBOPUFFER_FILTER_OPERATORS = {
     "linkedin_followers": ["Gte", "Lte"],
     "linkedin_connections": ["Gte", "Lte"],
     "ig_followers": ["Gte", "Lte"],
+    # The owner's interaction count per person; a column of the local index only.
+    "total_interactions": ["Gte", "Lte"],
     # Education prefilter namespace.
     "person_id": ["In"],
     "canonical_education_id": ["In"],

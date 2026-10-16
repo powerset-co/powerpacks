@@ -62,6 +62,7 @@ PERSON_PROFILE_FILTER_FIELDS = {
     "linkedin_followers",
     "linkedin_connections",
     "ig_followers",
+    "total_interactions",
     "inferred_birth_year",
 }
 ROLE_ROW_PREFERRED_PROFILE_FIELDS = {"inferred_birth_year"}

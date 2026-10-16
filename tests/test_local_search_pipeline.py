@@ -1252,6 +1252,20 @@ class PreviewFilterKeysTests(unittest.TestCase):
         payload["traits"] = []
         self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"], "is_current_role": True})
 
+    def test_local_payload_drops_investors_and_set_interactions_with_a_note(self):
+        """The local index has no investors and knows no set: those keys are dropped and named,
+        the search still runs; interactions with the owner are a local filter."""
+        module = load_pipeline_module()
+        payload = {"role_search_filters": {
+            "cities": ["Boston"], "investor_names": ["Example Capital"], "set_interaction_min": 2,
+            "operator_interaction_min": 5, "set_id": "remote-set",
+        }}
+        out, ignored = module.prepare_local_payload(payload)
+        self.assertEqual(ignored, ["set_id", "investor_names", "set_interaction_min"])
+        self.assertEqual(out["role_search_filters"], {"cities": ["Boston"], "operator_interaction_min": 5})
+        self.assertIn("the local index has no investors or set interactions; ignored: investor_names, set_interaction_min",
+                      out["notes"])
+
     def test_quick_run_records_the_latest_expansion(self):
         """A state can hold several expand steps (an edited expansion appended); the run executes
         the latest, so that is the one the saved run shows."""
