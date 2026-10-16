@@ -245,7 +245,7 @@ Use `--search-only` to skip those model stages entirely.
 
    `Execute this local search or modify it?`
 
-5. If the user chooses `execute`, run the returned `execute_command` exactly in the background and read its output as it arrives.
+5. Apply the reply using **Execute or modify the preview** below.
 
 6. Follow **Execution progress** below while the command runs.
 
@@ -289,8 +289,8 @@ files on the happy path. Start a fresh run for every search request.
 
    `Execute this search or modify it?`
 
-4. If the user chooses `execute`, run the returned `execute_command` exactly in the background and read its output as it arrives.
-   It already includes `--execute-approved`; do not ask for another approval.
+4. Apply the reply using **Execute or modify the preview** below.
+   `execute_command` already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
@@ -298,6 +298,41 @@ files on the happy path. Start a fresh run for every search request.
      searches, do not add a limit unless the user asks for one.
 5. Follow **Execution progress** below until the command finishes or emits a
    concrete `blocked_approval` / `blocked_user_action`.
+
+## Execute or modify the preview
+
+For both local and Powerset previews:
+
+- `execute`: run the returned `execute_command` exactly in the background and read
+  its output as it arrives.
+- A reply starting `Modify, then execute:` contains `filters: <key> = <value>; <key> = <value>`
+  and/or `traits: <value> (<temporal>); …` lines. Read the JSON file named by
+  `payload_json` in the preview:
+  - If a trait value changed, was added, or was removed (including an empty
+    `traits:` line clearing existing traits), log the change as `query_edit`,
+    restate the query around the new traits and requested filters, run a new
+    `prepare`, then show its preview and ask the usual execute-or-modify question.
+    Retrieval and LLM filtering use the prepared query; do not run the old
+    `execute_command` for changed trait values.
+  - Otherwise, compare each sent filter with its current `role_search_filters`
+    value (compare lists as the `, `-joined string). Apply and log only values
+    that differ; never re-split an unchanged value. Write changed filters under
+    the same keys, splitting changed list values on `, ` and retaining scalar
+    JSON types. Remove a key when its sent value is empty. Leave unmentioned
+    keys unchanged.
+  - Only traits' current/past wording is applied in place: update `temporal`
+    while preserving each trait's `value` and `meaning`. If the `traits:` line
+    is absent, leave traits unchanged.
+  - Log each change with `search_feedback.py log` as shown in **User edit & feedback
+    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for
+    traits, with both `--before` and `--after`.
+  - For in-place edits, save the payload, then run the returned `execute_command`
+    exactly in the background and read its output as it arrives. It binds the edited file.
+    Filter and temporal-only edits need no second `prepare` or approval.
+- Any other reply is a modify in the user's words: use the same rules above.
+  Changed trait values or query wording require a new `prepare` and the usual
+  question; filter and current/past-only edits are applied and logged in place,
+  then run the returned `execute_command` exactly.
 
 ## Execution progress
 
@@ -354,8 +389,8 @@ person-data errors still use `$feedback`.
 - Do not use sub-agents for ordinary single-query searches except the local
   SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
-- Do not filter or reuse prior artifacts for refinements; create a new search
-  with the updated query or constraints.
+- For refinements after execution, create a new search with the updated query
+  or constraints. Before execution, edit the prepared payload as described above.
 - Do not mention skip-rerank, alternate execution modes, internal ledgers, or
   internal artifact paths in the user-facing preview.
 

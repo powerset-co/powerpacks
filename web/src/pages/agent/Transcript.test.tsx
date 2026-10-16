@@ -100,13 +100,14 @@ const PREVIEW = {
       cities: [],
       is_current_role: true,
     },
+    traits: [{ meaning: "role", temporal: "current", value: "VP of Finance" }],
     pool_estimate: { status: "completed", matched_people: 1234, matched_positions: 1500, total_people: 5000 },
     runtime_notes: ["age_min 30 filters on LLM-inferred birth year", "broad search: consider narrowing"],
     role_title_intent: { bm25_queries: ["vp finance"] },
   },
 }
 
-it("shows a prepared search as a card in its command's place; Execute sends execute, Modify focuses the box", () => {
+it("shows a prepared search as a card in its command's place, its traits and filters editable; Execute sends execute, Modify focuses the box", () => {
   render(
     <>
       <Transcript
@@ -127,11 +128,12 @@ it("shows a prepared search as a card in its command's place; Execute sends exec
     within(within(card).getByRole("list", { name }))
       .getAllByRole("listitem")
       .map((item) => item.textContent)
-  expect(lines("Filters")).toEqual([
-    "Metro areas: New York Metropolitan Area",
-    "Seniority bands: vice-president, director",
-    "Is current role: true",
-  ])
+  const fields = (name: string) =>
+    within(within(card).getByRole("list", { name }))
+      .getAllByRole<HTMLInputElement>("textbox")
+      .map((field) => field.value)
+  expect(fields("Traits")).toEqual(["VP of Finance"])
+  expect(fields("Filters")).toEqual(["New York Metropolitan Area", "vice-president, director", "true"])
   expect(within(card).getByText("Pool: 1,234 of 5,000 people")).toBeTruthy()
   expect(lines("Notes")).toEqual([
     "age_min 30 filters on LLM-inferred birth year",
@@ -160,11 +162,9 @@ it("asks only on the newest card while the agent waits; the company fast path is
   const [older, newest] = cards
   if (cards.length !== 2 || !older || !newest) throw new Error("Expected two search cards")
   expect(within(older).queryByRole("button")).toBeNull()
-  expect(
-    within(newest)
-      .getAllByRole("button")
-      .map((button) => button.textContent),
-  ).toEqual(["Execute", "Modify"])
+  expect(within(older).queryByRole("textbox")).toBeNull()
+  expect(within(newest).getByRole("button", { name: "Execute" })).toBeTruthy()
+  expect(within(newest).getByRole("button", { name: "Modify" })).toBeTruthy()
   expect(screen.getByRole("list", { name: "Work" }).textContent).toContain(
     "search_network_pipeline.py prepare",
   )
@@ -222,6 +222,7 @@ it("shows a blocked search's blockers under its notes and offers only Modify", (
       .getAllByRole("listitem")
       .map((item) => item.textContent),
   ).toEqual(["role_search_filters has no semantic_query", "bm25_queries is empty"])
+  expect(within(card).queryByRole("list", { name: "Traits" })).toBeNull()
   expect(within(card).queryByRole("button", { name: "Execute" })).toBeNull()
   expect(within(card).getByRole("button", { name: "Modify" })).toBeTruthy()
 })
