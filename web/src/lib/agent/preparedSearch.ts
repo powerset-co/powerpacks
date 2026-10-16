@@ -1,8 +1,8 @@
 // The search a chat's `search_network_pipeline.py prepare` command made, before it runs: the
 // last JSON object the command printed (emit, indent=2, so only it opens a line with `{`). The
-// query is at its top and the filters under `preview`; the local index adds the pool estimate
-// and the runtime notes. A prepare blocked on its extraction (`blocked_user_action`) carries its
-// `runtime_blockers`. The company fast path prints no filters and is no search card.
+// query is at its top and the filters and the traits under `preview`; the local index adds the
+// pool estimate and the runtime notes. A prepare blocked on its extraction (`blocked_user_action`)
+// carries its `runtime_blockers`. The company fast path prints no filters and is no search card.
 
 import { isRecord } from "@/lib/utils"
 import type { Entry } from "@/types/agent"
@@ -10,13 +10,23 @@ import type { Entry } from "@/types/agent"
 const PREPARE = /search_network_pipeline\.py\s+prepare\b/
 
 export interface SearchFilter {
+  /** The preview's key, as an edit names it back to the agent: `metro_areas`. */
+  key: string
   label: string
   value: string
+}
+
+/** One of the expand step's traits: `VP of Finance`, `current` (or `past`, `all`). */
+export interface SearchTrait {
+  value: string
+  temporal: string
 }
 
 export interface PreparedSearch {
   query: string
   filters: SearchFilter[]
+  /** Empty when the preview carries none, as replies from older builds. */
+  traits: SearchTrait[]
   /** How many people in the local index the filters match; null when the backend gives no count. */
   pool: { matched: number; total: number } | null
   notes: string[]
@@ -35,6 +45,17 @@ function filterValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(String).join(", ")
   const plain = typeof value === "string" || typeof value === "number" || typeof value === "boolean"
   return plain ? String(value) : ""
+}
+
+/** The traits that carry a value and a temporal. */
+function searchTraits(value: unknown): SearchTrait[] {
+  const traits: SearchTrait[] = []
+  if (!Array.isArray(value)) return traits
+  for (const trait of value) {
+    if (isRecord(trait) && typeof trait.value === "string" && typeof trait.temporal === "string")
+      traits.push({ value: trait.value, temporal: trait.temporal })
+  }
+  return traits
 }
 
 /** One line per item: the runtime notes, the blockers. */
@@ -58,7 +79,7 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
   const filters: SearchFilter[] = []
   for (const [key, value] of Object.entries(preview.filters)) {
     const shown = filterValue(value)
-    if (shown) filters.push({ label: filterLabel(key), value: shown })
+    if (shown) filters.push({ key, label: filterLabel(key), value: shown })
   }
   const estimate = preview.pool_estimate
   const pool =
@@ -68,5 +89,12 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
       ? { matched: estimate.matched_people, total: estimate.total_people }
       : null
   const blockers = printed.status === "blocked_user_action" ? lines(preview.runtime_blockers) : []
-  return { query: printed.query, filters, pool, notes: lines(preview.runtime_notes), blockers }
+  return {
+    query: printed.query,
+    filters,
+    traits: searchTraits(preview.traits),
+    pool,
+    notes: lines(preview.runtime_notes),
+    blockers,
+  }
 }
