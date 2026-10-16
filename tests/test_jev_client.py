@@ -303,6 +303,14 @@ class JevClientTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "without a decision"):
                 await self._score(None, output_dir=Path(directory), api_key=None)
 
+    async def test_usage_beyond_the_input_cap_is_summed_not_refused(self) -> None:
+        payload = _payload(self._request())
+        payload["usage"] = {"input_tokens": jev.MAX_INPUT_TOKENS + 1, "output_tokens": 0}
+        result = await self._score(_Client(_Response(200, payload)))
+        self.assertEqual(
+            result["usage"], {"pairs": 1, "input_tokens": jev.MAX_INPUT_TOKENS + 1, "output_tokens": 0},
+        )
+
     async def test_any_error_sending_the_request_is_retried(self) -> None:
         request = self._request()
         api = _Client(ssl.SSLError("bad record mac"), _Response(200, _payload(request)))

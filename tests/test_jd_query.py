@@ -101,6 +101,14 @@ class JdQueryTests(unittest.TestCase):
             self.assertEqual(path.read_text(), '{"seeds": [')
         client.chat.completions.create.assert_called_once()
 
+    def test_extra_seeds_leave_the_first_as_the_query(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=json.dumps(
+                {"seeds": ["Office Manager in Toronto", "Facilities Manager in Toronto"]})))])
+        result = decompose_jd.generate_queries(jd="Full JD", client=client, use_precedents=False)
+        self.assertEqual(result, [{"key": "q00", "query": "Office Manager in Toronto"}])
+
 
 if __name__ == "__main__":
     unittest.main()

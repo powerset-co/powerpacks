@@ -119,7 +119,7 @@ def generate_queries(
     service_tier: str | None = None,
     use_precedents: bool = True,
 ) -> list[dict[str, Any]]:
-    """Run the Pond-1 query request and return exactly one located seed."""
+    """Run the Pond-1 query request and return its first located seed."""
     if raw_response_path is not None and raw_response_path.is_file():
         parsed = json.loads(raw_response_path.read_text(encoding="utf-8"))
     else:
@@ -147,10 +147,7 @@ def generate_queries(
         if raw_response_path is not None:
             raw_response_path.write_text(json.dumps(
                 {**parsed, "precedent_cards": precedent_cards}, indent=2) + "\n", encoding="utf-8")
-    seeds = parse_seeds(parsed)
-    if len(seeds) != 1:
-        raise ValueError(f"Pond-1 generation must return 1 query; received {len(seeds)}")
-    return seeds
+    return parse_seeds(parsed)[:1]
 
 
 def main() -> None:
