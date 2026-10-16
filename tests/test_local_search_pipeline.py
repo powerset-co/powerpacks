@@ -413,6 +413,19 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_removed_keyword_stays_removed_beside_the_older_alias(self) -> None:
+        # The card's edit writes bm25_queries; the alias from the expand step must not merge it back.
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "software engineers in sf",
+            "filters": {
+                "bm25_queries": ["software engineer"],
+                "role_bm25_queries": ["software engineer", "backend engineer"],
+            },
+        }
+        filters = mod.normalize_query_expansion_payload(payload)["role_search_filters"]
+        self.assertEqual(filters["bm25_queries"], ["software engineer"])
+
     def test_normalize_query_expansion_payload_accepts_prod_role_schema(self) -> None:
         mod = load_pipeline_module()
         payload = {

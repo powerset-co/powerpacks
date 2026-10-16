@@ -538,11 +538,10 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
 
     if "role_semantic_query" in normalized and "semantic_query" not in normalized:
         normalized["semantic_query"] = normalized.get("role_semantic_query")
-    if "role_bm25_queries" in normalized:
-        normalized["bm25_queries"] = _dedupe_present([
-            *(normalized.get("bm25_queries") or []),
-            *(normalized.get("role_bm25_queries") or []),
-        ])
+    # The keywords live in `bm25_queries`; the older alias only stands in when it is absent, so a
+    # keyword the user removed stays removed.
+    if "role_bm25_queries" in normalized and "bm25_queries" not in normalized:
+        normalized["bm25_queries"] = _dedupe_present(normalized.get("role_bm25_queries") or [])
 
     id_entity_keys = {
         "company_ids", "cities", "states", "countries", "metro_areas", "macro_regions",

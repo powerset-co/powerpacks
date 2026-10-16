@@ -1,41 +1,16 @@
 // Every filter a person can set on a prepared search, with the control each one is edited through.
 // expand payload's `role_search_filters` keys; the skill writes them back under the same names.
 
+import { FUNDING_STAGES as STAGES, SENIORITY_BANDS as BANDS } from "./companyFilters"
 import type { FilterValue } from "./preparedSearch"
 
-/** The seniority bands the index knows (`packs/search/primitives/shared/seniority_bands.py`). */
-export const SENIORITY_BANDS = [
-  "owner",
-  "partner",
-  "c-suite",
-  "vice-president",
-  "director",
-  "principal",
-  "staff",
-  "manager",
-  "senior",
-  "mid",
-  "junior",
-  "entry",
-  "trainee",
-]
+/** The seniority bands the index knows, most senior first on the card. */
+export const SENIORITY_BANDS = BANDS.map((band) => band.id).reverse()
 
 export const DEGREE_LEVELS = ["Bachelors", "Masters", "MBA", "PhD", "MD", "JD"]
 
-export const FUNDING_STAGES = [
-  "pre_seed",
-  "seed",
-  "series_a",
-  "series_b",
-  "series_c",
-  "series_d",
-  "series_e",
-  "series_f",
-  "series_g",
-  "series_h",
-  "ipo",
-  "exited",
-]
+/** The funding stages, earliest first. */
+export const FUNDING_STAGES = Object.keys(STAGES)
 
 export const TEMPORALS = ["all", "current", "past"]
 

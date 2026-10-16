@@ -317,9 +317,11 @@ For both local and Powerset previews:
     `query_edit`, run a new `prepare` with the
     same `--output-dir` for the sent `query` (restated around the sent traits when both came),
     or, when only the traits changed, for the preview's query restated around the new traits.
-    Keywords and filters never go into the query. On the new payload, replace `traits` with the
-    sent list when one came (their values and temporals as sent) and apply the sent `filters`
-    as below, then show the preview and ask the usual question. Retrieval and LLM filtering use the prepared query; do not run the old
+    Keywords and filters never go into the query, and no `filters` come with a changed query or
+    trait: the new prepare derives its own. On the new payload, replace `traits` with the sent
+    list when one came (their values and temporals as sent). Then show the new preview and ask
+    the usual question, even though the reply said `then execute`: the user approved the search
+    as it was, and a new prepare is a new search. Only `execute` on the new card runs it. Retrieval and LLM filtering use the prepared query; do not run the old
     `execute_command` for a changed query or trait value.
   - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
     the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when

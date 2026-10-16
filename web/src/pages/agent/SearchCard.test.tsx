@@ -90,7 +90,7 @@ it("sends execute when nothing changed, an edit put back included", () => {
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
-it("sends the query, the changed filters and the traits as JSON after edits", () => {
+it("sends a changed query and the traits as a new search, without the filters edited beside them", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.change(screen.getByRole("textbox", { name: "Query" }), {
     target: { value: "Finance leaders in NYC" },
@@ -109,15 +109,10 @@ it("sends the query, the changed filters and the traits as JSON after edits", ()
   const trait = screen.getByRole("textbox", { name: "Add trait" })
   fireEvent.change(trait, { target: { value: "CFO" } })
   execute()
+  // The filter edits stay out: the next prepare derives its own filters for the new query.
   expect(sent()).toEqual({
     query: "Finance leaders in NYC",
-    // Unchanged keys (years_experience_min) stay out: a key sent is an edit to the agent.
-    filters: {
-      metro_areas: ["Washington, DC"],
-      seniority_bands: ["vice-president", "c-suite"],
-      bm25_queries: ["vp finance", "head of finance"],
-      years_experience_max: 12,
-    },
+    filters: {},
     traits: [
       { value: "VP of Finance", temporal: "current", meaning: "role" },
       { value: "investment banking", temporal: "all", meaning: "experience" },

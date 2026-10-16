@@ -89,25 +89,39 @@ function preparedValues(search: PreparedSearch): Values {
   return new Map(search.filters.map((filter) => [filter.key, filter.value]))
 }
 
+/** The values as sent: a chip emptied while editing is gone, and a list with nothing left is null. */
+function clean(values: Values): Values {
+  const next: Values = new Map()
+  for (const [key, value] of values) {
+    const kept = Array.isArray(value) ? value.filter((name) => name.trim() !== "") : value
+    next.set(key, Array.isArray(kept) && kept.length === 0 ? null : kept)
+  }
+  return next
+}
+
 /**
- * What Execute sends for edits: one JSON object the skill copies into the payload. `filters`
- * carries every key the search came with (a removed one as null) and every key added since,
- * `traits` the whole list (absent when the search had none and still has none), `query` only
- * when it changed. Nothing is joined or split, so a name with a comma stays one name.
+ * What Execute sends for edits: one JSON object the skill copies into the payload, holding only
+ * what changed against the prepared search: `filters` the keys edited (a removed one as null),
+ * `traits` the whole list when it changed, `query` when it changed. The agent treats every key sent
+ * as an edit and traits sent as a new search. Nothing is joined or split, so a name with a comma
+ * stays one name.
  */
 function modifyMessage(search: PreparedSearch, query: string, values: Values, traits: SearchTrait[]): string {
   const body: { query?: string; filters: Record<string, FilterValue | null>; traits?: SearchTrait[] } = {
     filters: {},
   }
-  // Only what changed: the agent treats every key sent as an edit, and traits sent as a new search.
   if (query.trim() !== search.query) body.query = query.trim()
+  if (JSON.stringify(traits) !== JSON.stringify(search.traits)) body.traits = traits
+  // A changed query or trait is a new search: the next prepare derives its own filters, so the
+  // filters edited on this card do not go with it.
+  if (body.query !== undefined || body.traits !== undefined)
+    return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
   const prepared = preparedValues(search)
-  for (const key of new Set([...prepared.keys(), ...values.keys()])) {
-    const value = values.get(key) ?? null
-    const next = Array.isArray(value) && value.length === 0 ? null : value
+  const sent = clean(values)
+  for (const key of new Set([...prepared.keys(), ...sent.keys()])) {
+    const next = sent.get(key) ?? null
     if (JSON.stringify(next) !== JSON.stringify(prepared.get(key) ?? null)) body.filters[key] = next
   }
-  if (JSON.stringify(traits) !== JSON.stringify(search.traits)) body.traits = traits
   return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
 }
 
@@ -602,7 +616,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
   }
 
   function submit(message: string) {
-    setValues(valuesWithDrafts())
+    setValues(clean(valuesWithDrafts()))
     setDrafts({})
     setTraits(traitsWithTyped())
     setNewTrait("")

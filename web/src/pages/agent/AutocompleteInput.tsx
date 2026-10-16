@@ -286,53 +286,49 @@ export const AutocompleteInput = ({
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-72 overflow-auto">
           {isLoading ? (
             <div className="p-3 text-sm text-muted-foreground">Loading...</div>
-          ) : displaySuggestions.length > 0 ? (
-            groupedSuggestions ? (
-              // Grouped display
-              Object.entries(groupedSuggestions).map(([groupKey, groupSuggestions]) => (
-                <div key={groupKey}>
-                  <div className="px-3 py-1.5 text-xs font-semibold text-primary bg-muted/50 sticky top-0">
-                    {typeDisplayNames[groupKey] || groupKey.toUpperCase()}
-                  </div>
-                  {groupSuggestions.map((suggestion) => {
-                    const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
-                    return (
-                      <button
-                        key={suggestion.id}
-                        onClick={() => handleSelectSuggestion(suggestion)}
-                        className={cn(
-                          "w-full text-left px-3 py-2 hover:bg-accent text-sm transition-colors flex items-center justify-between",
-                          isSelected && "bg-accent/50",
-                        )}
-                      >
-                        <span>{suggestion.display_value}</span>
-                        {isSelected && <Check className="h-4 w-4 text-primary" />}
-                      </button>
-                    )
-                  })}
+          ) : groupedSuggestions ? (
+            // Grouped display
+            Object.entries(groupedSuggestions).map(([groupKey, groupSuggestions]) => (
+              <div key={groupKey}>
+                <div className="px-3 py-1.5 text-xs font-semibold text-primary bg-muted/50 sticky top-0">
+                  {typeDisplayNames[groupKey] || groupKey.toUpperCase()}
                 </div>
-              ))
-            ) : (
-              // Flat display
-              displaySuggestions.map((suggestion) => {
-                const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
-                return (
-                  <button
-                    key={suggestion.id}
-                    onClick={() => handleSelectSuggestion(suggestion)}
-                    className={cn(
-                      "w-full text-left px-3 py-2 hover:bg-accent text-sm transition-colors flex items-center justify-between",
-                      isSelected && "bg-accent/50",
-                    )}
-                  >
-                    <span>{suggestion.display_value}</span>
-                    {isSelected && <Check className="h-4 w-4 text-primary" />}
-                  </button>
-                )
-              })
-            )
+                {groupSuggestions.map((suggestion) => {
+                  const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
+                  return (
+                    <button
+                      key={suggestion.id}
+                      onClick={() => handleSelectSuggestion(suggestion)}
+                      className={cn(
+                        "w-full text-left px-3 py-2 hover:bg-accent text-sm transition-colors flex items-center justify-between",
+                        isSelected && "bg-accent/50",
+                      )}
+                    >
+                      <span>{suggestion.display_value}</span>
+                      {isSelected && <Check className="h-4 w-4 text-primary" />}
+                    </button>
+                  )
+                })}
+              </div>
+            ))
           ) : (
-            <div className="p-3 text-sm text-muted-foreground">No results found</div>
+            // Flat display
+            displaySuggestions.map((suggestion) => {
+              const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
+              return (
+                <button
+                  key={suggestion.id}
+                  onClick={() => handleSelectSuggestion(suggestion)}
+                  className={cn(
+                    "w-full text-left px-3 py-2 hover:bg-accent text-sm transition-colors flex items-center justify-between",
+                    isSelected && "bg-accent/50",
+                  )}
+                >
+                  <span>{suggestion.display_value}</span>
+                  {isSelected && <Check className="h-4 w-4 text-primary" />}
+                </button>
+              )
+            })
           )}
         </div>
       )}
