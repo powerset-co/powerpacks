@@ -1189,7 +1189,7 @@ def cmd_prepare(args):
         emit({
             "primitive":"search_network_pipeline",
             "status":"preview_ready" if not issues else "blocked_user_action",
-            "message":"Show preview and ask: Execute this search or modify it?" if not issues else "Regenerate or modify extraction before retrieval.",
+            "message":"Say: Search prepared. Execute or modify?" if not issues else "Regenerate or modify extraction before retrieval.",
             "query":args.query,
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),

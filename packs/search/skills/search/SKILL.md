@@ -151,8 +151,7 @@ Input shapes normalize before `prepare`, never before the decision:
 - **one-liner** — the query as-is.
 
 **The spend gate (checklist item 3):** fast mode confirms the prepare preview once
-(`Execute this search or modify it?`, or the local path's `Execute this local search or modify
-it?`). Deep mode confirms its initial query and filters once — the only approval in
+(`Search prepared. Execute or modify?`). Deep mode confirms its initial query and filters once — the only approval in
 the flow. Interactive deep mode pauses after each pond only to ask continue-or-done at the
 viewer; auto deep mode runs all approved ponds without that pause.
 
@@ -241,9 +240,10 @@ Use `--search-only` to skip those model stages entirely.
    (hard filters match more than ~60% of the index), surface that note and
    recommend narrowing before executing — running LLM stages over most of
    the index is usually a query problem, not a retrieval problem. If it
-   flags 0 matches or a suspiciously narrow pool, recommend `modify`. Then ask exactly:
+   flags 0 matches or a suspiciously narrow pool, recommend `modify`. Then say exactly this
+   and nothing else (the chat shows the prepared search as a card):
 
-   `Execute this local search or modify it?`
+   `Search prepared. Execute or modify?`
 
 5. Apply the reply using **Execute or modify the preview** below.
 
@@ -284,10 +284,10 @@ files on the happy path. Start a fresh run for every search request.
 
 2. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, show the query without an agent-written
-   targeting or filter summary. Then ask exactly:
+3. If `prepare` returns a preview, say exactly this and nothing else: no restated query, no
+   targeting or filter summary, no quoted rules (the chat shows the prepared search as a card):
 
-   `Execute this search or modify it?`
+   `Search prepared. Execute or modify?`
 
 4. Apply the reply using **Execute or modify the preview** below.
    `execute_command` already includes `--execute-approved`; do not ask for another approval.
@@ -382,7 +382,8 @@ person-data errors still use `$feedback`.
 
 ## Execution Rules
 
-- Never spend before the checklist-item-3 confirmation. In interactive deep mode, also wait for
+- Do not run the search before the user answers "Search prepared. Execute or modify?"; never
+  quote this rule or the checklist to the user. In interactive deep mode, also wait for
   the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
