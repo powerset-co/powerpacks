@@ -7,7 +7,8 @@ Only input tokens are billed: $0.10 per million.
 `decide_all` answers requests keyed by `request_digest`, which covers the caller's question
 version as well as the request, so a version bump asks again instead of reusing an answer to
 other questions. Every answer is cached on disk as it arrives: a request is billed once, and a
-stopped run keeps what it paid for.
+stopped run keeps what it paid for. A refusal is not an answer: it is never saved, so the family is
+asked again next run.
 
 Created: 2026-10-13
 """
@@ -50,22 +51,34 @@ def cache_path(cache_dir: Path, digest: str) -> Path:
     return cache_dir / f"{digest}.json"
 
 
+def saved_answers(cache_dir: Path, digest: str, refused: Callable[[list[Answer]], bool]) -> list[Answer] | None:
+    """The request's saved answers, or None when none are saved or the saved ones are a refusal."""
+    path = cache_path(cache_dir, digest)
+    if not path.exists():
+        return None
+    answers: list[Answer] = json.loads(path.read_text(encoding="utf-8"))["answers"]
+    if refused(answers):
+        return None
+    return answers
+
+
 def input_tokens(request: dict[str, Any]) -> int:
     """The request's size as OpenAI's tokenizer counts it: the estimate's basis."""
     return len(_ENCODER.encode(json.dumps(request, ensure_ascii=False)))
 
 
 async def decide_all(requests: dict[str, dict[str, Any]], cache_dir: Path, *, cache_only: bool, stage: str,
-                     on_progress: Callable[[int, int], None]) -> dict[str, list[Answer]]:
+                     on_progress: Callable[[int, int], None],
+                     refused: Callable[[list[Answer]], bool]) -> dict[str, list[Answer]]:
     """Every request's answers by digest, cached ones first. `cache_only` never calls OpenAI: an
     answer that is not cached stops the run before any write. `on_progress(done, total)` follows
-    the requests sent."""
+    the requests sent. Answers `refused` says are a refusal are returned but never saved."""
     answers: dict[str, list[Answer]] = {}
     missing: dict[str, dict[str, Any]] = {}
     for digest, request in requests.items():
-        path = cache_path(cache_dir, digest)
-        if path.exists():
-            answers[digest] = json.loads(path.read_text(encoding="utf-8"))["answers"]
+        saved = saved_answers(cache_dir, digest, refused)
+        if saved is not None:
+            answers[digest] = saved
         else:
             missing[digest] = request
     if not missing:
@@ -87,12 +100,13 @@ async def decide_all(requests: dict[str, dict[str, Any]], cache_dir: Path, *, ca
                 started = time.monotonic()
                 response: dict[str, Any] = await client.post("/decisions", cast_to=dict[str, Any], body=request)
                 latency_ms = round((time.monotonic() - started) * 1000)
-            path = cache_path(cache_dir, digest)
-            partial = path.with_suffix(".partial")
-            partial.write_text(json.dumps({"answers": response["answers"], "usage": response.get("usage")},
-                                          ensure_ascii=False), encoding="utf-8")
-            partial.replace(path)
             answers[digest] = response["answers"]
+            if not refused(response["answers"]):
+                path = cache_path(cache_dir, digest)
+                partial = path.with_suffix(".partial")
+                partial.write_text(json.dumps({"answers": response["answers"], "usage": response.get("usage")},
+                                              ensure_ascii=False), encoding="utf-8")
+                partial.replace(path)
             _log_usage(request, response, stage, latency_ms)
             answered.append(digest)
             on_progress(len(answered), len(missing))

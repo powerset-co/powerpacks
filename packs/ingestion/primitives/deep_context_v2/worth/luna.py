@@ -144,8 +144,8 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
 
 
 def refused(answers: list[Answer]) -> bool:
-    """A refused choice or score leaves the family unlabelled: it stays pending and is asked again
-    next run. A refused yes/no question only leaves that label out (Luna declines is_minor for some)."""
+    """A refused choice or score leaves the family unlabelled: the answer is not saved and the family is
+    asked again next run. A refused yes/no question only leaves that label out (Luna declines is_minor for some)."""
     asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
     asked.update(question["name"] for question in WORTH_QUESTIONS if question["type"] == "choice")
     return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)

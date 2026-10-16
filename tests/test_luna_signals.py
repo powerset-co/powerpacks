@@ -120,11 +120,12 @@ class DecisionsClientTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.cache = Path(self.tmp.name) / "decisions"
         self.sent: list[dict[str, Any]] = []
+        self.reply: list[dict[str, Any]] = ANSWERS
         real = decisions.AsyncOpenAI
 
         def handler(request: httpx.Request) -> httpx.Response:
             self.sent.append(json.loads(request.content))
-            return httpx.Response(200, json={"answers": ANSWERS})
+            return httpx.Response(200, json={"answers": self.reply})
 
         def client(**options: Any) -> Any:
             return real(**options, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
@@ -142,7 +143,7 @@ class DecisionsClientTests(unittest.TestCase):
 
     def decide(self, requests: dict[str, dict[str, Any]], *, cache_only: bool = False) -> dict[str, Any]:
         return asyncio.run(decisions.decide_all(requests, self.cache, cache_only=cache_only, stage="test",
-                                                on_progress=no_progress))
+                                                on_progress=no_progress, refused=luna.refused))
 
     def test_an_answer_is_paid_once_then_read_from_disk(self) -> None:
         request = {"model": decisions.MODEL, "input": "facts", "questions": []}
@@ -152,6 +153,15 @@ class DecisionsClientTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
         usage = [json.loads(line) for line in (Path(self.tmp.name) / "usage.jsonl").read_text().splitlines()]
         self.assertEqual((len(usage), usage[0]["model"], usage[0]["cost_basis"]), (1, "gpt-6-luna", "tiktoken_estimate"))
+
+    def test_a_refusal_is_not_saved_and_is_asked_again(self) -> None:
+        request = {"model": decisions.MODEL, "input": "facts", "questions": []}
+        digest = decisions.request_digest("v1", request)
+        self.reply = [{"type": "refusal", "name": "relationship_kind"}]
+        self.assertEqual(self.decide({digest: request}), {digest: self.reply})
+        self.assertEqual(self.decide({digest: request}), {digest: self.reply})
+        self.assertEqual(len(self.sent), 2)
+        self.assertFalse(decisions.cache_path(self.cache, digest).exists())
 
     def test_a_version_bump_asks_again(self) -> None:
         request = {"model": decisions.MODEL, "input": "facts", "questions": []}
@@ -255,8 +265,8 @@ class WorthRunTests(StoreTests):
 
 
 class MergeTests(StoreTests):
-    def test_a_merge_asks_nothing(self) -> None:
-        # Both people were judged under today's questions; dedupe then puts c2 under p:a.
+    def test_a_merge_is_one_family(self) -> None:
+        # Dedupe puts c2 under p:a: one family, one request.
         root = Path(self.tmp.name)
         queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
         self.conn.executemany("INSERT INTO candidate_sources (candidate_id, source) VALUES (?, 'gmail_msgvault')",
@@ -275,8 +285,7 @@ class MergeTests(StoreTests):
             [("c1", evidence.version_key()), ("c2", evidence.version_key())])
         self._parent("p:a", "c2")
         families = Worth(self.conn, root, limit=DEFAULT_LIMIT).families()
-        self.assertEqual([(family.key, family.members, family.judged) for family in families],
-                         [("p:a", ("c1", "c2"), True)])
+        self.assertEqual([(family.key, family.members) for family in families], [("p:a", ("c1", "c2"))])
 
 
 class LabelsTests(unittest.TestCase):

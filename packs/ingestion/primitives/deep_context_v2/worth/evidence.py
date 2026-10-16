@@ -60,9 +60,8 @@ def channel_summary(members: list[MemberFacts], sources: dict[str, list[str]],
 
 
 def version_key() -> str:
-    """The reuse key every machine worth row carries: the request version. A family is judged once per
-    version, as soon as any member is: new messages and merges never ask again; a version bump asks
-    everyone once."""
+    """The key every machine worth row carries: the request version that judged it. The settle rule and
+    the labels read it to tell this version's rows from older ones."""
     payload: dict[str, Any] = {"version": luna.REQUEST_VERSION}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 

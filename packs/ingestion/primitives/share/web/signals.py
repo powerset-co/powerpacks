@@ -1,8 +1,8 @@
 """Refresh People's signals from saved facts and counts: Worth (one Luna request per family), the settle rule
 (as Enrich applies it after worth), then the labels.
 
-With no one selected it refreshes the families worth would ask anyway: new, or judged under older
-questions. A selection is asked again as well, judged or not. The check never calls OpenAI. A start
+With no one selected it asks every family; a selection asks those. An unchanged request is answered
+from the saved answers for free. The check never calls OpenAI. A start
 is bound to those requests and their cache coverage; without a confirmed check it reads only saved
 answers, even if one disappears. Worth and labels run in one transaction, so a failure keeps the
 previous signals and human decisions.
