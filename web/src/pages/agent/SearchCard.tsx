@@ -695,7 +695,12 @@ export function SearchCard({ search, actions }: SearchCardProps) {
           onChange={setTraits}
         />
       )}
-      {rows(filledFields(shownValues, prepared).filter(offered))}
+      {/* Read-only, a row emptied before Execute is gone; while editing it stays, so it can be refilled. */}
+      {rows(
+        filledFields(shownValues, prepared)
+          .filter(offered)
+          .filter((field) => actions || fieldHasValue(field, shownValues)),
+      )}
       {search.notes.length > 0 && (
         <ul
           aria-label="Notes"
@@ -740,6 +745,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
           <EditFiltersModal
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
+            local={search.local}
             filters={modalFilters ?? toExpanded(values, LABELS)}
             // Functional: the modal fires several updates in one event (a clear, a location edit).
             onUpdate={(key, value) =>

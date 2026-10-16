@@ -69,6 +69,8 @@ interface EditFiltersModalV2Props {
     values: EntityItem[] | string[] | number | boolean | string | null,
   ) => void
   onApply: () => void
+  /** The search runs on the local index: no investors, no interaction counts. */
+  local?: boolean
 }
 
 type FilterSection = "roles" | "education" | "person-location" | "company" | "social" | "interactions"
@@ -178,9 +180,12 @@ export function EditFiltersModalV2({
   filters,
   onUpdate,
   onApply,
+  local = false,
 }: EditFiltersModalV2Props) {
   const [activeSection, setActiveSection] = useState<FilterSection>("roles")
-  const visibleSections = SECTIONS
+  // A local search has no investors or interaction counts (the local index does not hold them
+  // and the run refuses the keys), so the modal does not offer them.
+  const visibleSections = local ? SECTIONS.filter((section) => section.id !== "interactions") : SECTIONS
 
   // Helper functions
   const toEntityItems = (values: EntityValue[]): EntityItem[] =>
@@ -947,17 +952,18 @@ export function EditFiltersModalV2({
               </div>
             </div>
 
-            {/* Investors */}
-            <div className="space-y-2">
-              <Label>Investors</Label>
-              <AutocompleteInput
-                key="investors"
-                placeholder="e.g., Y Combinator"
-                value={toEntityValues(filters.investors || [])}
-                onChange={(v) => onUpdate("investors", toEntityItems(v))}
-                onSearch={(q) => handleSearch(q, "investor")}
-              />
-            </div>
+            {!local && (
+              <div className="space-y-2">
+                <Label>Investors</Label>
+                <AutocompleteInput
+                  key="investors"
+                  placeholder="e.g., Y Combinator"
+                  value={toEntityValues(filters.investors || [])}
+                  onChange={(v) => onUpdate("investors", toEntityItems(v))}
+                  onSearch={(q) => handleSearch(q, "investor")}
+                />
+              </div>
+            )}
           </div>
         )
 

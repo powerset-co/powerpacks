@@ -343,8 +343,8 @@ For both local and Powerset previews:
 - A reply starting `Modify:` (no "then execute") comes from a blocked card: apply the JSON by
   the same rules, in place, and ask the usual question again; a later `execute` runs the
   returned `execute_command`, which binds the edited file. Only a `query` or a changed trait
-  value means a new `prepare` (it re-expands and would overwrite in-place edits, so write those
-  edits after it). Never run the search from this reply.
+  value means a new `prepare`, by the rule above (the new payload stays as prepared). Never run
+  the search from this reply.
 - Any other reply is a modify in the user's words: use the same rules above.
   A changed query or trait value requires a new `prepare` and the usual question; filter and
   temporal-only edits are applied and logged in place, then run the returned

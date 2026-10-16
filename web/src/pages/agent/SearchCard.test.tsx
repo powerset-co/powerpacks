@@ -40,6 +40,7 @@ const SEARCH: PreparedSearch = {
   ],
   notes: [],
   blockers: [],
+  local: false,
 }
 
 /** The one message the card sent. */
@@ -245,6 +246,23 @@ it("shows money in millions and sends dollars", () => {
   fireEvent.change(screen.getByRole("spinbutton", { name: "Funding ($M) max" }), { target: { value: "40" } })
   execute()
   expect(sent().filters).toEqual({ funding_amount_max: 40_000_000 })
+})
+
+it("drops a row emptied before Execute once the card is read-only, and offers no local-only filters", () => {
+  const { rerender } = render(<SearchCard search={{ ...SEARCH, local: true }} actions={true} />)
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Years min" }), { target: { value: "" } })
+  // Still there while editing, so it can be refilled.
+  expect(screen.getByRole("spinbutton", { name: "Years min" })).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
+  expect(within(dialog).queryByRole("button", { name: /^Interactions/ })).toBeNull()
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
+  expect(within(dialog).queryByText("Investors")).toBeNull()
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+  execute()
+  expect(sent().filters).toEqual({ years_experience_min: null })
+  rerender(<SearchCard search={{ ...SEARCH, local: true }} actions={false} />)
+  expect(screen.queryByText("Years")).toBeNull()
 })
 
 it("sends an empty traits list when every trait is removed", () => {

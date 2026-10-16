@@ -35,6 +35,8 @@ export interface PreparedSearch {
   notes: string[]
   /** Why the search cannot run as prepared; set only on a blocked prepare, which is never executed. */
   blockers: string[]
+  /** Prepared on the local index (`mode: local_duckdb`): no investors or interaction filters. */
+  local: boolean
 }
 
 /** The value as the payload holds it, or null for anything empty or of another shape. */
@@ -112,5 +114,6 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
     traits: searchTraits(preview.traits),
     notes: lines(preview.runtime_notes),
     blockers,
+    local: value.mode === "local_duckdb",
   }
 }
