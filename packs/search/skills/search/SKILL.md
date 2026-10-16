@@ -354,8 +354,8 @@ For both local and Powerset previews:
 Keep execution quiet except for these milestones from `run`:
 
 - When it prints the screened count, say at once: `<N> screened, not ranked yet`.
-  Say the results page already lists them. These are screened people, never the
-  ranked list; do not present a ranked shortlist before ranking finishes.
+  Say the results page shows them once ranking finishes. These are screened people, never
+  the ranked list; do not present a ranked shortlist before ranking finishes.
 - When it prints the ranked count, say ranking has finished.
 
 Read these counts from the command's live output; no other run files need to

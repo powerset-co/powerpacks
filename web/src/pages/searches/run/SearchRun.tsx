@@ -1,5 +1,7 @@
 import { useMemo, type ReactNode } from "react"
 
+import { EmptyState } from "@/components/shared"
+import { isComplete } from "@/lib/searches/copy"
 import type { ResultSection, Results } from "@/lib/searches/ranking"
 import type { SearchResult } from "@/types/searches"
 
@@ -53,9 +55,12 @@ function emptyText(search: SearchResult, mode: Results["mode"], pondAt: number, 
 // One saved run: header (with the job description and the team), the pond chain (or, with one
 // pond, the search it ran), the toolbar, the people the filters keep.
 export function SearchRun(props: SearchRunProps) {
-  const { search, mode, pondAt, sections, filtered } = props
+  const { search, mode, pondAt, sections, filtered, status } = props
   // One identity per filtered list: the table's row keys and measurements follow it.
   const items = useMemo(() => tableItems(sections), [sections])
+  // A plain run's rows arrive screened and the ranking reorders them, so the table waits for it.
+  // A deep run shows its finished ponds while the next one runs.
+  const ranking = !search.jd_text && status !== undefined && status !== "failed" && !isComplete(status)
   return (
     <div className="search-run" data-search-run>
       <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
@@ -71,13 +76,19 @@ export function SearchRun(props: SearchRunProps) {
       <div className="run-toolbar" data-run-toolbar>
         {props.toolbar}
       </div>
-      <ResultsTable
-        items={items}
-        ranked={mode === "ranked"}
-        labels={props.labels}
-        empty={emptyText(search, mode, pondAt, filtered)}
-        rowContext={props.rowContext}
-      />
+      {ranking ? (
+        <EmptyState className="results-empty" data-results-ranking>
+          {`${props.people.toLocaleString()} screened, ranking…`}
+        </EmptyState>
+      ) : (
+        <ResultsTable
+          items={items}
+          ranked={mode === "ranked"}
+          labels={props.labels}
+          empty={emptyText(search, mode, pondAt, filtered)}
+          rowContext={props.rowContext}
+        />
+      )}
     </div>
   )
 }

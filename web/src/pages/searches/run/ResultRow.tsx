@@ -104,14 +104,13 @@ export const ResultRow = memo(function ResultRow({
 // rendering.py _overall_indicator. A ranked row shows the one score the list is ranked by (the
 // judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
-// the cloud app's row shows: the reasoning, then each trait's share with its name and reason.
-// The pond's own 0–1 only orders the list; the drawer still shows it.
+// the cloud app's row shows: each trait's share with its name and reason, nothing else. The
+// pond's own 0–1 only orders the list, and the overall reasoning is the drawer's.
 function Score({ result, ranked, labels }: { result: Result; ranked: boolean; labels: boolean }) {
   if (!ranked) {
     return (
       <div className="result-overall">
         <div className="result-reason">
-          <p>{result.reason}</p>
           <TraitList traits={result.row.traits} />
         </div>
       </div>

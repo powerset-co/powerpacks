@@ -1,34 +1,91 @@
-import type { SelectHTMLAttributes } from "react"
-
+import {
+  Select as Root,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
-// A native select in the app's field style, with a chevron.
-export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+export interface SelectOption {
+  value: string
+  label: string
+}
+
+export interface SelectOptionGroup {
+  label: string
+  options: readonly SelectOption[]
+}
+
+interface SelectProps {
+  value: string
+  onChange: (value: string) => void
+  options: readonly (SelectOption | SelectOptionGroup)[]
+  /** Shown while nothing is picked (the value is "" and no option is ""): a prompt like "Add…". */
+  placeholder?: string
+  disabled?: boolean
+  className?: string
+  "aria-label": string
+  title?: string
+  [attribute: `data-${string}`]: string | undefined
+}
+
+// Radix refuses an item whose value is "", so an empty choice ("any", "All relationships") rides
+// under this value and comes back as "".
+const EMPTY = "\u0000"
+
+function item({ value, label }: SelectOption) {
   return (
-    <span className="relative inline-flex">
-      <select
+    <SelectItem key={value} value={value === "" ? EMPTY : value}>
+      {label}
+    </SelectItem>
+  )
+}
+
+/** The app's one select: the ui Select (Radix) in the field style, options as data. */
+export function Select({
+  value,
+  onChange,
+  options,
+  placeholder,
+  disabled,
+  className,
+  title,
+  ...rest
+}: SelectProps) {
+  const hasEmptyOption = options.some((entry) =>
+    "options" in entry ? entry.options.some((option) => option.value === "") : entry.value === "",
+  )
+  return (
+    <Root
+      value={value === "" && hasEmptyOption ? EMPTY : value}
+      onValueChange={(next) => onChange(next === EMPTY ? "" : next)}
+      disabled={disabled}
+    >
+      <SelectTrigger
+        title={title}
         className={cn(
-          "h-8 cursor-pointer appearance-none rounded-[var(--radius-s)] border border-line-strong bg-background pl-2.5 pr-8 text-[13px] text-foreground disabled:cursor-default disabled:text-muted-foreground",
+          "h-8 w-auto gap-2 rounded-[var(--radius-s)] border-line-strong bg-background pl-2.5 pr-2 text-[13px] text-foreground disabled:text-muted-foreground",
           className,
         )}
-        {...props}
+        {...rest}
       >
-        {children}
-      </select>
-      <svg
-        viewBox="0 0 16 16"
-        aria-hidden="true"
-        className="pointer-events-none absolute right-2.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground"
-      >
-        <path
-          d="M4 6l4 4 4-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent align="start">
+        {options.map((entry) =>
+          "options" in entry ? (
+            <SelectGroup key={entry.label}>
+              <SelectLabel>{entry.label}</SelectLabel>
+              {entry.options.map(item)}
+            </SelectGroup>
+          ) : (
+            item(entry)
+          ),
+        )}
+      </SelectContent>
+    </Root>
   )
 }

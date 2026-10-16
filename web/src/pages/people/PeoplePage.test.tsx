@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { open, options, pick, picked } from "@/testing/select"
+
 import type { LogbookEntry, LogbookMessage } from "@/lib/api/logbook"
 import { must } from "@/lib/must"
 import {
@@ -209,13 +211,10 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
-    const sharing = screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" })
-    expect(sharing.value).toBe("all")
-    expect([...sharing.options].map((option) => option.textContent)).toEqual([
-      "All · 4",
-      "Sharing · 1",
-      "Not sharing · 3",
-    ])
+    expect(picked("Sharing")).toBe("All · 4")
+    open("Sharing")
+    expect(options()).toEqual(["All · 4", "Sharing · 1", "Not sharing · 3"])
+    fireEvent.keyDown(screen.getAllByRole("option")[0] as HTMLElement, { key: "Escape" })
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
   })
@@ -224,7 +223,7 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.change(screen.getByRole("combobox", { name: "Sharing" }), { target: { value: "all" } })
+    pick("Sharing", "All · 4")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
     await waitFor(() => expect(new URLSearchParams(must(at()).split("?")[1]).get("tab")).toBe("all"))
   })
@@ -233,7 +232,7 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const first = renderPage("/people?tab=no")
     await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.change(screen.getByRole("combobox", { name: "Relationship" }), { target: { value: "family" } })
+    pick("Relationship", /^Family/)
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
       target: { value: "Jordan" },
     })
@@ -255,7 +254,7 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(second.container.querySelectorAll(".row")).toHaveLength(1))
     expect(second.container.querySelector("[data-drawer] h2")?.textContent).toBe("Jordan Bravo")
     expect(screen.getByRole<HTMLInputElement>("searchbox", { name: "Search people" }).value).toBe("Jordan")
-    expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Relationship" }).value).toBe("family")
+    expect(picked("Relationship").startsWith("Family")).toBe(true)
     expect(second.container.querySelector('[data-section="relationship"]')?.getAttribute("data-open")).toBe(
       "true",
     )
@@ -266,9 +265,7 @@ describe("PeoplePage", () => {
   it("keeps the selected tab and all sections closed after refresh", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no&person=p1&sections=")
-    await waitFor(() =>
-      expect(screen.getByRole<HTMLSelectElement>("combobox", { name: "Sharing" }).value).toBe("no"),
-    )
+    await waitFor(() => expect(picked("Sharing").startsWith("Not sharing")).toBe(true))
     await screen.findByRole("button", { name: "Relationship", expanded: false })
     expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
   })
@@ -712,9 +709,7 @@ describe("PeoplePage logbook", () => {
       expect(within(viewport).getByText("Hello 2024-03")).toBeTruthy()
       const march = viewport.scrollTop
 
-      fireEvent.change(within(timeline).getByRole("combobox", { name: "Jump to month" }), {
-        target: { value: "2023-06" },
-      })
+      pick("Jump to month", "Jun 2023", timeline)
       await waitFor(() => expect(topDay()).toBe("Thu, Jun 1, 2023"))
       expect(month("Jun 2023").getAttribute("aria-current")).toBe("true")
 

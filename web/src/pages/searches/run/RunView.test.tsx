@@ -64,10 +64,10 @@ function tagServer(initial: Tagged | null) {
 const NOT_STOPPED: Pick<Feedback, "pending" | "failure"> = { pending: [], failure: null }
 
 // The run as RunPane reads it: from the query cache, so a saved score shows through it.
-function Harness({ feedback, onToast }: { feedback: Feedback; onToast: () => void }) {
+function Harness({ feedback, onToast, status }: { feedback: Feedback; onToast: () => void; status: string }) {
   const run = useSearchRun(RUN_ID)
   return run.data ? (
-    <RunView payload={run.data} status="completed" feedback={feedback} onToast={onToast} />
+    <RunView payload={run.data} status={status} feedback={feedback} onToast={onToast} />
   ) : null
 }
 
@@ -75,6 +75,7 @@ function renderRun(
   tags: Tagged | null = null,
   stopped: Pick<Feedback, "pending" | "failure"> = NOT_STOPPED,
   payload: SearchRunPayload = RUN,
+  status = "completed",
 ) {
   const saves = tagServer(tags)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -85,7 +86,7 @@ function renderRun(
   const onToast = vi.fn()
   render(
     <QueryClientProvider client={client}>
-      <Harness feedback={feedback} onToast={onToast} />
+      <Harness feedback={feedback} onToast={onToast} status={status} />
     </QueryClientProvider>,
   )
   return { saves, submit, retry, onToast }
@@ -162,10 +163,10 @@ describe("RunView", () => {
     expect(filters.getByText("Austin Metropolitan Area").textContent).toBe("Austin Metropolitan Area · metro")
     expect(filters.getByText("Years")).toBeTruthy()
     expect(filters.getByText("3 – any")).toBeTruthy()
-    // As the cloud app's row: the reasoning, then each trait's share with its name and reason.
-    // The pond's own score (80%) only orders the list.
+    // As the cloud app's row: each trait's share with its name and reason, nothing else. The
+    // pond's own score (80%) only orders the list; the overall reasoning is the drawer's.
     const jordan = row("p-jordan")
-    expect(jordan.getByText("Leads the current reliability platform.")).toBeTruthy()
+    expect(jordan.queryByText("Leads the current reliability platform.")).toBeNull()
     expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["90%"])
     expect(jordan.getByText("Backend depth:").parentElement?.textContent).toContain("Built the API layer.")
     fireEvent.click(main("p-jordan"))
@@ -173,6 +174,12 @@ describe("RunView", () => {
       within(drawer() ?? document.body).getByText("Backend depth:").parentElement?.textContent,
     ).toContain("Built the API layer.")
     expect(within(drawer() ?? document.body).getByText("90%")).toBeTruthy()
+  })
+
+  it("holds a plain run's rows back while it is still ranking", () => {
+    renderRun(null, NOT_STOPPED, QUICK_RUN, "running")
+    expect(screen.getByText("2 screened, ranking…")).toBeTruthy()
+    expect(document.querySelector(".result-row")).toBeNull()
   })
 
   it("shows the header, the pond chain and both score tables in the documented order", () => {

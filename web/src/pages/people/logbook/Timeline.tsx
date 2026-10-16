@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react"
 
+import { Select } from "@/components/shared"
 import { plural } from "@/lib/copy"
 import { LOGBOOK } from "@/lib/people/copy"
 import { monthsByYear, type ReaderMonth } from "@/lib/people/logbook"
@@ -38,25 +39,19 @@ export function Timeline({ months, active, onJump, onOldest, onNewest }: Timelin
       <button type="button" className="logbook-edge" onClick={onOldest}>
         {LOGBOOK.oldest}
       </button>
-      <select
+      <Select
         className="logbook-jump"
         aria-label={LOGBOOK.jump}
         value={active}
-        onChange={(event) => {
-          const month = months.find((row) => row.key === event.target.value)
+        onChange={(key) => {
+          const month = months.find((row) => row.key === key)
           if (month) onJump(month)
         }}
-      >
-        {years.map(([year, rows]) => (
-          <optgroup key={year} label={year || "Undated"}>
-            {rows.map((month) => (
-              <option key={month.key} value={month.key}>
-                {`${month.label} ${month.year}`.trim()}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        options={years.map(([year, rows]) => ({
+          label: year || "Undated",
+          options: rows.map((month) => ({ value: month.key, label: `${month.label} ${month.year}`.trim() })),
+        }))}
+      />
       <div className="logbook-years" ref={list}>
         {years.map(([year, rows]) => (
           <section key={year} className="logbook-year">

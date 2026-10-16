@@ -23,12 +23,20 @@ export function PeopleLoading() {
               aria-label={SEARCH_LABEL}
               disabled
             />
-            <Select aria-label="Sharing" disabled>
-              <option>All</option>
-            </Select>
-            <Select aria-label="Relationship" disabled>
-              <option>All relationships</option>
-            </Select>
+            <Select
+              aria-label="Sharing"
+              disabled
+              value="all"
+              onChange={() => {}}
+              options={[{ value: "all", label: "All" }]}
+            />
+            <Select
+              aria-label="Relationship"
+              disabled
+              value=""
+              onChange={() => {}}
+              options={[{ value: "", label: "All relationships" }]}
+            />
           </section>
           <section className="people-grid" data-grid>
             <div className="grid-head" role="row" data-grid-head />

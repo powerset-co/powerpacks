@@ -48,11 +48,11 @@ export function CodexCard() {
         </Badge>
       </div>
       {codex.login ? (
-        <div className="mb-3 mt-3">
+        <div className="mt-3">
           <ChatGptSignIn codex={codex} compact />
         </div>
       ) : (
-        <div className="mb-3 mt-2 flex min-h-7 items-center justify-between gap-3">
+        <div className="mt-2 flex min-h-7 items-center justify-between gap-3">
           <p className="m-0 text-xs text-muted-foreground">
             {codex.status?.installed && codex.status.account?.kind === "apiKey"
               ? "Uses your API key. API usage is billed separately."
@@ -63,7 +63,7 @@ export function CodexCard() {
           <CodexAction codex={codex} connected={connected} />
         </div>
       )}
-      {codex.error && <p className="m-0 mb-3 text-xs text-bad">{codex.error}</p>}
+      {codex.error && <p className="m-0 mt-2 text-xs text-bad">{codex.error}</p>}
     </li>
   )
 }

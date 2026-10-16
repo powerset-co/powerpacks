@@ -55,26 +55,24 @@ export const FilterBar = memo(
           <Select
             aria-label="Sharing"
             value={tab}
-            onChange={(event) => onTab(must(TABS.find((option) => option === event.target.value)))}
-          >
-            {TABS.map((option) => (
-              <option key={option} value={option}>
-                {`${option === "all" ? "All" : label("share", option)} · ${totals[option].toLocaleString()}`}
-              </option>
-            ))}
-          </Select>
+            onChange={(value) => onTab(must(TABS.find((option) => option === value)))}
+            options={TABS.map((option) => ({
+              value: option,
+              label: `${option === "all" ? "All" : label("share", option)} · ${totals[option].toLocaleString()}`,
+            }))}
+          />
           <Select
             aria-label="Relationship"
             value={relationship}
-            onChange={(event) => onRelationship(event.target.value)}
-          >
-            <option value="">All relationships</option>
-            {options.map(({ kind, text: name, count }) => (
-              <option key={kind} value={kind}>
-                {`${name} · ${count.toLocaleString()}`}
-              </option>
-            ))}
-          </Select>
+            onChange={onRelationship}
+            options={[
+              { value: "", label: "All relationships" },
+              ...options.map(({ kind, text: name, count }) => ({
+                value: kind,
+                label: `${name} · ${count.toLocaleString()}`,
+              })),
+            ]}
+          />
           {notice}
           <span className="bar-count num" data-count aria-live="polite">
             {shown === totals[tab] ? "" : countOf(shown, totals[tab], "person")}

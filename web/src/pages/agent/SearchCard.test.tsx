@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeAll, expect, it, vi } from "vitest"
 
+import { pick } from "@/testing/select"
+
 // The modal's scroll area watches element sizes; jsdom has no ResizeObserver.
 beforeAll(() => {
   if (!("ResizeObserver" in globalThis))
@@ -101,7 +103,7 @@ it("sends a changed query and the traits as a new search, without the filters ed
     target: { value: "Washington, DC" },
   })
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
-  fireEvent.change(screen.getByRole("combobox", { name: "Add Seniority" }), { target: { value: "c-suite" } })
+  pick("Add Seniority", "c-suite")
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years max" }), { target: { value: "12" } })
   const keyword = screen.getByRole("textbox", { name: "Add Keywords" })
   fireEvent.change(keyword, { target: { value: "head of finance" } })
@@ -192,7 +194,7 @@ it("drops the modal's edits on Cancel", () => {
 
 it("keeps a typed location with the chosen kind", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
-  fireEvent.change(screen.getByRole("combobox", { name: "Location kind" }), { target: { value: "cities" } })
+  pick("Location kind", "city")
   const add = screen.getByRole("textbox", { name: "Add Location" })
   fireEvent.change(add, { target: { value: "Brooklyn" } })
   fireEvent.keyDown(add, { key: "Enter" })
@@ -217,7 +219,7 @@ it("sends a changed end of a select pair, the other end untouched", () => {
     filters: [...SEARCH.filters, { key: "funding_stage_min", value: "seed" }],
   }
   render(<SearchCard search={search} actions={true} />)
-  fireEvent.change(screen.getByRole("combobox", { name: "Stage max" }), { target: { value: "series_b" } })
+  pick("Stage max", "series_b")
   execute()
   expect(sent().filters).toEqual({ funding_stage_max: "series_b" })
 })
@@ -294,7 +296,7 @@ it("applies the kind chosen after the location was typed", () => {
   const kind = screen.getByRole("combobox", { name: "Location kind" })
   fireEvent.change(add, { target: { value: "Brooklyn" } })
   fireEvent.blur(add, { relatedTarget: kind })
-  fireEvent.change(kind, { target: { value: "cities" } })
+  pick("Location kind", "city")
   // No Enter: Execute carries what sits in the add field, under the kind picked after typing.
   execute()
   expect(sent().filters).toEqual({ cities: ["Brooklyn"] })
