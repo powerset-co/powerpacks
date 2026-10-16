@@ -1099,19 +1099,19 @@ DEEP_SEARCH_ROOT = ROOT/".powerpacks/deep-search"
 
 def record_quick_run(result: dict[str, Any]) -> None:
     """A quick search (its ledger under .powerpacks/search/<slug>) also lands in the results
-    viewer as a one-pond run, with the filters and traits it ran with (the expand step's output
-    in its state, which is the payload as executed, edits included); deep-search ponds keep
-    their ledgers under deep-search/."""
+    viewer as a one-pond run, with the filters and traits it ran with (the latest expand step
+    in its state, the payload as executed, edits included); deep-search ponds keep their
+    ledgers under deep-search/."""
     lp=Path(result["ledger"]).resolve()
     if lp.parent.parent!=QUICK_SEARCH_ROOT.resolve():
         return
     l=load_ledger(lp); artifacts=l["artifacts"]
-    state=read_json(ROOT/result["state"])
-    expanded=next(step for step in state["steps"] if step.get("id")=="expand_search_request")["output"]
+    state=ROOT/result["state"]
+    expanded=latest_step(state,"expand_search_request")
     filters=preview_filters(expanded)
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
-    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=state["query"], filters=filters,
+    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"])
 
