@@ -320,8 +320,9 @@ For both local and Powerset previews:
     the key; a key not sent is left unchanged), log each key whose value differs from the
     file's as `filter_edit`, and when `traits` is present replace the payload's `traits` with
     it (a changed `temporal` alone is an in-place edit). When `bm25_queries` is sent, also drop
-    from `role_core_patterns` every example that is no longer in it: the run merges those
-    examples back into the keywords, so a removed keyword would return.
+    every `role_core_patterns` entry that holds an example no longer in it: the run merges the
+    examples back into the keywords and retrieval matches the entry's regex, so a removed
+    keyword would return either way. The kept examples are already in `bm25_queries`.
   - Log each change with `search_feedback.py log` as shown in **User edit & feedback
     capture**, using `--kind filter_edit` for filters or `--kind query_edit` for the query or
     traits, with both `--before` and `--after`.
@@ -329,8 +330,10 @@ For both local and Powerset previews:
     exactly in the background and read its output as it arrives. It binds the edited file.
     Filter and temporal-only edits need no second `prepare` or approval.
 - A reply starting `Modify:` (no "then execute") comes from a blocked card: apply the JSON by
-  the same rules, run a new `prepare` with the same `--output-dir`, show its preview and ask the
-  usual question. Never run the search from this reply.
+  the same rules, in place, and ask the usual question again; a later `execute` runs the
+  returned `execute_command`, which binds the edited file. Only a `query` or a changed trait
+  value means a new `prepare` (it re-expands and would overwrite in-place edits, so write those
+  edits after it). Never run the search from this reply.
 - Any other reply is a modify in the user's words: use the same rules above.
   A changed query or trait value requires a new `prepare` and the usual question; filter and
   temporal-only edits are applied and logged in place, then run the returned

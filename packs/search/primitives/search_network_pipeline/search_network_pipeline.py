@@ -332,16 +332,7 @@ def payload_quality_issues_local(payload: dict[str, Any]) -> list[str]:
 def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues: list[str]) -> dict[str, Any]:
     f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
     filters={}
-    for k in [
-        "company_names","company_ids","company_semantic_queries","investor_names",
-        "education_names","education_ids","metro_areas","cities","states","countries",
-        "macro_regions","seniority_bands","years_experience_min","years_experience_max",
-        "age_min","age_max",
-        "position_after_date","position_before_date","is_current_role","is_current_company",
-        "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
-        "fields_of_study","degree_levels","graduation_year_min","graduation_year_max",
-        "role_tracks","operator_interaction_max","set_interaction_min","set_interaction_max",
-    ]:
+    for k in PREVIEW_FILTER_KEYS:
         if payload.get("traits") and k in ("is_current_role", "is_current_company"):
             continue
         v=f.get(k)
@@ -1010,7 +1001,9 @@ def run_pipeline_local(args) -> dict[str, Any]:
     if pin_current:
         payload=pin_payload_current_role(payload, True)
     payload, ignored_scope_keys=prepare_local_payload(payload)
-    payload=apply_local_title_clustering(payload, db_path)
+    # Clustered once, at prepare; clustering again at run would add back a keyword the user removed.
+    if not payload_filters(payload).get("local_title_clustering_status"):
+        payload=apply_local_title_clustering(payload, db_path)
     if args.payload_json:
         sanitized_path=lp.parent/f"{lp.stem}.local-payload.json"
         write_json(sanitized_path,payload)

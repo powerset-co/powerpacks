@@ -116,7 +116,7 @@ export const FIELDS: Field[] = [
     },
   },
   {
-    label: "Funding ($M)",
+    label: "Funding (USD)",
     control: { kind: "pair", keys: ["funding_amount_min", "funding_amount_max"], type: "number" },
   },
   {
@@ -124,7 +124,7 @@ export const FIELDS: Field[] = [
     control: { kind: "pair", keys: ["headcount_min", "headcount_max"], type: "number" },
   },
   {
-    label: "Valuation ($M)",
+    label: "Valuation (USD)",
     control: { kind: "pair", keys: ["valuation_min", "valuation_max"], type: "number" },
   },
   {

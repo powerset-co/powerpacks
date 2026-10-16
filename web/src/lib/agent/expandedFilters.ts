@@ -136,6 +136,9 @@ const SCALARS: Record<string, string> = {
   set_interaction_max: "set_interaction_max",
 }
 
+/** The modal's money fields, in millions on screen and dollars in the payload. */
+const MILLIONS = new Set(["funding_amount_min", "funding_amount_max", "valuation_min", "valuation_max"])
+
 const KINDS: Record<string, string> = {
   cities: "city",
   states: "state",
@@ -169,6 +172,11 @@ export function toExpanded(
     const value = values.get(SCALARS[field] ?? field)
     return typeof value === "string" ? value : null
   }
+  // The modal's money fields read in millions; the payload holds dollars.
+  const millions = (field: string) => {
+    const value = number(field)
+    return value === null ? null : value / 1_000_000
+  }
   const number = (field: string) => {
     const value = values.get(SCALARS[field] ?? field)
     return typeof value === "number" ? value : null
@@ -190,14 +198,14 @@ export function toExpanded(
     company_macro_regions: list("company_macro_regions"),
     funding_stage_min: text("funding_stage_min"),
     funding_stage_max: text("funding_stage_max"),
-    funding_amount_min: number("funding_amount_min"),
-    funding_amount_max: number("funding_amount_max"),
+    funding_amount_min: millions("funding_amount_min"),
+    funding_amount_max: millions("funding_amount_max"),
     headcount_min: number("headcount_min"),
     headcount_max: number("headcount_max"),
     last_funding_before: text("last_funding_before"),
     last_funding_after: text("last_funding_after"),
-    valuation_min: number("valuation_min"),
-    valuation_max: number("valuation_max"),
+    valuation_min: millions("valuation_min"),
+    valuation_max: millions("valuation_max"),
     founded_year_min: number("founded_year_min"),
     founded_year_max: number("founded_year_max"),
     yc_batches: list("yc_batches"),
@@ -254,7 +262,8 @@ export function fromExpanded(
     const value = record[field]
     const scalar =
       typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : null
-    if (scalar !== null || next.has(key)) next.set(key, scalar)
+    const dollars = MILLIONS.has(field) && typeof scalar === "number" ? scalar * 1_000_000 : scalar
+    if (scalar !== null || next.has(key)) next.set(key, dollars)
   }
   const keywords = Array.isArray(filters.role_bm25_queries) ? filters.role_bm25_queries : []
   if (keywords.length > 0 || next.has("bm25_queries"))
