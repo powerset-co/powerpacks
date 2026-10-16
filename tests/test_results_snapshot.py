@@ -101,6 +101,16 @@ class SnapshotTest(unittest.TestCase):
         altered["search"]["total_cost_usd"] = float("nan")
         with self.assertRaisesRegex(ValueError, "finite number"):
             validate_snapshot(altered)
+        # A quick search's filters travel as names to plain values; anything nested is refused.
+        altered = copy.deepcopy(self.snapshot)
+        altered["search"]["ponds"][0]["filters"] = {"seniority_bands": ["mid", "senior"], "years_experience_min": 3}
+        altered["search"]["ponds"][0]["traits"] = [{"value": "Recruiter", "temporal": "current", "meaning": "role"}]
+        kept = validate_snapshot(altered)["search"]["ponds"][0]
+        self.assertEqual(kept["filters"], {"seniority_bands": ["mid", "senior"], "years_experience_min": 3})
+        self.assertEqual(kept["traits"], ({"value": "Recruiter", "temporal": "current", "meaning": "role"},))
+        altered["search"]["ponds"][0]["filters"] = {"stage": {"min": "seed"}}
+        with self.assertRaisesRegex(ValueError, "lists of strings"):
+            validate_snapshot(altered)
 
     def test_unsafe_link_schemes_and_url_credentials_are_rejected(self):
         for url in ("javascript:alert(1)", "data:text/html,x", "//example.com", "https://token@example.com"):

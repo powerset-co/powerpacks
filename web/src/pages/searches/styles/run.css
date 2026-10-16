@@ -94,6 +94,17 @@
   gap: 6px;
 }
 
+/* A one-pond run's search in the chain's slot: its query, traits and filters as read-only rows. */
+.run-filters {
+  display: grid;
+  gap: 6px;
+  padding: 2px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.run-filters:empty {
+  display: none;
+}
+
 /* The chain: one row per pond, top to bottom; the number, the query, and what it kept. */
 .pond-chain {
   padding: 2px 20px 12px;

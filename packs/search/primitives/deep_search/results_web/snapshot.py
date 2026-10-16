@@ -21,6 +21,12 @@ SCHEMA_VERSION = 1
 _field_types = lru_cache(maxsize=None)(get_type_hints)
 
 
+def _plain(value: Any) -> bool:
+    """A filter value: a string, a number, a yes/no or a list of strings."""
+    return type(value) in (str, int, float, bool) or (
+        isinstance(value, list) and all(type(item) is str for item in value))
+
+
 def _decode(kind: Any, value: Any, path: str) -> Any:
     """Reject fields that the renderer does not consume, before persistence."""
     if get_origin(kind) is types.UnionType:
@@ -46,6 +52,11 @@ def _decode(kind: Any, value: Any, path: str) -> Any:
         if any(score is not None and score not in range(1, 6) for score in scores):
             raise ValueError(f"{path} ratings must be between 1 and 5")
         return result
+    if get_origin(kind) is dict:
+        # A quick search's filters: names to the values the search ran with, never nested.
+        if not isinstance(value, dict) or any(type(key) is not str or not _plain(item) for key, item in value.items()):
+            raise ValueError(f"{path} must map names to strings, numbers, yes/no or lists of strings")
+        return dict(value)
     if kind is float:
         if type(value) not in (int, float) or not math.isfinite(value):
             raise ValueError(f"{path} must be a finite number")

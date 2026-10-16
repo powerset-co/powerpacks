@@ -1,8 +1,8 @@
 import { useState } from "react"
 
-import { CLOSE_MARK } from "@/components/shared"
+import { CHIP, CLOSE_MARK, ReadRow, Row, TraitChips } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import type { FilterValue, PreparedSearch, SearchTrait } from "@/lib/agent/preparedSearch"
+import type { PreparedSearch, SearchTrait } from "@/lib/agent/preparedSearch"
 import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expandedFilters"
 import { ENTITY_TYPES, SECTOR_TYPES, SENIORITY_BANDS as BAND_ITEMS } from "@/lib/agent/companyFilters"
 import {
@@ -10,12 +10,15 @@ import {
   TEMPORALS,
   type Control,
   type Field,
-  fieldFor,
+  type Values,
   fieldHasValue,
-  fieldKeys,
+  filledFields,
+  names,
+  scalar,
 } from "@/lib/agent/searchFields"
 import { send } from "@/lib/agent/store"
 import { cn } from "@/lib/utils"
+import type { FilterValue } from "@/types/searches"
 
 import { EditFiltersModal } from "./EditFiltersModal"
 
@@ -33,10 +36,6 @@ interface SearchCardProps {
   actions: boolean
 }
 
-/** The edited filters: a key's value as the payload holds it, or null once removed. */
-type Values = Map<string, FilterValue | null>
-
-const CHIP = "rounded-full border border-line px-2.5 py-1 text-[11.5px] font-semibold leading-snug"
 // A chip being edited: its value is a text field, and the chip shows the field's focus.
 const EDIT_CHIP = cn(CHIP, "inline-flex max-w-full items-center gap-1 pr-1.5 focus-within:border-primary")
 const ADD_FIELD = cn(
@@ -49,15 +48,6 @@ const REMOVE =
   "inline-grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
 const TEXT_BUTTON =
   "cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground transition-colors duration-fast ease-out hover:text-foreground"
-
-function names(value: FilterValue | null | undefined): string[] {
-  if (Array.isArray(value)) return value
-  return typeof value === "string" && value.trim() !== "" ? [value] : []
-}
-
-function scalar(value: FilterValue | null | undefined): string {
-  return value === null || value === undefined || Array.isArray(value) ? "" : String(value)
-}
 
 /** A typed number or date as the payload holds it; nothing typed removes the key. */
 function parsed(text: string, type: "number" | "date"): FilterValue | null {
@@ -157,18 +147,6 @@ function ChipField({
   )
 }
 
-/** A label on the left, the field's values on the right. */
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[96px_minmax(0,1fr)] items-start gap-x-2 gap-y-1 max-[480px]:grid-cols-1">
-      <span className="pt-1 text-[11px] font-semibold uppercase tracking-[.04em] text-muted-foreground">
-        {label}
-      </span>
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">{children}</div>
-    </div>
-  )
-}
-
 /** What sits in a row's add field before Enter: the text and, for locations, the kind picked. */
 interface Draft {
   text: string
@@ -183,7 +161,6 @@ function Chips({
   items,
   options,
   readonly,
-  editable,
   onChange,
   kinds,
   draft,
@@ -193,7 +170,6 @@ function Chips({
   items: { name: string; kind?: string }[]
   options?: string[]
   readonly?: boolean
-  editable: boolean
   onChange: (items: { name: string; kind?: string }[]) => void
   /** Kind labels and their keys, for a row that mixes several lists (locations). */
   kinds?: Record<string, string>
@@ -203,17 +179,6 @@ function Chips({
   const typed = draft.text
   const kind = draft.kind ?? (kinds ? Object.keys(kinds)[0] : undefined)
   const kindLabel = (item: { kind?: string }) => (kinds && item.kind ? kinds[item.kind] : undefined)
-  if (!editable)
-    return (
-      <>
-        {items.map((item, index) => (
-          <span key={index} className={CHIP}>
-            {item.name}
-            {kindLabel(item) && <span className="text-faint"> · {kindLabel(item)}</span>}
-          </span>
-        ))}
-      </>
-    )
   const add = (name: string) => {
     const trimmed = name.trim()
     if (!trimmed) return
@@ -300,7 +265,7 @@ function Chips({
   )
 }
 
-/** One field's row, edited in place or read-only. */
+/** One field's row, edited in place; read-only it is the shared ReadRow. */
 function FieldRow({
   field,
   values,
@@ -319,6 +284,7 @@ function FieldRow({
   draft: Draft
   onDraft: (draft: Draft) => void
 }) {
+  if (!editable) return <ReadRow field={field} values={values} />
   const control: Control = field.control
   switch (control.kind) {
     case "chips":
@@ -329,7 +295,6 @@ function FieldRow({
             items={names(values.get(control.key)).map((name) => ({ name }))}
             options={control.options}
             readonly={control.readonly}
-            editable={editable}
             draft={draft}
             onDraft={onDraft}
             onChange={(items) =>
@@ -353,7 +318,6 @@ function FieldRow({
           <Chips
             label={field.label}
             items={items}
-            editable={editable}
             kinds={control.keys}
             draft={draft}
             onDraft={onDraft}
@@ -375,20 +339,16 @@ function FieldRow({
       const text = scalar(values.get(control.key))
       return (
         <Row label={field.label}>
-          {editable ? (
-            <input
-              aria-label={field.label}
-              value={text}
-              onChange={(event) =>
-                onChange(
-                  withValue(values, control.key, typedScalar(event.target.value, prepared.get(control.key))),
-                )
-              }
-              className={cn(FIELD, "w-full")}
-            />
-          ) : (
-            <span className="text-[12.5px]">{text}</span>
-          )}
+          <input
+            aria-label={field.label}
+            value={text}
+            onChange={(event) =>
+              onChange(
+                withValue(values, control.key, typedScalar(event.target.value, prepared.get(control.key))),
+              )
+            }
+            className={cn(FIELD, "w-full")}
+          />
         </Row>
       )
     }
@@ -402,14 +362,6 @@ function FieldRow({
         return typeof value === "number" ? value * scale : value
       }
       const [low, high] = control.keys.map((key) => shown(values.get(key)))
-      if (!editable)
-        return (
-          <Row label={field.label}>
-            <span className="text-[12.5px]">
-              {low === "" ? "any" : low} – {high === "" ? "any" : high}
-            </span>
-          </Row>
-        )
       return (
         <Row label={field.label}>
           {control.keys.map((key, index) => (
@@ -430,14 +382,6 @@ function FieldRow({
     }
     case "select-pair": {
       const [low, high] = control.keys.map((key) => scalar(values.get(key)))
-      if (!editable)
-        return (
-          <Row label={field.label}>
-            <span className="text-[12.5px]">
-              {low === "" ? "any" : low} – {high === "" ? "any" : high}
-            </span>
-          </Row>
-        )
       return (
         <Row label={field.label}>
           {control.keys.map((key, index) => (
@@ -465,21 +409,17 @@ function FieldRow({
       const on = values.get(control.key) === true
       return (
         <Row label={field.label}>
-          {editable ? (
-            <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12.5px]">
-              <input
-                type="checkbox"
-                aria-label={field.label}
-                checked={on}
-                onChange={(event) =>
-                  onChange(withValue(values, control.key, event.target.checked ? true : null))
-                }
-              />
-              yes
-            </label>
-          ) : (
-            <span className="text-[12.5px]">{on ? "yes" : "no"}</span>
-          )}
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12.5px]">
+            <input
+              type="checkbox"
+              aria-label={field.label}
+              checked={on}
+              onChange={(event) =>
+                onChange(withValue(values, control.key, event.target.checked ? true : null))
+              }
+            />
+            yes
+          </label>
         </Row>
       )
     }
@@ -508,8 +448,8 @@ function Traits({
   }
   return (
     <Row label="Traits">
-      {traits.map((trait, index) =>
-        editable ? (
+      {editable ? (
+        traits.map((trait, index) => (
           // Index keys: a trait's value changes as it is typed.
           <span key={index} className={EDIT_CHIP}>
             <ChipField
@@ -540,11 +480,9 @@ function Traits({
               {CLOSE_MARK}
             </button>
           </span>
-        ) : (
-          <span key={index} className={CHIP}>
-            {trait.value} <span className="text-faint">({trait.temporal})</span>
-          </span>
-        ),
+        ))
+      ) : (
+        <TraitChips traits={traits} />
       )}
       {editable && (
         <input
@@ -560,19 +498,6 @@ function Traits({
       )}
     </Row>
   )
-}
-
-/**
- * The fields the card shows: the ones with a value now or as prepared (an emptied row stays until
- * Execute), in the table's order, then any key the table doesn't name.
- */
-function filledFields(values: Values, prepared: Values): Field[] {
-  const known = FIELDS.filter((field) => fieldHasValue(field, values) || fieldHasValue(field, prepared))
-  const named = new Set(FIELDS.flatMap(fieldKeys))
-  const other = [...values.keys()]
-    .filter((key) => !named.has(key))
-    .map((key) => fieldFor(key, values.get(key) ?? prepared.get(key)))
-  return [...known, ...other]
 }
 
 /**

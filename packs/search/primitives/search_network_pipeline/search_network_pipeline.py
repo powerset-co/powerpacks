@@ -329,15 +329,17 @@ def payload_quality_issues_local(payload: dict[str, Any]) -> list[str]:
         issues.append("role/profile intent will run BM25/filter-only unless semantic_query has at least 80 characters")
     return issues
 
+def preview_filters(payload: dict[str, Any]) -> dict[str, Any]:
+    """The filters a prepared search shows: the preview keys the payload carries. The current-only
+    toggles are the traits' temporal when the search has traits, so they stay out then."""
+    filters = payload_filters(payload)
+    return {key: filters[key] for key in PREVIEW_FILTER_KEYS
+            if is_present(filters.get(key))
+            and not (payload.get("traits") and key in ("is_current_role", "is_current_company"))}
+
 def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues: list[str]) -> dict[str, Any]:
-    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
-    filters={}
-    for k in PREVIEW_FILTER_KEYS:
-        if payload.get("traits") and k in ("is_current_role", "is_current_company"):
-            continue
-        v=f.get(k)
-        if v not in (None, [], ""):
-            filters[k]=v
+    f=payload_filters(payload)
+    filters=preview_filters(payload)
     role={}
     for k in ["semantic_query","bm25_queries","role_ids"]:
         v=f.get(k)
@@ -742,13 +744,7 @@ def age_filter_notes(filters: dict[str, Any]) -> list[str]:
 
 def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: Path, removed_scope_keys: list[str]) -> dict[str, Any]:
     filters = payload_filters(payload)
-    visible_filters = {}
-    for key in PREVIEW_FILTER_KEYS:
-        if payload.get("traits") and key in ("is_current_role", "is_current_company"):
-            continue
-        value = filters.get(key)
-        if is_present(value):
-            visible_filters[key] = value
+    visible_filters = preview_filters(payload)
     role = {key: filters.get(key) for key in ["semantic_query", "bm25_queries", "role_ids", "role_tracks"] if is_present(filters.get(key))}
     runtime_notes = payload_quality_issues_local(payload) + age_filter_notes(filters)
     pool = local_pool_estimate(payload, db_path)
@@ -1103,14 +1099,21 @@ DEEP_SEARCH_ROOT = ROOT/".powerpacks/deep-search"
 
 def record_quick_run(result: dict[str, Any]) -> None:
     """A quick search (its ledger under .powerpacks/search/<slug>) also lands in the results
-    viewer as a one-pond run; deep-search ponds keep their ledgers under deep-search/."""
+    viewer as a one-pond run, with the filters and traits it ran with (the latest expand step
+    in its state, the payload as executed, edits included); deep-search ponds keep their
+    ledgers under deep-search/."""
     lp=Path(result["ledger"]).resolve()
     if lp.parent.parent!=QUICK_SEARCH_ROOT.resolve():
         return
     l=load_ledger(lp); artifacts=l["artifacts"]
-    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(ROOT/result["state"])["query"],
-                        created_at=l["created_at"], jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"],
-                        status=result["status"])
+    state=ROOT/result["state"]
+    expanded=latest_step(state,"expand_search_request")
+    filters=preview_filters(expanded)
+    role=payload_filters(expanded)
+    filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
+    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
+                        traits=expanded.get("traits") or [], created_at=l["created_at"],
+                        jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"])
 
 def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_kwargs) -> None:
     if done(ledger, "llm_rerank_candidates") or ledger["artifacts"].get("query_results_csv"):

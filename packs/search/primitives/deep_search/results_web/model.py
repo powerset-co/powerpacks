@@ -16,7 +16,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -196,6 +196,15 @@ class Iteration:
 
 
 @dataclass(frozen=True)
+class Trait:
+    """One trait a search asked for: its value and the temporal it applies to."""
+
+    value: str
+    temporal: str
+    meaning: str
+
+
+@dataclass(frozen=True)
 class Pond:
     run_id: str
     pond_n: int
@@ -207,6 +216,10 @@ class Pond:
     result_count: int
     cost_usd: float
     candidates: tuple[PondCandidate, ...] = ()
+    # A quick search records the filters and traits it ran with (record_quick_search); a
+    # deep-search pond carries none.
+    filters: dict[str, Any] = field(default_factory=dict)
+    traits: tuple[Trait, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -615,6 +628,10 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
             result_count=int(raw.get("result_count") or 0),
             cost_usd=_number(raw.get("cost_usd")),
             candidates=rows,
+            filters=dict(raw.get("filters") or {}),
+            traits=tuple(Trait(value=_text(trait.get("value")), temporal=_text(trait.get("temporal")),
+                               meaning=_text(trait.get("meaning")))
+                         for trait in raw.get("traits") or []),
         ))
     raw_groups = summary.get("groups") or {}
     raw_candidates = {_text(row.get("person")): dict(row)
@@ -786,16 +803,19 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
     write_json(root / CATALOG_FILE, catalog)
 
 
-def record_quick_search(root: Path, run_id: str, *, query: str, created_at: str,
-                        jsonl: str, profiles_path: str, status: str) -> None:
-    """Save a quick search as a one-pond run beside the deep ones, and list it."""
+def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[str, Any],
+                        traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
+                        status: str) -> None:
+    """Save a quick search as a one-pond run beside the deep ones, with the filters and traits it
+    ran with, and list it."""
     rows = len(tuple(_jsonl_rows(_artifact_path(root, jsonl))))
     artifacts = {"jsonl": jsonl, "profiles_path": profiles_path}
     payload = {
         "title": query,
         "created_at": created_at,
         "iterations": [{"pond_n": 1, "query": query, "arm": {"artifacts": artifacts}}],
-        "summary": {"pond_chain": [{"run": run_id, "pond_n": 1, "query": query, "result_count": rows}],
+        "summary": {"pond_chain": [{"run": run_id, "pond_n": 1, "query": query, "result_count": rows,
+                                    "filters": filters, "traits": traits}],
                     "groups": {}, "total_cost_usd": 0},
     }
     write_json(root / run_id / "results.json", payload)

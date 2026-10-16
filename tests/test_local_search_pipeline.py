@@ -1241,6 +1241,50 @@ class PreviewFilterKeysTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertEqual(preview["filters"][key], value)
 
+    def test_preview_filters_are_the_present_keys_without_the_toggles_beside_traits(self):
+        module = load_pipeline_module()
+        payload = {
+            "role_search_filters": {"cities": ["Boston"], "is_current_role": True, "seniority_bands": [],
+                                    "semantic_query": "people who ship", "role_core_patterns": [{"regex": "x"}]},
+            "traits": [{"value": "Engineer", "temporal": "current", "meaning": "role"}],
+        }
+        self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"]})
+        payload["traits"] = []
+        self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"], "is_current_role": True})
+
+    def test_quick_run_records_the_latest_expansion(self):
+        """A state can hold several expand steps (an edited expansion appended); the run executes
+        the latest, so that is the one the saved run shows."""
+        module = load_pipeline_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module.ROOT = root
+            module.QUICK_SEARCH_ROOT = root / ".powerpacks/search"
+            module.DEEP_SEARCH_ROOT = root / ".powerpacks/deep-search"
+            run = root / ".powerpacks/search/recruiters"
+            run.mkdir(parents=True)
+            artifacts = root / ".powerpacks/runs/artifacts/recruiters"
+            artifacts.mkdir(parents=True)
+            (artifacts / "rows.jsonl").write_text(json.dumps({"person_id": "p1", "name": "A"}) + "\n")
+            (artifacts / "profiles.jsonl").write_text("")
+            state = root / ".powerpacks/runs/recruiters.json"
+            expansion = lambda city: {"id": "expand_search_request", "output": {
+                "role_search_filters": {"metro_areas": [city], "bm25_queries": ["recruiter"], "semantic_query": "x"},
+                "traits": [{"value": "Recruiter", "temporal": "current", "meaning": "role"}]}}
+            state.write_text(json.dumps({"query": "recruiters", "steps": [expansion("Boston"), expansion("Austin")]}))
+            ledger = run / "pipeline.ledger.json"
+            ledger.write_text(json.dumps({
+                "created_at": "2026-10-16T00:00:00Z", "steps": {},
+                "artifacts": {"jsonl": ".powerpacks/runs/artifacts/recruiters/rows.jsonl",
+                              "profiles_path": ".powerpacks/runs/artifacts/recruiters/profiles.jsonl"}}))
+            module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/recruiters.json",
+                                     "status": "completed"})
+            saved = json.loads((root / ".powerpacks/deep-search/recruiters/results.json").read_text())
+        pond = saved["summary"]["pond_chain"][0]
+        self.assertEqual(pond["filters"], {"metro_areas": ["Austin"], "bm25_queries": ["recruiter"]})
+        self.assertEqual(pond["traits"], [{"value": "Recruiter", "temporal": "current", "meaning": "role"}])
+        self.assertEqual(pond["result_count"], 1)
+
     def test_powerset_preview_carries_the_same_keys(self):
         module = load_pipeline_module()
         payload = {"normalized_query": "scientists", "role_search_filters": {"cities": ["Boston"], **self.EDITABLE}}

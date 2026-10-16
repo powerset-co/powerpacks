@@ -2,7 +2,7 @@
 // modal copied from there, and the two mappings between it and a prepared search's filters: the
 // modal edits entity items with an id and a display value; the expand payload holds plain names.
 
-import type { FilterValue } from "./preparedSearch"
+import type { FilterValue } from "@/types/searches"
 
 export interface EntityItem {
   id: string

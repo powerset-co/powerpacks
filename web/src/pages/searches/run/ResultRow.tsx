@@ -4,7 +4,6 @@ import { ProxiedLinkedinAvatar } from "@/components/shared"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 import type { PondCandidate } from "@/types/searches"
 
-import { TraitList } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { NetworkSources } from "./NetworkSources"
@@ -94,38 +93,25 @@ export const ResultRow = memo(function ResultRow({
               <RowScore result={result} candidate={candidate} context={context} />
             </span>
           ) : null}
-          {ranked ? <Overall result={result} labels={labels} /> : <PondScores result={result} />}
+          <Score result={result} ranked={ranked} labels={labels} />
         </div>
       </div>
     </div>
   )
 })
 
-// rendering.py _overall_indicator: the badge, the judges' reason, their labels under it. A
-// person without an overall shows what happened instead ("Not judged"), never a zero.
-function Overall({ result, labels }: { result: Result; labels: boolean }) {
+// rendering.py _overall_indicator: the one score the list is ranked by (the judges' 1–5, or a
+// plain run's own 0–1) and the reasoning beside it, the judges' labels under a ranked row. A
+// person without an overall shows what happened instead ("Not judged"), never a zero. Each
+// trait's own score is the drawer's (Evidence), not the row's.
+function Score({ result, ranked, labels }: { result: Result; ranked: boolean; labels: boolean }) {
+  const unscored = ranked && result.overall === null
   return (
     <div className="result-overall">
-      {result.overall === null ? null : <ScoreCell result={result} ranked />}
+      {unscored ? null : <ScoreCell result={result} ranked={ranked} />}
       <div className="result-reason">
-        <p className={result.overall === null ? "result-noscore" : undefined}>{result.reason}</p>
-        <JudgeBadges candidate={result.candidate} shown={labels} />
-      </div>
-    </div>
-  )
-}
-
-// rendering.py _pond_table: the pond's own score, then each trait with its reason.
-function PondScores({ result }: { result: Result }) {
-  return (
-    <div className="result-overall">
-      <ScoreCell result={result} ranked={false} />
-      <div className="result-reason">
-        {result.row.traits.length ? (
-          <TraitList traits={result.row.traits} />
-        ) : (
-          <p className="result-noscore">No trait scores</p>
-        )}
+        <p className={unscored ? "result-noscore" : undefined}>{result.reason}</p>
+        {ranked && <JudgeBadges candidate={result.candidate} shown={labels} />}
       </div>
     </div>
   )
