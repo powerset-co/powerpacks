@@ -87,7 +87,7 @@ class ShareEvidence:
             for member in family:
                 channel_counts.extend(by_candidate.get(member.candidate_id, []))
                 groups += counts.groups.get(member.candidate_id, 0)
-            decided = worth.get(parent_id)
+            decided = worth[parent_id]
             # The labels worth computed stay with the family when a human overrides the worth itself.
             # Labels from older questions (a family Luna refused keeps its JEV row) are absent.
             labels_json: str | None = queries_review.labels_json(self.conn, candidates[parent_id])
@@ -105,7 +105,7 @@ class ShareEvidence:
                 source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
                 interaction_counts=parse_interaction_counts(row["interaction_counts"]),
                 last_interaction=row["last_interaction"] or None,
-                network_worth=decided["worth"] if decided is not None else "",
+                network_worth=decided["worth"],
                 worth_labels=labels,
                 facts=facts,
                 shared_overlaps=frozenset(overlaps),
