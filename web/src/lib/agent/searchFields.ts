@@ -87,7 +87,7 @@ export const FIELDS: Field[] = [
   { group: "Role", label: "Keywords", control: { kind: "chips", key: "bm25_queries" } },
   { group: "Role", label: "Role query", control: { kind: "text", key: "semantic_query" } },
   { group: "Role", label: "Role ids", control: { kind: "chips", key: "role_ids", readonly: true } },
-  { group: "Role", label: "Tracks", control: { kind: "chips", key: "role_tracks" } },
+  { group: "Role", label: "Tracks", control: { kind: "chips", key: "role_tracks", readonly: true } },
   {
     group: "Role",
     label: "Years",
@@ -101,7 +101,6 @@ export const FIELDS: Field[] = [
   },
   { group: "Role", label: "Current role only", control: { kind: "toggle", key: "is_current_role" } },
   { group: "Role", label: "Current company only", control: { kind: "toggle", key: "is_current_company" } },
-  { group: "Role", label: "Tech skills", control: { kind: "chips", key: "tech_skills" } },
   { group: "Location", label: "Location", control: { kind: "kinds", keys: LOCATION_KINDS } },
   { group: "Company", label: "Companies", control: { kind: "chips", key: "company_names" } },
   { group: "Company", label: "Company ids", control: { kind: "chips", key: "company_ids", readonly: true } },
@@ -150,6 +149,9 @@ export const FIELDS: Field[] = [
     label: "Last funding",
     control: { kind: "pair", keys: ["last_funding_after", "last_funding_before"], type: "date" },
   },
+  { group: "Company", label: "Stages", control: { kind: "chips", key: "stages" } },
+  { group: "Company", label: "Company stages", control: { kind: "chips", key: "company_stages" } },
+  { group: "Company", label: "Stage name", control: { kind: "text", key: "stage" } },
   { group: "Company", label: "YC batches", control: { kind: "chips", key: "yc_batches" } },
   { group: "Company", label: "Accelerators", control: { kind: "chips", key: "accelerators" } },
   { group: "Education", label: "Schools", control: { kind: "chips", key: "education_names" } },
@@ -199,6 +201,7 @@ export const FIELDS: Field[] = [
     label: "With the set",
     control: { kind: "pair", keys: ["set_interaction_min", "set_interaction_max"], type: "number" },
   },
+  { group: "Other", label: "Tech skills", control: { kind: "chips", key: "tech_skills" } },
 ]
 
 /** The payload keys a field edits. */
@@ -217,16 +220,13 @@ export function fieldKeys(field: Field): string[] {
   }
 }
 
-/** The field a payload key belongs to; a key the table doesn't name gets a plain chips row under Other. */
-export function fieldFor(key: string): Field {
-  const known = FIELDS.find((field) => fieldKeys(field).includes(key))
-  if (known) return known
+/** A row under Other for a key the table doesn't name, with the control its value's shape needs. */
+export function fieldFor(key: string, value: FilterValue | null | undefined): Field {
   const words = key.replaceAll("_", " ")
-  return {
-    group: "Other",
-    label: `${words.charAt(0).toUpperCase()}${words.slice(1)}`,
-    control: { kind: "chips", key },
-  }
+  const label = `${words.charAt(0).toUpperCase()}${words.slice(1)}`
+  if (Array.isArray(value)) return { group: "Other", label, control: { kind: "chips", key } }
+  if (typeof value === "boolean") return { group: "Other", label, control: { kind: "toggle", key } }
+  return { group: "Other", label, control: { kind: "text", key } }
 }
 
 /** True when any of the field's keys holds a value in `values`. */

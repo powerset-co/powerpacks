@@ -19,11 +19,11 @@ export interface SearchFilter {
   value: FilterValue
 }
 
-/** One of the expand step's traits: `VP of Finance`, `current` (or `past`, `all`), `role`. */
+/** One of the expand step's traits: `VP of Finance`, `current` (or `past`, `all`), `role` when the step said. */
 export interface SearchTrait {
   value: string
   temporal: string
-  meaning: string
+  meaning?: string
 }
 
 export interface PreparedSearch {
@@ -62,17 +62,17 @@ function searchFilters(...sources: unknown[]): SearchFilter[] {
   return filters
 }
 
-/** The traits that carry a value and a temporal; a missing meaning reads as `role`. */
+/** The traits that carry a value and a temporal, with the meaning when the step gave one. */
 function searchTraits(value: unknown): SearchTrait[] {
   const traits: SearchTrait[] = []
   if (!Array.isArray(value)) return traits
   for (const trait of value) {
     if (isRecord(trait) && typeof trait.value === "string" && typeof trait.temporal === "string")
-      traits.push({
-        value: trait.value,
-        temporal: trait.temporal,
-        meaning: typeof trait.meaning === "string" ? trait.meaning : "role",
-      })
+      traits.push(
+        typeof trait.meaning === "string"
+          ? { value: trait.value, temporal: trait.temporal, meaning: trait.meaning }
+          : { value: trait.value, temporal: trait.temporal },
+      )
   }
   return traits
 }

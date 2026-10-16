@@ -51,7 +51,7 @@ it("keeps each filter's value as the payload holds it, the role intent after the
   expect(search?.traits).toEqual([
     { value: "VP of Finance", temporal: "current", meaning: "role" },
     { value: "investment banking", temporal: "past", meaning: "experience" },
-    { value: "Series B", temporal: "all", meaning: "role" },
+    { value: "Series B", temporal: "all" },
   ])
 })
 

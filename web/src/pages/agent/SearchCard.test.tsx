@@ -192,6 +192,63 @@ it("sends an empty traits list when every trait is removed", () => {
   expect(sent().traits).toEqual([])
 })
 
+it("keeps showing what it sent once the card no longer asks", () => {
+  const { rerender } = render(<SearchCard search={SEARCH} actions={true} />)
+  fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "CFOs in NYC" } })
+  fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Add trait" }), { target: { value: "CFO" } })
+  execute()
+  rerender(<SearchCard search={SEARCH} actions={false} />)
+  expect(screen.getByRole("heading", { name: "CFOs in NYC" })).toBeTruthy()
+  expect(screen.queryByText("director")).toBeNull()
+  expect(screen.getByText("CFO").textContent).toContain("(current)")
+  expect(screen.queryByRole("button")).toBeNull()
+})
+
+it("applies the kind chosen after the location was typed", () => {
+  render(<SearchCard search={SEARCH} actions={true} />)
+  const add = screen.getByRole("textbox", { name: "Add Location" })
+  const kind = screen.getByRole("combobox", { name: "Location kind" })
+  fireEvent.change(add, { target: { value: "Brooklyn" } })
+  fireEvent.blur(add, { relatedTarget: kind })
+  fireEvent.change(kind, { target: { value: "cities" } })
+  fireEvent.keyDown(add, { key: "Enter" })
+  execute()
+  expect(sent().filters.cities).toEqual(["Brooklyn"])
+  expect(sent().filters.metro_areas).toEqual(["New York Metropolitan Area"])
+})
+
+it("shows a filter the table doesn't name with its value's own shape and keeps its type", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: [
+      ...SEARCH.filters,
+      { key: "custom_score_min", value: 3 },
+      { key: "remote_ok", value: true },
+      { key: "team_note", value: "platform" },
+    ],
+  }
+  render(<SearchCard search={search} actions={true} />)
+  fireEvent.change(screen.getByRole("textbox", { name: "Custom score min" }), { target: { value: "4" } })
+  expect(screen.getByRole("checkbox", { name: "Remote ok" })).toBeTruthy()
+  fireEvent.change(screen.getByRole("textbox", { name: "Team note" }), { target: { value: "infra" } })
+  execute()
+  const { filters } = sent()
+  expect(filters.custom_score_min).toBe(4)
+  expect(filters.remote_ok).toBe(true)
+  expect(filters.team_note).toBe("infra")
+})
+
+it("offers the current-only toggles only to a search without traits", () => {
+  const { rerender } = render(<SearchCard search={{ ...SEARCH, traits: [] }} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "More filters ▾" }))
+  expect(screen.getByRole("checkbox", { name: "Current role only" })).toBeTruthy()
+  rerender(<SearchCard search={SEARCH} actions={true} />)
+  expect(screen.queryByRole("checkbox", { name: "Current role only" })).toBeNull()
+  expect(screen.getByText("Stages")).toBeTruthy()
+  expect(screen.getByRole("heading", { name: "Other" })).toBeTruthy()
+})
+
 it("resets every edit to the prepared search", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "CFOs" } })

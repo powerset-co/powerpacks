@@ -133,7 +133,8 @@ it("shows a prepared search as a card in its command's place, its query, traits 
   )
   expect(within(card).getByText("vice-president")).toBeTruthy()
   expect(within(card).getByText("vp finance")).toBeTruthy()
-  expect(within(card).getByRole("checkbox", { name: "Current role only" })).toBeTruthy()
+  // The traits carry currentness, so the current-only toggle is not offered beside them.
+  expect(within(card).queryByRole("checkbox", { name: "Current role only" })).toBeNull()
   expect(within(card).getByText("Pool: 1,234 of 5,000 people, as prepared")).toBeTruthy()
   expect(lines("Notes")).toEqual([
     "age_min 30 filters on LLM-inferred birth year",

@@ -55,6 +55,12 @@ function parsed(text: string, type: "number" | "date"): FilterValue | null {
   return type === "number" ? Number(trimmed) : trimmed
 }
 
+/** Typed text as the payload holds the key: a number stays a number while the text reads as one. */
+function typedScalar(text: string, previous: FilterValue | null | undefined): FilterValue | null {
+  if (text === "") return null
+  return typeof previous === "number" && !Number.isNaN(Number(text)) ? Number(text) : text
+}
+
 function withNames(values: Values, key: string, list: string[]): Values {
   const next = new Map(values)
   next.set(key, list.length > 0 ? list : null)
@@ -226,7 +232,10 @@ function Chips({
             onKeyDown={(event) => {
               if (event.key === "Enter") add(typed)
             }}
-            onBlur={() => add(typed)}
+            // Leaving for the kind picker keeps the text, so the kind chosen next applies to it.
+            onBlur={(event) => {
+              if (!(event.relatedTarget instanceof HTMLSelectElement)) add(typed)
+            }}
             className={ADD_FIELD}
           />
           {kinds && (
@@ -317,7 +326,11 @@ function FieldRow({
             <input
               aria-label={field.label}
               value={text}
-              onChange={(event) => onChange(withValue(values, control.key, event.target.value || null))}
+              onChange={(event) =>
+                onChange(
+                  withValue(values, control.key, typedScalar(event.target.value, values.get(control.key))),
+                )
+              }
               className={cn(FIELD, "w-full")}
             />
           ) : (
@@ -494,7 +507,9 @@ function Traits({
 function filledFields(values: Values): Field[] {
   const known = FIELDS.filter((field) => fieldHasValue(field, values))
   const named = new Set(FIELDS.flatMap(fieldKeys))
-  const other = [...values.keys()].filter((key) => !named.has(key)).map(fieldFor)
+  const other = [...values.keys()]
+    .filter((key) => !named.has(key))
+    .map((key) => fieldFor(key, values.get(key)))
   return [...known, ...other.filter((field) => fieldHasValue(field, values))]
 }
 
@@ -510,13 +525,24 @@ export function SearchCard({ search, actions }: SearchCardProps) {
   const [traits, setTraits] = useState(search.traits)
   const [newTrait, setNewTrait] = useState("")
   const [more, setMore] = useState(false)
-  const shownValues = actions ? values : preparedValues(search)
-  const shownTraits = actions ? traits : search.traits
+  // Once Execute (or Send changes) went out from this card, it keeps showing what it sent.
+  const [submitted, setSubmitted] = useState(false)
+  const shown = actions || submitted
+  const shownValues = shown ? values : preparedValues(search)
+  const shownTraits = shown ? traits : search.traits
+  const shownQuery = shown ? query : search.query
 
   // The traits and the one typed into Add trait, so Execute keeps it without an Enter.
   function traitsWithTyped(): SearchTrait[] {
     const value = newTrait.trim()
     return value ? [...traits, { value, temporal: "current", meaning: "role" }] : traits
+  }
+
+  function submit(message: string) {
+    setTraits(traitsWithTyped())
+    setNewTrait("")
+    setSubmitted(true)
+    void send(message)
   }
 
   const edited = modifyMessage(search, query, values, traitsWithTyped())
@@ -534,7 +560,11 @@ export function SearchCard({ search, actions }: SearchCardProps) {
   function offered(field: Field): boolean {
     const control = field.control
     if (control.kind === "chips" && control.readonly) return fieldHasValue(field, shownValues)
-    if (control.kind === "toggle") return search.traits.length === 0 && traits.length === 0
+    if (
+      control.kind === "toggle" &&
+      (control.key === "is_current_role" || control.key === "is_current_company")
+    )
+      return search.traits.length === 0 && traits.length === 0
     return true
   }
 
@@ -562,7 +592,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
           className="m-0 w-full border-0 border-b border-transparent bg-transparent p-0 text-[15px] font-semibold text-foreground outline-none focus:border-primary focus-visible:outline-none"
         />
       ) : (
-        <h2 className="m-0 text-[15px] font-semibold">{search.query}</h2>
+        <h2 className="m-0 text-[15px] font-semibold">{shownQuery}</h2>
       )}
       {(shownTraits.length > 0 || actions) && (
         <Traits
@@ -591,7 +621,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
               </div>
             )
           })
-        : rows(filledFields(shownValues))}
+        : rows(filledFields(shownValues).filter(offered))}
       {search.pool && (
         <p className="m-0 text-xs text-muted-foreground">
           Pool: {search.pool.matched.toLocaleString()} of {search.pool.total.toLocaleString()} people, as
@@ -618,12 +648,12 @@ export function SearchCard({ search, actions }: SearchCardProps) {
       {actions && (
         <div className="flex flex-wrap items-center gap-3">
           {search.blockers.length === 0 ? (
-            <Button variant="primary" onClick={() => void send(dirty ? edited : "execute")}>
+            <Button variant="primary" onClick={() => submit(dirty ? edited : "execute")}>
               Execute
             </Button>
           ) : (
             <Button
-              onClick={() => void send(edited.replace("Modify, then execute:", "Modify:"))}
+              onClick={() => submit(edited.replace("Modify, then execute:", "Modify:"))}
               disabled={!dirty}
             >
               Send changes
