@@ -112,10 +112,13 @@ function modifyMessage(search: PreparedSearch, query: string, values: Values, tr
   }
   if (query.trim() !== search.query) body.query = query.trim()
   if (JSON.stringify(traits) !== JSON.stringify(search.traits)) body.traits = traits
-  // A changed query or trait is a new search: the next prepare derives its own filters, so the
-  // filters edited on this card do not go with it.
-  if (body.query !== undefined || body.traits !== undefined)
-    return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
+  // A changed query or trait value is a new search: the next prepare derives its own filters, so
+  // the filters edited on this card do not go with it. A temporal change alone is an in-place edit
+  // and travels with them.
+  const values_ = (list: SearchTrait[]) => list.map((trait) => trait.value)
+  const newSearch =
+    body.query !== undefined || JSON.stringify(values_(traits)) !== JSON.stringify(values_(search.traits))
+  if (newSearch) return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
   const prepared = preparedValues(search)
   const sent = clean(values)
   for (const key of new Set([...prepared.keys(), ...sent.keys()])) {
@@ -390,7 +393,15 @@ function FieldRow({
       )
     }
     case "pair": {
-      const [low, high] = control.keys.map((key) => scalar(values.get(key)))
+      // Money reads in millions; the payload holds dollars.
+      const scale = control.scale ?? 1
+      const shown = (value: FilterValue | null | undefined) =>
+        typeof value === "number" ? String(value / scale) : scalar(value)
+      const typed = (text: string) => {
+        const value = parsed(text, control.type)
+        return typeof value === "number" ? value * scale : value
+      }
+      const [low, high] = control.keys.map((key) => shown(values.get(key)))
       if (!editable)
         return (
           <Row label={field.label}>
@@ -409,9 +420,7 @@ function FieldRow({
                 type={control.type}
                 placeholder={index === 0 ? "min" : "max"}
                 value={index === 0 ? low : high}
-                onChange={(event) =>
-                  onChange(withValue(values, key, parsed(event.target.value, control.type)))
-                }
+                onChange={(event) => onChange(withValue(values, key, typed(event.target.value)))}
                 className={cn(FIELD, control.type === "number" ? "w-20" : "w-36")}
               />
             </span>

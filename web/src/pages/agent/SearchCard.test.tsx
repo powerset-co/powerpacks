@@ -221,6 +221,32 @@ it("sends a changed end of a select pair, the other end untouched", () => {
   expect(sent().filters).toEqual({ funding_stage_max: "series_b" })
 })
 
+it("sends a temporal change with the filter edits beside it: an in-place edit, not a new search", () => {
+  render(<SearchCard search={SEARCH} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
+  fireEvent.click(screen.getByRole("button", { name: "VP of Finance: current" }))
+  execute()
+  expect(sent()).toEqual({
+    filters: { seniority_bands: ["vice-president"] },
+    traits: [
+      { value: "VP of Finance", temporal: "past", meaning: "role" },
+      { value: "investment banking", temporal: "past", meaning: "experience" },
+    ],
+  })
+})
+
+it("shows money in millions and sends dollars", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: [...SEARCH.filters, { key: "funding_amount_min", value: 2_500_000 }],
+  }
+  render(<SearchCard search={search} actions={true} />)
+  expect(screen.getByRole<HTMLInputElement>("spinbutton", { name: "Funding ($M) min" }).value).toBe("2.5")
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Funding ($M) max" }), { target: { value: "40" } })
+  execute()
+  expect(sent().filters).toEqual({ funding_amount_max: 40_000_000 })
+})
+
 it("sends an empty traits list when every trait is removed", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.click(screen.getByRole("button", { name: "Remove VP of Finance" }))

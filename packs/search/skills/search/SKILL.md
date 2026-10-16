@@ -326,7 +326,9 @@ For both local and Powerset previews:
   - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
     the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when
     `traits` is present replace the payload's `traits` with it (a changed `temporal` alone is
-    an in-place edit). When `bm25_queries` is sent, also drop
+    an in-place edit). When `bm25_queries` is sent (a list or `null`), also delete
+    `role_bm25_queries` from `role_search_filters` when it is there (the older alias would bring
+    the removed keywords back at run time), and drop
     every `role_core_patterns` entry that holds an example no longer in it: the run merges the
     examples back into the keywords and retrieval matches the entry's regex, so a removed
     keyword would return either way. The kept examples are already in `bm25_queries`.

@@ -22,7 +22,8 @@ export type Control =
   /** One line of text. */
   | { kind: "text"; key: string }
   /** A min and a max. */
-  | { kind: "pair"; keys: [string, string]; type: "number" | "date" }
+  /** A min and a max; `scale` shows a number divided by it (dollars as millions). */
+  | { kind: "pair"; keys: [string, string]; type: "number" | "date"; scale?: number }
   /** A min and a max from a vocabulary. */
   | { kind: "select-pair"; keys: [string, string]; options: string[] }
   /** A yes/no. */
@@ -91,16 +92,21 @@ export const FIELDS: Field[] = [
     },
   },
   {
-    label: "Funding (USD)",
-    control: { kind: "pair", keys: ["funding_amount_min", "funding_amount_max"], type: "number" },
+    label: "Funding ($M)",
+    control: {
+      kind: "pair",
+      keys: ["funding_amount_min", "funding_amount_max"],
+      type: "number",
+      scale: 1_000_000,
+    },
   },
   {
     label: "Headcount",
     control: { kind: "pair", keys: ["headcount_min", "headcount_max"], type: "number" },
   },
   {
-    label: "Valuation (USD)",
-    control: { kind: "pair", keys: ["valuation_min", "valuation_max"], type: "number" },
+    label: "Valuation ($M)",
+    control: { kind: "pair", keys: ["valuation_min", "valuation_max"], type: "number", scale: 1_000_000 },
   },
   {
     label: "Founded",
