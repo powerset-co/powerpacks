@@ -9,8 +9,8 @@ In order:
    connection is already in the network. Its labels and share call still come from Luna.
 2. Notable position is yes in code: the same yes, with that connection's position as the reason when
    it names a chief officer, founder, president, chair, partner or managing director.
-3. Every family gets Luna's two requests (luna.py): the labels and worth over its members' facts
-   (collapsed into one) and message counts, then the share call over those labels. Worth is yes,
+3. Every family gets Luna's two requests (luna.py): the labels and worth over its members' raw
+   messages (merged newest first), profile and message counts, then the share call over those labels. Worth is yes,
    maybe or no with a reason, for every family not settled by rules 1 and 2.
 4. A family is judged once per question version, as soon as any member is (evidence.version_key):
    new messages and merges never ask again, and a version bump asks everyone once. People's explicit
@@ -34,6 +34,7 @@ from pathlib import Path
 
 from typing import Any
 
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle
 from packs.ingestion.primitives.deep_context_v2.db import queries_worth as queries
 from packs.ingestion.primitives.deep_context_v2.db.queries import display_names
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, read_owner
@@ -136,7 +137,12 @@ class Worth(Node):
                     is_judged = True
             # Every family gets Luna's labels, a pre-matched one included: its worth is yes by the match, its
             # labels and share call come from the same requests as everyone else's.
-            request: dict[str, Any] = luna.build_request(evidence.family_facts(members), summary, owner,
+            member_bundles: list[CollectionBundle] = []
+            for member in members:
+                row = self.conn.execute("SELECT payload_json FROM bundles WHERE candidate_id = ?",
+                                        (member.candidate_id,)).fetchone()
+                member_bundles.append(CollectionBundle.from_payload(json.loads(row["payload_json"])))
+            request: dict[str, Any] = luna.build_request(evidence.family_facts(members), member_bundles, summary, owner,
                                                          evidence.reference_date(members))
             digest: str = request_digest(luna.REQUEST_VERSION, request)
             member_ids: list[str] = []

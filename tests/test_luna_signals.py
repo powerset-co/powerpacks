@@ -15,13 +15,21 @@ import httpx
 
 from test_share_v2 import StoreTests
 from packs.ingestion.primitives.deep_context_v2 import decisions
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import (
+    CollectionBundle, MessageChannel, MessageDirection, MessageEntry, Person, ThreadParticipants,
+)
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import render_batch
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
-from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
+from packs.ingestion.primitives.deep_context_v2.worth.worth import (
+    DEFAULT_LIMIT, LABELS_TOKENS_PER_QUESTION, SHARE_REQUEST_TOKENS, Worth,
+)
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 from packs.ingestion.primitives.share.labels import flag, labels_from_saved, share_decision
 from packs.ingestion.primitives.share.models import HumanTags, LabelRow
-from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS, SCORE_LABELS
+from packs.ingestion.primitives.share.questions import (
+    CHOICE_LABELS, EVIDENCE_POLICY, NOUL_LABELS, SCORE_LABELS, label_questions,
+)
 
 ANSWERS: list[dict[str, Any]] = [
     {"type": "predicate", "name": "is_recruiter", "probability": 0.91},
@@ -52,6 +60,60 @@ def answers_for(request: dict[str, Any]) -> list[dict[str, Any]]:
             answers.append({"type": "choice", "name": name, "choice": values[0], "confidence": 0.9, "probabilities": [
                 {"value": value, "probability": 0.9 if value == values[0] else 0.05} for value in values]})
     return answers
+
+
+def bundle(candidate_id: str, messages: list[MessageEntry]) -> CollectionBundle:
+    return CollectionBundle.of(
+        Person(candidate_id, "Jordan Bravo", (f"{candidate_id}@example.com",), (), ("gmail",)),
+        messages=messages, groups=[], thread_participants=(), available=len(messages),
+    )
+
+
+class RequestTests(unittest.TestCase):
+    def test_synthesis_default_render_is_byte_identical(self) -> None:
+        messages = [
+            MessageEntry.of(MessageChannel.GMAIL, "2026-10-14T12:00:00Z", from_me=True,
+                            subject="Hello", text="Can we talk?"),
+            MessageEntry.of(MessageChannel.IMESSAGE, "2026-10-15", from_me=False, text="Yes!"),
+            MessageEntry(MessageChannel.IMESSAGE_GROUP, "", MessageDirection.FROM_OTHER, "", "See you there."),
+        ]
+        person = CollectionBundle.of(
+            Person("c1", "Jordan Bravo", ("jordan@example.com",), ("+15550100",), ("gmail", "imessage")),
+            messages=messages, groups=["Project"],
+            thread_participants=(ThreadParticipants("Hello", ("owner@example.com", "jordan@example.com")),),
+            available=3,
+        )
+        self.assertEqual(render_batch(person, messages),
+                         "CONTACT: Jordan Bravo\n"
+                         "Known emails: jordan@example.com\n"
+                         "Known phones: +15550100\n"
+                         "Channels: gmail, imessage\n"
+                         "Shared group chats (names only): Project\n\n"
+                         "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):\n"
+                         "- Hello — owner@example.com, jordan@example.com\n\n"
+                         "MESSAGES (most relevant, chronological):\n"
+                         "[gmail 2026-10-14 ME] Hello: Can we talk?\n"
+                         "[imessage 2026-10-15 THEM]: Yes!\n"
+                         "[imessage_group  OTHER-IN-GROUP]: See you there.")
+
+    def test_questions_use_messages_and_define_warmth_as_reachability_today(self) -> None:
+        questions = label_questions() + luna.WORTH_QUESTIONS
+        text = json.dumps(questions) + EVIDENCE_POLICY
+        self.assertNotIn("facts", text)
+        self.assertIn("messages", text)
+        warmth = next(question for question in questions if question["name"] == "warmth")
+        self.assertEqual(warmth["instructions"],
+                         "How readily could the owner message this person today and ask for something real "
+                         "(join a company, help with a search, an intro)? Judge from how close the relationship "
+                         "has been AND how recently they were in touch, as of reference_date. Two people equally "
+                         "close in the past differ when one was in touch last month and the other ten years ago.")
+        self.assertEqual(warmth["levels"], [
+            {"label": "0", "description": "No relationship, or automated contact only."},
+            {"label": "1", "description": "Distant: would need a reintroduction."},
+            {"label": "2", "description": "Friendly: would answer, but it has been a while."},
+            {"label": "3", "description": "Close: would answer promptly."},
+            {"label": "4", "description": "Inner circle: in regular touch."},
+        ])
 
 
 class DecisionsClientTests(unittest.TestCase):
@@ -110,7 +172,7 @@ class WorthRunTests(StoreTests):
         queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
         self.conn.execute("INSERT INTO candidate_sources (candidate_id, source) VALUES ('c1', 'gmail_msgvault')")
         self.conn.execute("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
-                          "VALUES ('c1', '{\"messages\":[],\"groups\":[]}', 'test', '2026-10-07')")
+                          "VALUES ('c1', ?, 'test', '2026-10-07')", (json.dumps(bundle("c1", []).to_payload()),))
         self._parent("p:a", "c1")
         self._facts("c1", "Jordan Bravo")
         root = Path(self.tmp.name)
@@ -139,6 +201,59 @@ class WorthRunTests(StoreTests):
         self.assertEqual((labels["worth"], labels["share_call"], labels["version"]),
                          ("yes", "share", luna.REQUEST_VERSION))
 
+    def test_family_request_merges_member_messages_newest_first_and_prices_them(self) -> None:
+        queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
+        self._parent("p:a", "c1", "c2")
+        self._facts("c1", "Jordan Bravo")
+        self._facts("c2", "Jordan Bravo")
+        messages = [
+            MessageEntry.of(MessageChannel.GMAIL, "2026-10-01", from_me=True, text="Oldest"),
+            MessageEntry.of(MessageChannel.GMAIL, "2026-10-15", from_me=False, text="Newest"),
+            MessageEntry.of(MessageChannel.GMAIL, "2026-10-10", from_me=True, text="Middle"),
+            MessageEntry(MessageChannel.IMESSAGE_GROUP, "2026-09-30", MessageDirection.FROM_OTHER, "", "Group"),
+        ]
+        for candidate_id, entries in [("c1", messages[:2]), ("c2", messages[2:])]:
+            self.conn.execute("INSERT INTO candidate_sources (candidate_id, source) VALUES (?, 'gmail_msgvault')",
+                              (candidate_id,))
+            queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle(candidate_id, entries).to_payload()),
+                                  "test", "2026-10-15")
+        node = Worth(self.conn, Path(self.tmp.name), limit=DEFAULT_LIMIT)
+        request = node.families()[0].request
+        state = json.loads(request["input"])
+        self.assertNotIn("facts", state)
+        self.assertEqual(state["profile"]["name"], "Jordan Bravo")
+        self.assertEqual(state["messages"].count("CONTACT:"), 1)
+        self.assertIn("Known emails: c1@example.com, c2@example.com", state["messages"])
+        self.assertEqual([line for line in state["messages"].splitlines() if line.startswith("[")], [
+            "[gmail 2026-10-15 from Jordan Bravo to Test Owner (owner)]: Newest",
+            "[gmail 2026-10-10 from Test Owner (owner) to Jordan Bravo]: Middle",
+            "[gmail 2026-10-01 from Test Owner (owner) to Jordan Bravo]: Oldest",
+            "[imessage_group 2026-09-30 from another group participant to Test Owner (owner) and Jordan Bravo]: Group",
+        ])
+        self.assertEqual((state["channels"]["from_me"], state["channels"]["from_them"]), (2, 1))
+        self.assertEqual(state["owner"]["name"], "Test Owner")
+        self.assertEqual(state["reference_date"], "2026-10-07")
+        self.assertEqual(state["evidence_policy"], EVIDENCE_POLICY)
+        with mock.patch.object(decisions, "AsyncOpenAI", side_effect=AssertionError("No API calls")):
+            estimate = node.estimate()
+        self.assertEqual(estimate["families"], 1)
+        self.assertEqual(estimate["input_tokens"], decisions.input_tokens(request)
+                         + LABELS_TOKENS_PER_QUESTION * len(request["questions"]) + SHARE_REQUEST_TOKENS)
+
+        # The synthesis cap applies once across the family, after merging the members' messages.
+        for candidate_id, days in [("c1", range(1, 22, 2)), ("c2", range(2, 23, 2))]:
+            entries = [MessageEntry.of(MessageChannel.GMAIL, f"2026-09-{day:02}", from_me=True,
+                                       text=f"Day {day:02} " + "x" * 8993) for day in days]
+            queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle(candidate_id, entries).to_payload()),
+                                  "test", "2026-10-15")
+        request = Worth(self.conn, Path(self.tmp.name), limit=DEFAULT_LIMIT).families()[0].request
+        state = json.loads(request["input"])
+        lines = [line for line in state["messages"].splitlines() if line.startswith("[")]
+        self.assertEqual(len(lines), 20)
+        self.assertIn("Day 22 ", lines[0])
+        self.assertIn("Day 03 ", lines[-1])
+        self.assertEqual(state["channels"]["from_me"], 22)
+
 
 class MergeTests(StoreTests):
     def test_a_merge_asks_nothing(self) -> None:
@@ -148,8 +263,9 @@ class MergeTests(StoreTests):
         self.conn.executemany("INSERT INTO candidate_sources (candidate_id, source) VALUES (?, 'gmail_msgvault')",
                               [("c1",), ("c2",)])
         self.conn.executemany("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
-                              "VALUES (?, '{\"messages\":[],\"groups\":[]}', 'test', '2026-10-07')",
-                              [("c1",), ("c2",)])
+                              "VALUES (?, ?, 'test', '2026-10-07')",
+                              [(candidate_id, json.dumps(bundle(candidate_id, []).to_payload()))
+                               for candidate_id in ("c1", "c2")])
         self._parent("p:a", "c1")
         self._parent("p:b", "c2")
         self._facts("c1", "Jordan Bravo")

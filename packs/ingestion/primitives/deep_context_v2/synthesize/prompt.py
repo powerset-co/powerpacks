@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection, MessageEntry
 
@@ -56,7 +56,8 @@ _DIRECTION_LABEL = {
 }
 
 
-def render_batch(person: CollectionBundle, batch: Sequence[MessageEntry]) -> str:
+def render_batch(person: CollectionBundle, batch: Sequence[MessageEntry], *,
+                 direction_labels: Mapping[MessageDirection, str] = _DIRECTION_LABEL) -> str:
     """One batch as the plain-text block the model reads: the candidate's keys, its threads, then the messages."""
     lines = [
         f"CONTACT: {person.full_name or '(unknown)'}",
@@ -77,7 +78,7 @@ def render_batch(person: CollectionBundle, batch: Sequence[MessageEntry]) -> str
     lines.append("MESSAGES (most relevant, chronological):")
     for message in batch:
         date = (message.at or "")[:10]
-        head = f"[{message.channel} {date} {_DIRECTION_LABEL[message.direction]}]"
+        head = f"[{message.channel} {date} {direction_labels[message.direction]}]"
         if message.subject:
             head += f" {message.subject}"
         lines.append(f"{head}: {message.text or ''}")
