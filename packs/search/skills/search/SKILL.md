@@ -312,8 +312,9 @@ For both local and Powerset previews:
   it showed: a key in `filters` is an edit, `traits` is present only when the traits changed,
   and `query` only when the query changed. Copy the values, never re-parse them, and never
   compare them with the file on disk. Read the JSON file named by `payload_json` in the preview:
-  - If `query` is present, or a trait's `value` changed, was added, or was removed (an empty
-    `traits` list clears them), log the change as `query_edit`, run a new `prepare` with the
+  - If `query` is present, or a trait's `value` changed, was added, or was removed against the
+    `traits` of the preview you showed (an empty `traits` list clears them), log the change as
+    `query_edit`, run a new `prepare` with the
     same `--output-dir` for the sent `query`, or, when only the traits changed, for the
     preview's query restated around the new traits. Keywords and filters never go into the
     query: apply the sent `filters` to the new payload as below, then show the preview and ask
