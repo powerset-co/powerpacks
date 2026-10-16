@@ -162,11 +162,12 @@ describe("RunView", () => {
     expect(filters.getByText("Austin Metropolitan Area").textContent).toBe("Austin Metropolitan Area · metro")
     expect(filters.getByText("Years")).toBeTruthy()
     expect(filters.getByText("3 – any")).toBeTruthy()
-    // One badge per row, the pond score, with the reasoning beside it; the trait badges are the drawer's.
+    // As the cloud app's row: the reasoning, then each trait's share with its name and reason.
+    // The pond's own score (80%) only orders the list.
     const jordan = row("p-jordan")
-    expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["80%"])
     expect(jordan.getByText("Leads the current reliability platform.")).toBeTruthy()
-    expect(document.querySelector(".result-row .traits")).toBeNull()
+    expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["90%"])
+    expect(jordan.getByText("Backend depth:").parentElement?.textContent).toContain("Built the API layer.")
     fireEvent.click(main("p-jordan"))
     expect(
       within(drawer() ?? document.body).getByText("Backend depth:").parentElement?.textContent,

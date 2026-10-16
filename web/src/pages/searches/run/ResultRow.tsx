@@ -4,6 +4,7 @@ import { ProxiedLinkedinAvatar } from "@/components/shared"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 import type { PondCandidate } from "@/types/searches"
 
+import { TraitList } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { NetworkSources } from "./NetworkSources"
@@ -100,18 +101,29 @@ export const ResultRow = memo(function ResultRow({
   )
 })
 
-// rendering.py _overall_indicator: the one score the list is ranked by (the judges' 1–5, or a
-// plain run's own 0–1) and the reasoning beside it, the judges' labels under a ranked row. A
-// person without an overall shows what happened instead ("Not judged"), never a zero. Each
-// trait's own score is the drawer's (Evidence), not the row's.
+// rendering.py _overall_indicator. A ranked row shows the one score the list is ranked by (the
+// judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an
+// overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
+// the cloud app's row shows: the reasoning, then each trait's share with its name and reason.
+// The pond's own 0–1 only orders the list; the drawer still shows it.
 function Score({ result, ranked, labels }: { result: Result; ranked: boolean; labels: boolean }) {
-  const unscored = ranked && result.overall === null
+  if (!ranked) {
+    return (
+      <div className="result-overall">
+        <div className="result-reason">
+          <p>{result.reason}</p>
+          <TraitList traits={result.row.traits} />
+        </div>
+      </div>
+    )
+  }
+  const unscored = result.overall === null
   return (
     <div className="result-overall">
       {unscored ? null : <ScoreCell result={result} ranked={ranked} />}
       <div className="result-reason">
         <p className={unscored ? "result-noscore" : undefined}>{result.reason}</p>
-        {ranked && <JudgeBadges candidate={result.candidate} shown={labels} />}
+        <JudgeBadges candidate={result.candidate} shown={labels} />
       </div>
     </div>
   )
