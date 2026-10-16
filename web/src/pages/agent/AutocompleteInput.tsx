@@ -50,16 +50,6 @@ export const AutocompleteInput = ({
   const onSearchRef = useRef(onSearch)
   const onFetchPreviewRef = useRef(onFetchPreview)
 
-  // Normalize value to ensure it's always EntityValue[]
-  const normalizedValue: EntityValue[] = value.map((item) => {
-    if (item && typeof item === "object" && "id" in item && "display_value" in item) {
-      return item
-    }
-    // Handle plain strings
-    const strValue = typeof item === "string" ? item : String(item)
-    return { id: strValue, display_value: strValue }
-  })
-
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
@@ -178,8 +168,8 @@ export const AutocompleteInput = ({
     } else if (e.key === "Enter" && inputValue.trim() && suggestions.length === 0 && !isLoading) {
       e.preventDefault()
       const manualEntry = { id: inputValue.trim(), display_value: inputValue.trim() }
-      if (!normalizedValue.some((v) => v.display_value === inputValue.trim())) {
-        onChange([...normalizedValue, manualEntry])
+      if (!value.some((v) => v.display_value === inputValue.trim())) {
+        onChange([...value, manualEntry])
       }
       setInputValue("")
       setSuggestions([])
@@ -244,9 +234,9 @@ export const AutocompleteInput = ({
           onBlur={handleInputBlur}
         />
 
-        {normalizedValue.length > 0 && (
+        {value.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {(maxDisplayed ? normalizedValue.slice(0, maxDisplayed) : normalizedValue).map((item) => (
+            {(maxDisplayed ? value.slice(0, maxDisplayed) : value).map((item) => (
               <Badge key={item.id} variant="secondary" className="pl-3 pr-1">
                 {item.display_value}
                 <button onClick={() => handleRemove(item)} className="ml-1 hover:bg-muted rounded-full p-0.5">
@@ -264,7 +254,7 @@ export const AutocompleteInput = ({
             <div className="p-3 text-sm text-muted-foreground">Loading...</div>
           ) : (
             displaySuggestions.map((suggestion) => {
-              const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
+              const isSelected = value.some((v) => v.id === suggestion.id)
               return (
                 <button
                   key={suggestion.id}
