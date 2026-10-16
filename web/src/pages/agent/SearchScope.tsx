@@ -1,5 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+} from "@/components/ui/select"
 import { errorText } from "@/lib/api/http"
 import { SEARCH_SCOPE_KEY as KEY, useSearchScope } from "@/lib/agent/useSearchScope"
 import { LOCAL_SCOPE, saveSearchScope } from "@/lib/api/searches"
@@ -33,55 +41,40 @@ export function SearchScope() {
   const { sets, local, selected } = scope.data
   const picked = sets.find(({ set_id }) => set_id === selected)
   const shown = selected === LOCAL_SCOPE ? "Local index" : picked ? name(picked) : "Pick a set"
-  // The pill is as wide as the pick; a native select is as wide as its longest option, so it sits
-  // invisibly over the pill and opens the usual menu.
+  // The pill is the app's Select with its own face: the pick's name and count, as wide as they are.
   return (
     <span className="relative inline-flex">
-      <span className="relative inline-flex h-[26px] max-w-[240px] items-center gap-1.5 rounded-full border border-line pl-2.5 pr-2 text-[11px] text-muted-foreground transition-colors duration-fast ease-out focus-within:border-line-strong hover:text-foreground">
-        {/* A long name gives way before its count does. */}
-        <span aria-hidden className="flex min-w-0">
-          <span className="truncate">{shown}</span>
-          {picked && <span className="shrink-0 whitespace-pre">{people(picked)}</span>}
-        </span>
-        <svg viewBox="0 0 16 16" aria-hidden="true" className="size-3 shrink-0">
-          <path
-            d="M4 6l4 4 4-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        <select
+      <Select value={selected} onValueChange={(value) => save.mutate(value)}>
+        <SelectTrigger
           aria-label="Search in"
           title="Where searches look"
-          value={selected}
-          onChange={(event) => save.mutate(event.target.value)}
-          className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0"
+          className="h-[26px] w-auto max-w-[240px] gap-1.5 rounded-full border-line bg-transparent py-0 pl-2.5 pr-2 text-[11px] text-muted-foreground transition-colors duration-fast ease-out hover:text-foreground focus:border-line-strong focus:ring-0 focus:ring-offset-0 [&>svg]:size-3 [&>svg]:shrink-0"
         >
-          {/* Signed out with a local index not picked yet. */}
-          {selected === "" && (
-            <option value="" disabled hidden>
-              Pick a set
-            </option>
-          )}
+          {/* A long name gives way before its count does. "Pick a set": signed out with a local index not picked yet. */}
+          <span className="flex min-w-0">
+            <span className="truncate">{shown}</span>
+            {picked && <span className="shrink-0 whitespace-pre">{people(picked)}</span>}
+          </span>
+        </SelectTrigger>
+        <SelectContent align="start">
           {sets.length > 0 && (
-            <optgroup label="Powerset">
+            <SelectGroup>
+              <SelectLabel>Powerset</SelectLabel>
               {sets.map((set) => (
-                <option key={set.set_id} value={set.set_id}>
+                <SelectItem key={set.set_id} value={set.set_id}>
                   {name(set) + people(set)}
-                </option>
+                </SelectItem>
               ))}
-            </optgroup>
+            </SelectGroup>
           )}
           {local && (
-            <optgroup label="This Mac">
-              <option value={LOCAL_SCOPE}>Local index</option>
-            </optgroup>
+            <SelectGroup>
+              <SelectLabel>This Mac</SelectLabel>
+              <SelectItem value={LOCAL_SCOPE}>Local index</SelectItem>
+            </SelectGroup>
           )}
-        </select>
-      </span>
+        </SelectContent>
+      </Select>
       {save.error && (
         <span
           role="alert"

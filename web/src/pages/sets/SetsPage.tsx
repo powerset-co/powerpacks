@@ -31,20 +31,15 @@ export function SetsPage() {
           <Select
             aria-label={SETS.choose}
             value={chosen?.set_id ?? ""}
-            onChange={(event) => {
-              choose(event.target.value)
+            onChange={(set_id) => {
+              choose(set_id)
               setConfirming(false)
             }}
             disabled={!local.length}
             className="min-w-[220px]"
-          >
-            {local.length ? null : <option value="">{sets.isPending ? SETS.loading : SETS.noneTitle}</option>}
-            {local.map((set) => (
-              <option key={set.set_id} value={set.set_id}>
-                {set.name}
-              </option>
-            ))}
-          </Select>
+            placeholder={sets.isPending ? SETS.loading : SETS.noneTitle}
+            options={local.map((set) => ({ value: set.set_id, label: set.name }))}
+          />
           <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
             + {SETS.newSet}
           </Button>

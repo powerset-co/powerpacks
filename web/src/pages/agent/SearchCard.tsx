@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-import { CHIP, CLOSE_MARK, ReadRow, Row, TraitChips } from "@/components/shared"
+import { CHIP, CLOSE_MARK, ReadRow, Row, Select, TraitChips } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { PreparedSearch, SearchTrait } from "@/lib/agent/preparedSearch"
 import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expandedFilters"
@@ -44,6 +44,8 @@ const ADD_FIELD = cn(
 )
 const FIELD =
   "rounded-[var(--radius-s)] border border-line bg-transparent px-2 py-1 text-[12px] text-foreground outline-none focus:border-primary focus-visible:outline-none"
+// A select at the chip's size: the shared Select's trigger in the FIELD style.
+const PICKER = cn(FIELD, "h-auto gap-1 border-line pr-1.5 text-muted-foreground")
 const REMOVE =
   "inline-grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
 const TEXT_BUTTON =
@@ -215,19 +217,14 @@ function Chips({
       ))}
       {options ? (
         unused.length > 0 && (
-          <select
+          <Select
             aria-label={`Add ${label}`}
             value=""
-            onChange={(event) => add(event.target.value)}
-            className={cn(FIELD, "cursor-pointer text-muted-foreground")}
-          >
-            <option value="">Add…</option>
-            {unused.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+            onChange={add}
+            placeholder="Add…"
+            className={PICKER}
+            options={unused.map((option) => ({ value: option, label: option }))}
+          />
         )
       ) : readonly ? null : (
         <>
@@ -241,23 +238,20 @@ function Chips({
             }}
             // Leaving for the kind picker keeps the text, so the kind chosen next applies to it.
             onBlur={(event) => {
-              if (!(event.relatedTarget instanceof HTMLSelectElement)) add(typed)
+              const next = event.relatedTarget
+              if (!(next instanceof HTMLElement && next.closest("[data-kind-picker]"))) add(typed)
             }}
             className={ADD_FIELD}
           />
           {kinds && (
-            <select
+            <Select
               aria-label={`${label} kind`}
-              value={kind}
-              onChange={(event) => onDraft({ text: typed, kind: event.target.value })}
-              className={cn(FIELD, "cursor-pointer text-muted-foreground")}
-            >
-              {Object.entries(kinds).map(([key, name]) => (
-                <option key={key} value={key}>
-                  {name}
-                </option>
-              ))}
-            </select>
+              value={kind ?? ""}
+              onChange={(next) => onDraft({ text: typed, kind: next })}
+              className={PICKER}
+              data-kind-picker=""
+              options={Object.entries(kinds).map(([key, name]) => ({ value: key, label: name }))}
+            />
           )}
         </>
       )}
@@ -371,7 +365,7 @@ function FieldRow({
                 aria-label={`${field.label} ${index === 0 ? "min" : "max"}`}
                 type={control.type}
                 placeholder={index === 0 ? "min" : "max"}
-                value={index === 0 ? low : high}
+                value={(index === 0 ? low : high) ?? ""}
                 onChange={(event) => onChange(withValue(values, key, typed(event.target.value)))}
                 className={cn(FIELD, control.type === "number" ? "w-20" : "w-36")}
               />
@@ -387,19 +381,16 @@ function FieldRow({
           {control.keys.map((key, index) => (
             <span key={key} className="inline-flex items-center gap-1.5">
               {index === 1 && <span className="text-faint">–</span>}
-              <select
+              <Select
                 aria-label={`${field.label} ${index === 0 ? "min" : "max"}`}
-                value={index === 0 ? low : high}
-                onChange={(event) => onChange(withValue(values, key, event.target.value || null))}
-                className={cn(FIELD, "cursor-pointer")}
-              >
-                <option value="">any</option>
-                {control.options.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+                value={(index === 0 ? low : high) ?? ""}
+                onChange={(next) => onChange(withValue(values, key, next || null))}
+                className={PICKER}
+                options={[
+                  { value: "", label: "any" },
+                  ...control.options.map((option) => ({ value: option, label: option })),
+                ]}
+              />
             </span>
           ))}
         </Row>
