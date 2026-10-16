@@ -122,7 +122,7 @@ class TestSkillContract(unittest.TestCase):
 
     def test_contract_strings(self):
         self.assertIn("decision.json", SKILL_TEXT)
-        self.assertIn("Execute this search or modify it?", SKILL_TEXT)
+        self.assertIn("Search prepared. Execute or modify?", SKILL_TEXT)
         self.assertIn("Decide + record the search decision", SKILL_TEXT)
         self.assertIn("search_network_pipeline.py prepare", SKILL_TEXT)
         self.assertNotIn("primitives/route_query", SKILL_TEXT)

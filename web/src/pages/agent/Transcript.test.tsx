@@ -114,7 +114,7 @@ it("shows a prepared search as a card in its command's place, its traits and fil
         entries={[
           { kind: "user", id: "u1", text: "VP of finance in New York" },
           prepared("c1", PREVIEW),
-          { kind: "agent", id: "a1", text: "Execute this search or modify it?" },
+          { kind: "agent", id: "a1", text: "Search prepared. Execute or modify?" },
         ]}
         running={false}
       />

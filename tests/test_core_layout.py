@@ -257,7 +257,8 @@ class CoreLayoutTests(unittest.TestCase):
 
     def test_search_network_uses_single_execute_preview_gate(self) -> None:
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
-        self.assertIn("Execute this search or modify it?", text)
+        self.assertIn("Search prepared. Execute or modify?", text)
+        self.assertNotIn("Execute this search or modify it?", text)
         self.assertNotIn("execute`, `modify`, or `search only`", text)
         self.assertIn("--execute-approved", text)
         self.assertIn("do not ask for another approval", text)
