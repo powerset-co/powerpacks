@@ -352,11 +352,13 @@ be opened for progress.
 
 - Say `<N> found`.
 - For local results, say `found (local)`.
-- Say `Run artifacts: <artifact-dir>`.
-- For the ranked list, read only the `csv` path from the final `artifacts` object and show the top
-  10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
-  compact: rank, name, current title/company, location, and LinkedIn URL when
-  present.
+- In the Powerpacks desktop app (the developer instructions say you are its assistant), stop
+  there: the results pane beside the chat already shows the ranked list. Never print a table of
+  results in the chat.
+- Outside the app: say `Run artifacts: <artifact-dir>`, then read only the `csv` path from the
+  final `artifacts` object and show the top 10 candidates, or fewer if fewer than 10 rows were
+  returned. Keep each row compact: rank, name, current title/company, location, and LinkedIn URL
+  when present.
 - Live progress above is the exception to waiting for final output. Other run
   files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.
