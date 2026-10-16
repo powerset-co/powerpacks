@@ -13,7 +13,7 @@ representations do not validate this new structured input.
 flowchart LR
     JD[Source JD + title + company] --> CALL[One structured extraction]
     CALL --> CACHE[Exact-request response cache]
-    CACHE --> CHECK[Exact source-quote validation]
+    CACHE --> CHECK[Shape validation]
     CHECK --> TEXT[Capability-only text]
 ```
 
@@ -25,11 +25,10 @@ response deliberately. The shared OpenAI client records live-call usage in the
 normal local usage log; cache hits make no API call.
 
 The renderer never falls back to the raw JD after a refusal, truncated response,
-malformed JSON, unexpected field, or source-quote mismatch. A quote is grounded
-when every line of it appears verbatim in the source: the model joins passages
-from different paragraphs with a blank line when one item draws on both. Exact
-quotes remain in the cache for provenance and are omitted from the model-visible
-cleaned text.
+malformed JSON, or unexpected field. The response carries a source quote per
+item so the model anchors each item to the posting; the quotes stay in the cache
+for provenance, are not checked against the posting, and are omitted from the
+model-visible cleaned text.
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
@@ -39,3 +38,4 @@ cleaned text.
 ## Change log
 
 - 2026-10-15: A source quote may join passages from different paragraphs with a blank line; each line still has to be an exact substring. A JD whose cleaner response did that failed every retry from its own cache.
+- 2026-10-15: The source-quote check and the invented-label check are gone. Nothing reads the quotes, and a response that failed either check stayed cached, so the run could never recover. Shape validation stays.

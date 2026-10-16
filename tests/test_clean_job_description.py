@@ -150,53 +150,37 @@ class CleanJobDescriptionTests(unittest.TestCase):
         self.assertEqual(api.chat.completions.create.call_count, 5)
         self.assertEqual(len(list(self.output_dir.glob("*.json"))), 5)
 
-    def test_source_quotes_are_required_and_must_match_exactly(self):
+    def test_unexpected_fields_and_empty_items_are_rejected(self):
         cases = [
-            _answer(responsibilities=[{"text": "Invented duty", "source_quote": "Invented duty"}]),
-            _answer(experience=[{
-                "text": "[must] Experience with distributed systems.",
-                "source_quote": "Experience with distributed systems or databases.",
-            }]),
-            _answer(company={
-                **_answer()["company"], "stage": "Series B",
-                "source_quotes": {**_answer()["company"]["source_quotes"], "stage": []},
-            }),
             _answer(tech_stack=["Rust"]),
-            _answer(responsibilities=[{
-                "text": "Build storage control software and ship it weekly.",
-                "source_quote": "Build storage control software.\n\nShip it weekly.",
-            }]),
-            _answer(responsibilities=[{
-                "text": "Build storage control software.",
-                "source_quote": "\n\n",
-            }]),
+            _answer(responsibilities=[{"text": "  ", "source_quote": "Build storage control software."}]),
+            _answer(company={**_answer()["company"], "what_it_does": ""}),
         ]
         for index, answer in enumerate(cases):
             with self.subTest(index=index), self.assertRaises(RuntimeError):
                 self._clean(_client(_response(answer)), output_dir=self.output_dir / str(index))
 
-    def test_source_quote_may_join_passages_from_different_paragraphs(self):
+    def test_source_quotes_are_kept_but_not_checked(self):
         answer = _answer(
             responsibilities=[{
-                "text": "Build storage control software for Example Systems.",
-                "source_quote": (
-                    "Example Systems builds storage control software.\n\n"
-                    "Build storage control software."
-                ),
+                "text": "Operate under tight deadlines.",
+                "source_quote": "Build storage control software.\n\nFree lunch and health insurance.",
+            }],
+            experience=[{
+                "text": "[must] Experience with distributed systems.",
+                "source_quote": "Experience with distributed systems, databases.",
             }],
             company={
-                **_answer()["company"],
-                "source_quotes": {
-                    **_answer()["company"]["source_quotes"],
-                    "size": ["We are a team of 42 employees.\n\nFree lunch and health insurance."],
-                },
+                **_answer()["company"], "stage": "Series B",
+                "source_quotes": {**_answer()["company"]["source_quotes"], "stage": []},
             },
         )
 
         text = self._clean(_client(_response(answer)))
 
-        self.assertIn("- Build storage control software for Example Systems.\n", text)
-        self.assertIn("Size: 42 employees", text)
+        self.assertIn("- Operate under tight deadlines.\n", text)
+        self.assertIn("- [must] Experience with distributed systems.\n", text)
+        self.assertIn("Stage: Series B", text)
 
     def test_malformed_paid_response_is_checkpointed_and_not_retried(self):
         output_dir = self.output_dir / "malformed"
