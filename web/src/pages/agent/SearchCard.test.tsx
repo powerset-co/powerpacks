@@ -90,7 +90,7 @@ it("sends execute when nothing changed, an edit put back included", () => {
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
-it("sends the query, every filter and every trait as JSON after edits", () => {
+it("sends the query, the changed filters and the traits as JSON after edits", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.change(screen.getByRole("textbox", { name: "Query" }), {
     target: { value: "Finance leaders in NYC" },
@@ -111,10 +111,10 @@ it("sends the query, every filter and every trait as JSON after edits", () => {
   execute()
   expect(sent()).toEqual({
     query: "Finance leaders in NYC",
+    // Unchanged keys (years_experience_min) stay out: a key sent is an edit to the agent.
     filters: {
       metro_areas: ["Washington, DC"],
       seniority_bands: ["vice-president", "c-suite"],
-      years_experience_min: 5,
       bm25_queries: ["vp finance", "head of finance"],
       years_experience_max: 12,
     },
@@ -131,15 +131,8 @@ it("sends a removed filter as null and an emptied list as null", () => {
   fireEvent.click(screen.getByRole("button", { name: "Remove New York Metropolitan Area" }))
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years min" }), { target: { value: "" } })
   execute()
-  expect(sent()).toEqual({
-    filters: {
-      metro_areas: null,
-      seniority_bands: ["vice-president", "director"],
-      years_experience_min: null,
-      bm25_queries: ["vp finance"],
-    },
-    traits: SEARCH.traits,
-  })
+  // The traits did not change, so none are sent: to the agent, traits sent mean a new search.
+  expect(sent()).toEqual({ filters: { metro_areas: null, years_experience_min: null } })
 })
 
 it("adds a filter the search did not come with through the Edit Filters modal", () => {
@@ -158,10 +151,7 @@ it("adds a filter the search did not come with through the Edit Filters modal", 
   expect(screen.getByText("Companies")).toBeTruthy()
   expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Companies 1" }).value).toBe("Stripe")
   execute()
-  const body = sent()
-  expect(body.filters.company_names).toEqual(["Stripe"])
-  expect(body.filters.metro_areas).toEqual(["New York Metropolitan Area"])
-  expect(body.filters.seniority_bands).toEqual(["vice-president", "director"])
+  expect(sent().filters).toEqual({ company_names: ["Stripe"] })
 })
 
 it("clears both ends of a range from the modal, and keeps a typed location under the kind picked", () => {
@@ -222,14 +212,7 @@ it("sends no traits for a search that came with none and still has none", () => 
   render(<SearchCard search={{ ...SEARCH, traits: [] }} actions={true} />)
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
   execute()
-  expect(sent()).toEqual({
-    filters: {
-      metro_areas: ["New York Metropolitan Area"],
-      seniority_bands: ["vice-president"],
-      years_experience_min: 5,
-      bm25_queries: ["vp finance"],
-    },
-  })
+  expect(sent()).toEqual({ filters: { seniority_bands: ["vice-president"] } })
 })
 
 it("sends an empty traits list when every trait is removed", () => {
@@ -262,8 +245,7 @@ it("applies the kind chosen after the location was typed", () => {
   fireEvent.change(kind, { target: { value: "cities" } })
   // No Enter: Execute carries what sits in the add field, under the kind picked after typing.
   execute()
-  expect(sent().filters.cities).toEqual(["Brooklyn"])
-  expect(sent().filters.metro_areas).toEqual(["New York Metropolitan Area"])
+  expect(sent().filters).toEqual({ cities: ["Brooklyn"] })
 })
 
 it("shows a filter the table doesn't name with its value's own shape and keeps its type", () => {
@@ -283,10 +265,8 @@ it("shows a filter the table doesn't name with its value's own shape and keeps i
   expect(screen.getByRole("checkbox", { name: "Remote ok" })).toBeTruthy()
   fireEvent.change(screen.getByRole("textbox", { name: "Team note" }), { target: { value: "infra" } })
   execute()
-  const { filters } = sent()
-  expect(filters.custom_score_min).toBe(4)
-  expect(filters.remote_ok).toBe(true)
-  expect(filters.team_note).toBe("infra")
+  // The number stays a number; the untouched toggle is not sent.
+  expect(sent().filters).toEqual({ custom_score_min: 4, team_note: "infra" })
 })
 
 it("shows the current-only toggle only to a search without traits", () => {

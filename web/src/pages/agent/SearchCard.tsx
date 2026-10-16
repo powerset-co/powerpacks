@@ -99,13 +99,15 @@ function modifyMessage(search: PreparedSearch, query: string, values: Values, tr
   const body: { query?: string; filters: Record<string, FilterValue | null>; traits?: SearchTrait[] } = {
     filters: {},
   }
+  // Only what changed: the agent treats every key sent as an edit, and traits sent as a new search.
   if (query.trim() !== search.query) body.query = query.trim()
-  for (const { key } of search.filters) body.filters[key] = values.get(key) ?? null
-  for (const [key, value] of values) {
-    if (key in body.filters || value === null || (Array.isArray(value) && value.length === 0)) continue
-    body.filters[key] = value
+  const prepared = preparedValues(search)
+  for (const key of new Set([...prepared.keys(), ...values.keys()])) {
+    const value = values.get(key) ?? null
+    const next = Array.isArray(value) && value.length === 0 ? null : value
+    if (JSON.stringify(next) !== JSON.stringify(prepared.get(key) ?? null)) body.filters[key] = next
   }
-  if (search.traits.length > 0 || traits.length > 0) body.traits = traits
+  if (JSON.stringify(traits) !== JSON.stringify(search.traits)) body.traits = traits
   return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
 }
 

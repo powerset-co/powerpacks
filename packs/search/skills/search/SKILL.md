@@ -308,18 +308,21 @@ For both local and Powerset previews:
 - A reply starting `Modify, then execute:` is followed by one JSON object with any of
   `query` (a string), `filters` (an object: `role_search_filters` keys with their JSON values as
   the payload holds them, `null` to remove a key) and `traits` (the whole list of
-  `{value, temporal, meaning}`). The card sends it; copy the values, never re-parse them. Read
-  the JSON file named by `payload_json` in the preview:
+  `{value, temporal, meaning}`). The card sends only what the user changed against the preview
+  it showed: a key in `filters` is an edit, `traits` is present only when the traits changed,
+  and `query` only when the query changed. Copy the values, never re-parse them, and never
+  compare them with the file on disk. Read the JSON file named by `payload_json` in the preview:
   - If `query` is present, or a trait's `value` changed, was added, or was removed (an empty
-    `traits` list clears them), log the change as `query_edit`, run a new `prepare` for the
-    new query (or the query restated around the new traits and the sent filters) with the same
-    `--output-dir`, then show its preview and ask the usual question. Retrieval and LLM
-    filtering use the prepared query; do not run the old `execute_command` for a changed query
-    or trait value.
+    `traits` list clears them), log the change as `query_edit`, run a new `prepare` with the
+    same `--output-dir` for the sent `query`, or, when only the traits changed, for the
+    preview's query restated around the new traits. Keywords and filters never go into the
+    query: apply the sent `filters` to the new payload as below, then show the preview and ask
+    the usual question. Retrieval and LLM filtering use the prepared query; do not run the old
+    `execute_command` for a changed query or trait value.
   - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
-    the key; a key not sent is left unchanged), log each key whose value differs from the
-    file's as `filter_edit`, and when `traits` is present replace the payload's `traits` with
-    it (a changed `temporal` alone is an in-place edit). When `bm25_queries` is sent, also drop
+    the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when
+    `traits` is present replace the payload's `traits` with it (a changed `temporal` alone is
+    an in-place edit). When `bm25_queries` is sent, also drop
     every `role_core_patterns` entry that holds an example no longer in it: the run merges the
     examples back into the keywords and retrieval matches the entry's regex, so a removed
     keyword would return either way. The kept examples are already in `bm25_queries`.
