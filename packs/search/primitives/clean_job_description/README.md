@@ -25,10 +25,17 @@ response deliberately. The shared OpenAI client records live-call usage in the
 normal local usage log; cache hits make no API call.
 
 The renderer never falls back to the raw JD after a refusal, truncated response,
-malformed JSON, unexpected field, or source-quote mismatch. Exact quotes remain
-in the cache for provenance and are omitted from the model-visible cleaned text.
+malformed JSON, unexpected field, or source-quote mismatch. A quote is grounded
+when every line of it appears verbatim in the source: the model joins passages
+from different paragraphs with a blank line when one item draws on both. Exact
+quotes remain in the cache for provenance and are omitted from the model-visible
+cleaned text.
 
 | File | Role | Reads | Writes |
 | --- | --- | --- | --- |
 | `clean_job_description.py` | Request, validation, cache and rendering | Source JD, prompt, response cache | Response cache and rendered text |
 | `../../prompts/jd-cleaning.txt` | Structured extraction rules | Source JD supplied by the caller | Model JSON |
+
+## Change log
+
+- 2026-10-15: A source quote may join passages from different paragraphs with a blank line; each line still has to be an exact substring. A JD whose cleaner response did that failed every retry from its own cache.

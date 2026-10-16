@@ -174,12 +174,22 @@ def _exact_object(value: Any, fields: set[str], label: str) -> Mapping[str, Any]
     return value
 
 
+def _grounded(quote: str, source: str) -> bool:
+    """A quote is grounded when every line of it appears verbatim in the source.
+
+    The model joins passages from different paragraphs with a blank line when one
+    item draws on both; each passage still has to be an exact substring.
+    """
+    lines = [line.strip() for line in quote.splitlines() if line.strip()]
+    return bool(lines) and all(line in source for line in lines)
+
+
 def _claim(value: Any, quotes: Any, source: str, label: str) -> tuple[str | None, tuple[str, ...]]:
     if value is not None and (not isinstance(value, str) or not value.strip()):
         raise RuntimeError(f"JD cleaner returned an invalid {label}")
     if not isinstance(quotes, list) or any(not isinstance(quote, str) or not quote for quote in quotes):
         raise RuntimeError(f"JD cleaner returned invalid {label} source quotes")
-    if any(quote not in source for quote in quotes):
+    if any(not _grounded(quote, source) for quote in quotes):
         raise RuntimeError(f"JD cleaner returned an ungrounded {label}")
     if (value is None) != (not quotes):
         raise RuntimeError(f"JD cleaner returned {label} without matching source evidence")
@@ -198,7 +208,7 @@ def _items(value: Any, source: str, label: str) -> tuple[_EvidenceItem, ...]:
             raise RuntimeError(f"JD cleaner returned an empty {label} item")
         if _INVENTED_LABEL.match(text):
             raise RuntimeError(f"JD cleaner returned an invented label in {label}")
-        if not isinstance(quote, str) or not quote or quote not in source:
+        if not isinstance(quote, str) or not _grounded(quote, source):
             raise RuntimeError(f"JD cleaner returned an ungrounded {label} item")
         items.append(_EvidenceItem(text=" ".join(text.split()), source_quote=quote))
     return tuple(items)
