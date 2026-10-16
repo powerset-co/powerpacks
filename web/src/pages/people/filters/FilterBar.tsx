@@ -53,7 +53,7 @@ export const FilterBar = memo(
             onChange={(event) => onText(event.target.value)}
           />
           <Select
-            aria-label="Worth"
+            aria-label="Decision"
             value={tab}
             onChange={(value) => onTab(must(TABS.find((option) => option === value)))}
             options={TABS.map((option) => ({

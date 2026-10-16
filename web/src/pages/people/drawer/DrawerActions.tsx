@@ -21,7 +21,7 @@ function Check({ on, risen }: { on: boolean; risen: boolean }) {
   return on ? <span className={risen ? "rise-in" : undefined}>✓</span> : null
 }
 
-// Worth it and Not worth it show the owner's own call; the other button is the correction.
+// Keep and Skip show the owner's own call; the other button is the correction.
 export function DrawerActions({ row, saving, disabled, onAction }: DrawerActionsProps) {
   const yours = row.worth_source === "human"
   const shares = yours && row.worth === "yes"
@@ -38,7 +38,7 @@ export function DrawerActions({ row, saving, disabled, onAction }: DrawerActions
         onClick={() => onAction("yes")}
       >
         <Check on={shares} risen={!opened.shares} />
-        Worth it
+        Keep
       </Button>
       <Button
         className={PRESSED}
@@ -48,7 +48,7 @@ export function DrawerActions({ row, saving, disabled, onAction }: DrawerActions
         onClick={() => onAction("no")}
       >
         <Check on={keepsPrivate} risen={!opened.keepsPrivate} />
-        Not worth it
+        Skip
       </Button>
     </div>
   )

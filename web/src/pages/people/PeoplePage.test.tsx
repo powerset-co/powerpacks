@@ -209,9 +209,9 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
-    expect(picked("Worth")).toBe("All · 4")
-    open("Worth")
-    expect(options()).toEqual(["All · 4", "Yes · 1", "Maybe · 0", "No · 3", "Not assessed · 0"])
+    expect(picked("Decision")).toBe("All · 4")
+    open("Decision")
+    expect(options()).toEqual(["All · 4", "Keep · 1", "Maybe · 0", "Skip · 3", "Not assessed · 0"])
     fireEvent.keyDown(screen.getByRole("option", { name: "All · 4" }), { key: "Escape" })
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
@@ -221,7 +221,7 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    pick("Worth", "All · 4")
+    pick("Decision", "All · 4")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
     await waitFor(() => expect(new URLSearchParams(must(at()).split("?")[1]).get("tab")).toBe("all"))
   })
@@ -263,7 +263,7 @@ describe("PeoplePage", () => {
   it("keeps the selected tab and all sections closed after refresh", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no&person=p1&sections=")
-    await waitFor(() => expect(picked("Worth").startsWith("No")).toBe(true))
+    await waitFor(() => expect(picked("Decision").startsWith("Skip")).toBe(true))
     await screen.findByRole("button", { name: "Relationship", expanded: false })
     expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
   })
@@ -294,7 +294,7 @@ describe("PeoplePage", () => {
     expect(screen.queryByText("Never shared")).toBeNull()
   })
 
-  it("selects every matching person and marks them worth it", async () => {
+  it("selects every matching person and keeps them", async () => {
     const fetch = vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith("/worth")) expect(sentWorth(init)).toEqual({ ids: ["p2", "p1", "p3"], worth: "yes" })
       return serve(url, init)
@@ -305,9 +305,9 @@ describe("PeoplePage", () => {
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByText("3 selected")).toBeTruthy()
-    fireEvent.click(within(bar).getByRole("button", { name: "Worth it Y" }))
-    await waitFor(() => expect(screen.getByText("Marked 3 people worth it.")).toBeTruthy())
-    expect(screen.getByText("No one marked not worth it.")).toBeTruthy()
+    fireEvent.click(within(bar).getByRole("button", { name: "Keep Y" }))
+    await waitFor(() => expect(screen.getByText("Kept 3 people.")).toBeTruthy())
+    expect(screen.getByText("No one skipped yet.")).toBeTruthy()
     expect(
       fetch.mock.calls.filter(
         ([url]) =>
@@ -355,7 +355,7 @@ describe("PeoplePage", () => {
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     fireEvent.click(
       within(must(container.querySelector<HTMLElement>("[data-action-bar]"))).getByRole("button", {
-        name: "Worth it Y",
+        name: "Keep Y",
       }),
     )
     await waitFor(() =>
@@ -383,14 +383,12 @@ describe("PeoplePage", () => {
     fireEvent.click(updating)
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
     expect(within(drawer).getByText("Jordan Bravo is being updated; finish the run first.")).toBeTruthy()
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Worth it" }).disabled).toBe(true)
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Not worth it" }).disabled).toBe(
-      true,
-    )
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Keep" }).disabled).toBe(true)
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Skip" }).disabled).toBe(true)
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
-    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Worth it Y" }).disabled).toBe(true)
-    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Not worth it N" }).disabled).toBe(true)
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Keep Y" }).disabled).toBe(true)
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Skip N" }).disabled).toBe(true)
     fireEvent.keyDown(document, { key: "y" })
     fireEvent.keyDown(document, { key: "n" })
     expect(fetch.mock.calls.some(([url]) => url.endsWith("/worth"))).toBe(false)
@@ -416,13 +414,13 @@ describe("PeoplePage", () => {
     const names = () => [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     const heading = () => container.querySelector("[data-drawer] h2")?.textContent
     const bar = () => must(container.querySelector<HTMLElement>("[data-action-bar]"))
-    const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Worth it Y" }))
+    const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Keep Y" }))
     const [first, second, third] = names()
     // Open the middle person: the bar names them, and Use worth is gone.
     fireEvent.click(must(container.querySelectorAll(".row")[1]))
     expect(within(bar()).getByText(second ?? "")).toBeTruthy()
     expect(within(bar()).queryByText(/Use worth/)).toBeNull()
-    // Worth it moves them out of the tab; the drawer opens whoever took their place.
+    // Keep moves them out of the tab; the drawer opens whoever took their place.
     share()
     await waitFor(() => expect(names()).toEqual([first, third]))
     await waitFor(() => expect(heading()).toBe(third))

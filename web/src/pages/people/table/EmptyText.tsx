@@ -3,10 +3,10 @@ import type { Tab } from "@/lib/people/view"
 
 const NOBODY: Record<Tab, string> = {
   all: "No people yet.",
-  yes: "No one worth it yet.",
+  yes: "No one kept yet.",
   maybe: "No one on the fence.",
-  no: "No one marked not worth it.",
-  unjudged: "Everyone has a worth call.",
+  no: "No one skipped yet.",
+  unjudged: "Everyone has a decision.",
 }
 
 interface EmptyTextProps {

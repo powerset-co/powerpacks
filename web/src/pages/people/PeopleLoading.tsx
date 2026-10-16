@@ -24,7 +24,7 @@ export function PeopleLoading() {
               disabled
             />
             <Select
-              aria-label="Worth"
+              aria-label="Decision"
               disabled
               value="all"
               onChange={() => undefined}

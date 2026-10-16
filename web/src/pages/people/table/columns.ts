@@ -15,7 +15,7 @@ export const COLUMNS: readonly GridColumn[] = [
   { sort: "name", cls: "c-person", label: "Person" },
   { cls: "c-sources", label: "Sources" },
   { sort: "relationship", cls: "c-rel", label: "Relationship" },
-  { sort: "worth", cls: "c-worth", label: "Worth" },
+  { sort: "worth", cls: "c-worth", label: "Decision" },
   { sort: "warmth", cls: "c-warmth", label: "Warmth" },
   { sort: "last", cls: "c-last", label: "Last contact", right: true },
   { sort: "messages", cls: "c-msgs", label: "Interactions", right: true },

@@ -21,7 +21,7 @@ interface BulkBarProps {
   onClear: () => void
 }
 
-// Worth it / Not worth it for the selection or the open person, on the shared action bar.
+// Keep / Skip for the selection or the open person, on the shared action bar.
 export function BulkBar({
   label,
   selection,
@@ -41,10 +41,10 @@ export function BulkBar({
         disabled={disabled}
         onClick={() => onAction("yes")}
       >
-        Worth it <Kbd className="ml-0.5">Y</Kbd>
+        Keep <Kbd className="ml-0.5">Y</Kbd>
       </Button>
       <Button shape="pill" className={BAR_BUTTON} disabled={disabled} onClick={() => onAction("no")}>
-        Not worth it <Kbd className="ml-0.5">N</Kbd>
+        Skip <Kbd className="ml-0.5">N</Kbd>
       </Button>
       <ActionBarRule />
       {logbook === "view" ? (
