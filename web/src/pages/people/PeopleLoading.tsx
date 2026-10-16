@@ -27,14 +27,14 @@ export function PeopleLoading() {
               aria-label="Sharing"
               disabled
               value="all"
-              onChange={() => {}}
+              onChange={() => undefined}
               options={[{ value: "all", label: "All" }]}
             />
             <Select
               aria-label="Relationship"
               disabled
               value=""
-              onChange={() => {}}
+              onChange={() => undefined}
               options={[{ value: "", label: "All relationships" }]}
             />
           </section>
