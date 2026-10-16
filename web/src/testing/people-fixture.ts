@@ -125,4 +125,5 @@ export const DETAIL: PersonDetail = {
   aliases: [],
   emails: [],
   phones: [],
+  interactions: {},
 }

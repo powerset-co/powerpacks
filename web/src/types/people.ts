@@ -149,6 +149,8 @@ export interface PersonDetail {
   aliases: string[]
   emails: string[]
   phones: string[]
+  /** Source family -> emails or messages, as the importer counted them. */
+  interactions: Record<string, number>
 }
 
 /** POST /api/people/worth result row: one parent after the human's worth call. */
