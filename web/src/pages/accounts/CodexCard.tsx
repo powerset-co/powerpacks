@@ -4,17 +4,25 @@ import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import type { CodexStatus } from "@/types/agent"
 
-function summary(status: CodexStatus | undefined): { name: string; plan: string; connected: boolean } {
-  if (!status) return { name: "Could not connect to Codex", plan: "—", connected: false }
-  if (!status.installed) return { name: "Missing from this app", plan: "—", connected: false }
-  const account = status.account
-  if (account === null) return { name: "Not signed in", plan: "—", connected: false }
-  if (account.kind === "chatgpt")
-    return { name: account.email ?? "ChatGPT", plan: account.plan, connected: true }
-  return { name: account.kind === "apiKey" ? "API key" : "Signed in", plan: "—", connected: true }
+// ChatGPT's plan types as people know them: the Pro tiers are "prolite", "pro" and "promax"
+// (the names codex-pooler shows); every other type reads as its own word.
+const PLAN_NAMES: Record<string, string> = { prolite: "Pro 100", pro: "Pro 200", promax: "Pro 500" }
+
+function planName(plan: string): string {
+  return PLAN_NAMES[plan] ?? plan.charAt(0).toUpperCase() + plan.slice(1)
 }
 
-/** The Codex account that runs Chat, signed in with ChatGPT. Desktop app only. */
+function summary(status: CodexStatus | undefined): { name: string; plan: string | null; connected: boolean } {
+  if (!status) return { name: "Could not connect to Codex", plan: null, connected: false }
+  if (!status.installed) return { name: "Missing from this app", plan: null, connected: false }
+  const account = status.account
+  if (account === null) return { name: "Not signed in", plan: null, connected: false }
+  if (account.kind === "chatgpt")
+    return { name: account.email ?? "ChatGPT", plan: planName(account.plan), connected: true }
+  return { name: account.kind === "apiKey" ? "API key" : "Signed in", plan: null, connected: true }
+}
+
+/** The Codex account that runs Chat, signed in with ChatGPT; its plan as a badge beside it. Desktop app only. */
 export function CodexCard() {
   const codex = useCodexAccount()
   const { name, plan, connected } = summary(codex.status)
@@ -31,6 +39,7 @@ export function CodexCard() {
           &gt;_
         </span>
         <span className="text-sm font-semibold">Codex</span>
+        {plan && !codex.loading ? <Badge variant="muted">{plan}</Badge> : null}
         <span className="min-w-0 truncate text-xs text-muted-foreground">
           {codex.loading ? "Checking Codex…" : name}
         </span>
@@ -55,12 +64,6 @@ export function CodexCard() {
         </div>
       )}
       {codex.error && <p className="m-0 mb-3 text-xs text-bad">{codex.error}</p>}
-      <dl className="m-0 grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
-        <div className="flex flex-col gap-0.5">
-          <dt className="text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">Plan</dt>
-          <dd className="m-0 text-sm capitalize">{plan}</dd>
-        </div>
-      </dl>
     </li>
   )
 }

@@ -45,4 +45,21 @@ it("identifies API billing instead of claiming the ChatGPT plan covers it", () =
   mount({ status: { installed: true, account: { kind: "apiKey" } } })
   expect(screen.getByText("Uses your API key. API usage is billed separately.")).toBeTruthy()
   expect(screen.queryByText("Runs Chat on your ChatGPT plan.")).toBeNull()
+  expect(screen.queryByText("Plan")).toBeNull()
+})
+
+it("shows the plan as a badge beside the account, with the Pro tiers named", () => {
+  const signedIn = (plan: string) => ({
+    status: { installed: true, account: { kind: "chatgpt" as const, email: "someone@example.com", plan } },
+  })
+  mount(signedIn("prolite"))
+  expect(screen.getByText("Pro 100")).toBeTruthy()
+  expect(screen.getByText("someone@example.com")).toBeTruthy()
+  expect(screen.queryByText("Plan")).toBeNull()
+  cleanup()
+  mount(signedIn("pro"))
+  expect(screen.getByText("Pro 200")).toBeTruthy()
+  cleanup()
+  mount(signedIn("plus"))
+  expect(screen.getByText("Plus")).toBeTruthy()
 })
