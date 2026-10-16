@@ -1,29 +1,34 @@
 // The search a chat's `search_network_pipeline.py prepare` command made, before it runs: the
 // last JSON object the command printed (emit, indent=2, so only it opens a line with `{`). The
-// query is at its top and the filters and the traits under `preview`; the local index adds the
-// pool estimate and the runtime notes. A prepare blocked on its extraction (`blocked_user_action`)
-// carries its `runtime_blockers`. The company fast path prints no filters and is no search card.
+// query is at its top; the filters, the role intent and the traits sit under `preview`; the local
+// index adds the pool estimate and the runtime notes. A prepare blocked on its extraction
+// (`blocked_user_action`) carries its `runtime_blockers`. The company fast path prints no filters
+// and is no search card.
 
 import { isRecord } from "@/lib/utils"
 import type { Entry } from "@/types/agent"
 
 const PREPARE = /search_network_pipeline\.py\s+prepare\b/
 
+/** A filter's value as the payload holds it: a list of names, a word, a number, a yes/no. */
+export type FilterValue = string[] | string | number | boolean
+
 export interface SearchFilter {
-  /** The preview's key, as an edit names it back to the agent: `metro_areas`. */
+  /** The payload's key, as an edit names it back to the agent: `metro_areas`. */
   key: string
-  label: string
-  value: string
+  value: FilterValue
 }
 
-/** One of the expand step's traits: `VP of Finance`, `current` (or `past`, `all`). */
+/** One of the expand step's traits: `VP of Finance`, `current` (or `past`, `all`), `role`. */
 export interface SearchTrait {
   value: string
   temporal: string
+  meaning: string
 }
 
 export interface PreparedSearch {
   query: string
+  /** The preview's filters, then its role intent (`semantic_query`, `bm25_queries`, …), in order. */
   filters: SearchFilter[]
   /** Empty when the preview carries none, as replies from older builds. */
   traits: SearchTrait[]
@@ -34,26 +39,40 @@ export interface PreparedSearch {
   blockers: string[]
 }
 
-/** `metro_areas` → `Metro areas`. */
-function filterLabel(key: string): string {
-  const words = key.replaceAll("_", " ")
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`
+/** The value as the payload holds it, or null for anything empty or of another shape. */
+function filterValue(value: unknown): FilterValue | null {
+  if (Array.isArray(value)) {
+    const names = value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+    return names.length > 0 ? names : null
+  }
+  if (typeof value === "string") return value.trim() === "" ? null : value
+  if (typeof value === "number" || typeof value === "boolean") return value
+  return null
 }
 
-/** A list joined with ", "; a word, number or yes/no as itself; anything empty as "". */
-function filterValue(value: unknown): string {
-  if (Array.isArray(value)) return value.map(String).join(", ")
-  const plain = typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-  return plain ? String(value) : ""
+function searchFilters(...sources: unknown[]): SearchFilter[] {
+  const filters: SearchFilter[] = []
+  for (const source of sources) {
+    if (!isRecord(source)) continue
+    for (const [key, raw] of Object.entries(source)) {
+      const value = filterValue(raw)
+      if (value !== null) filters.push({ key, value })
+    }
+  }
+  return filters
 }
 
-/** The traits that carry a value and a temporal. */
+/** The traits that carry a value and a temporal; a missing meaning reads as `role`. */
 function searchTraits(value: unknown): SearchTrait[] {
   const traits: SearchTrait[] = []
   if (!Array.isArray(value)) return traits
   for (const trait of value) {
     if (isRecord(trait) && typeof trait.value === "string" && typeof trait.temporal === "string")
-      traits.push({ value: trait.value, temporal: trait.temporal })
+      traits.push({
+        value: trait.value,
+        temporal: trait.temporal,
+        meaning: typeof trait.meaning === "string" ? trait.meaning : "role",
+      })
   }
   return traits
 }
@@ -76,11 +95,6 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
   const preview = printed.preview
   if (!isRecord(preview.filters)) return null
 
-  const filters: SearchFilter[] = []
-  for (const [key, value] of Object.entries(preview.filters)) {
-    const shown = filterValue(value)
-    if (shown) filters.push({ key, label: filterLabel(key), value: shown })
-  }
   const estimate = preview.pool_estimate
   const pool =
     isRecord(estimate) &&
@@ -91,7 +105,7 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
   const blockers = printed.status === "blocked_user_action" ? lines(preview.runtime_blockers) : []
   return {
     query: printed.query,
-    filters,
+    filters: searchFilters(preview.filters, preview.role_title_intent),
     traits: searchTraits(preview.traits),
     pool,
     notes: lines(preview.runtime_notes),

@@ -92,6 +92,10 @@ PREVIEW_FILTER_KEYS = [
     "stages", "company_stages", "stage", "x_followers_min", "x_followers_max",
     "li_followers_min", "li_followers_max", "li_connections_min", "li_connections_max",
     "ig_followers_min", "ig_followers_max",
+    "fields_of_study", "degree_levels", "graduation_year_min", "graduation_year_max",
+    "role_tracks", "investor_names",
+    "operator_interaction_min", "operator_interaction_max",
+    "set_interaction_min", "set_interaction_max",
 ]
 BROAD_POOL_RATIO = 0.6
 
@@ -335,6 +339,8 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "age_min","age_max",
         "position_after_date","position_before_date","is_current_role","is_current_company",
         "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
+        "fields_of_study","degree_levels","graduation_year_min","graduation_year_max",
+        "role_tracks","operator_interaction_max","set_interaction_min","set_interaction_max",
     ]:
         if payload.get("traits") and k in ("is_current_role", "is_current_company"):
             continue

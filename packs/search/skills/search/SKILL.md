@@ -305,34 +305,31 @@ For both local and Powerset previews:
 
 - `execute`: run the returned `execute_command` exactly in the background and read
   its output as it arrives.
-- A reply starting `Modify, then execute:` contains `filters: <key> = <value>; <key> = <value>`
-  and/or `traits: <value> (<temporal>); …` lines. Read the JSON file named by
-  `payload_json` in the preview:
-  - If a trait value changed, was added, or was removed (including an empty
-    `traits:` line clearing existing traits), log the change as `query_edit`,
-    restate the query around the new traits and requested filters, run a new
-    `prepare`, then show its preview and ask the usual execute-or-modify question.
-    Retrieval and LLM filtering use the prepared query; do not run the old
-    `execute_command` for changed trait values.
-  - Otherwise, compare each sent filter with its current `role_search_filters`
-    value (compare lists as the `, `-joined string). Apply and log only values
-    that differ; never re-split an unchanged value. Write changed filters under
-    the same keys, splitting changed list values on `, ` and retaining scalar
-    JSON types. Remove a key when its sent value is empty. Leave unmentioned
-    keys unchanged.
-  - Only traits' current/past wording is applied in place: update `temporal`
-    while preserving each trait's `value` and `meaning`. If the `traits:` line
-    is absent, leave traits unchanged.
+- A reply starting `Modify, then execute:` is followed by one JSON object with any of
+  `query` (a string), `filters` (an object: `role_search_filters` keys with their JSON values as
+  the payload holds them, `null` to remove a key) and `traits` (the whole list of
+  `{value, temporal, meaning}`). The card sends it; copy the values, never re-parse them. Read
+  the JSON file named by `payload_json` in the preview:
+  - If `query` is present, or a trait's `value` changed, was added, or was removed (an empty
+    `traits` list clears them), log the change as `query_edit`, run a new `prepare` for the
+    new query (or the query restated around the new traits and the sent filters) with the same
+    `--output-dir`, then show its preview and ask the usual question. Retrieval and LLM
+    filtering use the prepared query; do not run the old `execute_command` for a changed query
+    or trait value.
+  - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
+    the key; a key not sent is left unchanged), log each key whose value differs from the
+    file's as `filter_edit`, and when `traits` is present replace the payload's `traits` with
+    it (a changed `temporal` alone is an in-place edit).
   - Log each change with `search_feedback.py log` as shown in **User edit & feedback
-    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for
+    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for the query or
     traits, with both `--before` and `--after`.
   - For in-place edits, save the payload, then run the returned `execute_command`
     exactly in the background and read its output as it arrives. It binds the edited file.
     Filter and temporal-only edits need no second `prepare` or approval.
 - Any other reply is a modify in the user's words: use the same rules above.
-  Changed trait values or query wording require a new `prepare` and the usual
-  question; filter and current/past-only edits are applied and logged in place,
-  then run the returned `execute_command` exactly.
+  A changed query or trait value requires a new `prepare` and the usual question; filter and
+  temporal-only edits are applied and logged in place, then run the returned
+  `execute_command` exactly.
 
 ## Execution progress
 
