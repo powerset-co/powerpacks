@@ -1,10 +1,10 @@
-"""Refresh People's signals from saved facts and counts: Worth (Luna's two requests), the settle rule
-(as Enrich applies it after worth), then Share.
+"""Refresh People's signals from saved facts and counts: Worth (one Luna request per family), the settle rule
+(as Enrich applies it after worth), then the labels.
 
 With no one selected it refreshes the families worth would ask anyway: new, or judged under older
 questions. A selection is asked again as well, judged or not. The check never calls OpenAI. A start
 is bound to those requests and their cache coverage; without a confirmed check it reads only saved
-answers, even if one disappears. Worth and Share run in one transaction, so a failure keeps the
+answers, even if one disappears. Worth and labels run in one transaction, so a failure keeps the
 previous signals and human decisions.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.enrich.settle import settle
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
-from packs.ingestion.primitives.share.share_list import Share
+from packs.ingestion.primitives.share.person_labels import PersonLabels
 
 
 # Requests answered per second, for the time estimate: Luna's measured pace, 1,011 requests in 13 s
@@ -56,8 +56,8 @@ class SignalsStatus:
 
 class RefreshSignals(Node):
     name = "signals"
-    reads = tuple(dict.fromkeys((*Worth.reads, *Enrich.reads, *Share.reads)))
-    writes = (*Worth.writes, *Share.writes)
+    reads = tuple(dict.fromkeys((*Worth.reads, *Enrich.reads, *PersonLabels.reads)))
+    writes = (*Worth.writes, *PersonLabels.writes)
     cache_only = True
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, parent_ids: tuple[str, ...]) -> None:
@@ -87,7 +87,7 @@ class RefreshSignals(Node):
         counts = self.worth.execute(cache_only=self.cache_only)
         counts["settle_worth_rows"] = settle(self.conn, self.data_root, now_iso())
         self.progress("Updating People", 0, 0)
-        Share(self.conn, self.data_root).execute()
+        PersonLabels(self.conn, self.data_root).execute()
         return counts
 
 

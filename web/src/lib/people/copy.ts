@@ -13,23 +13,21 @@ const BRANDS: Readonly<Record<string, string>> = {
 }
 
 export type TextKind =
-  "share" | "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
+  "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
-  share: { yes: "Sharing", no: "Not sharing" },
   reason: {
     worth_yes: "Worth: yes",
     worth_maybe: "Worth: maybe",
     worth_no: "Worth: no",
+    unjudged: "Not assessed",
     owner: "You (the owner)",
-    human_share: "You chose to share",
-    human_private: "You chose to keep private",
+    human_worth: "Your call",
     family: "Family",
     romantic_partner: "Partner",
+    partner: "Partner",
     minor: "Minor",
-    would_vouch: "Professional contact",
-    not_professional: "Not a professional contact",
     // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",

@@ -1,27 +1,10 @@
-"""Block 06 Worth: does each family belong in the network? Yes, maybe or no, with a reason, the share labels
-and the share call.
+"""Worth and labels for each family, with one Luna request per family.
 
-A family is the candidates that share a current parent; a candidate with no parent yet is a family of
-one, keyed by its own id. Only candidates with facts are judged: without facts there is no evidence.
-In order:
-
-1. Pre-matched connection is yes in code: a family whose source names all match exactly one LinkedIn
-   connection is already in the network. Its labels and share call still come from Luna.
-2. Notable position is yes in code: the same yes, with that connection's position as the reason when
-   it names a chief officer, founder, president, chair, partner or managing director.
-3. Every family gets Luna's two requests (luna.py): the labels and worth over its members' raw
-   messages (merged newest first), profile and message counts, then the share call over those labels. Worth is yes,
-   maybe or no with a reason, for every family not settled by rules 1 and 2.
-4. A family is judged once per question version, as soon as any member is (evidence.version_key):
-   new messages and merges never ask again, and a version bump asks everyone once. People's explicit
-   refresh selects its families again, reusing the exact-request cache. A family Luna refuses to
-   answer gets no row and stays pending.
-5. One worth row per member candidate, the same verdict and labels to each.
-
-Created: 2026-10-06
-Changelog:
-  2026-10-13: Luna Decisions replace JEV and its frozen worth model; request 2, the share call. A
-    family is judged once any member is under the current version: a merge no longer asks again.
+A family contains the candidates with a current parent, or one unparented candidate.
+Only families with facts are judged. An exact LinkedIn pre-match is worth yes in code;
+Luna supplies everyone's labels and everyone else's worth. One worth row is written
+per member. A family is judged once per question version; an explicit People refresh
+asks its selected families again, reusing the exact-request cache.
 """
 from __future__ import annotations
 
@@ -42,7 +25,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_worth import BundleCo
 from packs.ingestion.primitives.deep_context_v2.db import schema
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.decisions import (
-    INPUT_PRICE_PER_MILLION, Answer, cache_path, decide_all, input_tokens, request_digest,
+    INPUT_PRICE_PER_MILLION, cache_path, decide_all, input_tokens, request_digest,
 )
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
@@ -50,15 +33,10 @@ from packs.ingestion.primitives.deep_context_v2.worth.luna import ChannelSummary
 from packs.ingestion.primitives.deep_context_v2.worth.pre_match import pre_match
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 
-DECISIONS_CACHE_DIR = Path("deep-context") / "decisions"  # both requests' answers, by request digest
-# What OpenAI bills beyond a request's own text, measured on 510 families (2026-10-13): 103-108
-# tokens per question of request 1, and 33 on request 2, which before request 1 is answered is
-# priced at its measured size (617 tokens, median).
+DECISIONS_CACHE_DIR = Path("deep-context") / "decisions"  # answers by request digest
+# Measured overhead per question beyond the request text (2026-10-13).
 LABELS_TOKENS_PER_QUESTION = 107
-SHARE_EXTRA_TOKENS = 33
-SHARE_REQUEST_TOKENS = 650
 LABELS_PHASE = "Reading signals"
-SHARE_PHASE = "Deciding who to share"
 PRE_MATCHED_REASON = "Already in the network: the name matches one LinkedIn connection."
 NOTABLE_REASON_PREFIX = "Notable position: "
 DEFAULT_LIMIT = 100_000  # more families than any store has; --limit N judges the first N pending
@@ -136,7 +114,7 @@ class Worth(Node):
                 if judged.get(member.candidate_id) == fingerprint:
                     is_judged = True
             # Every family gets Luna's labels, a pre-matched one included: its worth is yes by the match, its
-            # labels and share call come from the same requests as everyone else's.
+            # labels come from the same request as everyone else's.
             member_bundles: list[CollectionBundle] = []
             for member in members:
                 row = self.conn.execute("SELECT payload_json FROM bundles WHERE candidate_id = ?",
@@ -154,8 +132,7 @@ class Worth(Node):
     def pending(self, families: list[Family]) -> list[Family]:
         """The first `limit` families no member of which has a machine worth row under this version, and
         every family People asked for again (`parent_ids`), judged or not. New facts never make a family
-        pending. Asking for a few people still brings everyone else up to the current version, so the
-        share step after it never meets labels from older questions."""
+        pending. Asking for a few people still brings everyone else up to the current version."""
         asked: frozenset[str] = frozenset(self.parent_ids)
         todo: list[Family] = []
         for family in families:
@@ -164,9 +141,7 @@ class Worth(Node):
         return todo[: self.limit]
 
     def estimate(self) -> dict[str, int | float | str]:
-        """The dry run: count families, the free yeses and Luna's requests, and price the requests not
-        yet cached as OpenAI bills them. Request 2 is known only once request 1 is answered; before
-        that it is priced at its measured size. No call."""
+        """Count families and price uncached Luna requests without making a call."""
         families: list[Family] = self.families()
         pending: list[Family] = self.pending(families)
         fresh: int = 0
@@ -184,59 +159,35 @@ class Worth(Node):
                 pre_matched += 1
                 if luna.NOTABLE_POSITION_RE.search(family.match.position):
                     notable += 1
-            first = cache_path(self.cache_dir, family.digest)
-            if not first.exists():
-                tokens += (input_tokens(family.request) + LABELS_TOKENS_PER_QUESTION * len(family.request["questions"])
-                           + SHARE_REQUEST_TOKENS)
-                continue
-            cached += 1
-            answers: list[Answer] = json.loads(first.read_text(encoding="utf-8"))["answers"]
-            if luna.refused(answers):
-                continue
-            share: dict[str, Any] = luna.share_request(luna.labels(answers))
-            if cache_path(self.cache_dir, request_digest(luna.REQUEST_VERSION, share)).exists():
+            if cache_path(self.cache_dir, family.digest).exists():
                 cached += 1
             else:
-                tokens += input_tokens(share) + SHARE_EXTRA_TOKENS
+                tokens += input_tokens(family.request) + LABELS_TOKENS_PER_QUESTION * len(family.request["questions"])
         return {
             "families": len(families), "members": members, "fresh": fresh,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,
-            "requests": 2 * len(pending), "cached": cached, "input_tokens": tokens,
+            "requests": len(pending), "cached": cached, "input_tokens": tokens,
             "estimated_cost_usd": round(tokens * INPUT_PRICE_PER_MILLION / 1_000_000, 4),
             "request_version": luna.REQUEST_VERSION,
         }
 
     def execute(self, *, cache_only: bool = False) -> dict[str, int]:
-        """Rules 1 to 5: Luna's two requests for every pending family; a pre-matched family is yes by its
-        match, the rest by Luna's worth answer; one worth row per member."""
+        """Ask Luna once per pending family and write one worth row per member."""
         todo: list[Family] = self.pending(self.families())
-        first: dict[str, dict[str, Any]] = {}  # digest -> request 1
+        requests: dict[str, dict[str, Any]] = {}  # digest -> request
         for family in todo:
-            first[family.digest] = family.request
-        answers = asyncio.run(decide_all(first, self.cache_dir, cache_only=cache_only, stage="worth_labels",
+            requests[family.digest] = family.request
+        answers = asyncio.run(decide_all(requests, self.cache_dir, cache_only=cache_only, stage="worth_labels",
                                          on_progress=lambda done, total: self.progress(LABELS_PHASE, done, total)))
-        labelled: dict[str, Labels] = {}  # family key -> request 1's labels
-        second: dict[str, dict[str, Any]] = {}  # digest -> request 2
-        share_digest: dict[str, str] = {}  # family key -> its request 2's digest
-        for family in todo:
-            if luna.refused(answers[family.digest]):
-                continue
-            labelled[family.key] = luna.labels(answers[family.digest])
-            request: dict[str, Any] = luna.share_request(labelled[family.key])
-            share_digest[family.key] = request_digest(luna.REQUEST_VERSION, request)
-            second[share_digest[family.key]] = request
-        calls = asyncio.run(decide_all(second, self.cache_dir, cache_only=cache_only, stage="share_call",
-                                       on_progress=lambda done, total: self.progress(SHARE_PHASE, done, total)))
         verdicts: dict[str, Verdict] = {}  # family key -> its verdict
         pre_matched: int = 0
         for family in todo:
-            if family.key not in labelled or luna.refused(calls[share_digest[family.key]]):
+            if luna.refused(answers[family.digest]):
                 continue
-            labels: Labels = {**labelled[family.key], **luna.labels(calls[share_digest[family.key]]),
-                              "version": luna.REQUEST_VERSION}
+            labels: Labels = {**luna.labels(answers[family.digest]), "version": luna.REQUEST_VERSION}
             labels_json: str = json.dumps(labels, sort_keys=True)
             if family.match is not None:
-                # Rules 1 and 2: already in the network, so yes; the labels are Luna's all the same.
+                # Already in the network, so yes; the labels are Luna's all the same.
                 pre_matched += 1
                 text: str = PRE_MATCHED_REASON
                 if luna.NOTABLE_POSITION_RE.search(family.match.position):
@@ -245,7 +196,6 @@ class Worth(Node):
             else:
                 decision: str = str(labels["worth"])
                 verdicts[family.key] = Verdict(decision, reason(labels, decision), labels_json)
-        # Rule 5: one row per member, the same verdict to each.
         now: str = now_iso()
         rows: list[WorthRow] = []
         for family in todo:
@@ -257,7 +207,7 @@ class Worth(Node):
                              verdict.labels_json, family.fingerprint, now))
         queries.append_worth(self.conn, rows)
         return {"families": len(todo), "pre_matched_yes": pre_matched, "refused": len(todo) - len(verdicts),
-                "requests": len(first) + len(second), "worth_rows": len(rows)}
+                "requests": len(requests), "worth_rows": len(rows)}
 
 
 def main(argv: list[str] | None = None) -> int:

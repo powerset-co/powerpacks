@@ -41,24 +41,31 @@ class FeatureFlagsTests(unittest.TestCase):
             return error.code, json.loads(error.read())
 
     def test_defaults_and_persists_without_mounting_dependencies(self) -> None:
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": False, "auto_reply": False}))
-        flags = {"sets": True, "auto_reply": True}
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": False, "auto_reply": False, "share": False}))
+        flags = {"sets": True, "auto_reply": True, "share": True}
         self.assertEqual(self.request(flags, origin=self.url.removesuffix("/api/features")),
                          (HTTPStatus.OK, flags))
         self.assertEqual(self.request(), (HTTPStatus.OK, flags))
         self.assertEqual(json.loads((self.root / ".powerpacks/desktop/features.json").read_text()), flags)
+
+    def test_saved_flags_without_share_preserve_existing_features(self) -> None:
+        path = self.root / ".powerpacks/desktop/features.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"sets": true, "auto_reply": true}')
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": True, "auto_reply": True, "share": False}))
 
     def test_malformed_saved_flags_are_off(self) -> None:
         path = self.root / ".powerpacks/desktop/features.json"
         path.parent.mkdir(parents=True)
         for text in ("invalid", '{"sets": true, "auto_reply": "true"}', '{"auto_reply": true}'):
             path.write_text(text)
-            self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": False, "auto_reply": False}))
+            self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": False, "auto_reply": False, "share": False}))
 
     def test_rejects_incomplete_or_non_boolean_flags_and_cross_origin_writes(self) -> None:
         for payload in ({"sets": True}, {"sets": True, "auto_reply": "true"},
                         {"sets": 1, "auto_reply": False}, [True, False],
-                        {"sets": True, "auto_reply": True, "other": False}):
+                        {"sets": True, "auto_reply": True, "share": "true"},
+                        {"sets": True, "auto_reply": True, "share": True, "other": False}):
             self.assertEqual(self.request(payload)[0], HTTPStatus.BAD_REQUEST)
         self.assertEqual(self.request({"sets": True, "auto_reply": True}, origin="https://example.com")[0],
                          HTTPStatus.FORBIDDEN)

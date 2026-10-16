@@ -47,7 +47,7 @@ from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review.commit import commit_review
-from packs.ingestion.primitives.share.share_list import Share
+from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import DEFAULT_LIMIT as SYNTHESIZE_LIMIT
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
@@ -171,7 +171,7 @@ def realize(data_root: Path) -> Path:
     conn: sqlite3.Connection = open_store(store_path(data_root))
     node = Realize(conn, data_root)
     _stage("realize", node)
-    _stage("share", Share(conn, data_root))  # the share list over everything confirmed so far: free, seconds
+    _stage("labels", PersonLabels(conn, data_root))
     conn.close()
     print(f"people.csv: {node.people_csv()}", flush=True)
     return node.people_csv()

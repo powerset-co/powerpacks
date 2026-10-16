@@ -6,7 +6,7 @@ import { useFeatures, useUpdateFeatures } from "./features"
 
 function Controls() {
   const update = useUpdateFeatures()
-  return <button onClick={() => update.mutate({ sets: true, auto_reply: true })}>Enable</button>
+  return <button onClick={() => update.mutate({ sets: true, auto_reply: true, share: false })}>Enable</button>
 }
 
 function Consumer() {
@@ -64,7 +64,7 @@ it("updates other consumers only after settings are saved", async () => {
   expect(fetch).toHaveBeenLastCalledWith("/api/features", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sets: true, auto_reply: true }),
+    body: JSON.stringify({ sets: true, auto_reply: true, share: false }),
   })
 })
 

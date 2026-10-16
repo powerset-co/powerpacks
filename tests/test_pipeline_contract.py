@@ -481,8 +481,6 @@ class WholeDeclaredGraphTests(unittest.TestCase):
                 ("enrich_merge_people", ".powerpacks/network-import/enrichment/people.csv"),
                 ("gmail_stage_merge", ".powerpacks/network-import/discover/gmail/linkedin_resolution_queue.csv"),
                 ("linkedin_import", ".powerpacks/network-import/discover/linkedin/people.csv"),
-                # share declares no file outputs: its products are the
-                # person_labels and share tables, read by upload_powerset.
             ],
         )
 

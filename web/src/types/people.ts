@@ -6,16 +6,17 @@ export type LastBucket = (typeof LAST)[number]
 export const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "Inner circle (3–4)"] as const
 export type WarmthBucket = (typeof WARMTH)[number]
 
-export type Decision = "yes" | "no"
-
-/** The decision tabs, in page order. */
-export const ORDER: readonly Decision[] = ["yes", "no"]
-
 /** The worth call; "" when no one judged it. */
 export type Worth = "yes" | "maybe" | "no" | ""
 
-/** Who made a call. A share row always has one (labels.py `share_decision`); worth may have
- *  none, so `worth_source` adds "" (model.py `_worth_source`). */
+/** The Worth select's values: everyone, each worth call, or no call yet. */
+export type WorthTab = "all" | "yes" | "maybe" | "no" | "unjudged"
+export const WORTH_TABS: readonly WorthTab[] = ["all", "yes", "maybe", "no", "unjudged"]
+
+/** The tab a person's worth puts them under. */
+export const worthTab = (worth: Worth): Exclude<WorthTab, "all"> => worth || "unjudged"
+
+/** Who made the worth call; "" when no one has (model.py `_worth_source`). */
 export type DecidedBy = "human" | "machine"
 
 /** One list row per parent (`SharePerson`), plus the fields the page derives on load. */
@@ -45,9 +46,7 @@ export interface Person {
   warmth: number | null
   labels: string[]
   flag: string
-  share: Decision
   reason: string
-  share_source: DecidedBy
   tags: string[]
   is_owner: boolean
   linkedin_only: boolean
@@ -97,9 +96,7 @@ export const PERSON_COLUMNS = [
   "warmth",
   "labels",
   "flag",
-  "share",
   "reason",
-  "share_source",
   "tags",
   "is_owner",
   "linkedin_only",
@@ -154,17 +151,11 @@ export interface PersonDetail {
   phones: string[]
 }
 
-/** POST /api/people/tags entry: the tags one parent should hold (absolute set). */
-export interface TagChange {
+/** POST /api/people/worth result row: one parent after the human's worth call. */
+export interface WorthResult {
   parent_id: string
-  tags: string[]
-}
-
-/** POST /api/people/tags result row: the re-decided share for one parent. */
-export interface TagResult {
-  parent_id: string
-  share: Decision
+  worth: Worth
+  worth_source: DecidedBy | ""
   reason: string
-  share_source: DecidedBy
   tags: string[]
 }

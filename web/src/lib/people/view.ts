@@ -1,12 +1,12 @@
 // The People view (tab, facet selections, search text, sort) in query parameters.
 
-import { ORDER, type Decision } from "@/types/people"
+import { WORTH_TABS, type WorthTab } from "@/types/people"
 
 import { FACETS, isSortKey, type FacetFilters, type Sort } from "./facets"
 
-/** The Sharing select: everyone, or one decision. */
-export type Tab = Decision | "all"
-export const TABS: readonly Tab[] = ["all", ...ORDER]
+/** The Worth select: everyone, one worth call, or no call yet. */
+export type Tab = WorthTab
+export const TABS: readonly Tab[] = WORTH_TABS
 
 export interface PeopleView {
   tab: Tab

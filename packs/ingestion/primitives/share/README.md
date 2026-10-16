@@ -1,88 +1,37 @@
-# Share
+# People labels and upload
 
-Worth produces machine labels and a share call (OpenAI's Luna Decisions, `worth/luna.py`).
-Share projects those saved labels, applies human tags, and builds the upload list. It makes no paid
-calls and writes no file state: the labels, the share list, and the human tags
-are tables in the canonical store.
+Worth asks Luna once per family for worth and labels. The free `labels` node exports
+those saved labels to `person_labels`. Human worth and tags stay in their own tables.
 
 ```mermaid
 flowchart LR
-  F[worth: Luna labels + share call] --> PL[person_labels table]
-  P[people.csv] --> E[evidence join]
-  DB[(deep-context.sqlite)] --> E
-  E --> PL
-  E --> S[share table]
-  T[person_tags table: the human's word] --> S
-  PL -->|flag| S
+  W[worth + Luna labels] --> L[labels node]
+  E[family facts + counts] --> L
+  L --> PL[(person_labels)]
+  PL --> P[People page]
+  HW[(human worth)] --> P
+  T[(person_tags)] --> P
+  PL --> U[upload list]
+  HW --> U
 ```
-
-```bash
-bin/deep-context-v2 share       # the tables
-bin/deep-context-v2 review      # the page server; the People page is /people: tag people share / private in bulk
-```
-
-`share` is the stage's one node (`share_list.ShareList`, declared in
-`pipeline/graph.py`): one pass writes `person_labels` and `share` for every merged
-person, so the list can never be partial. A context-bearing person without saved
-labels must complete worth first. LinkedIn-only people get
-deterministic labels. Human tags are never changed by machine labeling.
-
-Its `manifest.json` (`ShareManifest`) is `completed` when both tables are
-rewritten, or `failed` when a context-bearing person has no saved labels (the
-write is skipped).
-
-| declared reads | declared writes | manifest |
-|---|---|---|
-| `merged/people.csv` (external), `deep-context/deep-context.sqlite` (external) | — (tables `person_labels` + `share`; no file outputs) | `share/manifest.json` (`ShareManifest`) |
 
 | File | Role | Reads | Writes |
 |---|---|---|---|
-| `questions.py` | The label questions (3 choices, warmth, 28 yes/no) and the share question Luna answers in worth | — | — |
-| `models.py` | Typed evidence, label cells, the manifest path | — | — |
-| `evidence.py` | Join the roster to parents, facts, dossiers, bundles | people.csv, `deep-context.sqlite` | — |
-| `labels.py` | Saved labels, the flags that keep a family home, sharing policy | saved labels | — |
-| `store.py` | `TagStore`: the human's tags | `person_tags` | `person_tags` |
-| `share_list.py` | The `share` node: labels + share list in one pass | evidence, `person_tags` | `person_labels`, `share`, manifest.json |
-| `share.py` | CLI | command arguments | command results |
-| `web/model.py` | `SharePeople`: one typed row per parent (the roster people merged under it) for the People page | people.csv, `share`, `person_labels`, `person_tags`, `parents`, `facts`, dossier artifacts | — |
-| `web/server.py` | `ShareRoutes` (mounted in the review server at `/api/people/*`, after `packs/shared/web/app.py` serves the React app: People at `http://127.0.0.1:8765/people`, Searches at `/searches` and `/searches/run?run_id=<slug>`) and a standalone server for tests | the rows | `person_tags` + `share` in one transaction (`Db.decide_share`) |
-| `web/vendor/` | the vendored row virtualizer the legacy results page imports (`packs/shared/web/virtual-table.js`, served by `results_web/server.py` for the hosted snapshot) | — | — |
+| `questions.py` | Luna label questions | — | — |
+| `models.py` | Typed family evidence, labels and tags | — | — |
+| `evidence.py` | Join family facts, worth and message counts | v2 store, profile cache | — |
+| `labels.py` | Label helpers and family/partner/minor flags | saved labels | — |
+| `person_labels.py` | Free `labels` node | family evidence | `person_labels`, `deep-context/v2-manifests/labels.json` |
+| `store.py` | Human tags and the upload list | `person_tags`, `person_labels`, effective worth | — |
+| `web/model.py` | People rows and details | v2 store, realized rows | — |
+| `web/server.py` | People routes | rows | human worth, human tags |
+| `web/signals.py` | Refresh worth and label exports | saved evidence, Decisions cache | worth, `person_labels` |
+| `web/upload.py` | Upload status and execution | upload list, upload manifest | upload manifest |
 
-## Tables
+The upload list contains effective worth yes, human over machine. The owner is excluded.
+Family, partner and minor flags exclude a family unless a human set its worth.
 
-One row per person in each; the node rewrites both in one transaction.
-
-- `person_labels` — `person_id, public_identifier, full_name, worth, flag,
-  labels_json, updated_at`. `labels_json` is the flat export (`label_payload`),
-  deterministic cells alone for a LinkedIn-only person.
-- `share` — `person_id, public_identifier, share, reason, labels, source,
-  updated_at`. `labels` is the active labels joined with `|`; `source` is `human`
-  when a human's tag decided the row, `machine` otherwise.
-- `person_tags` — the human's table. No node writes it; the People page does
-  (`web/server.decide_tags`), one absolute tag set per selected person, and in
-  the same transaction re-decides those people's `share` rows through
-  `labels.share_decision` from `person_labels` (`labels.label_row_from_export`),
-  so the upload never reads a tag the decision does not yet reflect. The node's
-  next run writes identical rows.
-
-## The share decision
-
-`share.share` is `yes | no`; the first rule that fires names the row's `reason`:
-
-| # | Rule | share | reason |
-|---|---|---|---|
-| 1 | the owner | no | `owner` |
-| 2 | human tag `private` | no | `human_private` |
-| 3 | human tag `share` | yes | `human_share` |
-| 4 | worth `no` | no | `worth_no` |
-| 5 | worth not `yes` (maybe / unjudged) | no | `worth_maybe` |
-| 6 | a flag keeps them home | no | `family`, `romantic_partner` or `minor` |
-| 7 | Luna's call `keep_private`, at any confidence | no | `not_professional` |
-| 8 | otherwise: Luna's call `share`, or no call | yes | `would_vouch` |
-
-Luna's share call (worth's request 2) reads every label and its confidence; its keep-private
-option spells out the easy no's: the owner's clinician, lawyer, accountant or lender, HR and
-benefits contacts, support and billing desks, landlords and vendors, automated senders and
-strangers. Nobody is asked to confirm a call: a wrong share is undone with a `private` tag,
-which the UI records through `TagStore`. Tags follow merged identities through
-`superseded_person_ids`.
+`POST /api/people/worth` takes `{ids: [parent_id], worth: "yes" | "no"}` and records
+human worth for every member. `POST /api/people/tags` keeps the human's boolean labels.
+Both return updated People rows. The upload feature flag hides the button on the page;
+the upload routes remain available.

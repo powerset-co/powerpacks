@@ -1,14 +1,12 @@
-"""The label questions Luna answers about one person, and the share question it answers from
-those labels, in the Decisions API's typed shapes.
+"""The label questions Luna answers about one person, in the Decisions API's typed shapes.
 
 Request 1 (worth/luna.py) asks `label_questions()` with worth's own questions over the person's
 state: their raw messages, profile, message counts and the owner's background.
-Request 2 asks `SHARE_QUESTION` over request 1's answers.
 
 Changelog:
   2026-10-13: Luna Decisions replace JEV. mode, hierarchy, seniority and sensitive_context are gone;
     is_hr_benefits_or_payroll and is_support_billing_or_landlord are new; the dossier left the input
-    (it repeated the facts line by line); relationship_kind asks about now; the share question.
+    (it repeated the facts line by line); relationship_kind asks about now.
   2026-09-25: dropped the unread REQUEST_VERSION; jev_worth/questions.py owns the version.
   2026-09-24: assembled the request state here and kept one version.
   2026-09-24: created.
@@ -137,30 +135,6 @@ NOUL_QUESTIONS: dict[str, str] = {
                                   "`channels`?",
     "met_in_person": "Have the owner and this contact met in person, per `messages`?",
     "notable": "Is this contact publicly notable in their field, per `profile.headline` and `messages`?",
-}
-
-# Request 2: from request 1's answers alone, who leaves the laptop. share_decision (labels.py)
-# reads the call: share is Sharing, keep_private is Not sharing, and a weak call of either asks the
-# owner. There is no ask option: offered one, Luna took it for most business contacts (2026-10-13).
-CALL_SHARE = "share"
-CALL_KEEP_PRIVATE = "keep_private"
-SHARE_QUESTION: dict[str, Any] = {
-    "type": "choice",
-    "name": "share_call",
-    "instructions": "These are signals about one contact of the owner's, each with its confidence. Does this "
-                    "contact belong in the professional network the owner shares with teammates, or is it one "
-                    "of the contacts to keep private?",
-    "choices": [
-        {"value": CALL_SHARE, "description": "Someone the owner knows through work, school or a real "
-                                          "professional tie: colleagues and classmates, clients, partners, "
-                                          "investors, founders, people they interviewed or hired with, recruiters "
-                                          "(even one who only reached out or scheduled an interview), and friends "
-                                          "with a work side or real professional standing."},
-        {"value": CALL_KEEP_PRIVATE, "description": "A contact to keep private: the owner's dentist, doctor, lawyer, "
-                                                 "accountant or lender; HR, benefits, payroll or IT met as an "
-                                                 "employee; support and billing desks, landlords and vendors' account "
-                                                 "managers; automated senders, strangers and cold sales pitches."},
-    ],
 }
 
 CHOICE_LABELS = tuple(CHOICE_QUESTIONS)

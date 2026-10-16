@@ -6,9 +6,6 @@ Change log:
 - 2026-10-09: share namespaces are `powerpacks_<name>_<version>`, set by
   `POWERPACKS_SHARE_INDEX_VERSION`; `$search` keeps the `aleph_` ones.
 - 2026-10-08: the upload writes the isolated share_v1 family, not v3.
-- 2026-09-24: read the share list from the store's `share` table, not share.csv.
-- 2026-09-24: `share.share` is three-way; only `yes` uploads and only a
-  human's `private` becomes a cloud tag.
 - 2026-09-24: first version.
 
 Makes the Powerset cloud state for ONE operator equal the local share list.
@@ -16,44 +13,42 @@ Reconcile, not append: a person dropped from the share list loses this operator'
 source rows and is patched out of `allowed_operator_ids`. Documents are never
 deleted, and no cloud-enriched value is ever overwritten with a local one.
 
-`share.share` is `yes | no | confirm` in
-`.powerpacks/deep-context/deep-context.sqlite`. Only `yes` is shared: a `confirm` row
-is a question waiting for a human, so it uploads nothing and tags nothing, and
-un-shares like any other non-`yes` row.
+The upload list reads effective worth from the local v2 store: yes only, human over
+machine. The owner is excluded; family, partner and minor flags exclude a family
+unless a human set its worth. Human tags stay local.
 
 `--dry-run` is the default and only reads. `--apply` writes.
 
 ```mermaid
 flowchart TD
-  share[("store: share table")] --> plan
+  share[("store: worth + person_labels")] --> plan
   people["merged/people.csv"] --> plan
   duck["search-index/local-search.duckdb"] --> plan
-  pg[("Postgres: persons, operator_person_sources, contact_tags")] --> plan
+  pg[("Postgres: persons, operator_person_sources")] --> plan
   tp[("TurboPuffer: 5 namespaces")] --> plan
   plan["plan.build_plan (pure)"] --> dry["--dry-run: manifest only"]
   plan --> apply["--apply"]
   apply --> pgw[("persons upsert -> sources upsert/delete")]
   pgw --> allowed["re-read allowed_operator_ids"]
   allowed --> tpw[("new people: upsert docs / known people: patch allowed_operator_ids")]
-  tpw --> tags[("contact_tags put/delete")]
-  tags --> manifest[".powerpacks/upload-powerset/manifest.json"]
+  tpw --> manifest[".powerpacks/upload-powerset/manifest.json"]
 ```
 
 | file | role | reads | writes |
 | --- | --- | --- | --- |
-| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns the people.csv read, the share-table read, and the stage manifest | share table, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
+| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns the people.csv read, the worth-list read, and the stage manifest | worth, person_labels, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
 | `local_index.py` | local DuckDB readers for profiles and namespace documents | local-search.duckdb | — |
 | `models.py` | frozen value types + the channel/identifier table | — | — |
 | `plan.py` | pure reconcile: local + cloud -> `UploadPlan` | — | — |
-| `postgres.py` | every SQL statement, each taking a cursor | `persons`, `operator_person_sources`, `contact_tags`, `users` | the same three tables |
+| `postgres.py` | every SQL statement, each taking a cursor | `persons`, `operator_person_sources`, `users` | persons and sources |
 | `turbopuffer_writer.py` | namespace definitions and reads, 500-row upserts, `allowed_operator_ids` patches | the 5 namespaces | the 5 namespaces |
 
 ## What the plan decides
 
-- `persons_upsert` — `share=yes` people that have a LinkedIn `public_identifier`.
+- `persons_upsert` — eligible people that have a LinkedIn `public_identifier`.
   The SQL is the cloud pipeline's own COALESCE upsert
   (`sync_persons_to_supabase.py`), so a laptop value never replaces a cloud one.
-- `skipped_no_linkedin` — `share=yes` people without a slug. `persons.public_identifier`
+- `skipped_no_linkedin` — eligible people without a slug. `persons.public_identifier`
   is UNIQUE and the cloud has no non-LinkedIn person key, so they stay local.
 - `sources_insert` — every DESIRED `operator_person_sources` row, one per
   (person, channel). The statement is an upsert, so re-sending an unchanged row
@@ -69,10 +64,6 @@ flowchart TD
   ones. Only `allowed_operator_ids` is written, on every document the CLOUD
   holds for that person, so an un-share also reaches documents this laptop
   never had.
-- `tags_put` / `tags_delete` — `contact_tags(tag='private')` keyed by
-  `group_key = public_identifier`, mirroring `PUT/DELETE /v2/contacts/tags`. Only
-  a `human_private` reason puts one, and only a `human_share` reason deletes one:
-  the cloud tag is a human decision on both sides.
 
 ## Facts the code depends on (read 2026-09-24)
 

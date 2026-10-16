@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Push the shared slice of the local search index to Powerset (the cloud hub).
 
-Flow: read the canonical store's `share` table + merged/people.csv +
+Flow: read eligible people from the canonical store + merged/people.csv +
 local-search.duckdb -> read the cloud
 state for those people (persons rows, this operator's powerpacks source rows,
-every operator that can see them, this operator's private tags, which
+every operator that can see them, which
 company/school docs already exist) -> plan.build_plan reconciles the two ->
 --dry-run emits the plan and stops; --apply upserts persons, reconciles
 operator_person_sources, re-reads the authoritative allowed_operator_ids, writes
-or patches the five TurboPuffer namespaces, then puts/deletes contact_tags.
+or patches the five TurboPuffer namespaces.
 The People route requires an unchanged completed check before applying. The CLI
 keeps its explicit --apply path. Either way one manifest lands in
 .powerpacks/upload-powerset/.
@@ -29,7 +29,6 @@ Changelog:
   2026-09-27: read os.environ only; .env is loaded once by the caller's entry point.
   2026-09-27: bind real runs to checked decisions and target; report typed stages.
   2026-09-24: read the share list from SQLite, not share.csv.
-  2026-09-24: shared = the three-way share value `yes`; `confirm` rows stay home.
   2026-09-24: created; delegated local reads and centralized namespace contracts.
 """
 
@@ -62,9 +61,8 @@ from powerpacks_contracts import TURBOPUFFER_NAMESPACES  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import now_iso  # noqa: E402
 from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH  # noqa: E402
 from packs.ingestion.primitives.deep_context_v2.openai import load_env  # noqa: E402
-from packs.ingestion.primitives.share.models import ShareDecisionRow  # noqa: E402
+from packs.ingestion.primitives.share.models import PersonLabelRow  # noqa: E402
 from packs.ingestion.primitives.share.store import share_rows as read_share_rows  # noqa: E402
-from packs.ingestion.schemas.share_schema import SHARE_YES  # noqa: E402
 from packs.indexing.lib.identity import stable_person_id  # noqa: E402
 from packs.indexing.primitives.upload_powerset import local_index, postgres, turbopuffer_writer  # noqa: E402
 from packs.indexing.primitives.upload_powerset.models import (  # noqa: E402
@@ -179,8 +177,7 @@ class UploadPowerset:
         share_rows = tuple(replace(row, person_id=stable_person_id(public_identifier=row.public_identifier))
                            if row.public_identifier else row for row in stored)
         current = current.at(Stage.CHECKING_ACCESS, share_digest=digest, progress={
-            **current.progress, "total": sum(row.share == SHARE_YES and bool(row.public_identifier)
-                                                for row in share_rows)})
+            **current.progress, "total": sum(bool(row.public_identifier) for row in share_rows)})
         current.write(self.manifest_path)
         people: dict[str, LocalPerson] = {}
         for person in (LocalPerson.from_csv_row(row) for row in CsvIO.read_dict_rows(self.people_csv)):
@@ -241,7 +238,7 @@ class UploadPowerset:
                         con, plan.persons_upsert)
                     preview["schools_skipped_no_row"] = local_index.count_missing_schools(
                         con, plan.persons_upsert)
-                    preview.update(marked_share=sum(row.share == SHARE_YES for row in share_rows),
+                    preview.update(marked_share=len(share_rows),
                                    with_linkedin=len(plan.persons_upsert),
                                    without_linkedin=len(plan.skipped_no_linkedin),
                                    new_to_cloud=len(newly_owned), changed=len(rewritten),
@@ -282,13 +279,11 @@ class UploadPowerset:
         current.write(self.manifest_path)
         return asdict(current) | {"manifest": str(self.manifest_path)}
 
-    def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[ShareDecisionRow, ...],
+    def _plan(self, con: Any, cur: Any, operator_id: str, share_rows: tuple[PersonLabelRow, ...],
               people: dict[str, LocalPerson]) -> UploadPlan:
         UploadManifest.read(self.manifest_path).at(Stage.CHECKING_PEOPLE).write(self.manifest_path)
         with_slug = [row for row in share_rows if row.public_identifier]
-        shared_ids = sorted(row.person_id for row in with_slug if row.share == SHARE_YES)
-        # Every slug, shared or not: a private person the cloud already has is
-        # the one who needs the tag.
+        shared_ids = sorted(row.person_id for row in with_slug)
         cloud_ids = postgres.fetch_cloud_ids_by_slug(cur, sorted(row.public_identifier for row in with_slug))
         cloud_id_by_person = {
             row.person_id: cloud_ids[row.public_identifier] for row in with_slug if row.public_identifier in cloud_ids
@@ -310,7 +305,6 @@ class UploadPowerset:
             operator_source_keys=postgres.fetch_operator_source_keys(cur, operator_id),
             operator_ids_by_person=postgres.fetch_operator_ids_by_person(
                 cur, sorted(cloud_id_by_person.get(person_id, person_id) for person_id in shared_ids)),
-            private_tag_keys=postgres.fetch_private_tag_keys(cur, operator_id),
             present_entity_ids=present_entity_ids,
         )
         return build_plan(
@@ -332,8 +326,6 @@ class UploadPowerset:
         persons_upserted = postgres.upsert_persons(cur, profiles)
         sources_inserted = postgres.upsert_sources(cur, plan.operator_id, plan.sources_insert)
         sources_deleted = postgres.delete_sources(cur, plan.operator_id, plan.sources_delete)
-        tags_put = postgres.put_tags(cur, plan.operator_id, plan.tags_put)
-        tags_deleted = postgres.delete_tags(cur, plan.operator_id, plan.tags_delete)
 
         # The plan's allowed map is keyed by cloud id; re-read those after the writes.
         touched = sorted(plan.allowed_operator_ids)
@@ -425,8 +417,6 @@ class UploadPowerset:
             persons_upserted=persons_upserted,
             sources_inserted=sources_inserted,
             sources_deleted=sources_deleted,
-            tags_put=tags_put,
-            tags_deleted=tags_deleted,
             docs_upserted=docs_upserted,
             docs_patched=docs_patched,
         )
@@ -442,7 +432,6 @@ def plan_preview(plan: UploadPlan) -> dict[str, Any]:
                                       for row in plan.sources_insert[:PREVIEW_IDS]]
     preview["sources_delete_keys"] = [f"{row.person_id}:{row.source_channel}"
                                       for row in plan.sources_delete[:PREVIEW_IDS]]
-    preview["tags_put_person_ids"] = [row.person_id for row in plan.tags_put[:PREVIEW_IDS]]
     preview["namespace_ids"] = {
         ns.logical: {"upsert": list(ns.upsert_ids[:PREVIEW_IDS]), "patch": list(ns.patch_person_ids[:PREVIEW_IDS])}
         for ns in plan.namespaces
@@ -455,7 +444,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--share-db", default=str(DEFAULT_SHARE_DB),
-                        help="canonical deep-context store holding the share table")
+                        help="canonical deep-context store holding worth and labels")
     parser.add_argument("--people-csv", default=str(DEFAULT_PEOPLE_CSV))
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--operator-id", default=None, help="override the credentials-derived users.id")

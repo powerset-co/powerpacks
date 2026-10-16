@@ -25,22 +25,14 @@ from packs.indexing.primitives.upload_powerset.models import (
     CloudState,
     LocalPerson,
     SourceRow,
-    TagRow,
 )
 from packs.indexing.primitives.upload_powerset.plan import build_plan
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.primitives.deep_context_v2.db import queries, queries_share
+from packs.ingestion.primitives.deep_context_v2.db import queries, queries_review
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
-from packs.ingestion.primitives.share.models import ShareDecisionRow
-from packs.indexing.primitives.upload_powerset.manifest import UploadManifest
-from packs.ingestion.schemas.share_schema import (
-    FAMILY,
-    HUMAN_PRIVATE,
-    HUMAN_SHARE,
-    SHARE_NO,
-    SHARE_YES,
-    WORTH_NO,
-)
+from packs.ingestion.primitives.share.models import PersonLabelRow
+from packs.ingestion.primitives.share.store import share_rows as read_share_rows
+from packs.indexing.primitives.upload_powerset.manifest import UploadManifest, share_digest
 
 OPERATOR = "00000000-0000-0000-0000-0000000000aa"
 OTHER_OPERATOR = "00000000-0000-0000-0000-0000000000bb"
@@ -68,13 +60,13 @@ CLOUD_PERSONS_COLUMNS = [
 ]
 
 
-def share_row(person_id: str, slug: str, *, share: str = SHARE_YES, reason: str = "",
-              labels: str = "") -> ShareDecisionRow:
-    return ShareDecisionRow(person_id, slug, share, reason, labels, "machine", "2026-09-24T00:00:00Z")
+def share_row(person_id: str, slug: str, *, worth: str = "yes", flag: str = "",
+              labels: str = "{}") -> PersonLabelRow:
+    return PersonLabelRow(person_id, slug, "Synthetic Person", worth, flag, labels, "2026-09-24T00:00:00Z")
 
 
-def share_db(root: Path, rows: list[ShareDecisionRow]) -> Path:
-    """A v2 store whose `share` table carries `rows`: one candidate per person, each its own parent."""
+def share_db(root: Path, rows: list[PersonLabelRow]) -> Path:
+    """A v2 store with one machine worth and person_labels row per parent."""
     path = root / "deep-context-v2.sqlite"
     conn = open_store(path)
     now = "2026-09-24T00:00:00Z"
@@ -82,9 +74,17 @@ def share_db(root: Path, rows: list[ShareDecisionRow]) -> Path:
     queries.upsert_candidates(conn, [(person_id, f"Person {index}", 0, "{}", now) for index, person_id in enumerate(people)])
     conn.executemany("INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, ?, 'singleton', NULL, ?)",
                      [(person_id, person_id, now) for person_id in people])
+    conn.executemany(
+        "INSERT INTO person_labels (candidate_id, public_identifier, full_name, worth, flag, labels_json, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(row.person_id, row.public_identifier, row.full_name, row.worth, row.flag, row.labels_json, row.updated_at) for row in rows],
+    )
+    conn.executemany(
+        "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
+        "VALUES (?, ?, 'machine', 'synthetic', '{}', 'synthetic', ?)",
+        [(row.person_id, row.worth, now) for row in rows],
+    )
     conn.commit()
-    queries_share.replace_share(conn, [], [(row.person_id, row.public_identifier or "", row.share, row.reason, row.labels,
-                                            row.source, row.updated_at) for row in rows])
     conn.close()
     return path
 
@@ -106,7 +106,6 @@ def cloud_state(**kwargs) -> CloudState:
         cloud_id_by_person=kwargs.pop("cloud_id_by_person", {}),
         operator_sources=kwargs.pop("operator_sources", ()),
         operator_ids_by_person=kwargs.pop("operator_ids_by_person", {}),
-        private_tag_keys=kwargs.pop("private_tag_keys", frozenset()),
         operator_source_keys=kwargs.pop("operator_source_keys", frozenset()),
         present_entity_ids=kwargs.pop("present_entity_ids", {}),
     )
@@ -204,6 +203,63 @@ class ShareFamilyTests(unittest.TestCase):
             upload_powerset.share_version()
 
 
+class UploadEligibilityTests(unittest.TestCase):
+    def test_effective_worth_owner_and_flags_determine_upload_list(self):
+        rows = [share_row("yes", "yes"), share_row("no", "no", worth="no"),
+                share_row("maybe", "maybe", worth="maybe"),
+                share_row("owner", "owner"),
+                share_row("label-owner", "label-owner", labels='{"is_owner":true}'),
+                share_row("human-no", "human-no")]
+        for flag in ("family", "romantic_partner", "minor"):
+            rows.extend([share_row(flag, flag, flag=flag),
+                         share_row(f"human-{flag}", f"human-{flag}", worth="no", flag=flag)])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = share_db(Path(tmp), rows)
+            conn = open_store(path)
+            conn.execute("UPDATE candidates SET is_owner = 1 WHERE candidate_id = 'owner'")
+            queries_review.insert_worth(conn, "owner", "yes", "human", "2026-10-16T00:00:00Z")
+            queries_review.insert_worth(conn, "human-no", "no", "human", "2026-10-16T00:00:00Z")
+            for flag in ("family", "romantic_partner", "minor"):
+                queries_review.insert_worth(conn, f"human-{flag}", "yes", "human", "2026-10-16T00:00:00Z")
+            conn.commit()
+            conn.close()
+            eligible = read_share_rows(path)
+        self.assertEqual({row.person_id for row in eligible},
+                         {"yes", "human-family", "human-romantic_partner", "human-minor"})
+        self.assertTrue(all(row.worth == "yes" for row in eligible))
+
+    def test_flags_and_owner_apply_to_every_member_of_a_merged_family(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = share_db(Path(tmp), [share_row("one", "jordan-bravo", flag="family"),
+                                       share_row("two", "jordan-bravo")])
+            conn = open_store(path)
+            queries_review.insert_parent(conn, "two", "one", "human", None, "2026-10-16")
+            conn.commit()
+            self.assertEqual(read_share_rows(path), ())
+            queries_review.insert_worth(conn, "two", "yes", "human", "2026-10-16")
+            conn.commit()
+            self.assertEqual([row.person_id for row in read_share_rows(path)], ["one"])
+            conn.execute("UPDATE person_labels SET labels_json = '{\"is_owner\":true}' WHERE candidate_id = 'two'")
+            conn.commit()
+            self.assertEqual(read_share_rows(path), ())
+            conn.close()
+
+
+class UploadDigestTests(unittest.TestCase):
+    def test_labels_and_timestamps_do_not_change_digest(self):
+        row = share_row(NEW_PERSON, "jordan-bravo")
+        updated = replace(row, full_name="Updated Name", worth="yes", flag="family",
+                          labels_json='{"is_family":1}', updated_at="2026-10-16T00:00:00Z")
+        self.assertEqual(share_digest((row,)), share_digest((updated,)))
+
+    def test_only_eligible_people_and_identifiers_change_digest(self):
+        row = share_row(NEW_PERSON, "jordan-bravo")
+        other = share_row(CLOUD_PERSON, "casey-lane")
+        self.assertEqual(share_digest((row, other)), share_digest((other, row)))
+        self.assertNotEqual(share_digest((row,)), share_digest((row, other)))
+        self.assertNotEqual(share_digest((row,)), share_digest((replace(row, public_identifier="new-slug"),)))
+
+
 class PlanBucketTests(unittest.TestCase):
     def test_missing_local_company_row_is_not_planned_for_upload(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -256,7 +312,7 @@ class PlanBucketTests(unittest.TestCase):
     def test_unshared_person_deletes_sources_and_joins_the_patch_list(self):
         stale = SourceRow(STALE_PERSON, "gmail", "casey@example.com", 3, "")
         plan = plan_for(
-            [share_row(STALE_PERSON, "casey-lane", share=SHARE_NO, reason=WORTH_NO)],
+            [],
             [local_person(STALE_PERSON, "casey-lane")],
             cloud_state(operator_sources=(stale,), operator_ids_by_person={STALE_PERSON: (OPERATOR, OTHER_OPERATOR)}),
         )
@@ -265,52 +321,7 @@ class PlanBucketTests(unittest.TestCase):
         self.assertEqual(summaries.patch_person_ids, (STALE_PERSON,))
         self.assertEqual(plan.allowed_operator_ids[STALE_PERSON], (OTHER_OPERATOR,))
 
-    def test_a_family_kept_home_is_neither_uploaded_nor_tagged(self):
-        stale = SourceRow(CLOUD_PERSON, "gmail", "casey@example.com", 3, "")
-        plan = plan_for(
-            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=FAMILY)],
-            [local_person(CLOUD_PERSON, "casey-lane")],
-            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}, operator_sources=(stale,)),
-        )
-        self.assertEqual(plan.persons_upsert, ())
-        self.assertEqual(plan.sources_insert, ())
-        self.assertEqual(plan.sources_delete, (stale,))
-        self.assertEqual(plan.tags_put, ())
-
-    def test_private_person_in_cloud_gets_a_tag_and_an_un_privated_one_loses_it(self):
-        plan = plan_for(
-            [
-                share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=HUMAN_PRIVATE),
-                share_row(NEW_PERSON, "jordan-bravo"),
-            ],
-            [local_person(CLOUD_PERSON, "casey-lane"), local_person(NEW_PERSON, "jordan-bravo")],
-            cloud_state(
-                cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON},
-                private_tag_keys=frozenset({"casey-lane", "jordan-bravo", "someone-cloud-only"}),
-            ),
-        )
-        self.assertEqual(plan.tags_put, ())
-        # jordan-bravo's local decision is a machine one, so the cloud tag (a
-        # human's word in the Powerset UI) stays; someone-cloud-only is not ours at all.
-        self.assertEqual(plan.tags_delete, ())
-
-    def test_a_human_share_tag_drops_the_cloud_private_tag(self):
-        plan = plan_for(
-            [share_row(NEW_PERSON, "jordan-bravo", reason=HUMAN_SHARE)],
-            [local_person(NEW_PERSON, "jordan-bravo")],
-            cloud_state(private_tag_keys=frozenset({"jordan-bravo", "someone-cloud-only"})),
-        )
-        self.assertEqual([row.group_key for row in plan.tags_delete], ["jordan-bravo"])
-
-    def test_a_machine_no_never_tags_the_cloud(self):
-        plan = plan_for(
-            [share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=WORTH_NO)],
-            [local_person(CLOUD_PERSON, "casey-lane")],
-            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
-        )
-        self.assertEqual(plan.tags_put, ())
-
-    def test_a_cloud_minted_id_is_used_for_sources_tags_and_patches(self):
+    def test_a_cloud_minted_id_is_used_for_sources_and_patches(self):
         cloud_minted = "99999999-9999-4999-8999-999999999999"
         plan = plan_for(
             [share_row(CLOUD_PERSON, "casey-lane")],
@@ -323,14 +334,6 @@ class PlanBucketTests(unittest.TestCase):
         self.assertEqual([row.person_id for row in plan.sources_insert], [cloud_minted])
         self.assertEqual(people_ns.patch_person_ids, (cloud_minted,))
         self.assertEqual(plan.allowed_operator_ids[cloud_minted], tuple(sorted((OPERATOR, OTHER_OPERATOR))))
-
-    def test_private_person_absent_from_cloud_gets_no_tag(self):
-        plan = plan_for(
-            [share_row(NEW_PERSON, "jordan-bravo", share=SHARE_NO, reason=HUMAN_PRIVATE)],
-            [local_person(NEW_PERSON, "jordan-bravo")],
-            cloud_state(),
-        )
-        self.assertEqual(plan.tags_put, ())
 
     def test_entity_namespaces_upsert_only_ids_the_cloud_lacks(self):
         plan = plan_for(
@@ -411,12 +414,6 @@ class PostgresSqlTests(unittest.TestCase):
         self.assertEqual(postgres.fetch_operator_ids_by_person(cur, [NEW_PERSON]),
                          {NEW_PERSON: tuple(sorted((OPERATOR, OTHER_OPERATOR)))})
 
-    def test_tag_put_keeps_an_existing_person_id(self):
-        cur = FakeCursor()
-        postgres.put_tags(cur, OPERATOR, [TagRow(CLOUD_PERSON, "casey-lane")])
-        sql, _ = cur.statements[0]
-        self.assertIn("DO UPDATE SET person_id = COALESCE(EXCLUDED.person_id, contact_tags.person_id)", sql)
-
 
 class PostgresBatchTests(unittest.TestCase):
     """Writes go in multi-row statements of BATCH_ROWS, not one round trip per row."""
@@ -434,7 +431,7 @@ class PostgresBatchTests(unittest.TestCase):
         self.assertLess(len(first_params), 65_535)
         self.assertEqual(count, postgres.BATCH_ROWS + 1)
 
-    def test_sources_and_tags_batch_and_sum_affected_rows(self):
+    def test_sources_batch_and_sum_affected_rows(self):
         sources = [SourceRow(NEW_PERSON, "gmail", f"p{n}@example.com", n, "") for n in range(1201)]
         cur = FakeCursor(rowcounts=[500, 500, 201])
         self.assertEqual(postgres.upsert_sources(cur, OPERATOR, sources), 1201)
@@ -444,10 +441,6 @@ class PostgresBatchTests(unittest.TestCase):
         sql, params = cur.statements[0]
         self.assertIn("USING (VALUES", sql)
         self.assertEqual(params[-2:], (OPERATOR, "powerpacks"))
-        cur = FakeCursor(rowcounts=[2, 2])
-        self.assertEqual(postgres.put_tags(cur, OPERATOR, [TagRow(CLOUD_PERSON, "casey-lane")] * 2), 2)
-        self.assertEqual(postgres.delete_tags(cur, OPERATOR, [TagRow("", "casey-lane")] * 2), 2)
-        self.assertEqual(len(cur.statements), 2)
 
     def test_nothing_to_write_sends_nothing(self):
         cur = FakeCursor()
@@ -597,16 +590,16 @@ class DryRunTests(unittest.TestCase):
         )
         canonical_db = share_db(root, [
             share_row(NEW_PERSON, "jordan-bravo"),
-            share_row(CLOUD_PERSON, "casey-lane", share=SHARE_NO, reason=HUMAN_PRIVATE),
-            share_row(STALE_PERSON, "riley-echo", share=SHARE_NO, reason=FAMILY, labels="is_family"),
+            share_row(CLOUD_PERSON, "casey-lane", worth="no"),
+            share_row(STALE_PERSON, "riley-echo", flag="family", labels='{"is_family":1}'),
         ])
         return {"db": db, "people_csv": people_csv, "share_db": canonical_db, "out_dir": root / "out"}
 
     def test_dry_run_selects_only_and_writes_one_manifest(self):
         namespace = FakeNamespace()
-        # persons-by-slug answers for the private person only; the other three reads are empty.
+        # No eligible person is present in the cloud.
         # The SET search_path answers nothing; the schema check reads the next row.
-        cursor = FakeCursor([[], [('powerset_share_v1', 'powerset_share_v1, powerset_v2, pg_catalog')], [("casey-lane", CLOUD_PERSON)], [], [], []])
+        cursor = FakeCursor([[], [('powerset_share_v1', 'powerset_share_v1, powerset_v2, pg_catalog')], [], [], [], []])
         connection = mock.MagicMock()
         connection.__enter__.return_value = connection
         connection.cursor.return_value.__enter__.return_value = cursor
@@ -630,14 +623,15 @@ class DryRunTests(unittest.TestCase):
             manifest = json.loads(Path(payload["manifest"]).read_text())
 
         self.assertEqual(namespace.writes, [])
-        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SET"] + ["SELECT"] * 6)
+        self.assertEqual([sql.strip().split()[0] for sql, _ in cursor.statements], ["SET"] + ["SELECT"] * 5)
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["plan"]["previously_uploaded"], 0)
         self.assertEqual(manifest["person_hashes"], {NEW_PERSON: "previously-uploaded"})
-        # The `yes` row only: the human's `private` and the machine's `confirm` stay home.
+        # Only the worth-yes person without a flag is eligible.
         self.assertEqual(payload["plan"]["persons_upsert_ids"], [NEW_PERSON])
         self.assertEqual(payload["plan"]["persons_upsert"], 1)
-        self.assertEqual(payload["plan"]["tags_put"], 1)
+        self.assertEqual(payload["plan"]["marked_share"], 1)
+        self.assertFalse(any("contact_tags" in sql for sql, _ in cursor.statements))
         self.assertEqual(payload["plan"]["namespaces"]["companies"]["upsert"], 1)
         self.assertEqual(manifest["plan"]["persons_upsert"], 1)
 
@@ -737,8 +731,6 @@ class DryRunTests(unittest.TestCase):
                  mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: writes.append(("sources", len(rows))) or len(rows)), \
                  mock.patch.object(postgres, "delete_sources", return_value=0), \
                  mock.patch.object(postgres, "fetch_operator_ids_by_person", side_effect=lambda cur, ids: {person_id: (OPERATOR,) for person_id in ids}), \
-                 mock.patch.object(postgres, "put_tags", return_value=0), \
-                 mock.patch.object(postgres, "delete_tags", return_value=0), \
                  mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[first, second, first]):
                 one = upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
                 before = sum(len(ns.writes) for ns in namespaces.values())
@@ -798,8 +790,6 @@ class DryRunTests(unittest.TestCase):
                  mock.patch.object(postgres, "upsert_sources", side_effect=lambda cur, op, rows: len(rows)), \
                  mock.patch.object(postgres, "delete_sources", return_value=0), \
                  mock.patch.object(postgres, "fetch_operator_ids_by_person", side_effect=lambda cur, ids: {person_id: (OPERATOR,) for person_id in ids}), \
-                 mock.patch.object(postgres, "put_tags", return_value=0), \
-                 mock.patch.object(postgres, "delete_tags", return_value=0), \
                  mock.patch.object(upload_powerset.UploadPowerset, "_plan", side_effect=[v3(initial), v3(initial), v3(settled)]):
                 with self.assertRaises(ConnectionError):
                     upload_powerset.UploadPowerset(operator_id=OPERATOR, dry_run=False, **paths).run()
@@ -863,7 +853,7 @@ class ApplyTests(unittest.TestCase):
     def test_unshared_person_never_repairs_missing_documents(self):
         stale = SourceRow(STALE_PERSON, "linkedin", "riley-echo", 0, "")
         plan = plan_for(
-            [share_row(STALE_PERSON, "riley-echo", share=SHARE_NO, reason=WORTH_NO)],
+            [],
             [local_person(STALE_PERSON, "riley-echo")],
             cloud_state(operator_sources=(stale,)),
         )
@@ -946,16 +936,14 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual([sorted(row["id"] for row in rows) for rows in position_writes], [["pos-a", "pos-b"]])
 
     def test_apply_counts_written_rows_and_upserts_new_docs_but_patches_existing_docs(self):
-        private_person = "55555555-5555-5555-8555-555555555555"
         plan = plan_for(
             [share_row(NEW_PERSON, "jordan-bravo"),
-             share_row(CLOUD_PERSON, "casey-lane"),
-             share_row(private_person, "private-person", share=SHARE_NO, reason=HUMAN_PRIVATE)],
+             share_row(CLOUD_PERSON, "casey-lane")],
             [local_person(NEW_PERSON, "jordan-bravo"), local_person(CLOUD_PERSON, "casey-lane")],
-            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON, private_person: private_person}),
+            cloud_state(cloud_id_by_person={CLOUD_PERSON: CLOUD_PERSON}),
         )
         # One statement per table: both people in one persons upsert, one of them affected.
-        cursor = FakeCursor(rowcounts=[1, 1, 1])
+        cursor = FakeCursor(rowcounts=[1, 1])
         namespace = FakeNamespace(rows=[mock.Mock(id="existing-doc", base_id=CLOUD_PERSON,
                                                   person_id=CLOUD_PERSON, allowed_operator_ids=[])])
 
@@ -988,8 +976,8 @@ class ApplyTests(unittest.TestCase):
         persons = [params for sql, params in cursor.statements if "INSERT INTO persons" in sql]
         self.assertEqual([len(params) for params in persons], [2 * 25])
         self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO operator_person_sources" in sql]), 1)
-        self.assertEqual(len([sql for sql, _ in cursor.statements if "INSERT INTO contact_tags" in sql]), 1)
-        self.assertEqual((result.persons_upserted, result.sources_inserted, result.tags_put), (1, 1, 1))
+        self.assertFalse(any("contact_tags" in sql for sql, _ in cursor.statements))
+        self.assertEqual((result.persons_upserted, result.sources_inserted), (1, 1))
 
 
 if __name__ == "__main__":

@@ -165,6 +165,16 @@ function DesktopDebugMenu() {
               className="accent-[var(--primary)]"
             />
           </label>
+          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
+            Share network (upload)
+            <input
+              type="checkbox"
+              checked={features.share}
+              disabled={updateFeatures.isPending}
+              onChange={() => updateFeatures.mutate({ ...features, share: !features.share })}
+              className="accent-[var(--primary)]"
+            />
+          </label>
           {updateFeatures.error && (
             <p role="alert" className="m-0 px-2.5 py-1 text-xs text-bad">
               {errorText(updateFeatures.error)}

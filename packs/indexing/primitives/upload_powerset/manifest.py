@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.share.models import ShareDecisionRow
+from packs.ingestion.primitives.share.models import PersonLabelRow
 
 
 class Stage(StrEnum):
@@ -80,7 +80,6 @@ class UploadManifest:
         return replace(self, stage=stage.value, **changes)
 
 
-def share_digest(rows: tuple[ShareDecisionRow, ...]) -> str:
-    decisions = sorted((row.person_id, row.public_identifier, row.share, row.reason, row.labels)
-                       for row in rows)
-    return hashlib.sha256(json.dumps(decisions, separators=(",", ":")).encode()).hexdigest()
+def share_digest(rows: tuple[PersonLabelRow, ...]) -> str:
+    people = sorted((row.person_id, row.public_identifier) for row in rows)
+    return hashlib.sha256(json.dumps(people, separators=(",", ":")).encode()).hexdigest()

@@ -84,11 +84,14 @@ function serveSaved(url: string): Response | null {
   return null
 }
 
-/** The People routes: the payload, one person's detail, a tags write that echoes the post, the upload status. */
+/** The People routes: the payload, one person's detail, a worth write that echoes the post, the upload status,
+ *  and the local features with the upload switched on. */
 function serve(url: string, init?: RequestInit): Promise<Response> {
   const archive = serveSaved(url)
   if (archive) return Promise.resolve(archive)
-  if (url.endsWith("/tags")) return Promise.resolve(tagsResponse(init))
+  if (url.endsWith("/worth")) return Promise.resolve(worthResponse(init))
+  if (url.endsWith("/api/features"))
+    return Promise.resolve(respond({ sets: false, auto_reply: false, share: true }))
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
@@ -135,39 +138,34 @@ function respond(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
 }
 
-/** A tags response echoing what was posted: share when the tags say so, else not sharing. */
-function tagsResponse(init?: RequestInit): Response {
-  const rows = sentPeople(init).map((entry) => {
-    const person = must(isTagged(entry) ? entry : null, "a tagged person")
-    return {
-      parent_id: person.parent_id,
-      share: person.tags.includes("share") ? "yes" : "no",
-      reason: person.tags.includes("share") ? "human_share" : "human_private",
-      share_source: "human",
-      tags: person.tags,
-    }
+/** A worth response echoing what was posted: each id with the human's call. */
+function worthResponse(init?: RequestInit): Response {
+  const { ids, worth } = sentWorth(init)
+  return respond({
+    rows: ids.map((parent_id) => ({
+      parent_id,
+      worth,
+      worth_source: "human",
+      reason: "human_worth",
+      tags: [],
+    })),
   })
-  return respond({ rows })
 }
 
-function isTagged(value: unknown): value is { parent_id: string; tags: string[] } {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "parent_id" in value &&
-    typeof value.parent_id === "string" &&
-    "tags" in value &&
-    Array.isArray(value.tags)
-  )
-}
-
-/** The `people` array a tags request carried. */
-function sentPeople(init?: RequestInit): unknown[] {
+/** The `ids` and `worth` a worth request carried. */
+function sentWorth(init?: RequestInit): { ids: string[]; worth: string } {
   const sent: unknown = JSON.parse(typeof init?.body === "string" ? init.body : "null")
-  if (!sent || typeof sent !== "object" || !("people" in sent) || !Array.isArray(sent.people)) {
-    throw new Error("the tags request carried no people")
+  if (
+    !sent ||
+    typeof sent !== "object" ||
+    !("ids" in sent) ||
+    !Array.isArray(sent.ids) ||
+    !("worth" in sent) ||
+    typeof sent.worth !== "string"
+  ) {
+    throw new Error("the worth request carried no ids")
   }
-  return sent.people
+  return { ids: sent.ids.map(String), worth: sent.worth }
 }
 
 /** Where the router is, for the reader's tests: path and query on a hidden node. */
@@ -211,9 +209,9 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
-    expect(picked("Sharing")).toBe("All · 4")
-    open("Sharing")
-    expect(options()).toEqual(["All · 4", "Sharing · 1", "Not sharing · 3"])
+    expect(picked("Worth")).toBe("All · 4")
+    open("Worth")
+    expect(options()).toEqual(["All · 4", "Yes · 1", "Maybe · 0", "No · 3", "Not assessed · 0"])
     fireEvent.keyDown(screen.getByRole("option", { name: "All · 4" }), { key: "Escape" })
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
@@ -223,7 +221,7 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    pick("Sharing", "All · 4")
+    pick("Worth", "All · 4")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
     await waitFor(() => expect(new URLSearchParams(must(at()).split("?")[1]).get("tab")).toBe("all"))
   })
@@ -265,9 +263,24 @@ describe("PeoplePage", () => {
   it("keeps the selected tab and all sections closed after refresh", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no&person=p1&sections=")
-    await waitFor(() => expect(picked("Sharing").startsWith("Not sharing")).toBe(true))
+    await waitFor(() => expect(picked("Worth").startsWith("No")).toBe(true))
     await screen.findByRole("button", { name: "Relationship", expanded: false })
     expect(container.querySelector('[data-section][data-open="true"]')).toBeNull()
+  })
+
+  it("hides Share network without the local switch", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) =>
+        url.endsWith("/api/features")
+          ? Promise.resolve(respond({ sets: false, auto_reply: false, share: false }))
+          : serve(url, init),
+      ),
+    )
+    const { container } = renderPage()
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
+    expect(screen.getByRole("button", { name: /^Refresh signals/ })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Share network" })).toBeNull()
   })
 
   it("puts Refresh signals and Share network at the search line's right end", async () => {
@@ -281,9 +294,9 @@ describe("PeoplePage", () => {
     expect(screen.queryByText("Never shared")).toBeNull()
   })
 
-  it("selects every matching person and writes share for them, then offers undo", async () => {
+  it("selects every matching person and marks them worth it", async () => {
     const fetch = vi.fn((url: string, init?: RequestInit) => {
-      if (url.endsWith("/tags")) expect(sentPeople(init)[2]).toEqual({ parent_id: "p3", tags: ["share"] })
+      if (url.endsWith("/worth")) expect(sentWorth(init)).toEqual({ ids: ["p2", "p1", "p3"], worth: "yes" })
       return serve(url, init)
     })
     vi.stubGlobal("fetch", fetch)
@@ -292,21 +305,22 @@ describe("PeoplePage", () => {
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByText("3 selected")).toBeTruthy()
-    fireEvent.click(within(bar).getByRole("button", { name: "Share S" }))
-    await waitFor(() => expect(screen.getByText("Marked 3 people for sharing.")).toBeTruthy())
-    expect(screen.getByText("No people marked as not sharing.")).toBeTruthy()
+    fireEvent.click(within(bar).getByRole("button", { name: "Worth it Y" }))
+    await waitFor(() => expect(screen.getByText("Marked 3 people worth it.")).toBeTruthy())
+    expect(screen.getByText("No one marked not worth it.")).toBeTruthy()
     expect(
       fetch.mock.calls.filter(
         ([url]) =>
           !url.endsWith("/upload") &&
           !url.includes("/logbook") &&
           !url.includes("/sets") &&
-          !url.endsWith("/signals"),
+          !url.endsWith("/signals") &&
+          !url.endsWith("/api/features"),
       ),
     ).toHaveLength(2)
   })
 
-  it("checks on its own after a share edit and marks what the check found", async () => {
+  it("checks on its own after a worth edit and marks what the check found", async () => {
     const shared = {
       finished_at: "2026-10-09T04:55:22Z",
       status: "completed",
@@ -318,7 +332,7 @@ describe("PeoplePage", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string, init?: RequestInit) => {
-        if (url.endsWith("/tags")) changed = true
+        if (url.endsWith("/worth")) changed = true
         if (url.endsWith("/upload/check")) {
           checked = true
           return Promise.resolve(uploadResponse(uploadStatus({ status: "checking", last_upload: shared })))
@@ -341,7 +355,7 @@ describe("PeoplePage", () => {
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     fireEvent.click(
       within(must(container.querySelector<HTMLElement>("[data-action-bar]"))).getByRole("button", {
-        name: "Share S",
+        name: "Worth it Y",
       }),
     )
     await waitFor(() =>
@@ -369,17 +383,17 @@ describe("PeoplePage", () => {
     fireEvent.click(updating)
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
     expect(within(drawer).getByText("Jordan Bravo is being updated; finish the run first.")).toBeTruthy()
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Share" }).disabled).toBe(true)
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Keep private" }).disabled).toBe(
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Worth it" }).disabled).toBe(true)
+    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Not worth it" }).disabled).toBe(
       true,
     )
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
-    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Share S" }).disabled).toBe(true)
-    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Keep private P" }).disabled).toBe(true)
-    fireEvent.keyDown(document, { key: "s" })
-    fireEvent.keyDown(document, { key: "p" })
-    expect(fetch.mock.calls.some(([url]) => url.endsWith("/tags"))).toBe(false)
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Worth it Y" }).disabled).toBe(true)
+    expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Not worth it N" }).disabled).toBe(true)
+    fireEvent.keyDown(document, { key: "y" })
+    fireEvent.keyDown(document, { key: "n" })
+    expect(fetch.mock.calls.some(([url]) => url.endsWith("/worth"))).toBe(false)
   })
 
   it("opens the drawer on a row click and closes it on the next", async () => {
@@ -402,13 +416,13 @@ describe("PeoplePage", () => {
     const names = () => [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     const heading = () => container.querySelector("[data-drawer] h2")?.textContent
     const bar = () => must(container.querySelector<HTMLElement>("[data-action-bar]"))
-    const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Share S" }))
+    const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Worth it Y" }))
     const [first, second, third] = names()
     // Open the middle person: the bar names them, and Use worth is gone.
     fireEvent.click(must(container.querySelectorAll(".row")[1]))
     expect(within(bar()).getByText(second ?? "")).toBeTruthy()
     expect(within(bar()).queryByText(/Use worth/)).toBeNull()
-    // Share moves them out of the tab; the drawer opens whoever took their place.
+    // Worth it moves them out of the tab; the drawer opens whoever took their place.
     share()
     await waitFor(() => expect(names()).toEqual([first, third]))
     await waitFor(() => expect(heading()).toBe(third))
@@ -489,10 +503,10 @@ describe("PeoplePage logbook", () => {
     expect(list(container).inert).toBe(true)
     expect(container.querySelector("[data-reading]")).toBeTruthy()
     // Keys the list would act on do nothing while reading.
-    fireEvent.keyDown(document.body, { key: "s" })
+    fireEvent.keyDown(document.body, { key: "y" })
     fireEvent.keyDown(document.body, { key: "Escape" })
     await waitFor(() => expect(at()?.split("?")[0]).toBe("/people"))
-    expect(route.fetch.mock.calls.filter(([url]) => url.endsWith("/tags"))).toHaveLength(0)
+    expect(route.fetch.mock.calls.filter(([url]) => url.endsWith("/worth"))).toHaveLength(0)
 
     // Escape went Back: the same nodes, filters, sort, selection and scroll.
     expect(reader()).toBeNull()

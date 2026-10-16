@@ -8,22 +8,21 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from test_share_v2 import StoreTests
+from test_people_worth import StoreTests
 from test_logbook_people import Handler
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, Person
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.enrich import settle
-from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
-from packs.ingestion.primitives.share.share_list import Share
+from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.ingestion.primitives.share.web.signals import PeopleSignals, RefreshSignals
 from packs.ingestion.primitives.share.web.server import share_routes
 
 NO_CALLS = mock.patch.object(decisions, "AsyncOpenAI", side_effect=AssertionError("no paid calls"))
 
 
-def answers_for(request: dict[str, Any], share_call: str = "share") -> list[dict[str, Any]]:
+def answers_for(request: dict[str, Any]) -> list[dict[str, Any]]:
     """A synthetic Decisions response to `request`: every predicate low, every choice its first value."""
     answers: list[dict[str, Any]] = []
     for question in request["questions"]:
@@ -36,7 +35,7 @@ def answers_for(request: dict[str, Any], share_call: str = "share") -> list[dict
                 for level, item in enumerate(question["levels"])]})
         else:
             values = [item["value"] for item in question["choices"]]
-            chosen = share_call if name == "share_call" else values[0]
+            chosen = values[0]
             answers.append({"type": "choice", "name": name, "choice": chosen, "confidence": 0.9, "probabilities": [
                 {"value": value, "probability": 0.9 if value == chosen else 0.05} for value in values]})
     return answers
@@ -63,7 +62,7 @@ class SignalsRefreshTests(StoreTests):
         for family in self.families:
             self._judged(family.members[0], family.fingerprint)
         self.conn.commit()
-        Share(self.conn, self.root).run()
+        PersonLabels(self.conn, self.root).run()
         self.signals = PeopleSignals(self.root / "store.sqlite", self.root)
 
     def _judged(self, candidate_id: str, fingerprint: str) -> None:
@@ -71,20 +70,17 @@ class SignalsRefreshTests(StoreTests):
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES (?, 'yes', 'machine', 'old', NULL, ?, '2026-10-07')", (candidate_id, fingerprint))
 
-    def _cache(self, family, share_call: str = "share") -> Path:
-        """Both of the family's requests answered on disk; returns request 1's file."""
+    def _cache(self, family) -> Path:
+        """The family's request answered on disk."""
         cache = self.root / DECISIONS_CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
         first = answers_for(family.request)
         path = decisions.cache_path(cache, family.digest)
         path.write_text(json.dumps({"answers": first, "usage": None}))
-        share = luna.share_request(luna.labels(first))
-        second = decisions.cache_path(cache, decisions.request_digest(luna.REQUEST_VERSION, share))
-        second.write_text(json.dumps({"answers": answers_for(share, share_call), "usage": None}))
         return path
 
     def _snapshot(self):
-        return [tuple(row) for table in ("worth", "person_labels", "share", "person_tags")
+        return [tuple(row) for table in ("worth", "person_labels", "person_tags")
                 for row in self.conn.execute(f"SELECT * FROM {table}")]
 
     def test_refresh_rejudges_only_selected_families_without_removing_old_rows(self) -> None:
@@ -99,15 +95,15 @@ class SignalsRefreshTests(StoreTests):
         self.assertEqual(self._snapshot(), before)
 
     def test_a_refresh_of_a_few_people_brings_older_signals_up_to_date(self) -> None:
-        # p:b was judged under older questions: any refresh asks it again, so share never mixes versions.
+        # p:b was judged under older questions: any refresh asks it again, so the label export never mixes versions.
         self._judged("c2", "an-older-version-key")
         self.conn.commit()
         self.assertEqual(self.signals.check(()).people, 1)
         self.assertEqual(self.signals.check(("p:a",)).people, 2)
 
-    def test_a_family_luna_refuses_keeps_its_old_signals_and_share_still_runs(self) -> None:
+    def test_a_family_luna_refuses_keeps_its_old_signals_and_labels_still_run(self) -> None:
         # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
-        # both are worth yes, so the settle rule leaves them alone. With no call of Luna's, p:a shares.
+        # both are worth yes, so the settle rule leaves them alone. The label export still completes.
         self.conn.execute(
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES ('c1', 'yes', 'machine', 'old', ?, 'an-older-version-key', '2026-10-08')",
@@ -122,8 +118,8 @@ class SignalsRefreshTests(StoreTests):
         self._cache(self.families[1])
         manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
         self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
-        share = dict(self.conn.execute("SELECT candidate_id, reason FROM share").fetchall())
-        self.assertEqual(share, {"c1": "would_vouch", "c2": "family"})
+        flags = dict(self.conn.execute("SELECT candidate_id, flag FROM person_labels").fetchall())
+        self.assertEqual(flags, {"c1": "", "c2": "family"})
 
     def test_a_refresh_keeps_the_settle_rule(self) -> None:
         # Luna says p:a is worth yes; with no profile and no messages, settle still makes it no.
@@ -135,7 +131,7 @@ class SignalsRefreshTests(StoreTests):
 
     def test_paid_refresh_without_confirmation_never_starts(self) -> None:
         plan = self.signals.check(("p:a",))
-        self.assertEqual((plan.people, plan.cached, plan.new_requests), (1, 0, 2))
+        self.assertEqual((plan.people, plan.cached, plan.new_requests), (1, 0, 1))
         self.assertGreater(plan.estimated_cost_usd, 0)
         self.assertEqual(plan.estimated_seconds, 1)
         with mock.patch("packs.ingestion.primitives.deep_context_v2.worth.worth.decide_all") as calls:
@@ -172,25 +168,25 @@ class SignalsRefreshTests(StoreTests):
         self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
                           "VALUES ('c1', 'no', 'human', 'keep', '2026-10-08')")
         self.conn.execute("INSERT INTO person_tags (candidate_id, tags, note, updated_at) "
-                          "VALUES ('c1', 'private', 'keep note', '2026-10-08')")
+                          "VALUES ('c1', 'is_recruiter', 'keep note', '2026-10-08')")
         self.conn.commit()
         with NO_CALLS:
             self.signals.start(("p:a",), None)
             self.signals._thread.join(10)
         self.assertEqual(self.signals.status()["status"], "completed", self.signals.status())
         self.assertEqual(self.conn.execute("SELECT worth, decided_by FROM current_worth WHERE parent_id = 'p:a'").fetchone()[:], ("no", "human"))
-        self.assertEqual(self.conn.execute("SELECT tags, note FROM person_tags WHERE candidate_id = 'c1'").fetchone()[:], ("private", "keep note"))
+        self.assertEqual(self.conn.execute("SELECT tags, note FROM person_tags WHERE candidate_id = 'c1'").fetchone()[:], ("is_recruiter", "keep note"))
         # p:b was not asked: no worth row of its carries Luna's labels.
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth WHERE candidate_id = 'c2' "
                                            "AND labels_json LIKE '%\"version\"%'").fetchone()[0], 0)
         labels = json.loads(self.conn.execute("SELECT labels_json FROM person_labels WHERE candidate_id = 'c1'").fetchone()[0])
-        self.assertEqual((labels["relationship_kind"], labels["share_call"]), ("family", "share"))
-        self.assertEqual(self.conn.execute("SELECT reason FROM share WHERE candidate_id = 'c1'").fetchone()[0], "human_private")
+        self.assertEqual(labels["relationship_kind"], "family")
+        self.assertNotIn("share_call", labels)
 
     def test_cache_disappearing_after_paid_confirmation_does_not_expand_paid_work(self) -> None:
         path = self._cache(self.families[0])
         plan = self.signals.check(("p:a", "p:b"))
-        self.assertEqual((plan.cached, plan.new_requests), (2, 2))
+        self.assertEqual((plan.cached, plan.new_requests), (1, 1))
         with mock.patch("packs.ingestion.primitives.share.web.signals.threading.Thread") as thread:
             self.signals.start(("p:a", "p:b"), plan.checked)
             node = thread.call_args.kwargs["args"][0]
@@ -204,12 +200,12 @@ class SignalsRefreshTests(StoreTests):
             with self.assertRaisesRegex(ValueError, "not saved yet"):
                 Worth(self.conn, self.root, limit=DEFAULT_LIMIT, parent_ids=("p:a",)).execute(cache_only=True)
 
-    def test_share_failure_rolls_back_new_machine_worth_and_preserves_cache(self) -> None:
+    def test_labels_failure_rolls_back_new_machine_worth_and_preserves_cache(self) -> None:
         path = self._cache(self.families[0])
         before = self._snapshot()
         node = RefreshSignals(self.conn, self.root, ("p:a",))
-        with mock.patch.object(Share, "execute", side_effect=RuntimeError("share failed")):
-            with self.assertRaisesRegex(RuntimeError, "share failed"):
+        with mock.patch.object(PersonLabels, "execute", side_effect=RuntimeError("labels failed")):
+            with self.assertRaisesRegex(RuntimeError, "labels failed"):
                 node.run()
         self.assertEqual(self._snapshot(), before)
         self.assertTrue(path.exists())
@@ -223,7 +219,7 @@ class SignalsRefreshTests(StoreTests):
             handler = Handler(body=json.dumps({"people": ["p:a"]}).encode())
             self.assertTrue(routes.post(handler, urllib.parse.urlparse("/api/people/signals/check")))
             plan = json.loads(handler.wfile.getvalue())
-            self.assertEqual((plan["people"], plan["new_requests"]), (1, 2))
+            self.assertEqual((plan["people"], plan["new_requests"]), (1, 1))
             handler = Handler(body=json.dumps({"people": ["p:a"]}).encode())
             self.assertTrue(routes.post(handler, urllib.parse.urlparse("/api/people/signals")))
             self.assertEqual(handler.response_status, 409)

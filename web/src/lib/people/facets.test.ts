@@ -4,7 +4,7 @@ import { decodePeople } from "@/lib/api/people"
 import { savedEntry } from "@/testing/logbook-fixture"
 import { PAYLOAD } from "@/testing/people-fixture"
 
-import { LAST, lastBucket, nextTags, sortRows, type FacetKey } from "./facets"
+import { LAST, lastBucket, sortRows, type FacetKey } from "./facets"
 import { filterRows } from "./filter"
 import { withLogbooks } from "./logbook"
 import { DEFAULT_VIEW, type PeopleView } from "./view"
@@ -58,16 +58,10 @@ describe("filterRows", () => {
   })
 })
 
-describe("sortRows and nextTags", () => {
+describe("sortRows", () => {
   it("sorts by interactions, most first", () => {
     expect(sortRows(rows, { key: "messages", dir: 1 }).map((row) => row.interactions)).toEqual([
       90, 40, 12, 3,
     ])
-  })
-
-  it("swaps share and private", () => {
-    const riley = rows.find((row) => row.name === "Riley Echo")
-    expect(riley && nextTags(riley, "share")).toEqual(["share"])
-    expect(riley && nextTags(riley, "private")).toEqual(["private"])
   })
 })

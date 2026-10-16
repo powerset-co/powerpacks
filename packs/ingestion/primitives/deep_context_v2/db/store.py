@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, SHARE_TABLES_DDL, SHARE_VIEWS_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -52,6 +52,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 3:
         _migrate_3_to_4(conn)
         version = 4
+    if version == 4:
+        _migrate_4_to_5(conn)
+        version = 5
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -59,9 +62,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
 
 
 def _migrate_2_to_3(conn: sqlite3.Connection) -> None:
-    """Schema 3 is schema 2 plus the share stage's three tables and two views; no row changes."""
+    """Add person tags and labels to a schema-2 store."""
     with conn:
-        conn.executescript(SHARE_TABLES_DDL + SHARE_VIEWS_DDL)
+        conn.executescript(PEOPLE_TABLES_DDL + TAGS_VIEW_DDL)
         conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'")
 
 
@@ -70,3 +73,15 @@ def _migrate_3_to_4(conn: sqlite3.Connection) -> None:
     with conn:
         conn.executescript(REVIEW_QUEUE_DDL + SETS_DDL)
         conn.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+
+
+def _migrate_4_to_5(conn: sqlite3.Connection) -> None:
+    """Remove derived sharing state and the retired human tags; preserve all other tags."""
+    with conn:
+        conn.execute("DROP VIEW IF EXISTS current_share")
+        conn.execute("DROP TABLE IF EXISTS share")
+        for row in conn.execute("SELECT candidate_id, tags FROM person_tags").fetchall():
+            tags = [tag for tag in row["tags"].split("|") if tag not in {"share", "private"}]
+            conn.execute("UPDATE person_tags SET tags = ? WHERE candidate_id = ?",
+                         ("|".join(tags), row["candidate_id"]))
+        conn.execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'")

@@ -26,7 +26,7 @@ interface FilterBarProps {
 
 const KIND = facetOf("relationship_kind")
 
-// One line: the search box, the sharing decision (or all), the relationship kind, how many show
+// One line: the search box, the worth call (or all), the relationship kind, how many show
 // once the search or the kind narrows the list, then the page's actions on the right.
 export const FilterBar = memo(
   forwardRef<HTMLInputElement, FilterBarProps>(
@@ -53,12 +53,12 @@ export const FilterBar = memo(
             onChange={(event) => onText(event.target.value)}
           />
           <Select
-            aria-label="Sharing"
+            aria-label="Worth"
             value={tab}
             onChange={(value) => onTab(must(TABS.find((option) => option === value)))}
             options={TABS.map((option) => ({
               value: option,
-              label: `${option === "all" ? "All" : label("share", option)} · ${totals[option].toLocaleString()}`,
+              label: `${option === "all" ? "All" : label("worth", option)} · ${totals[option].toLocaleString()}`,
             }))}
           />
           <Select

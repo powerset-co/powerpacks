@@ -68,7 +68,7 @@ class ShareEvidence:
         worth: dict[str, sqlite3.Row] = {}
         for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
             worth[row["parent_id"]] = row
-        # Every member of the family, facts or not: each gets a label and a share row.
+        # Every member of the family, facts or not: each gets a label row.
         candidates: dict[str, list[str]] = {}
         for row in self.conn.execute("SELECT parent_id, candidate_id FROM current_parent ORDER BY parent_id, candidate_id"):
             candidates.setdefault(row["parent_id"], []).append(row["candidate_id"])
@@ -87,7 +87,7 @@ class ShareEvidence:
             for member in family:
                 channel_counts.extend(by_candidate.get(member.candidate_id, []))
                 groups += counts.groups.get(member.candidate_id, 0)
-            decided = worth[parent_id]
+            decided = worth.get(parent_id)
             # The labels worth computed stay with the family when a human overrides the worth itself.
             # Labels from older questions (a family Luna refused keeps its JEV row) are absent.
             labels_json: str | None = queries_review.labels_json(self.conn, candidates[parent_id])
@@ -105,7 +105,7 @@ class ShareEvidence:
                 source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
                 interaction_counts=parse_interaction_counts(row["interaction_counts"]),
                 last_interaction=row["last_interaction"] or None,
-                network_worth=decided["worth"],
+                network_worth=decided["worth"] if decided is not None else "maybe",
                 worth_labels=labels,
                 facts=facts,
                 shared_overlaps=frozenset(overlaps),

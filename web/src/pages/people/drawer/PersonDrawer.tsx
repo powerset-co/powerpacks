@@ -2,7 +2,7 @@ import { useMemo } from "react"
 
 import { Drawer } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
-import type { TagAction } from "@/lib/people/facets"
+import type { WorthAction } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
 import type { DetailState } from "../hooks/usePersonDetail"
@@ -24,7 +24,7 @@ interface PersonDrawerProps {
   detail: DetailState
   saving: boolean
   building: boolean
-  onAction: (action: TagAction) => void
+  onAction: (action: WorthAction) => void
   onLogbook: () => void
   onView: (slugs: string[]) => void
   onClose: () => void

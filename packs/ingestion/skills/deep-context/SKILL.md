@@ -45,7 +45,6 @@ bin/deep-context-v2 run       # the whole pipeline; ends with the Check LinkedIn
 bin/deep-context-v2 finish    # after the review: people.csv, the share list and the index again
 bin/deep-context-v2 review    # the Check LinkedIn server and its URL (if it was stopped)
 bin/deep-context-v2 stop      # stop the page server, once the user is done with it
-bin/deep-context-v2 share     # the share list; then the People page at http://127.0.0.1:8765/people
 bin/deep-context-v2 lookup --name "Jordan Bravo" [--json]   # a person's facts; --email / --phone work too
 bin/deep-context-v2 <stage>   # one stage alone: load collect synthesize dedupe worth enrich realize
 ```
@@ -143,14 +142,11 @@ The reports are for the developers; the user is not told about them.
 
 ## Share and the People page
 
-`$deep-context share`, "share my network", "who gets shared": run `bin/deep-context-v2 share`
-(free, local: worth and the labels worth saved decide yes / no / confirm for every family), then
-start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
-tags people share or private in bulk and answers the confirmations there; the page writes the tags
-and re-decides on the spot. Uploading to Powerset is the page's own button.
+"Show me my network", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
+marks people worth it or not worth it there, alone or in bulk; the page writes the call on the spot.
+Uploading to Powerset is the page's own button, shown only with the Share network local feature.
 
-"Show me my network", "who do I know", "my people": the same page; run `share` first when it has
-never run on this store.
+"Show me my network", "who do I know", "my people": the same page.
 
 "Tell me about Jordan Bravo", a name, email or phone: `bin/deep-context-v2 lookup --name "Jordan Bravo"`
 prints the family's facts (relationship, work, topics, events, identifiers, the confirmed LinkedIn);
@@ -167,7 +163,7 @@ prints the family's facts (relationship, work, topics, events, identifiers, the 
 | Background index log and pid | `.powerpacks/deep-context/index.{log,pid}` |
 | The export | `.powerpacks/network-import/merged/people.csv` |
 | The search index | `.powerpacks/search-index/` |
-| The share list | `person_labels`, `share` and `person_tags` in the store; `current_share` per family |
+| The upload list | `person_labels` and `person_tags` in the store; worth yes per family, flags kept home |
 | A v1 install's old state | `.powerpacks/deep-context-v1-<utc>.tar.gz` (archived by the first v2 run) |
 
 The spec every block follows is the Deep Context Spec page; `packs/ingestion/docs/deep-context-pipeline.md`

@@ -10,7 +10,7 @@ describe("copy", () => {
   })
 
   it("maps machine values to words, else sentence case", () => {
-    expect(label("reason", "human_share")).toBe("You chose to share")
+    expect(label("reason", "human_worth")).toBe("Your call")
     expect(label("reason", "service_provider")).toBe("Service provider")
   })
 

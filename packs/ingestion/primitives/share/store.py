@@ -14,13 +14,11 @@ import sqlite3
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_share
-from packs.ingestion.primitives.share.labels import PRIVATE_TAG, SHARE_TAG
-from packs.ingestion.primitives.share.models import HumanTags, ShareDecisionRow
+from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow
 from packs.ingestion.primitives.share.questions import NOUL_LABELS
 
-# A human may assert any boolean-ish label Jev answers, plus the two decisions
-# only a human makes. The choice/score labels are graded, not assertable.
-TAG_VOCABULARY = frozenset(NOUL_LABELS) | {PRIVATE_TAG, SHARE_TAG}
+# Choice and score labels are graded; the human may assert boolean labels.
+TAG_VOCABULARY = frozenset(NOUL_LABELS)
 TAG_SEPARATOR = "|"
 
 
@@ -46,13 +44,29 @@ class TagStore:
         return held
 
 
-def share_rows(store: Path) -> tuple[ShareDecisionRow, ...]:
-    """Every family's current share decision, read from the store at `store` for the upload: one row per
-    export row (people.csv id = parent id)."""
+def share_rows(store: Path) -> tuple[PersonLabelRow, ...]:
+    """The upload list: effective worth yes, excluding the owner and unreviewed family flags."""
     conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    rows: list[ShareDecisionRow] = []
-    for row in queries_share.current_share(conn):
-        rows.append(ShareDecisionRow(row.parent_id, row.public_identifier, row.share, row.reason, row.labels, row.source, row.updated_at))
-    conn.close()
-    return tuple(rows)
+    try:
+        labels = queries_share.labels_by_parent(conn)
+        rows = conn.execute(
+            "SELECT p.parent_id FROM current_parent p JOIN person_labels l USING (candidate_id) "
+            "JOIN current_worth w USING (parent_id) "
+            "WHERE w.worth = 'yes' "
+            "AND NOT EXISTS (SELECT 1 FROM current_parent members JOIN candidates c USING (candidate_id) "
+            "WHERE members.parent_id = p.parent_id AND c.is_owner = 1) "
+            "GROUP BY p.parent_id "
+            "HAVING (MAX(l.flag != '') = 0 OR w.decided_by = 'human') "
+            "AND MAX(COALESCE(json_extract(l.labels_json, '$.is_owner'), 0)) = 0 "
+            "ORDER BY p.parent_id"
+        ).fetchall()
+        people: list[PersonLabelRow] = []
+        for row in rows:
+            parent_id = row["parent_id"]
+            label = labels[parent_id]
+            people.append(PersonLabelRow(parent_id, label.public_identifier, label.full_name, "yes", label.flag,
+                                         label.labels_json, label.updated_at))
+        return tuple(people)
+    finally:
+        conn.close()

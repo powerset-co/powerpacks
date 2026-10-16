@@ -3,7 +3,7 @@ import { useState } from "react"
 import { BookIcon, DrawerIconTip, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { LOGBOOK } from "@/lib/people/copy"
-import type { TagAction } from "@/lib/people/facets"
+import type { WorthAction } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
 interface DrawerActionsProps {
@@ -11,7 +11,7 @@ interface DrawerActionsProps {
   saving: boolean
   // Saving, or the drawer is switching away from this person.
   disabled: boolean
-  onAction: (action: TagAction) => void
+  onAction: (action: WorthAction) => void
 }
 
 const PRESSED = "flex-1 min-h-9 aria-pressed:shadow-[inset_0_0_0_1px_var(--line-strong)]"
@@ -21,33 +21,34 @@ function Check({ on, risen }: { on: boolean; risen: boolean }) {
   return on ? <span className={risen ? "rise-in" : undefined}>✓</span> : null
 }
 
-// Share and Keep private reflect the owner's own tags; Undo (toast, z) takes a choice back.
+// Worth it and Not worth it show the owner's own call; the other button is the correction.
 export function DrawerActions({ row, saving, disabled, onAction }: DrawerActionsProps) {
-  const shares = row.tags.includes("share")
-  const keepsPrivate = row.tags.includes("private")
+  const yours = row.worth_source === "human"
+  const shares = yours && row.worth === "yes"
+  const keepsPrivate = yours && row.worth === "no"
   const [opened] = useState({ shares, keepsPrivate })
   return (
     <div className="drawer-actions" data-saving={saving || undefined}>
       <Button
         variant={shares ? "ok" : "default"}
         className={shares ? "flex-1 min-h-9" : PRESSED}
-        data-one="share"
+        data-one="yes"
         aria-pressed={shares}
         disabled={disabled}
-        onClick={() => onAction("share")}
+        onClick={() => onAction("yes")}
       >
         <Check on={shares} risen={!opened.shares} />
-        Share
+        Worth it
       </Button>
       <Button
         className={PRESSED}
-        data-one="private"
+        data-one="no"
         aria-pressed={keepsPrivate}
         disabled={disabled}
-        onClick={() => onAction("private")}
+        onClick={() => onAction("no")}
       >
         <Check on={keepsPrivate} risen={!opened.keepsPrivate} />
-        Keep private
+        Not worth it
       </Button>
     </div>
   )
