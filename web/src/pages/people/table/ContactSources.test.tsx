@@ -25,7 +25,9 @@ afterEach(() => {
 })
 
 it("shows the emails under the Gmail pill with its count, and the numbers under the message pills", async () => {
-  const row = { ...decodePeople(PAYLOAD)[0]!, channels: ["gmail", "imessage"] }
+  const [first] = decodePeople(PAYLOAD)
+  if (!first) throw new Error("fixture has no people")
+  const row = { ...first, channels: ["gmail", "imessage"] }
   const detail = {
     ...DETAIL,
     emails: ["jordan@example.com", "jb@work.example"],
