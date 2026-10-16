@@ -78,6 +78,7 @@ jobs:
         shell: bash
         env:
           RELEASE: ${{ inputs.release }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
           # Cloud project as search.powerset.dev), baked into the app; unset builds skip Gmail.
           POWERPACKS_GOOGLE_CLIENT_ID: ${{ secrets.POWERPACKS_GOOGLE_CLIENT_ID }}
@@ -94,4 +95,11 @@ jobs:
         with:
           name: Powerpacks-macos-arm64
           path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Powerpacks-macos-arm64-updater
+          path: |
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           if-no-files-found: error

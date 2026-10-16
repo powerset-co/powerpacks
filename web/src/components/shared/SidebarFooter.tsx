@@ -6,15 +6,18 @@ import { fetchAccount } from "@/lib/api/account"
 import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
-import { openExternal } from "@/lib/api/install"
 import { useFeatures } from "@/lib/features"
 import {
   checkUpdate,
   dismissedVersion,
   dismissVersion,
+  installUpdate,
   lastCheck,
+  onUpdateProgress,
+  restartApp,
   UPDATE_INTERVAL_MS,
   type Update,
+  type UpdateProgress,
 } from "@/lib/api/update"
 import { isDesktop } from "@/lib/desktop"
 import { useDismiss } from "@/hooks/useDismiss"
@@ -25,6 +28,7 @@ import { AppFeedback } from "./AppFeedback"
 import { Avatar } from "./Avatar"
 import { CLOSE_MARK } from "./icons/actions"
 import { SettingsIcon } from "./icons/nav"
+import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
 
@@ -60,19 +64,55 @@ function useUpdate(): Update | null {
   return query.data ?? null
 }
 
+// Before the download's first bytes arrive.
+const NO_PROGRESS: UpdateProgress = { downloaded: 0, total: null }
+
+/** "Downloading… 42%" (no share while the size is unknown), then "Installing…" once every byte is in. */
+function installStep(progress: UpdateProgress): string {
+  if (progress.total === null) return "Downloading…"
+  if (progress.downloaded >= progress.total) return "Installing…"
+  return `Downloading… ${Math.floor((progress.downloaded / progress.total) * 100)}%`
+}
+
+/** Install update downloads and installs the new version in place; Restart now runs it, Later
+ *  leaves it for the next launch. A failed install shows why and offers Install update again. */
 function UpdatePane({ rail }: { rail: boolean }) {
   const update = useUpdate()
   const [dismissed, setDismissed] = useState(dismissedVersion)
+  const [progress, setProgress] = useState(NO_PROGRESS)
+  const install = useMutation({
+    mutationFn: async () => {
+      setProgress(NO_PROGRESS)
+      const stop = onUpdateProgress(setProgress)
+      try {
+        await installUpdate()
+      } finally {
+        stop()
+      }
+    },
+  })
   if (update === null || !update.available || update.latest === dismissed) return null
-  const label = `Update available · v${update.latest}`
-  const get = () => void openExternal(update.url)
+  const dismiss = () => {
+    dismissVersion(update.latest)
+    setDismissed(update.latest)
+  }
+  const problem = install.error ? errorText(install.error) : null
   if (rail) {
+    const label = install.isSuccess
+      ? "Restart to update"
+      : install.isPending
+        ? installStep(progress)
+        : (problem ?? `Update available · v${update.latest}`)
+    const click = () => {
+      if (install.isSuccess) void restartApp()
+      else if (!install.isPending) install.mutate()
+    }
     return (
       <div className="flex justify-center pb-1">
         <button
           type="button"
-          aria-label={`${label}. Get update`}
-          onClick={get}
+          aria-label={install.isSuccess || install.isPending ? label : `${label}. Install update`}
+          onClick={click}
           className="group relative grid size-9 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-primary transition-colors duration-fast ease-out hover:bg-secondary"
         >
           <UpdateIcon className="size-[18px]" />
@@ -91,21 +131,47 @@ function UpdatePane({ rail }: { rail: boolean }) {
             v{update.latest} · from v{update.current}
           </span>
         </span>
-        <button
-          type="button"
-          aria-label="Dismiss this update"
-          onClick={() => {
-            dismissVersion(update.latest)
-            setDismissed(update.latest)
-          }}
-          className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[16px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
-        >
-          {CLOSE_MARK}
-        </button>
+        {install.isIdle || install.isError ? (
+          <button
+            type="button"
+            aria-label="Dismiss this update"
+            onClick={dismiss}
+            className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[16px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+          >
+            {CLOSE_MARK}
+          </button>
+        ) : null}
       </div>
-      <Button variant="primary" size="sm" onClick={get} className="mt-2.5 w-full">
-        Get update
-      </Button>
+      {install.isPending ? (
+        <div className="mt-2.5 flex flex-col gap-1.5">
+          <ProgressBar
+            label="Downloading the update"
+            done={progress.downloaded}
+            total={progress.total ?? 0}
+          />
+          <span className="text-[11px] text-muted-foreground">{installStep(progress)}</span>
+        </div>
+      ) : install.isSuccess ? (
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <Button variant="primary" size="sm" onClick={() => void restartApp()} className="flex-1">
+            Restart now
+          </Button>
+          <Button variant="ghost" size="sm" onClick={dismiss}>
+            Later
+          </Button>
+        </div>
+      ) : (
+        <>
+          {problem !== null && (
+            <p role="alert" className="mt-2 mb-0 text-[11px] break-words text-bad">
+              {problem}
+            </p>
+          )}
+          <Button variant="primary" size="sm" onClick={() => install.mutate()} className="mt-2.5 w-full">
+            Install update
+          </Button>
+        </>
+      )}
     </div>
   )
 }

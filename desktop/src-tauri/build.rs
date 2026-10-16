@@ -15,6 +15,8 @@ const COMMANDS: &[&str] = &[
     "app_focus",
     "open_external",
     "update_check",
+    "update_install",
+    "update_restart",
     "onboard_continue",
     "debug_state",
     "debug_skip_setup",

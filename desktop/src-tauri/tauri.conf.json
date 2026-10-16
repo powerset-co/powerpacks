@@ -15,6 +15,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "app",
       "dmg",
@@ -50,6 +51,14 @@
       "nsis": {
         "installMode": "currentUser"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/powerset-co/powerpacks/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNjdDNTUxNTI4MUMzODAKUldTQXc0RlNVY1Zub09KMWlBdHk3bDIxdFNOamlUTWU4VGwyOEsxUlYvLytZMnl0OWdmdUNxeWoK"
     }
   }
 }
