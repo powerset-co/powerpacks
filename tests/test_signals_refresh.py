@@ -11,6 +11,7 @@ from unittest import mock
 from test_share_v2 import StoreTests
 from test_logbook_people import Handler
 from packs.ingestion.primitives.deep_context_v2 import decisions
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, Person
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.enrich import settle
 from packs.ingestion.primitives.deep_context_v2.worth import luna
@@ -50,8 +51,10 @@ class SignalsRefreshTests(StoreTests):
         self.conn.executemany("INSERT INTO candidate_identifiers (candidate_id, kind, normalized_value, display_value) "
                              "VALUES (?, 'email', ?, ?)", [("c1", "one@example.test", "one@example.test"),
                                                            ("c2", "two@example.test", "two@example.test")])
-        self.conn.executemany("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
-                             "VALUES (?, '{\"messages\":[],\"groups\":[]}', 'test', '2026-10-07')", [("c1",), ("c2",)])
+        for candidate_id in ("c1", "c2"):
+            bundle = CollectionBundle.of(Person(candidate_id, "", (), (), ()), messages=[], groups=[],
+                                         thread_participants=(), available=0)
+            queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle.to_payload()), "test", "2026-10-07")
         self._parent("p:a", "c1")
         self._parent("p:b", "c2")
         self._facts("c1", "Jordan Bravo")

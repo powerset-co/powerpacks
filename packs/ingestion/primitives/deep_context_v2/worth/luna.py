@@ -1,7 +1,7 @@
 """Luna's two requests for one family, and what their answers mean.
 
 Request 1 asks the share-label questions (share/questions.py) and worth's own over the family's
-facts and message counts: worth is the `worth` choice, its reason comes from worth's yes/no
+raw messages and message counts: worth is the `worth` choice, its reason comes from worth's yes/no
 answers (reason.py), and every answer becomes a label. Request 2 asks the share question over those
 labels and their confidences. Both go to OpenAI's Decisions API (deep_context_v2/decisions.py),
 cached on disk by REQUEST_VERSION and the exact request.
@@ -18,19 +18,22 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from packs.ingestion.primitives.deep_context_v2 import assets
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
 from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
 from packs.ingestion.primitives.deep_context_v2.decisions import MODEL, Answer
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
+from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import batches, render_batch
+from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import CHUNK_CHARS, MAX_BATCHES
 from packs.ingestion.primitives.share.questions import (
     CHOICE_LABELS, EVIDENCE_POLICY, SCORE_LABELS, SHARE_QUESTION, label_questions,
 )
 
 # Both requests' questions: a bump asks every family again.
-REQUEST_VERSION = "deep-context-luna-decisions-20261013"
+REQUEST_VERSION = "deep-context-luna-decisions-20261015"
 
 _HERE = Path(__file__).parent
 WORTH_QUESTIONS: list[dict[str, Any]] = assets.json_file(_HERE, "worth_questions.json")
@@ -74,26 +77,46 @@ def _channel_policy(sources: tuple[str, ...]) -> str:
         else:
             phone = True
     if email and phone:
-        rule = ("These facts come from both email and phone messages. Bias toward yes when either channel "
+        rule = ("These messages come from both email and phone messages. Bias toward yes when either channel "
                 "shows a genuine human relationship; automated noise in one channel must not erase real "
                 "correspondence in the other. Use maybe only when both channels remain genuinely ambiguous.")
     elif email:
-        rule = ("These facts come from email. Bias toward yes for clearly human, person-directed correspondence, "
+        rule = ("These messages come from email. Bias toward yes for clearly human, person-directed correspondence, "
                 "including sparse, one-off, old, academic, or plausibly important professional contacts. Use no only "
                 "for clear automated mail, broadcast/transactional noise, or unengaged cold spam. Maybe should be rare.")
     else:
-        rule = ("These facts come from phone messages. Repeated or clearly two-way personal or professional "
+        rule = ("These messages come from phone messages. Repeated or clearly two-way personal or professional "
                 "conversation is yes. Sparse context, a bare number, or an uncertain one-sided exchange may be maybe; "
                 "automated service traffic or obvious spam is no. A name or area code is weak context only.")
     return "\n\nWORTH SOURCE POLICY:\n" + rule
 
 
-def build_request(facts: SynthesizedFacts, channels: ChannelSummary, owner: OwnerProfile, reference_date: str) -> dict[str, Any]:
-    """Request 1: the family's facts (minus the identifiers it owns), its message counts and the owner's
-    background as JSON, with the label questions and worth's. `reference_date` is when the facts were
-    synthesized, so the request changes only with its evidence."""
-    payload: dict[str, Any] = facts.to_payload()
-    del payload["owned_identifiers"]
+def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], channels: ChannelSummary,
+                  owner: OwnerProfile, reference_date: str) -> dict[str, Any]:
+    """Request 1: the family's raw messages, profile, counts and the owner's background.
+
+    `reference_date` is when the facts were synthesized, so the request changes only with its evidence.
+    """
+    family = CollectionBundle(
+        person_id=bundles[0].person_id,
+        full_name=facts.canonical_name,
+        emails=tuple(dict.fromkeys(email for bundle in bundles for email in bundle.emails)),
+        phones=tuple(dict.fromkeys(phone for bundle in bundles for phone in bundle.phones)),
+        source_channels=tuple(dict.fromkeys(source for bundle in bundles for source in bundle.source_channels)),
+        groups=tuple(dict.fromkeys(group for bundle in bundles for group in bundle.groups)),
+        thread_participants=tuple(thread for bundle in bundles for thread in bundle.thread_participants),
+        messages=tuple(message for bundle in bundles for message in bundle.messages),
+        messages_available=sum(bundle.messages_available for bundle in bundles),
+        capped=any(bundle.capped for bundle in bundles),
+    )
+    direction_labels = {
+        MessageDirection.FROM_ME: f"from {owner.name} (owner) to {facts.canonical_name}",
+        MessageDirection.FROM_THEM: f"from {facts.canonical_name} to {owner.name} (owner)",
+        MessageDirection.FROM_OTHER: f"from another group participant to {owner.name} (owner) and {facts.canonical_name}",
+    }
+    messages = []
+    for batch in batches(family.messages, chunk_chars=CHUNK_CHARS, max_batches=MAX_BATCHES):
+        messages.append(render_batch(family, batch, direction_labels=direction_labels))
     company: str | None = None
     for employer in facts.employers:
         if employer.status == "current":
@@ -106,7 +129,7 @@ def build_request(facts: SynthesizedFacts, channels: ChannelSummary, owner: Owne
     for school in owner.education:
         education.append(asdict(school))
     state: dict[str, Any] = {
-        "facts": payload,
+        "messages": "\n\n".join(messages),
         "profile": {"name": facts.canonical_name, "title": facts.title, "company": company,
                     "location": facts.location, "headline": None},
         "channels": {
