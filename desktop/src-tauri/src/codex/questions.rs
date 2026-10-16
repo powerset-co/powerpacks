@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 use tokio::sync::oneshot;
 
-use super::{Codex, SKILL_ROOTS};
+use super::Codex;
 use crate::boot;
 
 const TURN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -316,10 +316,6 @@ impl Codex {
                 .ok_or("The saved question thread has no completed answer. A second turn was not started.")?;
             return completed_answer(turn, None);
         }
-        let roots: Vec<_> = SKILL_ROOTS.iter().map(|root| cwd.join(root)).collect();
-        connection
-            .request("skills/extraRoots/set", json!({"extraRoots": roots}))
-            .await?;
         let thread = connection
             .request_inner(
                 "thread/start",

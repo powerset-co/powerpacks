@@ -43,15 +43,6 @@ pub const PAGE_METHODS: &[&str] = &[
     "turn/interrupt",
     "thread/archive",
 ];
-/// The in-app agent gets every pack's skills but Powerset's own (install, sign-in, update,
-/// doctor), which run from the app's pages.
-const SKILL_ROOTS: [&str; 5] = [
-    "packs/search/skills",
-    "packs/ingestion/skills",
-    "packs/indexing/skills",
-    "packs/sales-nav/skills",
-    "packs/apollo/skills",
-];
 const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app. \
 You search the user's network, answer questions about people, companies and dossiers, and run \
 the Powerpacks workflows the user asks for (contact imports, Deep Context processing, logbooks, \
@@ -268,12 +259,6 @@ impl Codex {
             )
             .await?;
         connection.write(&json!({ "method": "initialized" }))?;
-        if let Some(cwd) = cwd {
-            let roots: Vec<_> = SKILL_ROOTS.iter().map(|root| cwd.join(root)).collect();
-            connection
-                .request("skills/extraRoots/set", json!({ "extraRoots": roots }))
-                .await?;
-        }
         *slot = Some(connection.clone());
         Ok(connection)
     }
