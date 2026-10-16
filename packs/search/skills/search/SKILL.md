@@ -305,34 +305,50 @@ For both local and Powerset previews:
 
 - `execute`: run the returned `execute_command` exactly in the background and read
   its output as it arrives.
-- A reply starting `Modify, then execute:` contains `filters: <key> = <value>; <key> = <value>`
-  and/or `traits: <value> (<temporal>); …` lines. Read the JSON file named by
-  `payload_json` in the preview:
-  - If a trait value changed, was added, or was removed (including an empty
-    `traits:` line clearing existing traits), log the change as `query_edit`,
-    restate the query around the new traits and requested filters, run a new
-    `prepare`, then show its preview and ask the usual execute-or-modify question.
-    Retrieval and LLM filtering use the prepared query; do not run the old
-    `execute_command` for changed trait values.
-  - Otherwise, compare each sent filter with its current `role_search_filters`
-    value (compare lists as the `, `-joined string). Apply and log only values
-    that differ; never re-split an unchanged value. Write changed filters under
-    the same keys, splitting changed list values on `, ` and retaining scalar
-    JSON types. Remove a key when its sent value is empty. Leave unmentioned
-    keys unchanged.
-  - Only traits' current/past wording is applied in place: update `temporal`
-    while preserving each trait's `value` and `meaning`. If the `traits:` line
-    is absent, leave traits unchanged.
+- A reply starting `Modify, then execute:` is followed by one JSON object with any of
+  `query` (a string), `filters` (an object: `role_search_filters` keys with their JSON values as
+  the payload holds them, `null` to remove a key) and `traits` (the whole list of
+  `{value, temporal, meaning}`). The card sends only what the user changed against the preview
+  it showed: a key in `filters` is an edit, `traits` is present only when the traits changed,
+  and `query` only when the query changed. Copy the values, never re-parse them, and never
+  compare them with the file on disk. Read the JSON file named by `payload_json` in the preview:
+  - If `query` is present, or a trait's `value` changed, was added, or was removed against the
+    `traits` of the preview you showed (an empty `traits` list clears them), log the change as
+    `query_edit`, run a new `prepare` with the
+    same `--output-dir` for the sent `query` (restated around the sent traits when both came),
+    or, when only the traits changed, for the preview's query restated around the new traits.
+    Keywords and filters never go into the query, and no `filters` come with a changed query or
+    trait: the new prepare derives its own. Leave the new payload as the prepare wrote it (its
+    traits and their meanings included: the sent traits shaped the query, nothing else), so the
+    card the user sees is what would run. Then show the new preview and ask the usual question,
+    even though the reply said `then execute`: the user approved the search as it was, and a new
+    prepare is a new search. Only `execute` on the new card runs it. Retrieval and LLM filtering use the prepared query; do not run the old
+    `execute_command` for a changed query or trait value.
+  - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
+    the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when
+    `traits` is present replace the payload's `traits` with it (a changed `temporal` alone is
+    an in-place edit). A sent key also deletes its older `role_` alias from `role_search_filters`
+    when it is there (`bm25_queries` → `role_bm25_queries`, `semantic_query` →
+    `role_semantic_query`): the run would restore a cleared value from the alias. When
+    `bm25_queries` is sent (a list or `null`), also drop
+    every `role_core_patterns` entry that holds an example no longer in it: the run merges the
+    examples back into the keywords and retrieval matches the entry's regex, so a removed
+    keyword would return either way. The kept examples are already in `bm25_queries`.
   - Log each change with `search_feedback.py log` as shown in **User edit & feedback
-    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for
+    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for the query or
     traits, with both `--before` and `--after`.
   - For in-place edits, save the payload, then run the returned `execute_command`
     exactly in the background and read its output as it arrives. It binds the edited file.
     Filter and temporal-only edits need no second `prepare` or approval.
+- A reply starting `Modify:` (no "then execute") comes from a blocked card: apply the JSON by
+  the same rules, in place, and ask the usual question again; a later `execute` runs the
+  returned `execute_command`, which binds the edited file. Only a `query` or a changed trait
+  value means a new `prepare`, by the rule above (the new payload stays as prepared). Never run
+  the search from this reply.
 - Any other reply is a modify in the user's words: use the same rules above.
-  Changed trait values or query wording require a new `prepare` and the usual
-  question; filter and current/past-only edits are applied and logged in place,
-  then run the returned `execute_command` exactly.
+  A changed query or trait value requires a new `prepare` and the usual question; filter and
+  temporal-only edits are applied and logged in place, then run the returned
+  `execute_command` exactly.
 
 ## Execution progress
 
@@ -350,11 +366,13 @@ be opened for progress.
 
 - Say `<N> found`.
 - For local results, say `found (local)`.
-- Say `Run artifacts: <artifact-dir>`.
-- For the ranked list, read only the `csv` path from the final `artifacts` object and show the top
-  10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
-  compact: rank, name, current title/company, location, and LinkedIn URL when
-  present.
+- In the Powerpacks desktop app (the developer instructions say you are its assistant), stop
+  there: the results pane beside the chat already shows the ranked list. Never print a table of
+  results in the chat.
+- Outside the app: say `Run artifacts: <artifact-dir>`, then read only the `csv` path from the
+  final `artifacts` object and show the top 10 candidates, or fewer if fewer than 10 rows were
+  returned. Keep each row compact: rank, name, current title/company, location, and LinkedIn URL
+  when present.
 - Live progress above is the exception to waiting for final output. Other run
   files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.

@@ -14,6 +14,9 @@ export const buttonVariants = cva(
         ok: "border-[color-mix(in_srgb,var(--ok)_40%,transparent)] bg-ok-soft text-ok hover:bg-[color-mix(in_srgb,var(--ok)_26%,transparent)]",
         bad: "border-[color-mix(in_srgb,var(--bad)_40%,transparent)] bg-bad-soft text-bad hover:bg-[color-mix(in_srgb,var(--bad)_26%,transparent)]",
         link: "border-transparent text-info underline-offset-4 hover:underline",
+        // The two the cloud app's filter modal uses.
+        outline: "border-border bg-transparent text-foreground hover:bg-secondary",
+        secondary: "border-transparent bg-secondary text-foreground hover:bg-line-strong",
       },
       size: {
         default: "min-h-8 px-3 py-1.5",

@@ -12,6 +12,9 @@ export const badgeVariants = cva(
         bad: "bg-bad-soft text-bad",
         info: "bg-info-soft text-info",
         muted: "bg-secondary text-muted-foreground",
+        // The two the cloud app's filter modal uses.
+        secondary: "bg-secondary text-foreground",
+        outline: "border border-line text-foreground",
       },
     },
     defaultVariants: {

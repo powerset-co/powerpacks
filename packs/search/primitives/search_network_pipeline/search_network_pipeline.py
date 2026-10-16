@@ -92,6 +92,10 @@ PREVIEW_FILTER_KEYS = [
     "stages", "company_stages", "stage", "x_followers_min", "x_followers_max",
     "li_followers_min", "li_followers_max", "li_connections_min", "li_connections_max",
     "ig_followers_min", "ig_followers_max",
+    "fields_of_study", "degree_levels", "graduation_year_min", "graduation_year_max",
+    "role_tracks", "investor_names",
+    "operator_interaction_min", "operator_interaction_max",
+    "set_interaction_min", "set_interaction_max",
 ]
 BROAD_POOL_RATIO = 0.6
 
@@ -328,14 +332,7 @@ def payload_quality_issues_local(payload: dict[str, Any]) -> list[str]:
 def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues: list[str]) -> dict[str, Any]:
     f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
     filters={}
-    for k in [
-        "company_names","company_ids","company_semantic_queries","investor_names",
-        "education_names","education_ids","metro_areas","cities","states","countries",
-        "macro_regions","seniority_bands","years_experience_min","years_experience_max",
-        "age_min","age_max",
-        "position_after_date","position_before_date","is_current_role","is_current_company",
-        "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
-    ]:
+    for k in PREVIEW_FILTER_KEYS:
         if payload.get("traits") and k in ("is_current_role", "is_current_company"):
             continue
         v=f.get(k)
@@ -541,11 +538,10 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
 
     if "role_semantic_query" in normalized and "semantic_query" not in normalized:
         normalized["semantic_query"] = normalized.get("role_semantic_query")
-    if "role_bm25_queries" in normalized:
-        normalized["bm25_queries"] = _dedupe_present([
-            *(normalized.get("bm25_queries") or []),
-            *(normalized.get("role_bm25_queries") or []),
-        ])
+    # The keywords live in `bm25_queries`; the older alias only stands in when it is absent, so a
+    # keyword the user removed stays removed.
+    if "role_bm25_queries" in normalized and "bm25_queries" not in normalized:
+        normalized["bm25_queries"] = _dedupe_present(normalized.get("role_bm25_queries") or [])
 
     id_entity_keys = {
         "company_ids", "cities", "states", "countries", "metro_areas", "macro_regions",
@@ -1004,7 +1000,9 @@ def run_pipeline_local(args) -> dict[str, Any]:
     if pin_current:
         payload=pin_payload_current_role(payload, True)
     payload, ignored_scope_keys=prepare_local_payload(payload)
-    payload=apply_local_title_clustering(payload, db_path)
+    # Clustered once, at prepare; clustering again at run would add back a keyword the user removed.
+    if not payload_filters(payload).get("local_title_clustering_status"):
+        payload=apply_local_title_clustering(payload, db_path)
     if args.payload_json:
         sanitized_path=lp.parent/f"{lp.stem}.local-payload.json"
         write_json(sanitized_path,payload)

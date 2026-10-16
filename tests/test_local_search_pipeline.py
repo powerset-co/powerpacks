@@ -413,6 +413,19 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_removed_keyword_stays_removed_beside_the_older_alias(self) -> None:
+        # The card's edit writes bm25_queries; the alias from the expand step must not merge it back.
+        mod = load_pipeline_module()
+        payload = {
+            "original_query": "software engineers in sf",
+            "filters": {
+                "bm25_queries": ["software engineer"],
+                "role_bm25_queries": ["software engineer", "backend engineer"],
+            },
+        }
+        filters = mod.normalize_query_expansion_payload(payload)["role_search_filters"]
+        self.assertEqual(filters["bm25_queries"], ["software engineer"])
+
     def test_normalize_query_expansion_payload_accepts_prod_role_schema(self) -> None:
         mod = load_pipeline_module()
         payload = {
@@ -1205,6 +1218,36 @@ class NarrowPoolPreviewTests(unittest.TestCase):
                                return_value={"status": "completed", "matched_people": 150, "total_people": 500}):
             preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
         self.assertFalse(any("suspiciously narrow" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
+
+
+class PreviewFilterKeysTests(unittest.TestCase):
+    """The card edits every filter the person can set, so the preview must carry them."""
+
+    EDITABLE = {
+        "fields_of_study": ["Mathematics"], "degree_levels": ["PhD"],
+        "graduation_year_min": 2010, "graduation_year_max": 2020,
+        "role_tracks": ["engineering"], "investor_names": ["Sequoia"],
+        "operator_interaction_min": 2, "operator_interaction_max": 9,
+        "set_interaction_min": 1, "set_interaction_max": 5,
+    }
+
+    def test_local_preview_carries_the_education_role_and_interaction_keys(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "scientists", "role_search_filters": {"cities": ["Boston"], **self.EDITABLE}}
+        with mock.patch.object(module, "local_pool_estimate",
+                               return_value={"status": "completed", "matched_people": 20, "total_people": 500}):
+            preview = module.compact_preview_local(payload, Path("payload.json"), Path("db.duckdb"), [])
+        for key, value in self.EDITABLE.items():
+            with self.subTest(key=key):
+                self.assertEqual(preview["filters"][key], value)
+
+    def test_powerset_preview_carries_the_same_keys(self):
+        module = load_pipeline_module()
+        payload = {"normalized_query": "scientists", "role_search_filters": {"cities": ["Boston"], **self.EDITABLE}}
+        preview = module.compact_preview(payload, Path("payload.json"), [])
+        for key, value in self.EDITABLE.items():
+            with self.subTest(key=key):
+                self.assertEqual(preview["filters"][key], value)
 
 
 class AgeFilterPreviewTests(unittest.TestCase):
