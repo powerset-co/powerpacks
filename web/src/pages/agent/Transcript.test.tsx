@@ -174,7 +174,30 @@ it("asks only on the newest card while the agent waits; the company fast path is
   expect(screen.queryByRole("button", { name: "Execute" })).toBeNull()
 })
 
-it("never offers a search again once a command has run after its card", () => {
+it("keeps asking when a command other than the run lands after the card", () => {
+  const logged: Entry = {
+    kind: "command",
+    id: "c2",
+    command: "uv run python packs/search/primitives/search_feedback/search_feedback.py log --kind query_edit",
+    status: "done",
+    exitCode: 0,
+    output: '{"status": "logged"}',
+    durationMs: 900,
+  }
+  render(
+    <Transcript
+      entries={[
+        prepared("c1", PREVIEW),
+        logged,
+        { kind: "agent", id: "a1", text: "Search prepared. Execute or modify?" },
+      ]}
+      running={false}
+    />,
+  )
+  expect(screen.getByRole("button", { name: "Execute" })).toBeTruthy()
+})
+
+it("never offers a search again once the run command has run after its card", () => {
   const ran: Entry = {
     kind: "command",
     id: "c2",

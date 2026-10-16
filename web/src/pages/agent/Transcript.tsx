@@ -187,14 +187,21 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   }
 }
 
+const RUN = /search_network_pipeline\.py\s+run\b/
+
 export function Transcript({ entries, running }: { entries: Entry[]; running: boolean }) {
   const turns = group(entries)
-  // Only the newest search card asks Execute or Modify, while the agent waits and until a command
-  // runs after it: then the search has run and the card is its record.
+  // Only the newest search card asks Execute or Modify, while the agent waits and until the
+  // search's run command runs after it: then the search has run and the card is its record. Other
+  // commands after the card (logging an edit beside the prepare) leave it asking.
   const newest = turns.filter((turn) => turn.kind === "search").at(-1)
   const ranSince = turns
     .slice(newest ? turns.indexOf(newest) + 1 : turns.length)
-    .some((turn) => turn.kind === "work" && turn.entries.some((entry) => entry.kind === "command"))
+    .some(
+      (turn) =>
+        turn.kind === "work" &&
+        turn.entries.some((entry) => entry.kind === "command" && RUN.test(entry.command)),
+    )
   const asking = !running && !ranSince
   return (
     <>
