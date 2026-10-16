@@ -91,6 +91,7 @@ function prepared(id: string, printed: Record<string, unknown>): Entry {
 }
 
 const PREVIEW = {
+  primitive: "search_network_pipeline",
   query: "VP of finance in New York",
   status: "preview_ready",
   preview: {
@@ -197,14 +198,19 @@ it("keeps asking when a command other than the run lands after the card", () => 
   expect(screen.getByRole("button", { name: "Execute" })).toBeTruthy()
 })
 
-it("never offers a search again once the run command has run after its card", () => {
+it("never offers a search again once the search ran after its card", () => {
+  // The run is known by what it printed, however the agent invoked it.
   const ran: Entry = {
     kind: "command",
     id: "c2",
-    command: "uv run python search_network_pipeline.py run --ledger pipeline.ledger.json --execute-approved",
+    command: "/bin/zsh -lc \"python3 - <<'PY'\nimport subprocess\nsubprocess.run(cmd)\nPY\"",
     status: "done",
     exitCode: 0,
-    output: "{}",
+    output: JSON.stringify(
+      { primitive: "search_network_pipeline", status: "completed", summary: { rows: 207 } },
+      null,
+      2,
+    ),
     durationMs: 26000,
   }
   render(
@@ -228,6 +234,7 @@ it("shows a blocked search's blockers under its notes and offers only Send chang
     <Transcript
       entries={[
         prepared("c1", {
+          primitive: "search_network_pipeline",
           query: "VP of finance in New York",
           status: "blocked_user_action",
           preview: {

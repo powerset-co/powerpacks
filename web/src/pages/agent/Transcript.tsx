@@ -1,5 +1,5 @@
 import { Spinner } from "@/components/shared"
-import { preparedSearch, type PreparedSearch } from "@/lib/agent/preparedSearch"
+import { preparedSearch, ranSearch, type PreparedSearch } from "@/lib/agent/preparedSearch"
 import { cn } from "@/lib/utils"
 import type { Entry, ItemStatus } from "@/types/agent"
 
@@ -187,21 +187,15 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   }
 }
 
-const RUN = /search_network_pipeline\.py\s+run\b/
-
 export function Transcript({ entries, running }: { entries: Entry[]; running: boolean }) {
   const turns = group(entries)
   // Only the newest search card asks Execute or Modify, while the agent waits and until the
-  // search's run command runs after it: then the search has run and the card is its record. Other
+  // search ran after it (its run printed a result): then the card is the search's record. Other
   // commands after the card (logging an edit beside the prepare) leave it asking.
   const newest = turns.filter((turn) => turn.kind === "search").at(-1)
   const ranSince = turns
     .slice(newest ? turns.indexOf(newest) + 1 : turns.length)
-    .some(
-      (turn) =>
-        turn.kind === "work" &&
-        turn.entries.some((entry) => entry.kind === "command" && RUN.test(entry.command)),
-    )
+    .some((turn) => turn.kind === "work" && turn.entries.some(ranSearch))
   const asking = !running && !ranSince
   return (
     <>

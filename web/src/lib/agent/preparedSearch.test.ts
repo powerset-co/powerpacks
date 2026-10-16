@@ -2,19 +2,38 @@ import { expect, it } from "vitest"
 
 import type { Entry } from "@/types/agent"
 
-import { preparedSearch } from "./preparedSearch"
+import { preparedSearch, ranSearch } from "./preparedSearch"
 
+// The agent may run the primitive inside a script: the card comes from what it printed.
 function prepared(printed: Record<string, unknown>): Entry {
   return {
     kind: "command",
     id: "c1",
-    command: "uv run python search_network_pipeline.py prepare --backend local --query 'VP of finance'",
+    command: "/bin/zsh -lc \"uv run python - <<'PY'\nimport subprocess\nsubprocess.run(prepare)\nPY\"",
     status: "done",
     exitCode: 0,
-    output: `warning: uv is resolving\n${JSON.stringify(printed, null, 2)}\n`,
+    output: `warning: uv is resolving\n${JSON.stringify({ primitive: "search_network_pipeline", ...printed }, null, 2)}\n`,
     durationMs: 3900,
   }
 }
+
+it("knows the search's run by what it printed, and a prepare or any other command as not it", () => {
+  expect(ranSearch(prepared({ status: "completed", summary: { rows: 207 } }))).toBe(true)
+  expect(
+    ranSearch(prepared({ query: "VP of finance", status: "preview_ready", preview: { filters: {} } })),
+  ).toBe(false)
+  const logged: Entry = {
+    kind: "command",
+    id: "c2",
+    command: "uv run python search_feedback.py log --kind query_edit",
+    status: "done",
+    exitCode: 0,
+    output: '{"status": "logged", "kind": "query_edit"}',
+    durationMs: 900,
+  }
+  expect(ranSearch(logged)).toBe(false)
+  expect(preparedSearch(prepared({ status: "completed", summary: { rows: 207 } }))).toBeNull()
+})
 
 it("keeps each filter's value as the payload holds it, the role intent after the filters", () => {
   const search = preparedSearch(
