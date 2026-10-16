@@ -147,6 +147,9 @@ describe("RunView", () => {
     renderRun(null, NOT_STOPPED, QUICK_RUN)
     expect(document.querySelector("[data-ponds]")).toBeNull()
     expect(screen.queryByText(/Kept/)).toBeNull()
+    // No job description, so no hiring company and no team under the title.
+    expect(screen.queryByText("Company unknown")).toBeNull()
+    expect(screen.queryByText("No team information available")).toBeNull()
     const filters = within(screen.getByRole("region", { name: "Search filters" }))
     // The title is the query, so no Query row.
     expect(filters.queryByText("Query")).toBeNull()
