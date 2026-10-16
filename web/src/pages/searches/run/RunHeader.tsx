@@ -19,14 +19,15 @@ interface RunHeaderProps {
   actions: ReactNode
 }
 
-// The run's name and facts on one compact block, the job description and the hiring
-// company's team folded under them (rendering.py _search); the actions slot sits at its right.
+// The run's name and facts on one compact block; a run with a job description also names the
+// hiring company and folds the description and the company's team under them (rendering.py
+// _search). The actions slot sits at its right.
 export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
   const [jdOpen, setJdOpen] = useState(false)
   return (
     <header className="run-head" data-run-head>
       <div className="run-head-id">
-        <small>{search.company || "Company unknown"}</small>
+        {search.jd_text ? <small>{search.company || "Company unknown"}</small> : null}
         <h1>{search.title}</h1>
         <p className="run-head-facts">
           {status === undefined ? null : (
@@ -43,17 +44,19 @@ export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
           {search.total_cost_usd ? <span>{money(search.total_cost_usd)}</span> : null}
         </p>
         {search.jd_text ? (
-          <DetailsSection
-            sectionKey="jd"
-            className="run-jd"
-            title="Job description"
-            open={jdOpen}
-            onToggle={setJdOpen}
-          >
-            <JobDescription text={search.jd_text} />
-          </DetailsSection>
+          <>
+            <DetailsSection
+              sectionKey="jd"
+              className="run-jd"
+              title="Job description"
+              open={jdOpen}
+              onToggle={setJdOpen}
+            >
+              <JobDescription text={search.jd_text} />
+            </DetailsSection>
+            <TeamPanel search={search} />
+          </>
         ) : null}
-        <TeamPanel search={search} />
       </div>
       {actions ? <div className="run-head-actions">{actions}</div> : null}
     </header>
