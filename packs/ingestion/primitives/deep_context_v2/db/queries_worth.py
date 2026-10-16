@@ -113,18 +113,6 @@ def all_connections(conn: sqlite3.Connection) -> list[Connection]:
     return connections
 
 
-def latest_machine_worth_fingerprints(conn: sqlite3.Connection) -> dict[str, str]:
-    """Each candidate's latest machine worth row's evidence fingerprint: what worth last judged."""
-    fingerprints: dict[str, str] = {}
-    for row in conn.execute(
-        "SELECT candidate_id, input_fingerprint FROM worth w WHERE decided_by = ? "
-        "AND seq = (SELECT MAX(seq) FROM worth WHERE candidate_id = w.candidate_id AND decided_by = ?)",
-        (DecidedBy.MACHINE.value, DecidedBy.MACHINE.value),
-    ):
-        fingerprints[row["candidate_id"]] = row["input_fingerprint"]
-    return fingerprints
-
-
 def append_worth(conn: sqlite3.Connection, rows: list[WorthRow]) -> None:
     """Worth is a ledger: every decision is a new row."""
     for batch in _batches(rows, BATCH):

@@ -3,8 +3,9 @@
 A family contains the candidates with a current parent, or one unparented candidate.
 Only families with facts are judged. An exact LinkedIn pre-match is worth yes in code;
 Luna supplies everyone's labels and everyone else's worth. One worth row is written
-per member. A family is judged once per question version; an explicit People refresh
-asks its selected families again, reusing the exact-request cache.
+per member. Every family is asked every run, or the selected ones on a People refresh with a
+selection: an unchanged request is answered from the exact-request cache for free, changed
+facts or a question version bump are a new request.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_worth import BundleCo
 from packs.ingestion.primitives.deep_context_v2.db import schema
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.decisions import (
-    INPUT_PRICE_PER_MILLION, cache_path, decide_all, input_tokens, request_digest,
+    INPUT_PRICE_PER_MILLION, decide_all, input_tokens, request_digest, saved_answers,
 )
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
@@ -39,7 +40,7 @@ LABELS_TOKENS_PER_QUESTION = 107
 LABELS_PHASE = "Reading signals"
 PRE_MATCHED_REASON = "Already in the network: the name matches one LinkedIn connection."
 NOTABLE_REASON_PREFIX = "Notable position: "
-DEFAULT_LIMIT = 100_000  # more families than any store has; --limit N judges the first N pending
+DEFAULT_LIMIT = 100_000  # more families than any store has; --limit N judges the first N
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,6 @@ class Family:
     key: str
     members: tuple[str, ...]
     fingerprint: str
-    judged: bool                     # a member's latest machine worth row carries the version key
     match: Connection | None         # None = the pre-match did not tie the family to exactly one connection
     request: dict[str, Any]          # request 1: every family is labelled, pre-matched or not
     digest: str                      # its cache key
@@ -94,7 +94,6 @@ class Worth(Node):
             counts.setdefault(count.candidate_id, []).append(count)
         groups: dict[str, int] = bundles.groups
         connections: list[Connection] = queries.all_connections(self.conn)
-        judged: dict[str, str] = queries.latest_machine_worth_fingerprints(self.conn)
         owner: OwnerProfile = read_owner(self.conn)
 
         families: list[Family] = []
@@ -107,12 +106,6 @@ class Worth(Node):
             # The message counts: the members' bundles added together, counts only.
             summary: ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
             fingerprint: str = evidence.version_key()
-            # Judged once any member was, under these questions: a merge, or a new identity joining a
-            # judged person, asks nothing.
-            is_judged: bool = False
-            for member in members:
-                if judged.get(member.candidate_id) == fingerprint:
-                    is_judged = True
             # Every family gets Luna's labels, a pre-matched one included: its worth is yes by the match, its
             # labels come from the same request as everyone else's.
             member_bundles: list[CollectionBundle] = []
@@ -126,17 +119,15 @@ class Worth(Node):
             member_ids: list[str] = []
             for member in members:
                 member_ids.append(member.candidate_id)
-            families.append(Family(key, tuple(member_ids), fingerprint, is_judged, match, request, digest))
+            families.append(Family(key, tuple(member_ids), fingerprint, match, request, digest))
         return families
 
     def pending(self, families: list[Family]) -> list[Family]:
-        """The first `limit` families no member of which has a machine worth row under this version, and
-        every family People asked for again (`parent_ids`), judged or not. New facts never make a family
-        pending. Asking for a few people still brings everyone else up to the current version."""
+        """The first `limit` families to ask: the selected ones (`parent_ids`), or every family."""
         asked: frozenset[str] = frozenset(self.parent_ids)
         todo: list[Family] = []
         for family in families:
-            if not family.judged or family.key in asked:
+            if not asked or family.key in asked:
                 todo.append(family)
         return todo[: self.limit]
 
@@ -144,12 +135,9 @@ class Worth(Node):
         """Count families and price uncached Luna requests without making a call."""
         families: list[Family] = self.families()
         pending: list[Family] = self.pending(families)
-        fresh: int = 0
         members: int = 0
         for family in families:
             members += len(family.members)
-            if family.judged:
-                fresh += 1
         pre_matched: int = 0
         notable: int = 0
         cached: int = 0
@@ -159,12 +147,12 @@ class Worth(Node):
                 pre_matched += 1
                 if luna.NOTABLE_POSITION_RE.search(family.match.position):
                     notable += 1
-            if cache_path(self.cache_dir, family.digest).exists():
+            if saved_answers(self.cache_dir, family.digest, luna.refused) is not None:
                 cached += 1
             else:
                 tokens += input_tokens(family.request) + LABELS_TOKENS_PER_QUESTION * len(family.request["questions"])
         return {
-            "families": len(families), "members": members, "fresh": fresh,
+            "families": len(families), "members": members,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,
             "requests": len(pending), "cached": cached, "input_tokens": tokens,
             "estimated_cost_usd": round(tokens * INPUT_PRICE_PER_MILLION / 1_000_000, 4),
@@ -172,13 +160,14 @@ class Worth(Node):
         }
 
     def execute(self, *, cache_only: bool = False) -> dict[str, int]:
-        """Ask Luna once per pending family and write one worth row per member."""
+        """Ask Luna once per family to ask and write one worth row per member."""
         todo: list[Family] = self.pending(self.families())
         requests: dict[str, dict[str, Any]] = {}  # digest -> request
         for family in todo:
             requests[family.digest] = family.request
         answers = asyncio.run(decide_all(requests, self.cache_dir, cache_only=cache_only, stage="worth_labels",
-                                         on_progress=lambda done, total: self.progress(LABELS_PHASE, done, total)))
+                                         on_progress=lambda done, total: self.progress(LABELS_PHASE, done, total),
+                                         refused=luna.refused))
         verdicts: dict[str, Verdict] = {}  # family key -> its verdict
         pre_matched: int = 0
         for family in todo:
@@ -213,7 +202,7 @@ class Worth(Node):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="06 Worth: yes, maybe or no per family (Luna Decisions).")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="judge only the first N pending families")
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="judge only the first N families")
     parser.add_argument("--dry-run", action="store_true", help="count and price only; no call, no manifest")
     args = parser.parse_args(argv)
     node = Worth(open_store(store_path(args.data_root)), args.data_root, limit=args.limit)

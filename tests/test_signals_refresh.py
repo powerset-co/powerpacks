@@ -84,7 +84,7 @@ class SignalsRefreshTests(StoreTests):
                 for row in self.conn.execute(f"SELECT * FROM {table}")]
 
     def test_refresh_rejudges_only_selected_families_without_removing_old_rows(self) -> None:
-        self.assertEqual(Worth(self.conn, self.root, limit=DEFAULT_LIMIT).estimate()["pending"], 0)
+        self.assertEqual(Worth(self.conn, self.root, limit=DEFAULT_LIMIT).estimate()["pending"], 2)
         refresh = Worth(self.conn, self.root, limit=DEFAULT_LIMIT, parent_ids=("p:a",))
         self.assertEqual([family.key for family in refresh.pending(refresh.families())], ["p:a"])
         before = self._snapshot()
@@ -94,12 +94,12 @@ class SignalsRefreshTests(StoreTests):
                 refresh.run()
         self.assertEqual(self._snapshot(), before)
 
-    def test_a_refresh_of_a_few_people_brings_older_signals_up_to_date(self) -> None:
-        # p:b was judged under older questions: any refresh asks it again, so the label export never mixes versions.
-        self._judged("c2", "an-older-version-key")
-        self.conn.commit()
-        self.assertEqual(self.signals.check(()).people, 1)
-        self.assertEqual(self.signals.check(("p:a",)).people, 2)
+    def test_a_refresh_asks_everyone_or_the_selection(self) -> None:
+        # Every family is asked every time; only the unsaved answers cost anything.
+        self._cache(self.families[1])
+        plan = self.signals.check(())
+        self.assertEqual((plan.people, plan.cached, plan.new_requests), (2, 1, 1))
+        self.assertEqual(self.signals.check(("p:a",)).people, 1)
 
     def test_a_family_luna_refuses_keeps_its_old_signals_and_labels_still_run(self) -> None:
         # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
@@ -111,12 +111,11 @@ class SignalsRefreshTests(StoreTests):
         self.conn.executemany("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
                               "VALUES (?, 'yes', 'human', 'mine', '2026-10-09')", [("c1",), ("c2",)])
         self.conn.commit()
-        cache = self.root / DECISIONS_CACHE_DIR
-        cache.mkdir(parents=True, exist_ok=True)
-        refusal = {"answers": [{"type": "refusal", "name": "relationship_kind"}], "usage": None}
-        decisions.cache_path(cache, self.families[0].digest).write_text(json.dumps(refusal))
-        self._cache(self.families[1])
-        manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
+        path = self._cache(self.families[1])
+        refusal = [{"type": "refusal", "name": "relationship_kind"}]
+        answers = {self.families[0].digest: refusal, self.families[1].digest: json.loads(path.read_text())["answers"]}
+        with mock.patch("packs.ingestion.primitives.deep_context_v2.worth.worth.decide_all", return_value=answers):
+            manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
         self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
         flags = dict(self.conn.execute("SELECT candidate_id, flag FROM person_labels").fetchall())
         self.assertEqual(flags, {"c1": "", "c2": "family"})
@@ -225,11 +224,11 @@ class SignalsRefreshTests(StoreTests):
             self.assertEqual(handler.response_status, 409)
             self.assertIn("confirm", json.loads(handler.wfile.getvalue())["error"])
 
-    def test_routes_refresh_whoever_needs_it_with_no_one_selected(self) -> None:
+    def test_routes_refresh_everyone_with_no_one_selected(self) -> None:
         routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
         handler = Handler(body=json.dumps({"people": []}).encode())
         routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
-        self.assertEqual(json.loads(handler.wfile.getvalue())["people"], 0)
+        self.assertEqual(json.loads(handler.wfile.getvalue())["people"], 2)
 
     def test_routes_reject_unknown_selection_and_other_origins(self) -> None:
         routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
