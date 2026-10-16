@@ -21,6 +21,11 @@ interface ShortcutTargets {
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
   label: (action: WorthAction, targets: readonly string[]) => Promise<void>
+  // The delete question and its answer (useDecisions).
+  askDelete: (targets: readonly string[]) => void
+  confirmDelete: () => void
+  armed: () => boolean
+  dismissToast: () => void
   // The selection, else the open person (PeopleWorkspace).
   targets: readonly string[]
 }
@@ -37,6 +42,10 @@ export function usePeopleShortcuts({
   selection,
   drawer,
   label,
+  askDelete,
+  confirmDelete,
+  armed,
+  dismissToast,
   targets,
 }: ShortcutTargets) {
   const focused = matching[focus]
@@ -64,11 +73,20 @@ export function usePeopleShortcuts({
     selectAll: selection.toggleAll,
     worthYes: () => act("yes"),
     worthNo: () => act("no"),
+    askDelete: () => {
+      if (targets.length) askDelete(targets)
+    },
+    confirmDelete: () => {
+      if (!armed()) return false
+      confirmDelete()
+      return true
+    },
     openFocused: () => {
       if (focused) drawer.toggle(focused.parent_id)
     },
     escape: () => {
-      if (drawer.openId) drawer.close()
+      if (armed()) dismissToast()
+      else if (drawer.openId) drawer.close()
       else if (selection.selected.size) selection.clear()
     },
   })

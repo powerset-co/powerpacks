@@ -8,12 +8,15 @@ export interface KeyboardActions {
   selectAll: () => void
   worthYes: () => void
   worthNo: () => void
+  askDelete: () => void
+  // Enter answers an open delete question; true when it did, else Enter opens the focused row.
+  confirmDelete: () => boolean
   openFocused: () => void
   escape: () => void
 }
 
 // Keys whose action should not fire again while held down.
-const NO_REPEAT = new Set(["y", "n", "x", " ", "Enter"])
+const NO_REPEAT = new Set(["y", "n", "d", "x", " ", "Enter"])
 const TABS: Record<string, 0 | 1 | 2> = { "1": 0, "2": 1, "3": 2 }
 
 /** The page's shortcuts while `active`. Typing in a field only honours Escape (it leaves the field). */
@@ -63,8 +66,11 @@ export function useKeyboard(active: boolean, run: KeyboardActions) {
       case "n":
         run.worthNo()
         break
+      case "d":
+        run.askDelete()
+        break
       case "Enter":
-        run.openFocused()
+        if (!run.confirmDelete()) run.openFocused()
         break
       case "Escape":
         run.escape()

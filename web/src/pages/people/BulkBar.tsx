@@ -18,6 +18,7 @@ interface BulkBarProps {
   logbook: LogbookAction | null
   onLogbook: () => void
   onAction: (action: WorthAction) => void
+  onDelete: () => void
   onClear: () => void
 }
 
@@ -29,6 +30,7 @@ export function BulkBar({
   building,
   logbook,
   onAction,
+  onDelete,
   onLogbook,
   onClear,
 }: BulkBarProps) {
@@ -64,6 +66,10 @@ export function BulkBar({
         </Button>
       ) : null}
       {logbook ? <ActionBarRule /> : null}
+      <Button variant="bad" shape="pill" className={BAR_BUTTON} disabled={disabled} onClick={onDelete}>
+        Delete <Kbd className="ml-0.5">D</Kbd>
+      </Button>
+      <ActionBarRule />
       <Button variant="ghost" shape="pill" className={BAR_BUTTON} onClick={onClear}>
         {selection ? "Clear selection" : "Close"} <Kbd className="ml-0.5">Esc</Kbd>
       </Button>
