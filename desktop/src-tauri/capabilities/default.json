@@ -36,6 +36,8 @@
     "allow-setup-import",
     "allow-app-focus",
     "allow-open-external",
-    "allow-update-check"
+    "allow-update-check",
+    "allow-update-install",
+    "allow-update-restart"
   ]
 }

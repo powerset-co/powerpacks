@@ -3,6 +3,8 @@
 The Powerpacks desktop app (Tauri 2). One installer: open it, sign in. The app carries everything
 it runs: uv, Codex, and a snapshot of this repo. It is built for macOS only.
 
+Changelog: 2026-10-15 — Install signed updates in the app and restart to run them.
+
 ```mermaid
 flowchart LR
   app[Tauri window] -->|first launch| src[unpack source to ~/.powerpacks/app]
@@ -92,3 +94,18 @@ the app, and it opens like any other download. All come from an Apple Developer 
 | `APPLE_API_ISSUER` | App Store Connect → Users and Access → Integrations → App Store Connect API: the Issuer ID |
 | `APPLE_API_KEY` | That API key's Key ID (a key with the Developer role) |
 | `APPLE_API_KEY_CONTENT` | The contents of the downloaded `AuthKey_<KEY>.p8` |
+
+**Updater.** Updates use a separate minisign key pair. Keep the private key at
+`~/.tauri/powerpacks-updater.key` and its contents in the repository secret
+`TAURI_SIGNING_PRIVATE_KEY`; the public key is in `tauri.conf.json` under
+`plugins.updater.pubkey`. With `bundle.createUpdaterArtifacts` enabled, local builds need:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/powerpacks-updater.key)"
+```
+
+CI publishes the signed `.app.tar.gz` and `latest.json` beside the dmg. The app checks that
+feed, downloads and verifies the update, installs it in place, then offers a restart.
+For a local test feed, bake alternate `plugins.updater.endpoints` into the app with
+`pnpm tauri build --config '<JSON config override>'`. An `http://` endpoint also needs
+`"dangerousInsecureTransportProtocol": true` beside `endpoints` in `plugins.updater`.
