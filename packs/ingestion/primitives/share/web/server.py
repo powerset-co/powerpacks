@@ -3,6 +3,7 @@
 POST /api/people/worth records human worth for every member of the selected families.
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
+POST /api/people/delete {ids} deletes each family from the store for good; returns `deleted`, the count.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
 GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
@@ -13,6 +14,7 @@ GET `/api/people/logbook` reads build status; POST builds the selected parents' 
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 
 Changelog:
+  2026-10-16: POST /api/people/delete.
   2026-10-07: v2 store; a decision writes every member of the family.
   2026-09-26: created.
   2026-09-26: serves the React build from web/dist; legacy page and vendor/ removed.
@@ -101,6 +103,18 @@ def parse_worth_request(body: bytes, known_ids: set[str]) -> tuple[tuple[str, ..
     return tuple(dict.fromkeys(ids)), worth
 
 
+def parse_delete_request(body: bytes) -> tuple[str, ...]:
+    """The parent ids to delete, validated for shape at the HTTP boundary."""
+    try:
+        request = json.loads(body)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"invalid JSON body: {exc}") from exc
+    ids = request.get("ids") if isinstance(request, dict) else None
+    if not isinstance(ids, list) or not ids or not all(isinstance(value, str) for value in ids):
+        raise ValueError("ids must be a non-empty list of parent ids")
+    return tuple(dict.fromkeys(ids))
+
+
 def _members(conn: sqlite3.Connection) -> dict[str, list[str]]:
     members: dict[str, list[str]] = {}
     for row in conn.execute("SELECT parent_id, candidate_id FROM current_parent"):
@@ -182,7 +196,7 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+        if parsed.path not in {f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
                                f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
                                f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
                                f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
@@ -243,6 +257,9 @@ class ShareRoutes:
             return True
         known = {row.parent_id for row in self.load()}
         body = handler.rfile.read(length)
+        if parsed.path == f"{API_PREFIX}delete":
+            self._delete(handler, body, known)
+            return True
         try:
             if parsed.path == f"{API_PREFIX}worth":
                 ids, worth = parse_worth_request(body, known)
@@ -262,6 +279,19 @@ class ShareRoutes:
             return True
         self._send_json(handler, {"rows": [asdict(row) for row in self.load() if row.parent_id in ids]})
         return True
+
+    def _delete(self, handler: BaseHTTPRequestHandler, body: bytes, known: set[str]) -> None:
+        try:
+            ids = parse_delete_request(body)
+        except ValueError as exc:
+            self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not set(ids) <= known:
+            self._send_json(handler, {"error": "Some selected people no longer exist. Reload People and try again."},
+                            status=HTTPStatus.CONFLICT)
+            return
+        self.people.delete(ids)
+        self._send_json(handler, {"deleted": len(ids)})
 
     def _refresh_signals(self, handler: BaseHTTPRequestHandler, *, check: bool) -> None:
         length = int(handler.headers.get("Content-Length") or 0)
