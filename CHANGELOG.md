@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.28.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.28.0...powerpacks-v3.28.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **people:** the decision reads Keep or Skip ([#846](https://github.com/powerset-co/powerpacks/issues/846)) ([3d3a525](https://github.com/powerset-co/powerpacks/commit/3d3a5258ec80f0feb822f1510b0dd13d0fbb0b26))
+
 ## [3.28.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.27.0...powerpacks-v3.28.0) (2026-10-16)
 
 
