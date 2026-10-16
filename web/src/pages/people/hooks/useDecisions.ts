@@ -13,8 +13,8 @@ import { UPLOAD_KEY } from "../upload/useUpload"
 import { PEOPLE_QUERY_KEY } from "./usePeopleQuery"
 
 const DONE: Record<WorthAction, (count: number) => string> = {
-  yes: (count) => `Marked ${plural(count, "person")} worth it.`,
-  no: (count) => `Marked ${plural(count, "person")} not worth it.`,
+  yes: (count) => `Kept ${plural(count, "person")}.`,
+  no: (count) => `Skipped ${plural(count, "person")}.`,
 }
 
 function patchRows(rows: Person[] | undefined, results: readonly WorthResult[]): Person[] | undefined {

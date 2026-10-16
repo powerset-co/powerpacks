@@ -18,9 +18,9 @@ export type TextKind =
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
   reason: {
-    worth_yes: "Worth: yes",
-    worth_maybe: "Worth: maybe",
-    worth_no: "Worth: no",
+    worth_yes: "Keep",
+    worth_maybe: "Maybe",
+    worth_no: "Skip",
     unjudged: "Not assessed",
     owner: "You (the owner)",
     human_worth: "Your call",
@@ -34,7 +34,7 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     automated_sender: "Automated sender",
     stranger: "Stranger",
   },
-  worth: { yes: "Yes", maybe: "Maybe", no: "No", unjudged: "Not assessed" },
+  worth: { yes: "Keep", maybe: "Maybe", no: "Skip", unjudged: "Not assessed" },
   source: { human: "You", machine: "AI" },
   intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
   function: { founder_exec: "Founder or executive", people: "People and recruiting" },
@@ -125,16 +125,16 @@ export const UPLOAD_TITLE: Readonly<Record<UploadPhase, string>> = {
 
 // A failed phase shows the server's sentence instead.
 export const UPLOAD_SENTENCE: Readonly<Record<CalmPhase, string>> = {
-  idle: "Only people worth it are uploaded.",
+  idle: "Only people you keep are uploaded.",
   checking: "Counting who will upload. Nothing is shared yet.",
-  ready: "Only people worth it with a LinkedIn profile upload.",
+  ready: "Only people you keep with a LinkedIn profile upload.",
   uploading: "Closing keeps the upload running.",
-  completed: "Only people worth it are uploaded.",
+  completed: "Only people you keep are uploaded.",
 }
 
 // The check's plan, in order; a zero row is hidden except what will upload.
 export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
-  { key: "marked_share", label: "Worth it" },
+  { key: "marked_share", label: "Kept" },
   { key: "with_linkedin", label: "With LinkedIn, will upload" },
   { key: "without_linkedin", label: "Without LinkedIn, stay local" },
   { key: "new_to_cloud", label: "New to the cloud" },

@@ -58,7 +58,7 @@ export const FACETS: readonly FacetDef[] = [
   { key: "reason", label: "Reason", get: (r) => [r.reason], words: "reason" },
   {
     key: "worth",
-    label: "Worth",
+    label: "Decision",
     get: (r) => [r.worth || "unjudged"],
     words: "worth",
   },
@@ -82,7 +82,7 @@ export const FACETS: readonly FacetDef[] = [
   },
   {
     key: "worth_source",
-    label: "Worth decided by",
+    label: "Decided by",
     get: (r) => one(r.worth_source),
     words: "source",
   },

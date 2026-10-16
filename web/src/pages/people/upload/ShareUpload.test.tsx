@@ -164,7 +164,7 @@ describe("ShareUpload dialog", () => {
     await within(dialog).findByRole("heading", { name: "Ready to share" }, POLLED)
     const terms = [...dialog.querySelectorAll("dt")].map((term) => term.textContent)
     expect(terms).toEqual([
-      "Worth it",
+      "Kept",
       "With LinkedIn, will upload",
       "Without LinkedIn, stay local",
       "New to the cloud",
