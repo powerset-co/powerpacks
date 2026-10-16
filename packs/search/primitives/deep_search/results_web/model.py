@@ -787,8 +787,8 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
 
 
 def record_quick_search(root: Path, run_id: str, *, query: str, created_at: str,
-                        jsonl: str, profiles_path: str) -> None:
-    """Save a finished quick search as a one-pond run beside the deep ones, and list it."""
+                        jsonl: str, profiles_path: str, status: str) -> None:
+    """Save a quick search as a one-pond run beside the deep ones, and list it."""
     rows = len(tuple(_jsonl_rows(_artifact_path(root, jsonl))))
     artifacts = {"jsonl": jsonl, "profiles_path": profiles_path}
     payload = {
@@ -799,7 +799,7 @@ def record_quick_search(root: Path, run_id: str, *, query: str, created_at: str,
                     "groups": {}, "total_cost_usd": 0},
     }
     write_json(root / run_id / "results.json", payload)
-    card = SearchCard(run_id=run_id, title=query, company="", status="completed",
+    card = SearchCard(run_id=run_id, title=query, company="", status=status,
                       created_at=created_at, updated_at=created_at, search_version="quick",
                       candidates=rows, ponds_run=1, cost_usd=0.0)
     catalog = _payload(root / CATALOG_FILE) or {}

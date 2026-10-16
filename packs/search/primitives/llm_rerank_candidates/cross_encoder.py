@@ -1,36 +1,9 @@
-"""Score training-format original evidence through the authenticated CE gateway."""
+"""Original profile evidence shared by the JD capability and candidate judges."""
 
 from __future__ import annotations
 
-import hashlib
 import json
-import math
-import os
-import sys
-import threading
-import time
-from contextlib import ExitStack
-from http import HTTPStatus
-from pathlib import Path
-from typing import Any
 
-import httpx
-
-ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/rerank"
-WARMUP_ENDPOINT = "https://proxy.powerset.dev/vendor/cross-encoder/warmup"
-SCORE_TYPE = "expected_rating_1_to_5"
-WARMUP_TIMEOUT = 240
-GATEWAY_RETRIES = 3
-GATEWAY_RETRY_DELAY = 30
-MAX_PAIRS = 1000
-MAX_TEXT_CHARS = 131072
-MAX_REQUEST_BYTES = 32 * 1024 * 1024
-MAX_INPUT_TOKENS = 32768
-FIT_INSTRUCTION = (
-    "Rank demonstrated job fit: skills, qualifications, experience and scope. "
-    "Ignore location, commute, onsite availability and relocation requirements when scoring. "
-    "Unknown evidence is not a demonstrated mismatch. Do not infer protected attributes."
-)
 _POSITION_FIELDS = (
     ("title", ("title", "position_title")), ("company", ("company", "company_name")),
     ("start", ("start", "start_date")), ("end", ("end", "end_date")),
@@ -39,28 +12,6 @@ _POSITION_FIELDS = (
     ("stage", ("stage", "company_stage")), ("funding_total", ("funding_total", "company_funding_total")),
     ("investors", ("investors", "investor_names")),
 )
-
-
-def warm_workers(*, api_key: str | None = None) -> None:
-    """Start loading workers without holding up retrieval or process exit."""
-    key = api_key if api_key is not None else os.environ.get("POWERSET_API_KEY")
-    if not key:
-        print("cross-encoder warmup: skipped (missing POWERSET_API_KEY)", file=sys.stderr)
-        return
-
-    def request() -> None:
-        try:
-            with httpx.Client(timeout=WARMUP_TIMEOUT) as client:
-                response = client.post(WARMUP_ENDPOINT, headers={
-                    "x-powerset-key": key, "x-ce-score-type": SCORE_TYPE,
-                })
-                response.raise_for_status()
-        except httpx.HTTPError:
-            print("cross-encoder warmup: unavailable; scoring will start workers if needed", file=sys.stderr)
-            return
-        print("cross-encoder warmup: ready", file=sys.stderr)
-
-    threading.Thread(target=request, name="cross-encoder-warmup", daemon=True).start()
 
 
 def profile_evidence(person: dict) -> dict:
@@ -82,129 +33,3 @@ def profile_evidence(person: dict) -> dict:
         companies[json.dumps(context, sort_keys=True, ensure_ascii=False)] = context
     profile.update(positions=positions, companies=list(companies.values()))
     return profile
-
-
-def _batches(query: str, profiles: dict[str, dict]) -> list[tuple[list[str], bytes]]:
-    if not isinstance(query, str) or not 1 <= len(query) <= MAX_TEXT_CHARS:
-        raise ValueError("Cross-encoder query must contain 1–131072 characters; nothing truncated")
-    batches = []
-    ids: list[str] = []
-    encoded: list[bytes] = []
-    size = len(b'{"pairs":[]}')
-    for person_id, profile in profiles.items():
-        if not isinstance(person_id, str) or not 1 <= len(person_id) <= 256:
-            raise ValueError("Cross-encoder candidate IDs must contain 1–256 characters")
-        passage = json.dumps(profile_evidence(profile), ensure_ascii=False, separators=(",", ":"))
-        if len(passage) > MAX_TEXT_CHARS:
-            raise ValueError("Cross-encoder profile exceeds 131072 characters; nothing truncated")
-        pair = json.dumps({"id": person_id, "query": query, "passage": passage},
-                          ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if len(pair) + len(b'{"pairs":[]}') > MAX_REQUEST_BYTES:
-            raise ValueError("Cross-encoder pair exceeds request byte limit; nothing truncated")
-        if encoded and (len(ids) == MAX_PAIRS or size + len(pair) + 1 > MAX_REQUEST_BYTES):
-            batches.append((ids, b'{"pairs":[' + b",".join(encoded) + b"]}"))
-            ids, encoded, size = [], [], len(b'{"pairs":[]}')
-        size += len(pair) + bool(encoded)
-        ids.append(person_id)
-        encoded.append(pair)
-    if encoded:
-        batches.append((ids, b'{"pairs":[' + b",".join(encoded) + b"]}"))
-    return batches
-
-
-def _validate(response: Any, ids: list[str]) -> list[dict]:
-    try:
-        if response["score_type"] not in ("raw_yes_minus_no_logit", SCORE_TYPE):
-            raise ValueError
-        rows = response["scores"]
-        if not isinstance(rows, list) or len(rows) != len(ids):
-            raise ValueError
-        scores = {}
-        for row in rows:
-            score = row["score"]
-            if type(score) not in (int, float) or not math.isfinite(score):
-                raise ValueError
-            if response["score_type"] == SCORE_TYPE and not 1 <= score <= 5:
-                raise ValueError
-            scores[row["id"]] = score
-        if set(scores) != set(ids):
-            raise ValueError
-        if any(not isinstance(response[field], str) or not response[field] for field in ("model", "revision")):
-            raise ValueError
-        usage = response["usage"]
-        if any(type(usage[field]) is not int or usage[field] < 0
-               for field in ("pairs", "input_tokens", "output_tokens", "max_tokens", "truncated")):
-            raise ValueError
-        if (usage["pairs"] != len(ids) or usage["truncated"] != 0
-                or not 1 <= usage["max_tokens"] <= MAX_INPUT_TOKENS
-                or usage["input_tokens"] < max(usage["max_tokens"], len(ids))):
-            raise ValueError
-        return [{"id": person_id, "score": scores[person_id]} for person_id in ids]
-    except (KeyError, TypeError, ValueError, OverflowError):
-        raise RuntimeError("Cross-encoder returned an invalid response; scores not applied") from None
-
-
-def score_candidates(*, query: str, profiles: dict[str, dict], output_dir: Path,
-                     api_key: str | None = None) -> dict:
-    """Preserve input order and reuse exact successful requests without charging again."""
-    result = {
-        "status": "ok" if profiles else "empty", "model": None, "revision": None, "adapter": None,
-        "score_type": "raw_yes_minus_no_logit", "scores": [], "artifacts": [], "requests": 0,
-        "cached_batches": 0,
-        "usage": {"pairs": 0, "input_tokens": 0, "output_tokens": 0, "max_tokens": 0, "truncated": 0},
-    }
-    if not profiles:
-        return result
-    batches = _batches(query, profiles)
-    key = api_key if api_key is not None else os.environ.get("POWERSET_API_KEY")
-    client = None
-    with ExitStack() as stack:
-        for ids, body in batches:
-            digest = hashlib.sha256(f"{ENDPOINT}\n{SCORE_TYPE}\n".encode() + body).hexdigest()
-            cache = output_dir / "cross_encoder" / f"{digest}.json"
-            cached = cache.exists()
-            if cached:
-                try:
-                    response = json.loads(cache.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    raise RuntimeError("Cross-encoder cache is unreadable; preserved without another paid request") from None
-            else:
-                if not key:
-                    raise RuntimeError("Cross-encoder beta requires POWERSET_API_KEY")
-                if client is None:
-                    client = stack.enter_context(httpx.Client(timeout=600))
-                for attempt in range(GATEWAY_RETRIES + 1):
-                    try:
-                        http = client.post(ENDPOINT, content=body, headers={
-                            "x-powerset-key": key, "content-type": "application/json",
-                            "x-ce-score-type": SCORE_TYPE,
-                        })
-                    except httpx.HTTPError:
-                        raise RuntimeError("Cross-encoder request failed; no automatic retry") from None
-                    result["requests"] += 1
-                    if http.status_code not in (HTTPStatus.BAD_GATEWAY, HTTPStatus.SERVICE_UNAVAILABLE) or attempt == GATEWAY_RETRIES:
-                        break
-                    print(f"cross-encoder HTTP {http.status_code}; retry {attempt + 1}/{GATEWAY_RETRIES} in {GATEWAY_RETRY_DELAY}s", file=sys.stderr)
-                    time.sleep(GATEWAY_RETRY_DELAY)
-                if http.status_code != HTTPStatus.OK:
-                    raise RuntimeError(f"Cross-encoder HTTP {http.status_code}; scoring failed")
-                try:
-                    response = http.json()
-                except ValueError:
-                    raise RuntimeError("Cross-encoder returned an invalid response; scores not applied") from None
-            scores = _validate(response, ids)
-            if not cached:
-                cache.parent.mkdir(parents=True, exist_ok=True)
-                with cache.open("x", encoding="utf-8") as handle:
-                    json.dump(response, handle, ensure_ascii=False)
-            metadata = {field: response.get(field) for field in ("model", "revision", "adapter", "score_type")}
-            if result["scores"] and any(result[field] != value for field, value in metadata.items()):
-                raise RuntimeError("Cross-encoder model changed between batches; scores not applied")
-            result.update(metadata)
-            result["scores"].extend(scores)
-            result["artifacts"].append(str(cache))
-            result["cached_batches"] += int(cached)
-            for field in ("pairs", "input_tokens", "output_tokens", "truncated"):
-                result["usage"][field] += response["usage"][field]
-            result["usage"]["max_tokens"] = max(result["usage"]["max_tokens"], response["usage"]["max_tokens"])
-    return result

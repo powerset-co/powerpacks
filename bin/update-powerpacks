@@ -220,7 +220,6 @@ case "$HARNESS" in
     ;;
 esac
 
-# Reuse provisioned credentials; no model calls or GPU warmup during an update.
 runtime_key_settings="$(python3 - "$REPO/.env" <<'PY'
 import sys
 from pathlib import Path
@@ -230,7 +229,7 @@ result = refresh_update_keys(Path(sys.argv[1]))
 for key, value in result.items():
     print(f"{key}={value}")
 if result["powerset_api_key_refresh"] != "refreshed":
-    print("Powerset key refresh unavailable; CE settings unchanged. Run $powerset login, "
+    print("Powerset key refresh unavailable. Run $powerset login, "
           "then $update-powerpacks to retry.", file=sys.stderr)
 PY
 )"
