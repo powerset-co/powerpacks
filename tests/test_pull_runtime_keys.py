@@ -136,33 +136,25 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertEqual(stage._read_env_file(env)["DATABASE_URL"], "postgresql://mine@db.example.test/app")
             self.assertEqual(result["database_url"], "not_provisioned")
 
-    def test_refresh_cross_encoder_updates_only_gateway_key_and_defaults_ce_on(self):
-        for preference in (None, "0", "1"):
-            with self.subTest(preference=preference), tempfile.TemporaryDirectory() as tmp:
-                env = Path(tmp) / ".env"
-                original = "# keep\nOPENAI_API_KEY=personal\nPOWERSET_API_KEY=old\n"
-                if preference is not None:
-                    original += f"POWERPACKS_CROSS_ENCODER_BETA={preference}\n"
-                env.write_text(original)
-                with mock.patch.object(stage, "bearer_token", return_value="tok") as bearer, \
-                     mock.patch.object(stage, "fetch_endpoint", return_value=(
-                         "ok", {"powerset_api_key": "refreshed-test-key"})) as fetch:
-                    result = stage.refresh_cross_encoder(env)
-                values = stage._read_env_file(env)
-                self.assertEqual(values["POWERSET_API_KEY"], "refreshed-test-key")
-                self.assertEqual(values["OPENAI_API_KEY"], "personal")
-                self.assertEqual(values["POWERPACKS_CROSS_ENCODER_BETA"], preference or "1")
-                self.assertIn("# keep", env.read_text())
-                self.assertEqual(env.stat().st_mode & 0o777, 0o600)
-                self.assertEqual(result, {
-                    "powerset_api_key_refresh": "refreshed",
-                    "cross_encoder": "disabled" if preference == "0" else "enabled",
-                })
-                bearer.assert_called_once_with(env)
-                self.assertEqual(fetch.call_args.args[1:], (
-                    "/v2/integrations/powerset-api/key", "tok"))
+    def test_refresh_gateway_key_updates_only_gateway_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            env.write_text("# keep\nOPENAI_API_KEY=personal\nPOWERSET_API_KEY=old\n")
+            with mock.patch.object(stage, "bearer_token", return_value="tok") as bearer, \
+                 mock.patch.object(stage, "fetch_endpoint", return_value=(
+                     "ok", {"powerset_api_key": "refreshed-test-key"})) as fetch:
+                result = stage.refresh_gateway_key(env)
+            self.assertEqual(stage._read_env_file(env), {
+                "POWERSET_API_KEY": "refreshed-test-key", "OPENAI_API_KEY": "personal",
+            })
+            self.assertIn("# keep", env.read_text())
+            self.assertEqual(env.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(result, {"powerset_api_key_refresh": "refreshed"})
+            bearer.assert_called_once_with(env)
+            self.assertEqual(fetch.call_args.args[1:], (
+                "/v2/integrations/powerset-api/key", "tok"))
 
-    def test_refresh_cross_encoder_leaves_settings_when_key_unavailable(self):
+    def test_refresh_gateway_key_leaves_settings_when_key_unavailable(self):
         for state, payload in (("not_provisioned", None), ("error", None), ("ok", {})):
             with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
                 env = Path(tmp) / ".env"
@@ -170,23 +162,22 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 env.write_text(original)
                 with mock.patch.object(stage, "bearer_token", return_value="tok"), \
                      mock.patch.object(stage, "fetch_endpoint", return_value=(state, payload)):
-                    result = stage.refresh_cross_encoder(env)
+                    result = stage.refresh_gateway_key(env)
                 self.assertEqual(env.read_text(), original)
                 self.assertEqual(result["powerset_api_key_refresh"],
                                  "error" if state == "ok" else state)
-                self.assertEqual(result["cross_encoder"], "disabled")
 
-    def test_refresh_cross_encoder_signed_out_does_not_create_env_or_call_api(self):
+    def test_refresh_gateway_key_signed_out_does_not_create_env_or_call_api(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
             with mock.patch.object(stage, "bearer_token", side_effect=SystemExit("signed out")), \
                  mock.patch.object(stage, "fetch_endpoint") as fetch:
-                result = stage.refresh_cross_encoder(env)
+                result = stage.refresh_gateway_key(env)
             self.assertEqual(result["powerset_api_key_refresh"], "not_signed_in")
             self.assertFalse(env.exists())
             fetch.assert_not_called()
 
-    def test_refresh_cross_encoder_handles_read_failure_without_changing_env(self):
+    def test_refresh_gateway_key_handles_read_failure_without_changing_env(self):
         for failure in (TimeoutError(), ConnectionResetError(),
                         json.JSONDecodeError("invalid response", "", 0)):
             with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as tmp:
@@ -196,7 +187,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 with mock.patch.object(stage, "bearer_token", return_value="tok"), \
                      mock.patch.object(stage.urllib.request, "urlopen") as open_url:
                     open_url.return_value.__enter__.return_value.read.side_effect = failure
-                    result = stage.refresh_cross_encoder(env)
+                    result = stage.refresh_gateway_key(env)
                 self.assertEqual(result["powerset_api_key_refresh"], "error")
                 self.assertEqual(env.read_text(), original)
 

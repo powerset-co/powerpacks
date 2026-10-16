@@ -33,7 +33,7 @@ class TerraPipelineTests(unittest.TestCase):
                         "--confirm-llm", "--filter-batch-size", "7",
                         *(["--jd-file", str(jd)] if jd_mode else [])])
                     result = {"returncode": 0, "json": {**payload, "state": str(state),
-                              "hydrated": 1, "passed_count": 1}}
+                              "hydrated": 1, "passed_count": 1, "ranked_count": 1, "row_count": 1}}
                     with mock.patch.dict(os.environ, {}, clear=True), \
                             mock.patch.object(pipeline, "ROOT", root), \
                             mock.patch.object(pipeline, "configure_local_backend_mode"), \
@@ -91,17 +91,15 @@ class TerraPipelineTests(unittest.TestCase):
             structured = "Title: Storage Engineer\nHiring company: Example Systems\n\nResponsibilities\n- Own storage.\n"
             with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
                     "--jd-file", str(jd_path), "--job-title", "Storage Engineer", "--job-company", "Example Systems",
-                    "--capability-judge", "terra", "--api-key", "synthetic-key", "--cross-encoder-beta",
+                    "--capability-judge", "terra", "--api-key", "synthetic-key",
                     "--evaluation-query", "Engineers; exclude frontend-only experience"]), \
                     mock.patch.object(reranker.jd_cleaner, "clean_job_description",
                                       return_value=structured) as cleaner, \
                     mock.patch.object(reranker.terra, "score_candidates", new_callable=mock.AsyncMock, return_value=native) as terra, \
                     mock.patch.object(reranker, "rerank_all") as luna, \
-                    mock.patch.object(reranker.cross_encoder, "score_candidates") as gemma, \
                     contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(reranker.main(), 0)
             luna.assert_not_called()
-            gemma.assert_not_called()
             cleaner.assert_called_once_with(
                 jd=jd_path.read_text(), title="Storage Engineer", company_name="Example Systems",
                 output_dir=mock.ANY, api_key="synthetic-key")
@@ -134,8 +132,7 @@ class TerraPipelineTests(unittest.TestCase):
             for command in ("prepare", "run"):
                 args = pipeline.build_parser().parse_args([command, "--query", "Engineers",
                     "--jd-file", str(jd), "--job-title", "Engineer", "--job-company", "Example",
-                    "--jd-cleaner-output-dir", str(cleaner_dir),
-                    "--cross-encoder-beta"])
+                    "--jd-cleaner-output-dir", str(cleaner_dir)])
                 self.assertEqual(pipeline.cross_encoder_child_args(args), [
                     "--jd-file", str(jd.resolve()), "--job-title", "Engineer", "--job-company", "Example",
                     "--jd-cleaner-output-dir", str(cleaner_dir)])

@@ -85,7 +85,7 @@ questions and a trained tree; see the [Jev README](../llm_rerank_candidates/jev/
 one full original profile per request, integer 1–5 output. The shared rubric and
 JD precede candidate evidence with an explicit prompt-cache breakpoint. Both
 downstream judges use the same prefix-first caching arrangement, with medium
-reasoning. Gemma warmup/scoring is skipped even if its beta environment flag is on.
+reasoning.
 
 For compatibility with saved results, capability ratings occupy the existing
 `cross_encoder` envelope, marked `model: gpt-5.6-terra` and

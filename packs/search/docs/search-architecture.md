@@ -162,50 +162,6 @@ pause. An explicit user request can reopen a completed run. The
 
 ## Execution and trust boundaries
 
-### Cross-encoder beta (off by default)
-
-`POWERPACKS_CROSS_ENCODER_BETA=1` opts into an additional scoring call after the
-LLM filter. The existing reranker stage runs its LLM fan-out and the hosted CE
-concurrently over the same full hydrated profiles; it remains the sole writer
-of their combined state. Deep ponds pass the complete JD alongside the pond
-query and qualifications. Explicit demographic fields are excluded from CE
-inputs; work history and company context are preserved without truncation.
-
-CE calls use the existing Powerset API key through vendor-gateway to GCP.
-Successful exact-request responses are cached within the search artifacts, in
-batches of at most 1,000 candidates. Search-only never invokes CE.
-An unavailable CE leaves ordinary reranking intact and records its failure.
-
-Approved full beta searches also send one background `POST /vendor/cross-encoder/warmup`
-before retrieval, using the same gateway key and env file. No candidate data is sent.
-Retrieval and filtering do not wait; warm-up errors do not stop the search. The
-request has a 240-second timeout and no retries. Preview, search-only,
-unapproved runs, and already-completed reranks do not warm workers (including
-forced replay of completed reranks). An approved interrupted run may warm again.
-
-Normal scores and ordering do not change. CSV/JSONL exports add separate
-`cross_encoder_score`, `cross_encoder_score_1_to_5`, `cross_encoder_model`, and `cross_encoder_status` fields
-only for beta runs. Rerank state holds model revision, token usage and cache
-paths. `cross_encoder_score` retains the raw yes-minus-no logit for ranking;
-`cross_encoder_score_1_to_5` is `1 + 4 * sigmoid(raw)`. The deployed base
-Qwen3-Reranker-8B has not learned the human rubric: this is normalized relevance,
-not a calibrated human rating or hiring probability.
-
-The results viewer's **JD Traits (Beta)** tab displays two-decimal `/5` scores,
-ordered by the raw score (rounded values can tie). Saved raw scores use the same
-conversion without rewriting paid caches or rerunning inference. It shows
-including candidates below the ordinary review cutoff. A person appearing in
-multiple ponds is shown once, using their highest CE score and that pond's
-profile and reasoning. The main view and human 1–5 review labels are unchanged;
-older runs without CE scores do not acquire a beta ordering.
-
-A LoRA trained only for pairwise order does not establish the 1–5 scale.
-For rubric scoring, train the native margin against `(human_rating - 1) / 4`
-using graded binary cross-entropy, with the same prompt and serialized inputs
-used in production. Validate held-out rating error and ranking before deploying
-the immutable merged checkpoint. Use a new output directory for that model:
-existing caches retain their recorded model revision.
-
 The sandbox is the local agent host. Python orchestration, subprocess control,
 decisions, and run artifacts stay there for both backends. The selected backend
 changes where retrieval and hydration execute; it does not change query and payload review.

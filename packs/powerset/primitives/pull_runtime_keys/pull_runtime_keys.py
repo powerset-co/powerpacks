@@ -199,11 +199,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
     return 0 if written else 2
 
 
-def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str, str]:
-    """Refresh the gateway key on update; default CE on, retaining explicit opt-outs."""
-    preference = _read_env_file(env_path).get("POWERPACKS_CROSS_ENCODER_BETA")
-    result = {"powerset_api_key_refresh": "not_signed_in",
-              "cross_encoder": "enabled" if preference == "1" else "disabled"}
+def refresh_gateway_key(env_path: Path, token: str | None = None) -> dict[str, str]:
+    """Refresh the gateway key on update."""
+    result = {"powerset_api_key_refresh": "not_signed_in"}
     try:
         token = token or bearer_token(env_path)
     except SystemExit:
@@ -214,21 +212,16 @@ def refresh_cross_encoder(env_path: Path, token: str | None = None) -> dict[str,
     if not key:
         result["powerset_api_key_refresh"] = "error" if state == "ok" else state
         return result
-    preference = preference or "1"
-    write_env(env_path, {"POWERSET_API_KEY": str(key),
-                        "POWERPACKS_CROSS_ENCODER_BETA": preference})
-    return {"powerset_api_key_refresh": "refreshed",
-            "cross_encoder": "enabled" if preference == "1" else "disabled"}
+    write_env(env_path, {"POWERSET_API_KEY": str(key)})
+    return {"powerset_api_key_refresh": "refreshed"}
 
 
 def refresh_update_keys(env_path: Path) -> dict[str, str]:
-    """Refresh CE and the shared credentials, and fill a missing TypeSafe key, with one login."""
+    """Refresh the gateway and shared credentials, and fill a missing TypeSafe key, with one login."""
     current = _read_env_file(env_path)
     existing_typesafe = bool(current.get("TYPESAFE_API_KEY", "").strip())
-    preference = current.get("POWERPACKS_CROSS_ENCODER_BETA")
     result = {
         "powerset_api_key_refresh": "not_signed_in",
-        "cross_encoder": "enabled" if preference == "1" else "disabled",
         "typesafe_api_key": "preserved" if existing_typesafe else "not_signed_in",
         **{key.lower(): "not_signed_in" for key in SHARED_KEYS},
     }
@@ -237,7 +230,7 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
     except SystemExit:
         return result
 
-    result.update(refresh_cross_encoder(env_path, token=token))
+    result.update(refresh_gateway_key(env_path, token=token))
     for key in SHARED_KEYS:
         result[key.lower()] = _refresh_shared_key(env_path, key, token)
     result["operator_id"] = _refresh_operator_id(env_path, token)

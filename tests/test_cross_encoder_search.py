@@ -1,24 +1,22 @@
-"""CE beta runs alongside reranking, never owns filtering or final order."""
-import asyncio
+"""Plain searches publish screening before LLM ranking; JD score exports stay native."""
 import contextlib
 import io
 import json
 import os
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import httpx
 
+from packs.search.primitives.deep_search import search_harness
+from packs.search.primitives.deep_search.results_web import model
+from packs.search.primitives.llm_filter_candidates import llm_filter_candidates as screening
 from packs.search.primitives.llm_rerank_candidates import llm_rerank_candidates as reranker
 from packs.search.primitives.persist_search_results import results_io
 from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
-from packs.search.primitives.deep_search import search_harness
-from tests.test_llm_rerank_candidates import _MockServer
-from tests.test_cross_encoder_client import response_for
 from tests.test_search_harness import _start, _payload
 
 
@@ -64,81 +62,7 @@ class CrossEncoderSearchTests(unittest.TestCase):
         self.assertEqual(row["cross_encoder_score"], 2.25)
         self.assertEqual(row["cross_encoder_score_1_to_5"], 2.25)
 
-    def test_global_ce_setting_does_not_break_standalone_jsonl_reranker(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            profiles = Path(tmp) / "profiles.jsonl"
-            profiles.write_text(json.dumps({"person_id": "fixture", "title": "Engineer"}) + "\n")
-            args = ["rerank", "--in", str(profiles), "--query", "engineers", "--dry-run"]
-            with mock.patch.dict(os.environ, {"POWERPACKS_CROSS_ENCODER_BETA": "1"}), \
-                 mock.patch.object(sys, "argv", args), \
-                 mock.patch.object(reranker.cross_encoder, "score_candidates") as ce, \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(reranker.main(), 0)
-                ce.assert_not_called()
-            with mock.patch.object(sys, "argv", args + ["--cross-encoder-beta"]), \
-                 contextlib.redirect_stderr(io.StringIO()), \
-                 self.assertRaises(SystemExit) as error:
-                reranker.main()
-            self.assertEqual(error.exception.code, 2)
-
-    def test_real_rerank_cli_uses_filtered_full_profiles_and_exports_both_scores(self):
-        captured = []
-
-        def respond(request):
-            body = json.loads(request.content)
-            captured.append(body)
-            response = response_for(body)
-            response["scores"][0]["score"] = -2.5
-            return httpx.Response(200, json=response)
-
-        client = httpx.Client(transport=httpx.MockTransport(respond))
-        with tempfile.TemporaryDirectory() as tmp, _MockServer() as server:
-            root = Path(tmp)
-            profiles = [{"person_id": pid, "name": "Jordan Bravo", "inferred_age": 40,
-                         "positions": [{"title": "Engineer", "description": "current work"},
-                                       {"title": "Engineer", "description": "earlier distributed storage"}]}
-                        for pid in ("keep", "filtered-out")]
-            full, compact, state_path, jd = [root / name for name in ("full.jsonl", "compact.jsonl", "state.json", "jd.txt")]
-            full.write_text("\n".join(map(json.dumps, profiles)))
-            compact.write_text(json.dumps({"person_id": "keep", "positions": []}))
-            jd.write_text("Own distributed storage and recovery protocols")
-            state_path.write_text(json.dumps({"task_id": "synthetic-ce", "query": "software engineers", "steps": [
-                {"id": "expand_search_request", "output": {"traits": [{"value": "Software engineer"}]}},
-                {"id": "hydrate_people", "status": "completed", "output": {
-                    "profiles_path": str(full), "llm_profiles_path": str(compact), "profile_ids": ["keep", "filtered-out"]}},
-                {"id": "llm_filter_candidates", "status": "completed", "output": {
-                    "passed_candidate_ids": ["keep"], "passed_count": 1}},
-            ]}))
-            output = io.StringIO()
-            with mock.patch.object(sys, "argv", ["rerank", "--state", str(state_path), "--write-state",
-                    "--api-base", server.url, "--api-key", "test-key", "--cross-encoder-beta",
-                    "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
-                    "--cross-encoder-job-company", "Example Systems",
-                    "--evaluation-query", "Different evaluation guidance"]), \
-                    mock.patch.object(httpx, "Client", return_value=client), \
-                    mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-powerset-key"}), \
-                    contextlib.redirect_stdout(output):
-                self.assertEqual(reranker.main(), 0)
-            saved = json.loads(state_path.read_text())
-            self.assertEqual(len(saved["steps"]), 4)
-            self.assertEqual(saved["steps"][-1]["output"]["cross_encoder"]["usage"]["pairs"], 1)
-            rows = results_io.result_rows(saved)
-            self.assertEqual([row["person_id"] for row in rows], ["keep"])
-            self.assertEqual(float(rows[0]["final_score"]), .4)
-            self.assertEqual(rows[0]["cross_encoder_score"], -2.5)
-            self.assertEqual(json.loads(output.getvalue())["cross_encoder"]["status"], "ok")
-        self.assertEqual([pair["id"] for pair in captured[0]["pairs"]], ["keep"])
-        pair = captured[0]["pairs"][0]
-        self.assertEqual(pair["query"],
-            "Rank demonstrated job fit: skills, qualifications, experience and scope. "
-            "Ignore location, commute, onsite availability and relocation requirements when scoring. "
-            "Unknown evidence is not a demonstrated mismatch. Do not infer protected attributes.\n\n"
-            "Job: Storage Engineer at Example Systems\nPond: software engineers\n\n"
-            "Own distributed storage and recovery protocols")
-        self.assertEqual(len(json.loads(pair["passage"])["positions"]), 2)
-        self.assertNotIn("inferred_age", pair["passage"])
-
-    def test_deep_pond_uses_jev_and_original_jd_even_when_ce_enabled(self):
+    def test_deep_pond_uses_jev_and_original_jd(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             results_path = _start(root)
@@ -149,8 +73,7 @@ class CrossEncoderSearchTests(unittest.TestCase):
             results["pending_payload"] = {"pond_n": 1, "query": "software engineers",
                 "payload_json": str(payload), "ledger": str(root / "pipeline.json"), "limit": 1000}
             results_path.write_text(json.dumps(results))
-            with mock.patch.dict(os.environ, {"POWERPACKS_CROSS_ENCODER_BETA": "1"}), \
-                    mock.patch.object(search_harness, "_run_command", side_effect=RuntimeError("captured")) as run, \
+            with mock.patch.object(search_harness, "_run_command", side_effect=RuntimeError("captured")) as run, \
                     self.assertRaisesRegex(RuntimeError, "captured"):
                 search_harness.run_pond(run_dir=root, env_file="/dev/null")
             command = run.call_args.args[0]
@@ -161,116 +84,153 @@ class CrossEncoderSearchTests(unittest.TestCase):
             self.assertEqual(command[command.index("--model") + 1], "jev-1.13.0")
             self.assertEqual(command[command.index("--capability-judge") + 1], "jev")
 
-    def test_reranker_and_ce_overlap_on_same_full_profiles(self):
-        llm_started, ce_started = threading.Event(), threading.Event()
-        profile = {"person_id": "candidate-1", "positions": [
-            {"title": "Engineer", "description": "Current work"},
-            {"title": "Engineer", "description": "Earlier distributed storage work"},
-        ]}
-        items = [reranker.RerankItem(position=0, payload=profile)]
 
-        async def llm(received, **kwargs):
-            self.assertEqual(received, items)
-            llm_started.set()
-            self.assertTrue(await asyncio.to_thread(ce_started.wait, 2))
-            return ["llm-result"]
+class PlainSearchPipelineTests(unittest.TestCase):
+    def test_prepare_has_no_cross_encoder_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            payload = {"normalized_query": "Storage engineers", "traits": [],
+                       "role_search_filters": {"semantic_query": "Engineers who build and operate distributed storage systems, recovery protocols and database infrastructure"}}
+            stdout = io.StringIO()
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": payload}), \
+                    contextlib.redirect_stdout(stdout):
+                args = pipeline.build_parser().parse_args([
+                    "prepare", "--query", "Storage engineers", "--output-dir", directory])
+                self.assertEqual(pipeline.cmd_prepare(args), 0)
+            output = json.loads(stdout.getvalue())
+            self.assertEqual(output["status"], "preview_ready")
+            self.assertNotIn("--cross-encoder", output["execute_command"])
 
-        def ce(**kwargs):
-            ce_started.set()
-            self.assertTrue(llm_started.wait(2))
-            self.assertEqual(kwargs["profiles"], {"candidate-1": profile})
-            self.assertIn("Job description", kwargs["query"])
-            return {"status": "ok", "scores": [{"id": "candidate-1", "score": -2.5}]}
+    def test_screened_catalog_running_then_completed_with_1434_ranked_people(self):
+        for backend in ("powerset", "local"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                self._run_plain_fixture(Path(directory), backend)
 
-        with mock.patch.object(reranker, "rerank_all", side_effect=llm), \
-                mock.patch.object(reranker.cross_encoder, "score_candidates", side_effect=ce):
-            results, beta = asyncio.run(reranker._rerank_with_cross_encoder(
-                items, cross_encoder_query="Job description: storage engineer",
-                cross_encoder_output_dir=Path("unused"), query="engineers", traits=[]))
-        self.assertEqual(results, ["llm-result"])
-        self.assertEqual(beta["scores"][0]["score"], -2.5)
+    def test_ranking_failure_marks_screened_catalog_failed(self):
+        for backend in ("powerset", "local"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                self._run_plain_fixture(Path(directory), backend, ranking_fails=True)
 
-    def test_disabled_beta_makes_no_ce_calls(self):
-        with mock.patch.object(reranker, "rerank_all", new_callable=mock.AsyncMock, return_value=[]), \
-                mock.patch.object(reranker.cross_encoder, "score_candidates") as ce:
-            results, beta = asyncio.run(reranker._rerank_with_cross_encoder(
-                [], cross_encoder_query=None, cross_encoder_output_dir=None))
-        self.assertEqual(results, [])
-        self.assertIsNone(beta)
-        ce.assert_not_called()
+    def test_forced_rerun_keeps_previous_ranked_results_until_ranking_finishes(self):
+        for backend in ("powerset", "local"):
+            for flag in ("--force", "--force-llm"):
+                for rerank_done in (True, False):
+                    with self.subTest(backend=backend, flag=flag, rerank_done=rerank_done), \
+                            tempfile.TemporaryDirectory() as directory:
+                        self._run_plain_fixture(Path(directory), backend, rerun_flag=flag, rerank_done=rerank_done)
 
-    def test_beta_failure_preserves_llm_results(self):
-        with mock.patch.object(reranker, "rerank_all", new_callable=mock.AsyncMock, return_value=["kept"]), \
-                mock.patch.object(reranker.cross_encoder, "score_candidates", side_effect=RuntimeError("CE HTTP 503")):
-            results, beta = asyncio.run(reranker._rerank_with_cross_encoder(
-                [], cross_encoder_query="engineers", cross_encoder_output_dir=Path("unused")))
-        self.assertEqual(results, ["kept"])
-        self.assertEqual(beta, {"status": "failed", "error": "CE HTTP 503"})
+    def _run_plain_fixture(self, root, backend, *, ranking_fails=False, rerun_flag=None, rerank_done=True):
+        run_dir = root / "search" / "synthetic-storage"
+        run_dir.mkdir(parents=True)
+        state_path, ledger_path = run_dir / "state.json", run_dir / "pipeline.json"
+        profiles_path, db = run_dir / "profiles.jsonl", root / "local.duckdb"
+        db.touch()
+        ids = [f"synthetic-{index}" for index in range(1434)]
+        profiles = [{"person_id": pid, "name": "Jordan Bravo", "education": [], "positions": [
+            {"title": "Engineer", "description": "Built storage systems"}]} for pid in [*ids, "rejected"]]
+        profiles_path.write_text("\n".join(map(json.dumps, profiles)) + "\n")
+        payload = {"normalized_query": "Storage engineers", "traits": [],
+                   "role_search_filters": {"semantic_query": "Engineers who build and operate distributed storage systems, recovery protocols and database infrastructure"}}
+        hydrated = {"profiles_path": str(profiles_path), "profile_ids": [p["person_id"] for p in profiles],
+                    "hydrated": len(profiles)}
+        state_path.write_text(json.dumps({"task_id": "synthetic-storage", "query": "Storage engineers", "steps": [
+            {"id": "expand_search_request", "status": "completed", "output": payload},
+            {"id": "hydrate_people", "status": "completed", "output": hydrated}]}))
+        scores = {pid: {"person_id": pid, "score": 0.8, "reason": "Relevant work"} for pid in ids}
+        scores["rejected"] = {"person_id": "rejected", "score": 0.0, "reason": "Unrelated work"}
+        stages = []
+        catalog_root = root / "deep-search"
+        stderr = io.StringIO()
+        forced_rerun = False
 
-    def test_unreadable_beta_jd_does_not_stop_normal_rerank(self):
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(reranker, "rerank_all", new_callable=mock.AsyncMock, return_value=["kept"]), \
-                mock.patch.object(reranker.cross_encoder, "score_candidates") as ce:
-            results, beta = asyncio.run(reranker._rerank_with_cross_encoder(
-                [], cross_encoder_query="engineers", cross_encoder_output_dir=Path(tmp),
-                cross_encoder_jd_file=str(Path(tmp) / "missing.txt")))
-        self.assertEqual(results, ["kept"])
-        self.assertEqual(beta["status"], "failed")
-        ce.assert_not_called()
+        async def rank(items, **kwargs):
+            # Observe the real catalog and exported viewer rows before ranking returns.
+            card, = model.load_catalog(catalog_root)
+            search = model.load_search(catalog_root, run_dir.name)
+            saved = pipeline.read_json(ledger_path)
+            rows = results_io.read_jsonl(Path(saved["artifacts"]["jsonl"]))
+            if forced_rerun:
+                self.assertEqual((card.status, card.candidates), ("completed", 1434))
+                self.assertEqual([row.person_id for row in search.ponds[0].candidates], list(reversed(ids)))
+                self.assertTrue(all(row["final_score"] != "" for row in rows))
+                self.assertNotIn("screened, not ranked yet", stderr.getvalue())
+                self.assertNotIn("results_io", stages)
+            else:
+                self.assertEqual((card.status, card.candidates), ("running", 1434))
+                self.assertEqual([row.person_id for row in search.ponds[0].candidates], ids)
+                self.assertFalse(pipeline.done(saved, "persist_search_results"))
+                self.assertTrue(all(row["final_score"] == "" for row in rows))
+                self.assertIn("1434 screened, not ranked yet", stderr.getvalue())
+            self.assertEqual([item.id for item in items], ids)
+            if ranking_fails:
+                raise RuntimeError("Ranking unavailable")
+            return [reranker.RerankResult(id=item.id, score=index / len(items), verdict="pass",
+                    reason="Relevant work", model="synthetic", elapsed_ms=0, input=item.payload)
+                    for index, item in enumerate(items)]
 
-    def test_beta_flags_survive_prepare_and_approval_continuation(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            jd = Path(tmp) / "jd.txt"
-            jd.write_text("Senior storage engineer", encoding="utf-8")
+        def child(command, **kwargs):
+            stage = Path(command[1]).stem
+            stages.append(stage)
+            output = io.StringIO()
+            with mock.patch.object(sys, "argv", command[1:]), contextlib.redirect_stdout(output):
+                if stage == "llm_filter_candidates":
+                    screening.main()
+                elif stage == "llm_rerank_candidates":
+                    self.assertEqual(reranker.main(), 0)
+                elif stage == "results_io":
+                    results_io.main()
+                else:
+                    self.assertIn(stage, ("resolve_set_operators", "apply_prefilters", "execute_role_search", "hydrate_people"))
+                    return {"returncode": 0, "json": hydrated if stage == "hydrate_people" else {}}
+            return {"returncode": 0, "json": json.loads(output.getvalue())}
+
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic", "POWERSET_API_KEY": "synthetic"}), \
+                mock.patch.object(pipeline, "QUICK_SEARCH_ROOT", root / "search"), \
+                mock.patch.object(pipeline, "DEEP_SEARCH_ROOT", catalog_root), \
+                mock.patch.object(pipeline, "configure_local_backend_mode"), \
+                mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db: p), \
+                mock.patch.object(pipeline, "run", side_effect=child), \
+                mock.patch.object(screening, "score_batches", new_callable=mock.AsyncMock, return_value=([], scores)) as filtered, \
+                mock.patch.object(reranker, "rerank_all", side_effect=rank) as ranked, \
+                mock.patch.object(httpx.Client, "send", side_effect=AssertionError("No network")) as sync_send, \
+                mock.patch.object(httpx.AsyncClient, "send", side_effect=AssertionError("No network")) as async_send, \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             args = pipeline.build_parser().parse_args([
-                "prepare", "--query", "engineers", "--cross-encoder-beta",
-                "--cross-encoder-jd-file", str(jd), "--cross-encoder-job-title", "Storage Engineer",
-                "--cross-encoder-job-company", "Example Systems"])
-            suffix = pipeline.execution_contract_suffix(args)
-            self.assertIn("--cross-encoder-beta", suffix)
-            self.assertIn(str(jd), suffix)
-            self.assertIn("--cross-encoder-jd-file", suffix)
-            self.assertEqual(pipeline.cross_encoder_child_args(args), [
-                "--cross-encoder-beta", "--cross-encoder-jd-file", str(jd.resolve()),
-                "--cross-encoder-job-title", "Storage Engineer",
-                "--cross-encoder-job-company", "Example Systems"])
-
-    def test_beta_status_and_usage_reach_pipeline_summary(self):
-        ce = {"status": "ok", "usage": {"pairs": 1, "input_tokens": 220, "output_tokens": 0},
-              "requests": 1, "scores": [{"id": "synthetic", "score": 3.0}]}
-        summary = pipeline.compact_summary({"ranked_count": 1, "cross_encoder": ce})
-        saved = pipeline.pipeline_summary({"steps": {"llm_rerank_candidates": {"summary": summary}}})
-        self.assertEqual(saved["cross_encoder"]["usage"], ce["usage"])
-        self.assertNotIn("scores", saved["cross_encoder"])
-
-    def test_ce_scores_export_without_changing_default_order_or_score(self):
-        state = {"steps": [
-            {"id": "hydrate_people", "output": {"profiles": [
-                {"person_id": "first", "name": "Jordan Bravo"},
-                {"person_id": "second", "name": "Casey Example"}]}},
-            {"id": "llm_filter_candidates", "output": {"passed_candidate_ids": ["first", "second"]}},
-            {"id": "llm_rerank_candidates", "output": {
-                "ranked_candidate_ids": ["second", "first"],
-                "cross_encoder": {"status": "ok", "model": "test-qwen", "scores": [
-                    {"id": "first", "score": 8.5}, {"id": "second", "score": -1.0}]}}},
-        ]}
-        baseline = json.loads(json.dumps(state))
-        del baseline["steps"][-1]["output"]["cross_encoder"]
-        old_rows, new_rows = results_io.result_rows(baseline), results_io.result_rows(state)
-        self.assertEqual([row["person_id"] for row in new_rows], ["second", "first"])
-        self.assertEqual([row["cross_encoder_score"] for row in new_rows], [-1.0, 8.5])
-        self.assertAlmostEqual(new_rows[0]["cross_encoder_score_1_to_5"], 2.07576569)
-        self.assertAlmostEqual(new_rows[1]["cross_encoder_score_1_to_5"], 4.99918629)
-        self.assertEqual(old_rows, [{k: v for k, v in row.items() if not k.startswith("cross_encoder_")}
-                                    for row in new_rows])
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "results.csv"
-            results_io.write_csv(path, new_rows)
-            self.assertIn("cross_encoder_score", path.read_text().splitlines()[0])
-            self.assertIn("cross_encoder_score_1_to_5", path.read_text().splitlines()[0])
-            results_io.write_csv(path, old_rows)
-            self.assertNotIn("cross_encoder_score", path.read_text().splitlines()[0])
-
-
-if __name__ == "__main__":
-    unittest.main()
+                "run", "--backend", backend, "--state", str(state_path), "--ledger", str(ledger_path),
+                "--db", str(db), "--execute-approved"])
+            self.assertEqual(pipeline.cmd_run(args), 1 if ranking_fails else 0, stdout.getvalue())
+            if rerun_flag:
+                forced_rerun = True
+                stages.clear()
+                stderr.seek(0)
+                stderr.truncate()
+                filtered.reset_mock()
+                ranked.reset_mock()
+                if not rerank_done:
+                    saved = pipeline.read_json(ledger_path)
+                    saved["steps"]["llm_rerank_candidates"]["status"] = "running"
+                    pipeline.save(ledger_path, saved)
+                setattr(args, rerun_flag.removeprefix("--").replace("-", "_"), True)
+                self.assertEqual(pipeline.cmd_run(args), 0, stdout.getvalue())
+        filtered.assert_awaited_once()
+        ranked.assert_called_once()
+        sync_send.assert_not_called()
+        async_send.assert_not_called()
+        if ranking_fails:
+            card, = model.load_catalog(catalog_root)
+            self.assertEqual((card.status, card.candidates), ("failed", 1434))
+            search = model.load_search(catalog_root, run_dir.name)
+            self.assertEqual([row.person_id for row in search.ponds[0].candidates], ids)
+            self.assertIn("Ranking unavailable", json.loads(stdout.getvalue())["error"])
+            self.assertFalse(pipeline.done(pipeline.read_json(ledger_path), "persist_search_results"))
+            return
+        self.assertEqual(stages.count("results_io"), 1 if forced_rerun else 2)
+        self.assertLess(stages.index("llm_filter_candidates"), stages.index("results_io"))
+        if not forced_rerun:
+            self.assertLess(stages.index("results_io"), stages.index("llm_rerank_candidates"))
+        card, = model.load_catalog(catalog_root)
+        self.assertEqual((card.status, card.candidates), ("completed", 1434))
+        search = model.load_search(catalog_root, run_dir.name)
+        self.assertEqual([row.person_id for row in search.ponds[0].candidates], list(reversed(ids)))
+        self.assertTrue(pipeline.done(pipeline.read_json(ledger_path), "persist_search_results"))
+        self.assertIn("1434 ranked", stderr.getvalue())

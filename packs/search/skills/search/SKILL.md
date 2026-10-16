@@ -245,9 +245,9 @@ Use `--search-only` to skip those model stages entirely.
 
    `Execute this local search or modify it?`
 
-5. If the user chooses `execute`, run the returned `execute_command` exactly.
+5. If the user chooses `execute`, run the returned `execute_command` exactly in the background and read its output as it arrives.
 
-6. Keep execution quiet until the command finishes.
+6. Follow **Execution progress** below while the command runs.
 
 ### SQL assistance (local only)
 
@@ -289,26 +289,39 @@ files on the happy path. Start a fresh run for every search request.
 
    `Execute this search or modify it?`
 
-4. If the user chooses `execute`, run the returned `execute_command` exactly.
+4. If the user chooses `execute`, run the returned `execute_command` exactly in the background and read its output as it arrives.
    It already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user
      searches, do not add a limit unless the user asks for one.
-5. Keep execution quiet until the command finishes or emits a concrete
-   `blocked_approval` / `blocked_user_action`.
+5. Follow **Execution progress** below until the command finishes or emits a
+   concrete `blocked_approval` / `blocked_user_action`.
+
+## Execution progress
+
+Keep execution quiet except for these milestones from `run`:
+
+- When it prints the screened count, say at once: `<N> screened, not ranked yet`.
+  Say the results page already lists them. These are screened people, never the
+  ranked list; do not present a ranked shortlist before ranking finishes.
+- When it prints the ranked count, say ranking has finished.
+
+Read these counts from the command's live output; no other run files need to
+be opened for progress.
 
 ## Final Summary
 
 - Say `<N> found`.
 - For local results, say `found (local)`.
 - Say `Run artifacts: <artifact-dir>`.
-- Read only the `csv` path from the final `artifacts` object and show the top
+- For the ranked list, read only the `csv` path from the final `artifacts` object and show the top
   10 candidates, or fewer if fewer than 10 rows were returned. Keep each row
   compact: rank, name, current title/company, location, and LinkedIn URL when
   present.
-- Other run files are internal handoff/debug artifacts. Inspect them only for a
+- Live progress above is the exception to waiting for final output. Other run
+  files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.
 
 ## User edit & feedback capture

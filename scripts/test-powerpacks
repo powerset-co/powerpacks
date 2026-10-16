@@ -55,7 +55,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_core_layout \
   tests.test_cross_encoder_client \
   tests.test_cross_encoder_search \
-  tests.test_cross_encoder_warmup \
   tests.test_deep_search_catalog \
   tests.test_deep_search_results_web \
   tests.test_discover \
