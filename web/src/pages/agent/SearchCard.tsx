@@ -3,9 +3,10 @@ import { useState } from "react"
 import { CLOSE_MARK } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import type { FilterValue, PreparedSearch, SearchTrait } from "@/lib/agent/preparedSearch"
+import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expandedFilters"
+import { ENTITY_TYPES, SECTOR_TYPES, SENIORITY_BANDS as BAND_ITEMS } from "@/lib/agent/companyFilters"
 import {
   FIELDS,
-  GROUPS,
   TEMPORALS,
   type Control,
   type Field,
@@ -15,6 +16,16 @@ import {
 } from "@/lib/agent/searchFields"
 import { send } from "@/lib/agent/store"
 import { cn } from "@/lib/utils"
+
+import { EditFiltersModal } from "./EditFiltersModal"
+
+/** Display names for the ids the modal shows as chips: bands, degrees, entity and sector types. */
+const LABELS: Record<string, Record<string, string>> = {
+  seniority_bands: Object.fromEntries(BAND_ITEMS.map((band) => [band.id, band.display_value])),
+  degree_levels: { Bachelors: "Bachelor's", Masters: "Master's", MBA: "MBA", PhD: "PhD", MD: "MD", JD: "JD" },
+  entity_types: ENTITY_TYPES,
+  sector_types: SECTOR_TYPES,
+}
 
 interface SearchCardProps {
   search: PreparedSearch
@@ -139,6 +150,14 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+/** What sits in a row's add field before Enter: the text and, for locations, the kind picked. */
+interface Draft {
+  text: string
+  kind?: string
+}
+
+const NO_DRAFT: Draft = { text: "" }
+
 /** A list of names: chips, each editable and removable, and an add field or a picker. */
 function Chips({
   label,
@@ -148,6 +167,8 @@ function Chips({
   editable,
   onChange,
   kinds,
+  draft,
+  onDraft,
 }: {
   label: string
   items: { name: string; kind?: string }[]
@@ -157,9 +178,11 @@ function Chips({
   onChange: (items: { name: string; kind?: string }[]) => void
   /** Kind labels and their keys, for a row that mixes several lists (locations). */
   kinds?: Record<string, string>
+  draft: Draft
+  onDraft: (draft: Draft) => void
 }) {
-  const [typed, setTyped] = useState("")
-  const [kind, setKind] = useState(kinds ? Object.keys(kinds)[0] : undefined)
+  const typed = draft.text
+  const kind = draft.kind ?? (kinds ? Object.keys(kinds)[0] : undefined)
   const kindLabel = (item: { kind?: string }) => (kinds && item.kind ? kinds[item.kind] : undefined)
   if (!editable)
     return (
@@ -176,7 +199,7 @@ function Chips({
     const trimmed = name.trim()
     if (!trimmed) return
     onChange([...items, { name: trimmed, kind }])
-    setTyped("")
+    onDraft({ text: "", kind })
   }
   const unused = options?.filter((option) => !items.some((item) => item.name === option)) ?? []
   return (
@@ -228,7 +251,7 @@ function Chips({
             aria-label={`Add ${label}`}
             placeholder="Add…"
             value={typed}
-            onChange={(event) => setTyped(event.target.value)}
+            onChange={(event) => onDraft({ text: event.target.value, kind })}
             onKeyDown={(event) => {
               if (event.key === "Enter") add(typed)
             }}
@@ -242,7 +265,7 @@ function Chips({
             <select
               aria-label={`${label} kind`}
               value={kind}
-              onChange={(event) => setKind(event.target.value)}
+              onChange={(event) => onDraft({ text: typed, kind: event.target.value })}
               className={cn(FIELD, "cursor-pointer text-muted-foreground")}
             >
               {Object.entries(kinds).map(([key, name]) => (
@@ -262,13 +285,20 @@ function Chips({
 function FieldRow({
   field,
   values,
+  prepared,
   editable,
   onChange,
+  draft,
+  onDraft,
 }: {
   field: Field
   values: Values
+  /** The values as prepared: a number stays a number however the field is retyped. */
+  prepared: Values
   editable: boolean
   onChange: (values: Values) => void
+  draft: Draft
+  onDraft: (draft: Draft) => void
 }) {
   const control: Control = field.control
   switch (control.kind) {
@@ -281,6 +311,8 @@ function FieldRow({
             options={control.options}
             readonly={control.readonly}
             editable={editable}
+            draft={draft}
+            onDraft={onDraft}
             onChange={(items) =>
               onChange(
                 withNames(
@@ -304,6 +336,8 @@ function FieldRow({
             items={items}
             editable={editable}
             kinds={control.keys}
+            draft={draft}
+            onDraft={onDraft}
             onChange={(next) => {
               let edited = values
               for (const key of Object.keys(control.keys))
@@ -328,7 +362,7 @@ function FieldRow({
               value={text}
               onChange={(event) =>
                 onChange(
-                  withValue(values, control.key, typedScalar(event.target.value, values.get(control.key))),
+                  withValue(values, control.key, typedScalar(event.target.value, prepared.get(control.key))),
                 )
               }
               className={cn(FIELD, "w-full")}
@@ -503,14 +537,17 @@ function Traits({
   )
 }
 
-/** The fields to show without More filters: the ones with a value, in the table's order, then any key the table doesn't name. */
-function filledFields(values: Values): Field[] {
-  const known = FIELDS.filter((field) => fieldHasValue(field, values))
+/**
+ * The fields the card shows: the ones with a value now or as prepared (an emptied row stays until
+ * Execute), in the table's order, then any key the table doesn't name.
+ */
+function filledFields(values: Values, prepared: Values): Field[] {
+  const known = FIELDS.filter((field) => fieldHasValue(field, values) || fieldHasValue(field, prepared))
   const named = new Set(FIELDS.flatMap(fieldKeys))
   const other = [...values.keys()]
     .filter((key) => !named.has(key))
-    .map((key) => fieldFor(key, values.get(key)))
-  return [...known, ...other.filter((field) => fieldHasValue(field, values))]
+    .map((key) => fieldFor(key, values.get(key) ?? prepared.get(key)))
+  return [...known, ...other]
 }
 
 /**
@@ -524,11 +561,16 @@ export function SearchCard({ search, actions }: SearchCardProps) {
   const [values, setValues] = useState<Values>(() => preparedValues(search))
   const [traits, setTraits] = useState(search.traits)
   const [newTrait, setNewTrait] = useState("")
-  const [more, setMore] = useState(false)
+  // The Edit Filters modal works on a copy; Apply writes it back, Cancel drops it.
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [modalFilters, setModalFilters] = useState<ExpandedFilters | null>(null)
+  // What sits in each row's add field, by the row's label, so Execute keeps it without an Enter.
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   // Once Execute (or Send changes) went out from this card, it keeps showing what it sent.
   const [submitted, setSubmitted] = useState(false)
+  const prepared = preparedValues(search)
   const shown = actions || submitted
-  const shownValues = shown ? values : preparedValues(search)
+  const shownValues = shown ? values : prepared
   const shownTraits = shown ? traits : search.traits
   const shownQuery = shown ? query : search.query
 
@@ -538,19 +580,41 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     return value ? [...traits, { value, temporal: "current", meaning: "role" }] : traits
   }
 
+  // The values with every row's typed-but-not-entered name added under its key.
+  function valuesWithDrafts(): Values {
+    let next = values
+    const fields = [...FIELDS, ...filledFields(values, prepared)]
+    for (const [label, draft] of Object.entries(drafts)) {
+      const text = draft.text.trim()
+      const control = fields.find((field) => field.label === label)?.control
+      if (!text || !control) continue
+      const key =
+        control.kind === "kinds"
+          ? (draft.kind ?? Object.keys(control.keys)[0])
+          : control.kind === "chips" && !control.readonly && !control.options
+            ? control.key
+            : undefined
+      if (key) next = withNames(next, key, [...names(next.get(key)), text])
+    }
+    return next
+  }
+
   function submit(message: string) {
+    setValues(valuesWithDrafts())
+    setDrafts({})
     setTraits(traitsWithTyped())
     setNewTrait("")
     setSubmitted(true)
     void send(message)
   }
 
-  const edited = modifyMessage(search, query, values, traitsWithTyped())
-  const dirty = edited !== modifyMessage(search, search.query, preparedValues(search), search.traits)
+  const edited = modifyMessage(search, query, valuesWithDrafts(), traitsWithTyped())
+  const dirty = edited !== modifyMessage(search, search.query, prepared, search.traits)
 
   function reset() {
     setQuery(search.query)
-    setValues(preparedValues(search))
+    setValues(prepared)
+    setDrafts({})
     setTraits(search.traits)
     setNewTrait("")
   }
@@ -574,8 +638,11 @@ export function SearchCard({ search, actions }: SearchCardProps) {
         key={field.label}
         field={field}
         values={shownValues}
+        prepared={prepared}
         editable={actions}
         onChange={setValues}
+        draft={drafts[field.label] ?? NO_DRAFT}
+        onDraft={(draft) => setDrafts({ ...drafts, [field.label]: draft })}
       />
     ))
 
@@ -603,25 +670,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
           onChange={setTraits}
         />
       )}
-      {actions && more
-        ? GROUPS.map((group) => {
-            const fields = [
-              ...FIELDS.filter((field) => field.group === group && offered(field)),
-              ...(group === "Other"
-                ? filledFields(shownValues).filter((field) => field.group === "Other")
-                : []),
-            ]
-            if (fields.length === 0) return null
-            return (
-              <div key={group} className="flex flex-col gap-2 border-t border-line pt-2">
-                <h3 className="m-0 text-[11px] font-semibold uppercase tracking-[.06em] text-faint">
-                  {group}
-                </h3>
-                {rows(fields)}
-              </div>
-            )
-          })
-        : rows(filledFields(shownValues).filter(offered))}
+      {rows(filledFields(shownValues, prepared).filter(offered))}
       {search.pool && (
         <p className="m-0 text-xs text-muted-foreground">
           Pool: {search.pool.matched.toLocaleString()} of {search.pool.total.toLocaleString()} people, as
@@ -659,9 +708,28 @@ export function SearchCard({ search, actions }: SearchCardProps) {
               Send changes
             </Button>
           )}
-          <button type="button" onClick={() => setMore(!more)} className={TEXT_BUTTON}>
-            {more ? "Fewer filters ▴" : "More filters ▾"}
+          <button
+            type="button"
+            onClick={() => {
+              setModalFilters(toExpanded(valuesWithDrafts(), LABELS))
+              setFiltersOpen(true)
+            }}
+            className={TEXT_BUTTON}
+          >
+            More filters…
           </button>
+          <EditFiltersModal
+            open={filtersOpen}
+            onOpenChange={setFiltersOpen}
+            filters={modalFilters ?? toExpanded(values, LABELS)}
+            onUpdate={(key, value) =>
+              setModalFilters({ ...(modalFilters ?? toExpanded(values, LABELS)), [key]: value })
+            }
+            onApply={() => {
+              if (modalFilters) setValues(fromExpanded(modalFilters, valuesWithDrafts()))
+              setDrafts({})
+            }}
+          />
           {dirty && (
             <button type="button" onClick={reset} className={cn(TEXT_BUTTON, "ml-auto")}>
               Reset

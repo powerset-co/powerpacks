@@ -140,7 +140,7 @@ it("shows a prepared search as a card in its command's place, its query, traits 
     "age_min 30 filters on LLM-inferred birth year",
     "broad search: consider narrowing",
   ])
-  expect(within(card).getByRole("button", { name: "More filters ▾" })).toBeTruthy()
+  expect(within(card).getByRole("button", { name: "More filters…" })).toBeTruthy()
 
   fireEvent.click(within(card).getByRole("button", { name: "Execute" }))
   expect(store.send).toHaveBeenCalledWith("execute")
@@ -164,7 +164,7 @@ it("asks only on the newest card while the agent waits; the company fast path is
   expect(within(older).queryByRole("button")).toBeNull()
   expect(within(older).queryByRole("textbox")).toBeNull()
   expect(within(newest).getByRole("button", { name: "Execute" })).toBeTruthy()
-  expect(within(newest).getByRole("button", { name: "More filters ▾" })).toBeTruthy()
+  expect(within(newest).getByRole("button", { name: "More filters…" })).toBeTruthy()
   expect(screen.getByRole("list", { name: "Work" }).textContent).toContain(
     "search_network_pipeline.py prepare",
   )

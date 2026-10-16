@@ -319,13 +319,18 @@ For both local and Powerset previews:
   - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
     the key; a key not sent is left unchanged), log each key whose value differs from the
     file's as `filter_edit`, and when `traits` is present replace the payload's `traits` with
-    it (a changed `temporal` alone is an in-place edit).
+    it (a changed `temporal` alone is an in-place edit). When `bm25_queries` is sent, also drop
+    from `role_core_patterns` every example that is no longer in it: the run merges those
+    examples back into the keywords, so a removed keyword would return.
   - Log each change with `search_feedback.py log` as shown in **User edit & feedback
     capture**, using `--kind filter_edit` for filters or `--kind query_edit` for the query or
     traits, with both `--before` and `--after`.
   - For in-place edits, save the payload, then run the returned `execute_command`
     exactly in the background and read its output as it arrives. It binds the edited file.
     Filter and temporal-only edits need no second `prepare` or approval.
+- A reply starting `Modify:` (no "then execute") comes from a blocked card: apply the JSON by
+  the same rules, run a new `prepare` with the same `--output-dir`, show its preview and ask the
+  usual question. Never run the search from this reply.
 - Any other reply is a modify in the user's words: use the same rules above.
   A changed query or trait value requires a new `prepare` and the usual question; filter and
   temporal-only edits are applied and logged in place, then run the returned

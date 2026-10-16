@@ -1,5 +1,17 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, expect, it, vi } from "vitest"
+
+// The modal's scroll area watches element sizes; jsdom has no ResizeObserver.
+beforeAll(() => {
+  if (!("ResizeObserver" in globalThis))
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      value: class {
+        observe = () => undefined
+        unobserve = () => undefined
+        disconnect = () => undefined
+      },
+    })
+})
 
 import type { PreparedSearch } from "@/lib/agent/preparedSearch"
 import { isRecord } from "@/lib/utils"
@@ -131,29 +143,40 @@ it("sends a removed filter as null and an emptied list as null", () => {
   })
 })
 
-it("adds a filter the search did not come with from More filters", () => {
+it("adds a filter the search did not come with through the Edit Filters modal", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   expect(screen.queryByText("Companies")).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: "More filters ▾" }))
-  expect(screen.getByRole("heading", { name: "Company" })).toBeTruthy()
-  // Id lists with nothing in them and the current-only toggles (the traits carry that) are not offered.
-  expect(screen.queryByText("Role ids")).toBeNull()
-  expect(screen.queryByRole("checkbox", { name: "Current role only" })).toBeNull()
-  const company = screen.getByRole("textbox", { name: "Add Companies" })
+  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
+  // The modal opens on the prepared search: the seniority picker already lists its two bands.
+  expect(within(dialog).getByText("Vice President, Director")).toBeTruthy()
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
+  const company = within(dialog).getByPlaceholderText("e.g., Google")
   fireEvent.change(company, { target: { value: "Stripe" } })
   fireEvent.keyDown(company, { key: "Enter" })
-  fireEvent.change(screen.getByRole("combobox", { name: "Stage min" }), { target: { value: "series_b" } })
-  fireEvent.change(screen.getByRole("textbox", { name: "Add Location" }), { target: { value: "Brooklyn" } })
-  fireEvent.change(screen.getByRole("combobox", { name: "Location kind" }), { target: { value: "cities" } })
-  fireEvent.click(screen.getByRole("button", { name: "Fewer filters ▴" }))
-  // Closed again: the added fields stay in the preview layer.
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply Filters" }))
+  // Applied: the card's preview layer shows the company beside the prepared rows.
   expect(screen.getByText("Companies")).toBeTruthy()
-  expect(screen.getByText("Stage")).toBeTruthy()
+  expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Companies 1" }).value).toBe("Stripe")
   execute()
   const body = sent()
   expect(body.filters.company_names).toEqual(["Stripe"])
-  expect(body.filters.funding_stage_min).toBe("series_b")
   expect(body.filters.metro_areas).toEqual(["New York Metropolitan Area"])
+  expect(body.filters.seniority_bands).toEqual(["vice-president", "director"])
+})
+
+it("drops the modal's edits on Cancel", () => {
+  render(<SearchCard search={SEARCH} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
+  const company = within(dialog).getByPlaceholderText("e.g., Google")
+  fireEvent.change(company, { target: { value: "Stripe" } })
+  fireEvent.keyDown(company, { key: "Enter" })
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+  expect(screen.queryByText("Companies")).toBeNull()
+  execute()
+  expect(store.send).toHaveBeenCalledWith("execute")
 })
 
 it("keeps a typed location with the chosen kind", () => {
@@ -212,7 +235,7 @@ it("applies the kind chosen after the location was typed", () => {
   fireEvent.change(add, { target: { value: "Brooklyn" } })
   fireEvent.blur(add, { relatedTarget: kind })
   fireEvent.change(kind, { target: { value: "cities" } })
-  fireEvent.keyDown(add, { key: "Enter" })
+  // No Enter: Execute carries what sits in the add field, under the kind picked after typing.
   execute()
   expect(sent().filters.cities).toEqual(["Brooklyn"])
   expect(sent().filters.metro_areas).toEqual(["New York Metropolitan Area"])
@@ -229,7 +252,9 @@ it("shows a filter the table doesn't name with its value's own shape and keeps i
     ],
   }
   render(<SearchCard search={search} actions={true} />)
-  fireEvent.change(screen.getByRole("textbox", { name: "Custom score min" }), { target: { value: "4" } })
+  const score = screen.getByRole("textbox", { name: "Custom score min" })
+  fireEvent.change(score, { target: { value: "" } })
+  fireEvent.change(score, { target: { value: "4" } })
   expect(screen.getByRole("checkbox", { name: "Remote ok" })).toBeTruthy()
   fireEvent.change(screen.getByRole("textbox", { name: "Team note" }), { target: { value: "infra" } })
   execute()
@@ -239,14 +264,16 @@ it("shows a filter the table doesn't name with its value's own shape and keeps i
   expect(filters.team_note).toBe("infra")
 })
 
-it("offers the current-only toggles only to a search without traits", () => {
-  const { rerender } = render(<SearchCard search={{ ...SEARCH, traits: [] }} actions={true} />)
-  fireEvent.click(screen.getByRole("button", { name: "More filters ▾" }))
+it("shows the current-only toggle only to a search without traits", () => {
+  const current: PreparedSearch = {
+    ...SEARCH,
+    traits: [],
+    filters: [...SEARCH.filters, { key: "is_current_role", value: true }],
+  }
+  const { rerender } = render(<SearchCard search={current} actions={true} />)
   expect(screen.getByRole("checkbox", { name: "Current role only" })).toBeTruthy()
-  rerender(<SearchCard search={SEARCH} actions={true} />)
+  rerender(<SearchCard search={{ ...current, traits: SEARCH.traits }} actions={true} />)
   expect(screen.queryByRole("checkbox", { name: "Current role only" })).toBeNull()
-  expect(screen.getByText("Stages")).toBeTruthy()
-  expect(screen.getByRole("heading", { name: "Other" })).toBeTruthy()
 })
 
 it("resets every edit to the prepared search", () => {
