@@ -12,6 +12,7 @@ import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
+import { searchRunKey } from "@/pages/searches/hooks/useSearchRun"
 import { RunColumn } from "@/pages/searches/RunColumn"
 
 import { ApprovalCard } from "./ApprovalCard"
@@ -194,19 +195,28 @@ function Workspace() {
   const agent = useAgent()
   const features = useFeatures()
   const collaboration = useCollaboration(features.sets)
-  const catalog = useCatalog()
+  const catalog = useCatalog(agent.running)
   const client = useQueryClient()
   const listed = useMemo(() => new Set(catalog.data?.map(({ run_id }) => run_id)), [catalog.data])
   const runId = chatRun(agent.entries, listed) ?? agent.searchRun
+  const card = catalog.data?.find((item) => item.run_id === runId)
   const runTitle =
-    catalog.data?.find((card) => card.run_id === runId)?.title ??
-    collaboration.data?.conversations.find((item) => item.search_id === runId)?.title ??
-    null
+    card?.title ?? collaboration.data?.conversations.find((item) => item.search_id === runId)?.title ?? null
+  const runRunning = card?.status === "running"
+  // The run last seen running; only that same run leaving "running" is re-read.
+  const lastRunning = useRef(runRunning ? runId : null)
 
   // A search saves when its turn ends; look for it then.
   useEffect(() => {
     if (!agent.running) void client.invalidateQueries({ queryKey: ["searches", "catalog"] })
   }, [agent.running, client])
+
+  // A running search shows its screened people; when it stops running, read its ranked ones.
+  useEffect(() => {
+    if (runId && lastRunning.current === runId && !runRunning)
+      void client.invalidateQueries({ queryKey: searchRunKey(runId) })
+    lastRunning.current = runRunning ? runId : null
+  }, [client, runId, runRunning])
 
   // Chat and results split the room evenly; the results keep 380px at the narrowest window (960px).
   return (
