@@ -1,16 +1,17 @@
-"""Turn a source JD into grounded capability evidence in one cached model call.
+"""Turn a source JD into capability evidence in one cached model call.
 
-The response keeps exact source quotes for validation. The returned text contains
-only the hiring company, responsibilities, experience, and explicitly optional
-qualifications. Paid responses are checkpointed before parsing so a malformed
-response never causes an automatic repeat charge.
+The response carries a source quote per item so the model anchors each item to
+the posting; the quotes stay in the cache for provenance and are not checked.
+The returned text contains only the hiring company, responsibilities,
+experience, and explicitly optional qualifications. Paid responses are
+checkpointed before parsing so a malformed response never causes an automatic
+repeat charge.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +39,6 @@ _ITEM_SCHEMA = {
     },
 }
 _NULLABLE_STRING = {"type": ["string", "null"]}
-_INVENTED_LABEL = re.compile(r"^\s*(?:\[(?:must|nice|gate|inferred)\]|(?:must|gate|inferred):)", re.I)
 _OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -174,29 +174,15 @@ def _exact_object(value: Any, fields: set[str], label: str) -> Mapping[str, Any]
     return value
 
 
-def _grounded(quote: str, source: str) -> bool:
-    """A quote is grounded when every line of it appears verbatim in the source.
-
-    The model joins passages from different paragraphs with a blank line when one
-    item draws on both; each passage still has to be an exact substring.
-    """
-    lines = [line.strip() for line in quote.splitlines() if line.strip()]
-    return bool(lines) and all(line in source for line in lines)
-
-
-def _claim(value: Any, quotes: Any, source: str, label: str) -> tuple[str | None, tuple[str, ...]]:
+def _claim(value: Any, quotes: Any, label: str) -> tuple[str | None, tuple[str, ...]]:
     if value is not None and (not isinstance(value, str) or not value.strip()):
         raise RuntimeError(f"JD cleaner returned an invalid {label}")
-    if not isinstance(quotes, list) or any(not isinstance(quote, str) or not quote for quote in quotes):
+    if not isinstance(quotes, list) or any(not isinstance(quote, str) for quote in quotes):
         raise RuntimeError(f"JD cleaner returned invalid {label} source quotes")
-    if any(not _grounded(quote, source) for quote in quotes):
-        raise RuntimeError(f"JD cleaner returned an ungrounded {label}")
-    if (value is None) != (not quotes):
-        raise RuntimeError(f"JD cleaner returned {label} without matching source evidence")
     return " ".join(value.split()) if value is not None else None, tuple(quotes)
 
 
-def _items(value: Any, source: str, label: str) -> tuple[_EvidenceItem, ...]:
+def _items(value: Any, label: str) -> tuple[_EvidenceItem, ...]:
     if not isinstance(value, list):
         raise RuntimeError(f"JD cleaner returned invalid {label}")
     items = []
@@ -206,15 +192,13 @@ def _items(value: Any, source: str, label: str) -> tuple[_EvidenceItem, ...]:
         quote = item["source_quote"]
         if not isinstance(text, str) or not text.strip():
             raise RuntimeError(f"JD cleaner returned an empty {label} item")
-        if _INVENTED_LABEL.match(text):
-            raise RuntimeError(f"JD cleaner returned an invented label in {label}")
-        if not isinstance(quote, str) or not _grounded(quote, source):
-            raise RuntimeError(f"JD cleaner returned an ungrounded {label} item")
+        if not isinstance(quote, str):
+            raise RuntimeError(f"JD cleaner returned an invalid {label} item quote")
         items.append(_EvidenceItem(text=" ".join(text.split()), source_quote=quote))
     return tuple(items)
 
 
-def _parse(record: Mapping[str, Any], *, source: str, title: str,
+def _parse(record: Mapping[str, Any], *, title: str,
            company_name: str, request_hash: str) -> _StructuredJobDescription:
     if record.get("request_sha256") != request_hash:
         raise RuntimeError("JD cleaner cache does not match its request")
@@ -235,7 +219,7 @@ def _parse(record: Mapping[str, Any], *, source: str, title: str,
         company["source_quotes"], {"what_it_does", "stage", "size"}, "company source quote",
     )
     claims = {
-        key: _claim(company[key], quotes[key], source, f"company {key}")
+        key: _claim(company[key], quotes[key], f"company {key}")
         for key in ("what_it_does", "stage", "size")
     }
     return _StructuredJobDescription(
@@ -247,9 +231,9 @@ def _parse(record: Mapping[str, Any], *, source: str, title: str,
             size=claims["size"][0],
             source_quotes={key: claims[key][1] for key in claims},
         ),
-        responsibilities=_items(root["responsibilities"], source, "responsibilities"),
-        experience=_items(root["experience"], source, "experience"),
-        nice_to_have=_items(root["nice_to_have"], source, "nice_to_have"),
+        responsibilities=_items(root["responsibilities"], "responsibilities"),
+        experience=_items(root["experience"], "experience"),
+        nice_to_have=_items(root["nice_to_have"], "nice_to_have"),
     )
 
 
@@ -305,8 +289,7 @@ def clean_job_description(
     if cache.is_file():
         record = json.loads(cache.read_text(encoding="utf-8"))
         return _save_rendered(cache.with_suffix(".txt"), _parse(
-            record, source=jd, title=title,
-            company_name=company_name, request_hash=request_hash))
+            record, title=title, company_name=company_name, request_hash=request_hash))
 
     owned_client = None
     if client is None:
@@ -321,5 +304,4 @@ def clean_job_description(
         if owned_client is not None:
             owned_client.close()
     return _save_rendered(cache.with_suffix(".txt"), _parse(
-        record, source=jd, title=title,
-        company_name=company_name, request_hash=request_hash))
+        record, title=title, company_name=company_name, request_hash=request_hash))
