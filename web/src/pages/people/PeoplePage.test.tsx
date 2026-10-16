@@ -214,7 +214,7 @@ describe("PeoplePage", () => {
     expect(picked("Sharing")).toBe("All · 4")
     open("Sharing")
     expect(options()).toEqual(["All · 4", "Sharing · 1", "Not sharing · 3"])
-    fireEvent.keyDown(screen.getAllByRole("option")[0] as HTMLElement, { key: "Escape" })
+    fireEvent.keyDown(screen.getByRole("option", { name: "All · 4" }), { key: "Escape" })
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")
   })
