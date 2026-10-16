@@ -17,6 +17,7 @@ import {
   scalar,
 } from "@/lib/agent/searchFields"
 import { send } from "@/lib/agent/store"
+import { sentence } from "@/lib/people/copy"
 import { cn } from "@/lib/utils"
 import type { FilterValue } from "@/types/searches"
 
@@ -193,7 +194,9 @@ function Chips({
       {items.map((item, index) => (
         // Index keys: a name changes as it is typed.
         <span key={index} className={EDIT_CHIP}>
-          {readonly || options ? (
+          {readonly ? (
+            <span>{sentence(item.name)}</span>
+          ) : options ? (
             <span>{item.name}</span>
           ) : (
             <ChipField

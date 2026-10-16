@@ -6,6 +6,8 @@ describe("copy", () => {
   it("keeps brand casing", () => {
     expect(sentence("imessage")).toBe("iMessage")
     expect(sentence("close_friend")).toBe("Close friend")
+    expect(sentence(163348)).toBe("163348")
+    expect(sentence(undefined)).toBe("")
     expect(sentence("")).toBe("")
   })
 
