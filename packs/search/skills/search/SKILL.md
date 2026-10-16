@@ -110,12 +110,20 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
 <!-- decision-rules:end -->
 
 Record the decision before anything runs (checklist item 1). Create the run dir with a short
-stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json`:
+stable slug from the query (e.g. `swe-sf-stanford`) and write `decision.json` with this command
+and nothing else (no Python: the system interpreter has none of the project's packages):
 
-```json
+```bash
+mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.json <<'EOF'
 {"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
+EOF
 ```
+
+The environment default for `backend` comes from one line that prints key names only, never
+values: `grep -o '^\(POWERPACKS_LOCAL_SEARCH_DB\|TURBOPUFFER_API_KEY\)=' .env; ls .powerpacks/search-index/local-search.duckdb`.
+`local` when `POWERPACKS_LOCAL_SEARCH_DB` is listed, or the index file exists and
+`TURBOPUFFER_API_KEY` is not listed; otherwise `powerset`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.
@@ -262,7 +270,8 @@ do not need SQL assistance.
   missing, rerun with `--search-only` instead of failing the search
 - No set/operator resolution
 - No TurboPuffer or Postgres calls
-- Investor filters are not supported locally
+- Investors and set interactions have no local data: `prepare` drops those keys with a note.
+  Interactions with you (`operator_interaction_min/max`) are a local filter.
 
 ---
 
@@ -310,45 +319,35 @@ For both local and Powerset previews:
   the payload holds them, `null` to remove a key) and `traits` (the whole list of
   `{value, temporal, meaning}`). The card sends only what the user changed against the preview
   it showed: a key in `filters` is an edit, `traits` is present only when the traits changed,
-  and `query` only when the query changed. Copy the values, never re-parse them, and never
-  compare them with the file on disk. Read the JSON file named by `payload_json` in the preview:
+  and `query` only when the query changed. Save the object exactly as printed, never re-parsed,
+  to `<run>/card-edits.json`, where `<run>` is the preview's `--output-dir`:
+
+  ```bash
+  cat > <run>/card-edits.json <<'EOF'
+  <the JSON object as printed>
+  EOF
+  ```
+
+  The pipeline applies the edits and logs them in `<run>/user-edits.jsonl`: never edit the
+  payload file yourself and never log these edits yourself. Then:
   - If `query` is present, or a trait's `value` changed, was added, or was removed against the
-    `traits` of the preview you showed (an empty `traits` list clears them), log the change as
-    `query_edit`, run a new `prepare` with the
-    same `--output-dir` for the sent `query` (restated around the sent traits when both came),
-    or, when only the traits changed, for the preview's query restated around the new traits.
-    Keywords and filters never go into the query, and no `filters` come with a changed query or
-    trait: the new prepare derives its own. Leave the new payload as the prepare wrote it (its
-    traits and their meanings included: the sent traits shaped the query, nothing else), so the
-    card the user sees is what would run. Then show the new preview and ask the usual question,
-    even though the reply said `then execute`: the user approved the search as it was, and a new
-    prepare is a new search. Only `execute` on the new card runs it. Retrieval and LLM filtering use the prepared query; do not run the old
-    `execute_command` for a changed query or trait value.
-  - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
-    the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when
-    `traits` is present replace the payload's `traits` with it (a changed `temporal` alone is
-    an in-place edit). A sent key also deletes its older `role_` alias from `role_search_filters`
-    when it is there (`bm25_queries` → `role_bm25_queries`, `semantic_query` →
-    `role_semantic_query`): the run would restore a cleared value from the alias. When
-    `bm25_queries` is sent (a list or `null`), also drop
-    every `role_core_patterns` entry that holds an example no longer in it: the run merges the
-    examples back into the keywords and retrieval matches the entry's regex, so a removed
-    keyword would return either way. The kept examples are already in `bm25_queries`.
-  - Log each change with `search_feedback.py log` as shown in **User edit & feedback
-    capture**, using `--kind filter_edit` for filters or `--kind query_edit` for the query or
-    traits, with both `--before` and `--after`.
-  - For in-place edits, save the payload, then run the returned `execute_command`
-    exactly in the background and read its output as it arrives. It binds the edited file.
-    Filter and temporal-only edits need no second `prepare` or approval.
-- A reply starting `Modify:` (no "then execute") comes from a blocked card: apply the JSON by
-  the same rules, in place, and ask the usual question again; a later `execute` runs the
-  returned `execute_command`, which binds the edited file. Only a `query` or a changed trait
-  value means a new `prepare`, by the rule above (the new payload stays as prepared). Never run
-  the search from this reply.
-- Any other reply is a modify in the user's words: use the same rules above.
-  A changed query or trait value requires a new `prepare` and the usual question; filter and
-  temporal-only edits are applied and logged in place, then run the returned
-  `execute_command` exactly.
+    `traits` of the preview you showed (an empty `traits` list clears them): run a new `prepare`
+    with the same `--output-dir`, `--edits-json <run>/card-edits.json`, and `--query` set to the
+    sent `query` (restated around the sent traits when both came) or, when only the traits
+    changed, to the preview's query restated around the new traits. Keywords and filters never
+    go into the query: the filter edits ride along through `--edits-json`, and the traits come
+    from the restated query. Then show the new preview and ask the usual question, even though
+    the reply said `then execute`: a new prepare is a new search. Only `execute` on the new card
+    runs it; never run the old `execute_command` for a changed query or trait value.
+  - Otherwise run the returned `execute_command` with ` --edits-json <run>/card-edits.json`
+    appended, in the background, and read its output as it arrives. Filter and temporal-only
+    edits need no second `prepare` or approval.
+- A reply starting `Modify:` (no "then execute") comes from a blocked card: save the object the
+  same way and run a new `prepare` with the same `--output-dir`, `--edits-json`, and the query by
+  the rule above (the preview's own query when none was sent); then ask the usual question
+  again. Never run the search from this reply.
+- Any other reply is a modify in the user's words: write the same JSON object yourself and
+  follow the rules above.
 
 ## Execution progress
 
@@ -379,11 +378,13 @@ be opened for progress.
 
 ## User edit & feedback capture
 
-Log each user query/filter/pond edit or result note immediately:
+Query, filter and trait edits made through the card are logged by the pipeline (`--edits-json`
+and a re-prepare over the same `--output-dir`). Log pond edits and result notes yourself,
+immediately:
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_feedback/search_feedback.py log \
-  --run-dir <run> --kind <filter_edit|query_edit|pond_edit|result_feedback> \
+  --run-dir <run> --kind <pond_edit|result_feedback> \
   --note "<one line in the user's words>" [--before "<old value>"] [--after "<new value>"]
 ```
 
@@ -409,7 +410,9 @@ person-data errors still use `$feedback`.
   SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
 - For refinements after execution, create a new search with the updated query
-  or constraints. Before execution, edit the prepared payload as described above.
+  or constraints. Before execution, edits go through `--edits-json` as described above.
+- Every Python command runs as `uv run --env-file .env --project . python …`; the system
+  `python3` has none of the project's packages.
 - Do not mention skip-rerank, alternate execution modes, internal ledgers, or
   internal artifact paths in the user-facing preview.
 

@@ -1009,6 +1009,9 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 },
             }
             payload_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            # The card's edit rides in through --edits-json: applied to the payload, logged beside it.
+            edits_path = tmp / "card-edits.json"
+            edits_path.write_text(json.dumps({"filters": {"li_followers_max": 100000}}), encoding="utf-8")
 
             env = dict(os.environ)
             env.update({
@@ -1033,6 +1036,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     "software engineers in sf that went to stanford",
                     "--payload-json",
                     str(payload_path),
+                    "--edits-json",
+                    str(edits_path),
                     "--limit",
                     "0",
                     "--top-k",
@@ -1061,6 +1066,11 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("resolve_set_operators", step_ids)
             expand = next(step for step in state["steps"] if step["id"] == "expand_search_request")
             filters = expand["output"]["role_search_filters"]
+            self.assertEqual(filters["li_followers_max"], 100000)
+            self.assertEqual(json.loads(payload_path.read_text())["role_search_filters"]["li_followers_max"], 100000)
+            edit_rows = [json.loads(line) for line in (tmp / "user-edits.jsonl").read_text().splitlines()]
+            self.assertEqual([(row["kind"], row["note"], row["after"]) for row in edit_rows],
+                             [("filter_edit", "li_followers_max", "100000")])
             # There is no concept of a set/operator locally: the scope keys are
             # stripped from the executable payload outright (reported via
             # ignored_remote_scope_keys above), not carried along and ignored.
@@ -1251,6 +1261,47 @@ class PreviewFilterKeysTests(unittest.TestCase):
         self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"]})
         payload["traits"] = []
         self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"], "is_current_role": True})
+
+    def test_card_edits_apply_to_the_payload_and_log_each_one(self):
+        """The card's JSON edits the prepared payload in code: null removes a key, the older alias
+        goes with it, a kept keyword list prunes the patterns, traits are replaced; every edit
+        lands in user-edits.jsonl."""
+        module = load_pipeline_module()
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            payload = {
+                "traits": [{"value": "Engineer", "temporal": "current", "meaning": "role"}],
+                "role_search_filters": {
+                    "cities": ["Boston"], "seniority_bands": ["senior", "staff"],
+                    "bm25_queries": ["backend engineer", "platform engineer"],
+                    "role_bm25_queries": ["backend engineer", "platform engineer"],
+                    "role_core_patterns": [{"regex": "backend", "examples": ["backend engineer"]},
+                                           {"regex": "platform", "examples": ["platform engineer"]}],
+                },
+            }
+            edits = {
+                "filters": {"seniority_bands": None, "bm25_queries": ["backend engineer"],
+                            "cities": ["Boston", "Austin"]},
+                "traits": [{"value": "Engineer", "temporal": "past", "meaning": "role"}],
+            }
+            out = module.apply_card_edits(payload, edits, run_dir)
+            self.assertEqual(out["role_search_filters"], {
+                "cities": ["Boston", "Austin"], "bm25_queries": ["backend engineer"],
+                "role_core_patterns": [{"regex": "backend", "examples": ["backend engineer"]}],
+            })
+            self.assertEqual(out["traits"][0]["temporal"], "past")
+            self.assertEqual(payload["role_search_filters"]["seniority_bands"], ["senior", "staff"])
+            rows = [json.loads(line) for line in (run_dir / "user-edits.jsonl").read_text().splitlines()]
+            self.assertEqual([(row["kind"], row["note"]) for row in rows], [
+                ("filter_edit", "seniority_bands"), ("filter_edit", "bm25_queries"),
+                ("filter_edit", "cities"), ("query_edit", "traits"),
+            ])
+            self.assertEqual((rows[0]["before"], rows[0]["after"]), ('["senior", "staff"]', "null"))
+
+    def test_prepare_and_run_take_the_card_edits(self):
+        parser = load_pipeline_module().build_parser()
+        self.assertEqual(parser.parse_args(["run", "--edits-json", "e.json"]).edits_json, "e.json")
+        self.assertEqual(parser.parse_args(["prepare", "--query", "q", "--edits-json", "e.json"]).edits_json, "e.json")
 
     def test_quick_run_records_the_latest_expansion(self):
         """A state can hold several expand steps (an edited expansion appended); the run executes

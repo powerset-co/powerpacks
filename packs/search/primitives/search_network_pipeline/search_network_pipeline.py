@@ -45,6 +45,7 @@ from packs.search.primitives.llm_rerank_candidates import capability_contract  #
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
+from packs.search.primitives.search_feedback.search_feedback import log_edit  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -478,6 +479,59 @@ def is_present(value: Any) -> bool:
 def payload_filters(payload: dict[str, Any]) -> dict[str, Any]:
     filters = payload.get("role_search_filters")
     return dict(filters) if isinstance(filters, dict) else {}
+
+# The card's edits, one JSON file: {"filters": {key: value | null}, "traits": [{value, temporal, meaning}]}.
+# The pipeline applies them and logs each one in the run folder's user-edits.jsonl; the agent never edits the payload.
+EDIT_ALIASES = {"bm25_queries": "role_bm25_queries", "semantic_query": "role_semantic_query"}
+
+def read_edits(args) -> dict[str, Any]:
+    path = getattr(args, "edits_json", None)
+    if not path:
+        return {}
+    edits = read_json(Path(path))
+    if not isinstance(edits, dict):
+        raise Failed("--edits-json must hold one JSON object")
+    return edits
+
+def apply_card_edits(payload: dict[str, Any], edits: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    """Apply the card's filters (null removes a key) and traits to a prepared payload, logging each edit."""
+    out = json.loads(json.dumps(payload))
+    filters = payload_filters(out)
+    for key, value in (edits.get("filters") or {}).items():
+        before = filters.get(key)
+        if value is None:
+            filters.pop(key, None)
+        else:
+            filters[key] = value
+        # The run would restore a cleared value from the older alias.
+        filters.pop(EDIT_ALIASES.get(key, ""), None)
+        if key == "bm25_queries":
+            # A pattern's examples merge back into the keywords at run time, so a removed keyword must not return.
+            kept = set(value or [])
+            filters["role_core_patterns"] = [
+                pattern for pattern in filters.get("role_core_patterns") or []
+                if set(pattern.get("examples") or []) <= kept
+            ]
+        log_edit(run_dir, kind="filter_edit", note=key, before=json.dumps(before), after=json.dumps(value))
+    if "traits" in edits:
+        log_edit(run_dir, kind="query_edit", note="traits",
+                 before=json.dumps(out.get("traits")), after=json.dumps(edits["traits"]))
+        out["traits"] = edits["traits"]
+    out["role_search_filters"] = filters
+    return out
+
+def apply_prepare_edits(args, payload: dict[str, Any], payload_json: Path, out_dir: Path) -> dict[str, Any]:
+    """A prepare over a run dir that already holds a payload is a query change: log it. The card's
+    filter edits ride along; the traits are the expander's, shaped by the restated query."""
+    previous = read_json(payload_json)
+    if isinstance(previous, dict):
+        before, after = previous.get("normalized_query"), payload.get("normalized_query")
+        if before != after:
+            log_edit(out_dir, kind="query_edit", note="query", before=str(before or ""), after=str(after or ""))
+    edits = read_edits(args)
+    if edits.get("filters"):
+        payload = apply_card_edits(payload, {"filters": edits["filters"]}, out_dir)
+    return payload
 
 def _dedupe_present(values: list[Any]) -> list[Any]:
     out: list[Any] = []
@@ -1130,6 +1184,15 @@ def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_
 def cmd_run(args):
     try:
         _validate_capability_input(args)
+        edits=read_edits(args)
+        if edits:
+            if not args.payload_json:
+                raise Failed("--edits-json edits the prepared --payload-json; pass both")
+            payload_json=Path(args.payload_json)
+            prepared=read_json(payload_json)
+            if not isinstance(prepared,dict):
+                raise Failed(f"--payload-json is not a prepared payload: {payload_json}")
+            write_json(payload_json, apply_card_edits(prepared, edits, payload_json.parent))
         result=run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)
         record_quick_run(result)
         emit(result); return 0
@@ -1168,6 +1231,7 @@ def cmd_prepare(args):
             payload=pin_payload_seniority_bands(payload,pinned_bands)
         if getattr(args,"current_role",False):
             payload=pin_payload_current_role(payload,True)
+        payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         company_args=company_directory_tool_args(payload)
         if company_args:
@@ -1234,6 +1298,7 @@ def cmd_prepare_local(args):
             payload=pin_payload_current_role(payload,True)
         payload, removed_scope_keys=prepare_local_payload(payload)
         payload=apply_local_title_clustering(payload, db_path)
+        payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         extra=(
             f"--backend local --db {shlex.quote(str(db_path))} "
@@ -1287,6 +1352,7 @@ def add_run(p):
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
     p.add_argument("--payload-json", help="Exact reviewed expansion payload; the only payload execution input")
+    p.add_argument("--edits-json", help="The card's edits as one JSON file ({\"filters\": {key: value|null}, \"traits\": [...]}): applied to --payload-json before the run and logged in its folder's user-edits.jsonl")
     p.add_argument("--evaluation-query", help="Canonical plan/JD brief used only by filter/rerank")
     p.add_argument("--evaluation-traits-json", help="Canonical evaluation traits as JSON, @file, or JSON file path")
     p.add_argument("--filter-system-file", help="Reviewed filter system prompt")
@@ -1325,6 +1391,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--query",required=True)
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")
+    p.add_argument("--edits-json",help="The card's edits as one JSON file: its filters are applied to the prepared payload and logged in the output dir's user-edits.jsonl (the traits come from the query)")
     p.add_argument("--expand-prompts-dir",help="Reviewed complete query-expansion prompt bundle")
     p.add_argument("--expand-model",default=DEFAULT_EXPAND_MODEL)
     p.add_argument("--expand-reasoning-effort",default=DEFAULT_EXPAND_REASONING_EFFORT)
