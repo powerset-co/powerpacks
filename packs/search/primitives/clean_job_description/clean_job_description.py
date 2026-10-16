@@ -175,11 +175,12 @@ def _exact_object(value: Any, fields: set[str], label: str) -> Mapping[str, Any]
 
 
 def _claim(value: Any, quotes: Any, label: str) -> tuple[str | None, tuple[str, ...]]:
-    if value is not None and (not isinstance(value, str) or not value.strip()):
+    if value is not None and not isinstance(value, str):
         raise RuntimeError(f"JD cleaner returned an invalid {label}")
     if not isinstance(quotes, list) or any(not isinstance(quote, str) for quote in quotes):
         raise RuntimeError(f"JD cleaner returned invalid {label} source quotes")
-    return " ".join(value.split()) if value is not None else None, tuple(quotes)
+    text = " ".join(value.split()) if value is not None else ""
+    return text or None, tuple(quotes)
 
 
 def _items(value: Any, label: str) -> tuple[_EvidenceItem, ...]:
@@ -190,11 +191,12 @@ def _items(value: Any, label: str) -> tuple[_EvidenceItem, ...]:
         item = _exact_object(value_item, {"text", "source_quote"}, f"{label} item")
         text = item["text"]
         quote = item["source_quote"]
-        if not isinstance(text, str) or not text.strip():
-            raise RuntimeError(f"JD cleaner returned an empty {label} item")
+        if not isinstance(text, str):
+            raise RuntimeError(f"JD cleaner returned an invalid {label} item")
         if not isinstance(quote, str):
             raise RuntimeError(f"JD cleaner returned an invalid {label} item quote")
-        items.append(_EvidenceItem(text=" ".join(text.split()), source_quote=quote))
+        if text.strip():
+            items.append(_EvidenceItem(text=" ".join(text.split()), source_quote=quote))
     return tuple(items)
 
 

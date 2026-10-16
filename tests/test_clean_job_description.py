@@ -150,15 +150,25 @@ class CleanJobDescriptionTests(unittest.TestCase):
         self.assertEqual(api.chat.completions.create.call_count, 5)
         self.assertEqual(len(list(self.output_dir.glob("*.json"))), 5)
 
-    def test_unexpected_fields_and_empty_items_are_rejected(self):
-        cases = [
-            _answer(tech_stack=["Rust"]),
-            _answer(responsibilities=[{"text": "  ", "source_quote": "Build storage control software."}]),
-            _answer(company={**_answer()["company"], "what_it_does": ""}),
-        ]
-        for index, answer in enumerate(cases):
-            with self.subTest(index=index), self.assertRaises(RuntimeError):
-                self._clean(_client(_response(answer)), output_dir=self.output_dir / str(index))
+    def test_unexpected_fields_are_rejected(self):
+        with self.assertRaises(RuntimeError):
+            self._clean(_client(_response(_answer(tech_stack=["Rust"]))))
+
+    def test_blank_items_and_claims_read_as_not_stated(self):
+        answer = _answer(
+            responsibilities=[
+                {"text": "  ", "source_quote": "Build storage control software."},
+                {"text": "Ship  releases.", "source_quote": ""},
+            ],
+            nice_to_have=[{"text": " ", "source_quote": ""}],
+            company={**_answer()["company"], "what_it_does": ""},
+        )
+
+        text = self._clean(_client(_response(answer)))
+
+        self.assertIn("What it does: Not stated ·", text)
+        self.assertIn("Responsibilities\n- Ship releases.\n", text)
+        self.assertTrue(text.endswith("Nice to have\nNot stated.\n"))
 
     def test_source_quotes_are_kept_but_not_checked(self):
         answer = _answer(

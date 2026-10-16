@@ -117,9 +117,7 @@ def validate_response(response: object, request: dict) -> dict:
         usage = response["usage"]
         if not isinstance(usage, dict):
             raise ValueError
-        if type(usage["input_tokens"]) is not int or not 0 < usage["input_tokens"] <= MAX_INPUT_TOKENS:
-            raise ValueError
-        if type(usage["output_tokens"]) is not int or usage["output_tokens"] < 0:
+        if type(usage["input_tokens"]) is not int or type(usage["output_tokens"]) is not int:
             raise ValueError
         return response
     except (KeyError, TypeError, ValueError, OverflowError):
