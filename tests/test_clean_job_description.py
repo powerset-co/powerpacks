@@ -162,10 +162,41 @@ class CleanJobDescriptionTests(unittest.TestCase):
                 "source_quotes": {**_answer()["company"]["source_quotes"], "stage": []},
             }),
             _answer(tech_stack=["Rust"]),
+            _answer(responsibilities=[{
+                "text": "Build storage control software and ship it weekly.",
+                "source_quote": "Build storage control software.\n\nShip it weekly.",
+            }]),
+            _answer(responsibilities=[{
+                "text": "Build storage control software.",
+                "source_quote": "\n\n",
+            }]),
         ]
         for index, answer in enumerate(cases):
             with self.subTest(index=index), self.assertRaises(RuntimeError):
                 self._clean(_client(_response(answer)), output_dir=self.output_dir / str(index))
+
+    def test_source_quote_may_join_passages_from_different_paragraphs(self):
+        answer = _answer(
+            responsibilities=[{
+                "text": "Build storage control software for Example Systems.",
+                "source_quote": (
+                    "Example Systems builds storage control software.\n\n"
+                    "Build storage control software."
+                ),
+            }],
+            company={
+                **_answer()["company"],
+                "source_quotes": {
+                    **_answer()["company"]["source_quotes"],
+                    "size": ["We are a team of 42 employees.\n\nFree lunch and health insurance."],
+                },
+            },
+        )
+
+        text = self._clean(_client(_response(answer)))
+
+        self.assertIn("- Build storage control software for Example Systems.\n", text)
+        self.assertIn("Size: 42 employees", text)
 
     def test_malformed_paid_response_is_checkpointed_and_not_retried(self):
         output_dir = self.output_dir / "malformed"
