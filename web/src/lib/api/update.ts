@@ -56,7 +56,10 @@ export async function installUpdate(): Promise<void> {
   await invoke("update_install")
 }
 
+/** Restarts into the installed version. The stored check still names the old version as current,
+ *  so it goes first: the relaunched app asks the feed again. */
 export async function restartApp(): Promise<void> {
+  localStorage.removeItem(CHECKED_KEY)
   await invoke("update_restart")
 }
 

@@ -107,4 +107,5 @@ export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/powerpacks-updater.key)"
 CI publishes the signed `.app.tar.gz` and `latest.json` beside the dmg. The app checks that
 feed, downloads and verifies the update, installs it in place, then offers a restart.
 For a local test feed, bake alternate `plugins.updater.endpoints` into the app with
-`pnpm tauri build --config '<JSON config override>'`.
+`pnpm tauri build --config '<JSON config override>'`. An `http://` endpoint also needs
+`"dangerousInsecureTransportProtocol": true` beside `endpoints` in `plugins.updater`.

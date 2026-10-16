@@ -169,8 +169,11 @@ it("installs the update with a progress bar, then restarts into it", async () =>
   expect(bar.getAttribute("aria-valuenow")).toBe("100")
 
   app.done()
+  // The stored check names 3.27.0 as current; the relaunched app must ask the feed again.
+  expect(localStorage.getItem("update.checked")).not.toBeNull()
   fireEvent.click(await screen.findByRole("button", { name: "Restart now" }))
   expect(invoked("update_restart")).toBe(1)
+  expect(localStorage.getItem("update.checked")).toBeNull()
 })
 
 it("says Downloading without a share while the download's size is unknown", async () => {
@@ -232,4 +235,5 @@ it("installs from the rail's icon, its tip following along, and restarts on the 
   expect(icon.getAttribute("aria-label")).toBe("Restart to update")
   fireEvent.click(icon)
   expect(invoked("update_restart")).toBe(1)
+  expect(localStorage.getItem("update.checked")).toBeNull()
 })

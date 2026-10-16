@@ -95,7 +95,7 @@ async fn update_install(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn update_restart(app: AppHandle) {
-    app.restart();
+    app.request_restart();
 }
 
 #[tauri::command]

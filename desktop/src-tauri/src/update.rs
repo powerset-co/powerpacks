@@ -1,8 +1,11 @@
 //! Signed in-app updates from the configured Tauri updater feed.
 
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
+
+const UPDATE_PROGRESS_EVENT: &str = "update:progress";
 
 #[derive(Serialize)]
 pub struct Update {
@@ -42,14 +45,24 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
         .await
         .map_err(|error| error.to_string())?
         .ok_or("No update available.")?;
-    let mut downloaded = 0;
+    let downloaded = AtomicU64::new(0);
     update
         .download_and_install(
             |bytes, total| {
-                downloaded += bytes as u64;
-                let _ = app.emit("update:progress", Progress { downloaded, total });
+                let downloaded =
+                    downloaded.fetch_add(bytes as u64, Ordering::Relaxed) + bytes as u64;
+                let _ = app.emit(UPDATE_PROGRESS_EVENT, Progress { downloaded, total });
             },
-            || {},
+            || {
+                let downloaded = downloaded.load(Ordering::Relaxed);
+                let _ = app.emit(
+                    UPDATE_PROGRESS_EVENT,
+                    Progress {
+                        downloaded,
+                        total: Some(downloaded),
+                    },
+                );
+            },
         )
         .await
         .map_err(|error| error.to_string())
@@ -85,5 +98,18 @@ mod tests {
                 json!({"downloaded": 100, "total": total})
             );
         }
+    }
+
+    #[test]
+    fn finished_download_payload_reports_received_bytes_as_total() {
+        let downloaded = 100;
+        assert_eq!(
+            serde_json::to_value(Progress {
+                downloaded,
+                total: Some(downloaded),
+            })
+            .unwrap(),
+            json!({"downloaded": 100, "total": 100})
+        );
     }
 }
