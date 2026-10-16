@@ -59,12 +59,15 @@ export const SEARCH_LABEL = "Search people"
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-export function humanize(value: string | null | undefined): string {
-  return (value ?? "").replace(/^is_/, "").replaceAll("_", " ").trim()
+export function humanize(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .replace(/^is_/, "")
+    .replaceAll("_", " ")
+    .trim()
 }
 
-/** Sentence case, brand names kept: "close friend" -> "Close friend", "imessage" -> "iMessage". */
-export function sentence(value: string | null | undefined): string {
+/** Sentence case, brand names kept: "close_friend" -> "Close friend", "imessage" -> "iMessage". */
+export function sentence(value: string | number | null | undefined): string {
   const words = humanize(value).split(" ").filter(Boolean)
   const [first] = words
   if (first === undefined) return ""

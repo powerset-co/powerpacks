@@ -35,6 +35,7 @@ const SEARCH: PreparedSearch = {
     { key: "seniority_bands", value: ["vice-president", "director"] },
     { key: "years_experience_min", value: 5 },
     { key: "bm25_queries", value: ["vp finance"] },
+    { key: "role_ids", value: ["vp_finance"] },
   ],
   traits: [
     { value: "VP of Finance", temporal: "current", meaning: "role" },
@@ -77,6 +78,7 @@ it("shows the query, the traits and the filled filters read-only on a card that 
   expect(screen.getByText("vice-president")).toBeTruthy()
   expect(screen.getByText("5 – any")).toBeTruthy()
   expect(screen.getByText("vp finance")).toBeTruthy()
+  expect(screen.getByText("Vp finance")).toBeTruthy()
   expect(screen.queryByText("Companies")).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
   expect(screen.queryByRole("button")).toBeNull()

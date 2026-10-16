@@ -5,6 +5,7 @@
 import type { ReactNode } from "react"
 
 import { type Field, type Values, names, scalar } from "@/lib/agent/searchFields"
+import { sentence } from "@/lib/people/copy"
 import type { FilterValue, Trait } from "@/types/searches"
 
 export const CHIP = "rounded-full border border-line px-2.5 py-1 text-[11.5px] font-semibold leading-snug"
@@ -26,7 +27,8 @@ function range(low: string, high: string): string {
   return `${low === "" ? "any" : low} – ${high === "" ? "any" : high}`
 }
 
-/** One field's values, read-only: chips for names (a location with its kind), text for the rest. */
+/** One field's values, read-only: chips for names (a location with its kind), text for the rest.
+ * A readonly list holds the search's own ids (role_ids, role_tracks), shown as words. */
 export function ReadRow({ field, values }: { field: Field; values: Values }) {
   const control = field.control
   switch (control.kind) {
@@ -35,7 +37,7 @@ export function ReadRow({ field, values }: { field: Field; values: Values }) {
         <Row label={field.label}>
           {names(values.get(control.key)).map((name, index) => (
             <span key={index} className={CHIP}>
-              {name}
+              {control.readonly ? sentence(name) : name}
             </span>
           ))}
         </Row>
