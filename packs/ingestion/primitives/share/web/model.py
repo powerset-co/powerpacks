@@ -213,7 +213,7 @@ class SharePeople:
                 recency_days=cells.get("recency_days"),
                 cadence=str(cells.get("cadence") or ""),
                 direction=str(cells.get("direction") or ""),
-                worth=decision["worth"] if decision is not None and decision["worth"] in {"yes", "maybe", "no"} else "",
+                worth=decision["worth"] if decision is not None else "",
                 worth_source=decision["decided_by"] if decision is not None else "",
                 relationship_kind=str(cells.get("relationship_kind") or ""),
                 mode=str(cells.get("mode") or ""),
@@ -224,7 +224,7 @@ class SharePeople:
                 warmth=cells.get("warmth"),
                 labels=tuple(name for name in NOUL_LABELS if float(cells.get(name, 0.0)) >= ACTIVE_P),
                 flag=label.flag,
-                reason=decision["reason"] if decision is not None else "",
+                reason=_reason(bool(cells.get("is_owner")), decision, label.flag),
                 tags=tuple(sorted(split_tags(held.tags))) if held else (),
                 is_owner=bool(cells.get("is_owner")),
                 linkedin_only=bool(cells.get("linkedin_only")),
@@ -275,6 +275,18 @@ class SharePeople:
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),
         )
+
+
+def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:
+    """The first rule that places the family, as the page's key: the owner, the human's call, a flag
+    that keeps the family off the upload, else the machine's worth or none."""
+    if is_owner:
+        return "owner"
+    if decision is not None and decision["decided_by"] == "human":
+        return "human_worth"
+    if flag:
+        return flag
+    return f"worth_{decision['worth']}" if decision is not None else "unjudged"
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))

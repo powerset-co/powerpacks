@@ -105,7 +105,7 @@ class ShareEvidence:
                 source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
                 interaction_counts=parse_interaction_counts(row["interaction_counts"]),
                 last_interaction=row["last_interaction"] or None,
-                network_worth=decided["worth"] if decided is not None else "maybe",
+                network_worth=decided["worth"] if decided is not None else "",
                 worth_labels=labels,
                 facts=facts,
                 shared_overlaps=frozenset(overlaps),

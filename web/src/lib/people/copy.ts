@@ -122,16 +122,16 @@ export const UPLOAD_TITLE: Readonly<Record<UploadPhase, string>> = {
 
 // A failed phase shows the server's sentence instead.
 export const UPLOAD_SENTENCE: Readonly<Record<CalmPhase, string>> = {
-  idle: "Only people marked Share are uploaded.",
+  idle: "Only people worth it are uploaded.",
   checking: "Counting who will upload. Nothing is shared yet.",
-  ready: "Only people marked Share with a LinkedIn profile upload.",
+  ready: "Only people worth it with a LinkedIn profile upload.",
   uploading: "Closing keeps the upload running.",
-  completed: "Only people marked Share are uploaded.",
+  completed: "Only people worth it are uploaded.",
 }
 
 // The check's plan, in order; a zero row is hidden except what will upload.
 export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
-  { key: "marked_share", label: "Marked Share" },
+  { key: "marked_share", label: "Worth it" },
   { key: "with_linkedin", label: "With LinkedIn, will upload" },
   { key: "without_linkedin", label: "Without LinkedIn, stay local" },
   { key: "new_to_cloud", label: "New to the cloud" },

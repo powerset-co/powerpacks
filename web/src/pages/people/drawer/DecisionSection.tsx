@@ -37,7 +37,13 @@ export function DecisionSection({
       {...section}
     >
       {why ? <p>{why}</p> : null}
-      {row.flag ? <p className="dim">{`${label("reason", row.flag)}: kept off the upload`}</p> : null}
+      {row.flag ? (
+        <p className="dim">
+          {row.worth_source === "human" && row.worth === "yes"
+            ? `${label("reason", row.flag)}: uploads on your call`
+            : `${label("reason", row.flag)}: kept off the upload`}
+        </p>
+      ) : null}
       {detail?.worth_note ? <p className="note">{detail.worth_note}</p> : null}
       {detail?.note ? <p className="note">{detail.note}</p> : null}
     </DetailsSection>

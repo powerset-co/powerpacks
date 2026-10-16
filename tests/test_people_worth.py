@@ -113,7 +113,7 @@ class PeopleWorthTests(StoreTests):
         from dataclasses import asdict
         initial, = self.people.load()
         # The machine's "maybe" reaches the page as its own call; only the human writes yes or no.
-        self.assertEqual((initial.worth, initial.worth_source, initial.reason), ("maybe", "machine", "uncertain"))
+        self.assertEqual((initial.worth, initial.worth_source, initial.reason), ("maybe", "machine", "worth_maybe"))
         self.assertNotIn("share", asdict(initial))
         self.assertNotIn("share_source", asdict(initial))
         labels = [tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")]
@@ -121,7 +121,7 @@ class PeopleWorthTests(StoreTests):
             code, payload = self.post("/api/people/worth", {"ids": ["p:a"], "worth": choice})
             self.assertEqual(code, 200)
             updated, = payload["rows"]
-            self.assertEqual((updated["worth"], updated["worth_source"], updated["reason"]), (choice, "human", "human"))
+            self.assertEqual((updated["worth"], updated["worth_source"], updated["reason"]), (choice, "human", "human_worth"))
             self.assertEqual(updated["tags"], ["is_recruiter"])
             self.assertNotIn("share", updated)
             human = self.conn.execute("SELECT candidate_id, worth, reason, labels_json, input_fingerprint FROM worth "
@@ -149,7 +149,7 @@ class PeopleWorthTests(StoreTests):
         self.conn.execute("DELETE FROM worth")
         self.conn.commit()
         row, = self.people.load()
-        self.assertEqual((row.worth, row.worth_source, row.reason), ("", "", ""))
+        self.assertEqual((row.worth, row.worth_source, row.reason), ("", "", "unjudged"))
 
     def test_changed_profile_keeps_in_progress_and_blocks_writes_until_labels_refresh(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.db import queries_review
