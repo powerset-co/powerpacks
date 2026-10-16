@@ -165,6 +165,32 @@ it("adds a filter the search did not come with through the Edit Filters modal", 
   expect(body.filters.seniority_bands).toEqual(["vice-president", "director"])
 })
 
+it("clears both ends of a range from the modal, and keeps a typed location under the kind picked", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: [...SEARCH.filters, { key: "headcount_min", value: 50 }, { key: "headcount_max", value: 500 }],
+  }
+  render(<SearchCard search={search} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
+  // Headcount's clear fires two updates in one click; both must land.
+  const headcount = within(dialog).getByText("Headcount").parentElement
+  if (!headcount) throw new Error("no headcount row")
+  fireEvent.click(within(headcount).getByRole("button", { name: "clear" }))
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Location/ }))
+  const place = within(dialog).getByPlaceholderText("e.g., San Francisco, California")
+  fireEvent.change(place, { target: { value: "Brooklyn" } })
+  fireEvent.keyDown(place, { key: "Enter" })
+  fireEvent.click(within(dialog).getByRole("button", { name: "Apply Filters" }))
+  execute()
+  const { filters } = sent()
+  expect(filters.headcount_min).toBeNull()
+  expect(filters.headcount_max).toBeNull()
+  // The default kind is metro area, so the typed name joins the prepared one.
+  expect(filters.metro_areas).toEqual(["New York Metropolitan Area", "Brooklyn"])
+})
+
 it("drops the modal's edits on Cancel", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.click(screen.getByRole("button", { name: "More filters…" }))

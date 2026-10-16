@@ -44,6 +44,14 @@ import {
   fuzzySearch,
 } from "@/lib/agent/companyFilters"
 
+const LOCATION_KINDS: [string, string][] = [
+  ["metro_area", "Metro area"],
+  ["city", "City"],
+  ["state", "State"],
+  ["country", "Country"],
+  ["macro_region", "Region"],
+]
+
 const DEGREE_LEVEL_OPTIONS = [
   { id: "Bachelors", label: "Bachelor's" },
   { id: "Masters", label: "Master's" },
@@ -206,19 +214,41 @@ export function EditFiltersModalV2({
   const personLocations = flattenPersonLocations(filters)
   const companyLocations = flattenCompanyLocations(filters)
 
+  // Without the cloud's entity service a typed location has no kind, so each location input
+  // has a kind picker beside it and a typed name takes the kind picked.
+  const [personKind, setPersonKind] = useState("metro_area")
+  const [companyKind, setCompanyKind] = useState("metro_area")
+  const withKind = (locations: EntityItem[], kind: string) =>
+    locations.map((loc) => (loc.type ? loc : { ...loc, type: kind }))
+
   const handlePersonLocationUpdate = (locations: EntityItem[]) => {
-    const unflattened = unflattenPersonLocations(locations)
+    const unflattened = unflattenPersonLocations(withKind(locations, personKind))
     Object.entries(unflattened).forEach(([key, value]) => {
       onUpdate(key as keyof ExpandedFilters, (value || []) as EntityItem[])
     })
   }
 
   const handleCompanyLocationUpdate = (locations: EntityItem[]) => {
-    const unflattened = unflattenCompanyLocations(locations)
+    const unflattened = unflattenCompanyLocations(withKind(locations, companyKind))
     Object.entries(unflattened).forEach(([key, value]) => {
       onUpdate(key as keyof ExpandedFilters, (value || []) as EntityItem[])
     })
   }
+
+  const kindPicker = (value: string, onChange: (kind: string) => void, label: string) => (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-40" aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {LOCATION_KINDS.map(([id, name]) => (
+          <SelectItem key={id} value={id}>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
 
   // Render section content
   const renderSectionContent = () => {
@@ -553,14 +583,18 @@ export function EditFiltersModalV2({
                   </Button>
                 )}
               </div>
-              <AutocompleteInput
-                key="person-location"
-                placeholder="e.g., San Francisco, California"
-                value={toEntityValues(personLocations)}
-                onChange={(v) => handlePersonLocationUpdate(toEntityItems(v))}
-                onSearch={(q) => handleSearch(q, "location")}
-                groupBy="type"
-              />
+              <div className="flex items-start gap-2">
+                <AutocompleteInput
+                  key="person-location"
+                  className="min-w-0 flex-1"
+                  placeholder="e.g., San Francisco, California"
+                  value={toEntityValues(personLocations)}
+                  onChange={(v) => handlePersonLocationUpdate(toEntityItems(v))}
+                  onSearch={(q) => handleSearch(q, "location")}
+                  groupBy="type"
+                />
+                {kindPicker(personKind, setPersonKind, "Person location kind")}
+              </div>
               <p className="text-xs text-muted-foreground">Where candidates are located</p>
             </div>
           </div>
@@ -608,14 +642,18 @@ export function EditFiltersModalV2({
                   </Button>
                 )}
               </div>
-              <AutocompleteInput
-                key="company-location"
-                placeholder="e.g., San Francisco"
-                value={toEntityValues(companyLocations)}
-                onChange={(v) => handleCompanyLocationUpdate(toEntityItems(v))}
-                onSearch={(q) => handleSearch(q, "location")}
-                groupBy="type"
-              />
+              <div className="flex items-start gap-2">
+                <AutocompleteInput
+                  key="company-location"
+                  className="min-w-0 flex-1"
+                  placeholder="e.g., San Francisco"
+                  value={toEntityValues(companyLocations)}
+                  onChange={(v) => handleCompanyLocationUpdate(toEntityItems(v))}
+                  onSearch={(q) => handleSearch(q, "location")}
+                  groupBy="type"
+                />
+                {kindPicker(companyKind, setCompanyKind, "Company location kind")}
+              </div>
             </div>
 
             {/* Funding Stage */}

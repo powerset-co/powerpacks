@@ -671,12 +671,6 @@ export function SearchCard({ search, actions }: SearchCardProps) {
         />
       )}
       {rows(filledFields(shownValues, prepared).filter(offered))}
-      {search.pool && (
-        <p className="m-0 text-xs text-muted-foreground">
-          Pool: {search.pool.matched.toLocaleString()} of {search.pool.total.toLocaleString()} people, as
-          prepared
-        </p>
-      )}
       {search.notes.length > 0 && (
         <ul
           aria-label="Notes"
@@ -722,8 +716,9 @@ export function SearchCard({ search, actions }: SearchCardProps) {
             open={filtersOpen}
             onOpenChange={setFiltersOpen}
             filters={modalFilters ?? toExpanded(values, LABELS)}
+            // Functional: the modal fires several updates in one event (a clear, a location edit).
             onUpdate={(key, value) =>
-              setModalFilters({ ...(modalFilters ?? toExpanded(values, LABELS)), [key]: value })
+              setModalFilters((previous) => ({ ...(previous ?? toExpanded(values, LABELS)), [key]: value }))
             }
             onApply={() => {
               if (modalFilters) setValues(fromExpanded(modalFilters, valuesWithDrafts()))

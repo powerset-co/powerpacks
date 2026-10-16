@@ -1,5 +1,4 @@
-// Every filter a person can set on a prepared search, grouped the way the cloud app's Edit
-// Filters modal groups them, with the control each one is edited through. The keys are the
+// Every filter a person can set on a prepared search, with the control each one is edited through.
 // expand payload's `role_search_filters` keys; the skill writes them back under the same names.
 
 import type { FilterValue } from "./preparedSearch"
@@ -55,7 +54,6 @@ export type Control =
   | { kind: "toggle"; key: string }
 
 export interface Field {
-  group: string
   label: string
   control: Control
 }
@@ -76,47 +74,40 @@ const COMPANY_LOCATION_KINDS = {
   company_macro_regions: "region",
 }
 
-export const GROUPS = ["Role", "Location", "Company", "Education", "Social", "Interactions", "Other"]
-
 export const FIELDS: Field[] = [
   {
-    group: "Role",
     label: "Seniority",
     control: { kind: "chips", key: "seniority_bands", options: SENIORITY_BANDS },
   },
-  { group: "Role", label: "Keywords", control: { kind: "chips", key: "bm25_queries" } },
-  { group: "Role", label: "Role query", control: { kind: "text", key: "semantic_query" } },
-  { group: "Role", label: "Role ids", control: { kind: "chips", key: "role_ids", readonly: true } },
-  { group: "Role", label: "Tracks", control: { kind: "chips", key: "role_tracks", readonly: true } },
+  { label: "Keywords", control: { kind: "chips", key: "bm25_queries" } },
+  { label: "Role query", control: { kind: "text", key: "semantic_query" } },
+  { label: "Role ids", control: { kind: "chips", key: "role_ids", readonly: true } },
+  { label: "Tracks", control: { kind: "chips", key: "role_tracks", readonly: true } },
   {
-    group: "Role",
     label: "Years",
     control: { kind: "pair", keys: ["years_experience_min", "years_experience_max"], type: "number" },
   },
-  { group: "Role", label: "Age", control: { kind: "pair", keys: ["age_min", "age_max"], type: "number" } },
+  { label: "Age", control: { kind: "pair", keys: ["age_min", "age_max"], type: "number" } },
   {
-    group: "Role",
     label: "Position dates",
     control: { kind: "pair", keys: ["position_after_date", "position_before_date"], type: "date" },
   },
-  { group: "Role", label: "Current role only", control: { kind: "toggle", key: "is_current_role" } },
-  { group: "Role", label: "Current company only", control: { kind: "toggle", key: "is_current_company" } },
-  { group: "Location", label: "Location", control: { kind: "kinds", keys: LOCATION_KINDS } },
-  { group: "Company", label: "Companies", control: { kind: "chips", key: "company_names" } },
-  { group: "Company", label: "Company ids", control: { kind: "chips", key: "company_ids", readonly: true } },
+  { label: "Current role only", control: { kind: "toggle", key: "is_current_role" } },
+  { label: "Current company only", control: { kind: "toggle", key: "is_current_company" } },
+  { label: "Location", control: { kind: "kinds", keys: LOCATION_KINDS } },
+  { label: "Companies", control: { kind: "chips", key: "company_names" } },
+  { label: "Company ids", control: { kind: "chips", key: "company_ids", readonly: true } },
   {
-    group: "Company",
     label: "Company query",
     control: { kind: "chips", key: "company_semantic_queries", readonly: true },
   },
-  { group: "Company", label: "Investors", control: { kind: "chips", key: "investor_names" } },
-  { group: "Company", label: "Company location", control: { kind: "kinds", keys: COMPANY_LOCATION_KINDS } },
-  { group: "Company", label: "Sector", control: { kind: "chips", key: "sector_types" } },
-  { group: "Company", label: "Entity type", control: { kind: "chips", key: "entity_types" } },
-  { group: "Company", label: "Technology", control: { kind: "chips", key: "technology_types" } },
-  { group: "Company", label: "Customers", control: { kind: "chips", key: "customer_types" } },
+  { label: "Investors", control: { kind: "chips", key: "investor_names" } },
+  { label: "Company location", control: { kind: "kinds", keys: COMPANY_LOCATION_KINDS } },
+  { label: "Sector", control: { kind: "chips", key: "sector_types" } },
+  { label: "Entity type", control: { kind: "chips", key: "entity_types" } },
+  { label: "Technology", control: { kind: "chips", key: "technology_types" } },
+  { label: "Customers", control: { kind: "chips", key: "customer_types" } },
   {
-    group: "Company",
     label: "Stage",
     control: {
       kind: "select-pair",
@@ -125,83 +116,69 @@ export const FIELDS: Field[] = [
     },
   },
   {
-    group: "Company",
     label: "Funding ($M)",
     control: { kind: "pair", keys: ["funding_amount_min", "funding_amount_max"], type: "number" },
   },
   {
-    group: "Company",
     label: "Headcount",
     control: { kind: "pair", keys: ["headcount_min", "headcount_max"], type: "number" },
   },
   {
-    group: "Company",
     label: "Valuation ($M)",
     control: { kind: "pair", keys: ["valuation_min", "valuation_max"], type: "number" },
   },
   {
-    group: "Company",
     label: "Founded",
     control: { kind: "pair", keys: ["founded_year_min", "founded_year_max"], type: "number" },
   },
   {
-    group: "Company",
     label: "Last funding",
     control: { kind: "pair", keys: ["last_funding_after", "last_funding_before"], type: "date" },
   },
-  { group: "Company", label: "Stages", control: { kind: "chips", key: "stages" } },
-  { group: "Company", label: "Company stages", control: { kind: "chips", key: "company_stages" } },
-  { group: "Company", label: "Stage name", control: { kind: "text", key: "stage" } },
-  { group: "Company", label: "YC batches", control: { kind: "chips", key: "yc_batches" } },
-  { group: "Company", label: "Accelerators", control: { kind: "chips", key: "accelerators" } },
-  { group: "Education", label: "Schools", control: { kind: "chips", key: "education_names" } },
+  { label: "Stages", control: { kind: "chips", key: "stages" } },
+  { label: "Company stages", control: { kind: "chips", key: "company_stages" } },
+  { label: "Stage name", control: { kind: "text", key: "stage" } },
+  { label: "YC batches", control: { kind: "chips", key: "yc_batches" } },
+  { label: "Accelerators", control: { kind: "chips", key: "accelerators" } },
+  { label: "Schools", control: { kind: "chips", key: "education_names" } },
   {
-    group: "Education",
     label: "School ids",
     control: { kind: "chips", key: "education_ids", readonly: true },
   },
-  { group: "Education", label: "Fields of study", control: { kind: "chips", key: "fields_of_study" } },
+  { label: "Fields of study", control: { kind: "chips", key: "fields_of_study" } },
   {
-    group: "Education",
     label: "Degree",
     control: { kind: "chips", key: "degree_levels", options: DEGREE_LEVELS },
   },
   {
-    group: "Education",
     label: "Graduation year",
     control: { kind: "pair", keys: ["graduation_year_min", "graduation_year_max"], type: "number" },
   },
   {
-    group: "Social",
     label: "X followers",
     control: { kind: "pair", keys: ["x_followers_min", "x_followers_max"], type: "number" },
   },
   {
-    group: "Social",
     label: "LinkedIn followers",
     control: { kind: "pair", keys: ["li_followers_min", "li_followers_max"], type: "number" },
   },
   {
-    group: "Social",
     label: "LinkedIn connections",
     control: { kind: "pair", keys: ["li_connections_min", "li_connections_max"], type: "number" },
   },
   {
-    group: "Social",
     label: "Instagram followers",
     control: { kind: "pair", keys: ["ig_followers_min", "ig_followers_max"], type: "number" },
   },
   {
-    group: "Interactions",
     label: "With you",
     control: { kind: "pair", keys: ["operator_interaction_min", "operator_interaction_max"], type: "number" },
   },
   {
-    group: "Interactions",
     label: "With the set",
     control: { kind: "pair", keys: ["set_interaction_min", "set_interaction_max"], type: "number" },
   },
-  { group: "Other", label: "Tech skills", control: { kind: "chips", key: "tech_skills" } },
+  { label: "Tech skills", control: { kind: "chips", key: "tech_skills" } },
 ]
 
 /** The payload keys a field edits. */
@@ -224,9 +201,9 @@ export function fieldKeys(field: Field): string[] {
 export function fieldFor(key: string, value: FilterValue | null | undefined): Field {
   const words = key.replaceAll("_", " ")
   const label = `${words.charAt(0).toUpperCase()}${words.slice(1)}`
-  if (Array.isArray(value)) return { group: "Other", label, control: { kind: "chips", key } }
-  if (typeof value === "boolean") return { group: "Other", label, control: { kind: "toggle", key } }
-  return { group: "Other", label, control: { kind: "text", key } }
+  if (Array.isArray(value)) return { label, control: { kind: "chips", key } }
+  if (typeof value === "boolean") return { label, control: { kind: "toggle", key } }
+  return { label, control: { kind: "text", key } }
 }
 
 /** True when any of the field's keys holds a value in `values`. */
