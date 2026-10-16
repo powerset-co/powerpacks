@@ -3,15 +3,52 @@ import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type 
 import { createPortal } from "react-dom"
 
 import { SourcePills } from "@/components/shared"
+import type { Channel } from "@/lib/channels"
 import { useFloatPanel } from "@/hooks/useFloatPanel"
 import { usePresence } from "@/hooks/usePresence"
 import { fetchPersonDetail } from "@/lib/api/people"
 import { toChannels } from "@/lib/channels"
-import type { Person } from "@/types/people"
+import type { Person, PersonDetail } from "@/types/people"
 
 const PANEL_WIDTH = 260
 // A panel the pointer opened closes this long after the pointer leaves it (NetworkSources' delay).
 const HOVER_CLOSE_MS = 150
+
+// The pills an address or number sits beside (drawer/DrawerHeader): emails by Gmail's, numbers by
+// iMessage's and WhatsApp's.
+const EMAIL_PILLS: readonly Channel[] = ["gmail"]
+const PHONE_PILLS: readonly Channel[] = ["imessage", "whatsapp"]
+
+// One kind of contact: its name, the row's pills of that kind with their counts, then the values.
+function Contact({
+  title,
+  pills,
+  values,
+  detail,
+}: {
+  title: string
+  pills: readonly Channel[]
+  values: readonly string[]
+  detail: PersonDetail
+}) {
+  if (!pills.length && !values.length) return null
+  const counts = Object.fromEntries(
+    pills.map((channel) => [channel, (detail.interactions[channel] ?? 0).toLocaleString("en-US")]),
+  )
+  return (
+    <div className="contact-kind">
+      <p className="contact-title">
+        <strong>{title}</strong>
+        <SourcePills channels={pills} counts={counts} />
+      </p>
+      {values.length ? (
+        values.map((value) => <span key={value}>{value}</span>)
+      ) : (
+        <span className="dim">None saved.</span>
+      )}
+    </div>
+  )
+}
 
 // The row's source pills. Hovering them, or a click that keeps it open, shows the person's
 // emails and numbers, read from their detail the first time.
@@ -53,12 +90,26 @@ export function ContactSources({ row }: { row: Person }) {
   }
 
   const label = `Email and phone for ${row.name}`
-  const values = detail.data ? [...detail.data.emails, ...detail.data.phones] : []
+  const channels = toChannels(row.channels)
+  const kinds = detail.data
+    ? [
+        {
+          title: "Email",
+          pills: EMAIL_PILLS.filter((pill) => channels.includes(pill)),
+          values: detail.data.emails,
+        },
+        {
+          title: "Phone",
+          pills: PHONE_PILLS.filter((pill) => channels.includes(pill)),
+          values: detail.data.phones,
+        },
+      ].filter((kind) => kind.pills.length || kind.values.length)
+    : []
   let body
   if (detail.isError) body = <span className="dim">Couldn't read their email or phone.</span>
   else if (!detail.data) body = <span className="dim">Loading…</span>
-  else if (!values.length) body = <span className="dim">No email or phone saved.</span>
-  else body = values.map((value) => <span key={value}>{value}</span>)
+  else if (!kinds.length) body = <span className="dim">No email or phone saved.</span>
+  else body = kinds.map((kind) => <Contact key={kind.title} {...kind} detail={detail.data} />)
 
   return (
     <span role="cell" className="sources c-sources" onPointerEnter={enter} onPointerLeave={leave}>
@@ -72,7 +123,7 @@ export function ContactSources({ row }: { row: Person }) {
         aria-label={label}
         onClick={click}
       >
-        <SourcePills channels={toChannels(row.channels)} />
+        <SourcePills channels={channels} />
       </button>
       {presence.mounted && presence.shown
         ? createPortal(

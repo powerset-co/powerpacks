@@ -129,6 +129,7 @@ class PersonDetail:
     aliases: tuple[str, ...]
     emails: tuple[str, ...]
     phones: tuple[str, ...]
+    interactions: dict[str, int]  # source family -> emails or messages, as the importer counted them
 
 
 def _events(facts: dict[str, Any]) -> tuple[FactEvent, ...]:
@@ -143,6 +144,15 @@ def _shared_context(facts: dict[str, Any]) -> tuple[str, ...]:
 
 def _families(channels: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(CHANNEL_FAMILIES.get(channel, channel) for channel in channels if channel))
+
+
+def _family_counts(counts: dict[str, int]) -> dict[str, int]:
+    """The importer's per-channel counts added up per source family."""
+    families: dict[str, int] = {}
+    for channel, count in counts.items():
+        family = CHANNEL_FAMILIES.get(channel, channel)
+        families[family] = families.get(family, 0) + count
+    return families
 
 
 def _facts_title(facts: dict[str, Any]) -> tuple[str, str]:
@@ -274,6 +284,7 @@ class SharePeople:
             aliases=tuple(dict.fromkeys(alias for alias in known_as if alias and alias != name)),
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),
+            interactions=_family_counts(parse_interaction_counts(row["interaction_counts"])),
         )
 
 
