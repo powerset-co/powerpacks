@@ -1,5 +1,42 @@
 # Changelog
 
+## [3.28.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.27.0...powerpacks-v3.28.0) (2026-10-16)
+
+
+### Features
+
+* **desktop:** the app installs its own updates and restarts ([#828](https://github.com/powerset-co/powerpacks/issues/828)) ([94702ff](https://github.com/powerset-co/powerpacks/commit/94702ffad4f6eb5acf1eb5bb4be6945ec9295be9))
+* **people:** worth yes/no in place of share; the upload behind a local switch ([#843](https://github.com/powerset-co/powerpacks/issues/843)) ([b3fc5dd](https://github.com/powerset-co/powerpacks/commit/b3fc5dd9b1cf40045faa67a6c99ec4a354360cd9))
+* **search:** the chat card is the search form, with More filters and JSON edits ([#829](https://github.com/powerset-co/powerpacks/issues/829)) ([b51094e](https://github.com/powerset-co/powerpacks/commit/b51094e3aaa40c30f7342831b43d5aad0001c453))
+* **search:** the pipeline applies the card's edits and logs them (--edits-json) ([#836](https://github.com/powerset-co/powerpacks/issues/836)) ([753ed50](https://github.com/powerset-co/powerpacks/commit/753ed50ca21b411ddf92faff1a9db518b8b4ba7c))
+* **search:** traits and filters on the chat card, editable before Execute ([#824](https://github.com/powerset-co/powerpacks/issues/824)) ([9858b45](https://github.com/powerset-co/powerpacks/commit/9858b458003a822f9bb780627429efbada4dbde6))
+* **worth:** Luna reads the family's raw messages, and warmth means how readily the owner could ask today ([#822](https://github.com/powerset-co/powerpacks/issues/822)) ([f076b8f](https://github.com/powerset-co/powerpacks/commit/f076b8f31c001357d2ed0776856457e3ae73ddab))
+
+
+### Bug Fixes
+
+* **accounts:** the Codex card shows the plan as a badge beside the account, with the Pro tiers named ([#839](https://github.com/powerset-co/powerpacks/issues/839)) ([2b57434](https://github.com/powerset-co/powerpacks/commit/2b5743409b1158b0c052a996d3cf1b0ca451b714))
+* **desktop:** the in-app agent reads only the installed skills ([#831](https://github.com/powerset-co/powerpacks/issues/831)) ([a54ea98](https://github.com/powerset-co/powerpacks/commit/a54ea980a53a9df7beb047b1096aedd39413a888))
+* **search:** a JD cleaner quote may join passages from different paragraphs ([#825](https://github.com/powerset-co/powerpacks/issues/825)) ([2790cdf](https://github.com/powerset-co/powerpacks/commit/2790cdf363097a488e99ca0c14d2235ab2b0fc1f))
+* **search:** a plain search runs filter and rerank only, and shows its screened people at once ([#823](https://github.com/powerset-co/powerpacks/issues/823)) ([9a91bb3](https://github.com/powerset-co/powerpacks/commit/9a91bb364f26f9a63b2c6b92d9cd1facbf46bfa1))
+* **search:** a quick run on a Powerset set records who in the set knows each person ([#841](https://github.com/powerset-co/powerpacks/issues/841)) ([6d5fa64](https://github.com/powerset-co/powerpacks/commit/6d5fa6434583f6e8b297ff02529f0ca3d40d9f44))
+* **searches:** a plain run's row shows its trait scores like the cloud app, not a bare percent ([#837](https://github.com/powerset-co/powerpacks/issues/837)) ([7cddf2e](https://github.com/powerset-co/powerpacks/commit/7cddf2ef77e07ed5ca011d475fd20c9728316b77))
+* **searches:** a quick run's header shows no hiring company and no team ([#833](https://github.com/powerset-co/powerpacks/issues/833)) ([34511a7](https://github.com/powerset-co/powerpacks/commit/34511a73462050fde539ec13ad198c0504e8d0ba))
+* **searches:** one score per person, and a quick search shows its filters where the pond chain sat ([#830](https://github.com/powerset-co/powerpacks/issues/830)) ([f115262](https://github.com/powerset-co/powerpacks/commit/f115262c39537364ca963b023916d1d57c2c4eb5))
+* **search:** local quick search knows Series E–I, filters by interactions with you, and drops investors instead of failing ([#834](https://github.com/powerset-co/powerpacks/issues/834)) ([98c6103](https://github.com/powerset-co/powerpacks/commit/98c6103ff53685f37bfda85dabececa2baa5e52b))
+* **search:** model output that bricked a run is read, not refused ([#832](https://github.com/powerset-co/powerpacks/issues/832)) ([2524b60](https://github.com/powerset-co/powerpacks/commit/2524b605b53d6d81cc47f6770454a9a618b7e727))
+* **search:** the agent says "Search prepared. Execute or modify?" and nothing else ([#827](https://github.com/powerset-co/powerpacks/issues/827)) ([db1ab7a](https://github.com/powerset-co/powerpacks/commit/db1ab7ac3d0e9f43c8de57efd4c6b3eba4896e91))
+* **search:** the JD cleaner no longer checks its source quotes ([#826](https://github.com/powerset-co/powerpacks/issues/826)) ([718899d](https://github.com/powerset-co/powerpacks/commit/718899dbe6e1b0bda998202e88eaa3778dc92564))
+* **web:** results rows, account cards, ranking placeholder and the app's one select ([#840](https://github.com/powerset-co/powerpacks/issues/840)) ([f455d70](https://github.com/powerset-co/powerpacks/commit/f455d70025ae96565a4ed7d4b3ef7104c6d45d33))
+* **web:** show a search's role ids and tracks as words ([#844](https://github.com/powerset-co/powerpacks/issues/844)) ([070d4ea](https://github.com/powerset-co/powerpacks/commit/070d4ea1b634d746f132ff34f4be658c07b3c0b7))
+* **web:** the nine ESLint errors [#840](https://github.com/powerset-co/powerpacks/issues/840) brought to main ([#842](https://github.com/powerset-co/powerpacks/issues/842)) ([83872ab](https://github.com/powerset-co/powerpacks/commit/83872abb945fc0d1bc4ac2683bdacc67aeb4359e))
+* **worth:** ask every family every run; never save a refusal ([#845](https://github.com/powerset-co/powerpacks/issues/845)) ([3370485](https://github.com/powerset-co/powerpacks/commit/3370485bcbb0285d47a5c53b8fda7786e775a18e))
+
+
+### Performance Improvements
+
+* **web:** faster People, Accounts and saved-search loads; the search's prepare step as a chat card ([#820](https://github.com/powerset-co/powerpacks/issues/820)) ([7c9774a](https://github.com/powerset-co/powerpacks/commit/7c9774aaf0dc9aa6105201b02b62fd2d23854f5a))
+
 ## [3.27.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.26.0...powerpacks-v3.27.0) (2026-10-15)
 
 
