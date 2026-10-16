@@ -48,7 +48,7 @@ describe("sendPersonFeedback", () => {
     expect(url).toBe("/api/feedback")
     const sent: unknown = JSON.parse(typeof init?.body === "string" ? init.body : "null")
     const { parent_id, name, public_identifier, title, company } = jordan
-    const { worth, worth_source, share, share_source, reason, labels, confidence } = jordan
+    const { worth, worth_source, reason, labels, confidence } = jordan
     const person = {
       parent_id,
       name,
@@ -57,8 +57,6 @@ describe("sendPersonFeedback", () => {
       company,
       worth,
       worth_source,
-      share,
-      share_source,
       reason,
       labels,
       confidence,

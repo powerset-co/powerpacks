@@ -2,22 +2,22 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useCallback, useRef, useState } from "react"
 
 import type { ToastMessage } from "@/components/shared"
-import { writeTags } from "@/lib/api/people"
-import { plural } from "@/lib/copy"
-import { nextTags, type TagAction } from "@/lib/people/facets"
-import { EMPTY } from "@/lib/sets"
-import type { Person, TagChange, TagResult } from "@/types/people"
 import { errorText } from "@/lib/api/http"
+import { writeWorth } from "@/lib/api/people"
+import { plural } from "@/lib/copy"
+import type { WorthAction } from "@/lib/people/facets"
+import { EMPTY } from "@/lib/sets"
+import type { Person, WorthResult } from "@/types/people"
 
 import { UPLOAD_KEY } from "../upload/useUpload"
 import { PEOPLE_QUERY_KEY } from "./usePeopleQuery"
 
-const DONE: Record<TagAction, (count: number) => string> = {
-  share: (count) => `Marked ${plural(count, "person")} for sharing.`,
-  private: (count) => `Marked ${plural(count, "person")} private.`,
+const DONE: Record<WorthAction, (count: number) => string> = {
+  yes: (count) => `Marked ${plural(count, "person")} worth it.`,
+  no: (count) => `Marked ${plural(count, "person")} not worth it.`,
 }
 
-function patchRows(rows: Person[] | undefined, results: readonly TagResult[]): Person[] | undefined {
+function patchRows(rows: Person[] | undefined, results: readonly WorthResult[]): Person[] | undefined {
   if (!rows) return rows
   const byId = new Map(results.map((result) => [result.parent_id, result]))
   return rows.map((row) => {
@@ -25,82 +25,53 @@ function patchRows(rows: Person[] | undefined, results: readonly TagResult[]): P
     if (!patch) return row
     return {
       ...row,
-      share: patch.share,
+      worth: patch.worth,
+      worth_source: patch.worth_source,
       reason: patch.reason,
-      share_source: patch.share_source,
       tags: patch.tags,
     }
   })
 }
 
 /**
- * Share / keep private for a set of people in one write. Rows are marked
- * pending while it runs and patched from the server's answer; undo re-posts the tags
- * each person held before.
+ * The human's worth call for a set of people in one write. Rows are marked pending while it
+ * runs and patched from the server's answer. There is no undo: a call cannot go back to the
+ * machine's, so the other button is the correction.
  */
 export function useDecisions(byId: ReadonlyMap<string, Person>, onWritten: (ids: readonly string[]) => void) {
   const queryClient = useQueryClient()
   const [pending, setPending] = useState<ReadonlySet<string>>(EMPTY)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const saving = useRef(false)
-  const lastUndo = useRef<TagChange[] | null>(null)
 
-  const write = useCallback(
-    async (changes: TagChange[], undo: TagChange[] | null): Promise<number> => {
-      const ids = changes.map((change) => change.parent_id)
+  /** Writes the call for `ids`; true when the server took it, false when skipped or failed. */
+  const apply = useCallback(
+    async (action: WorthAction, ids: readonly string[]): Promise<boolean> => {
+      const rows = ids.map((id) => byId.get(id)).filter((row): row is Person => row !== undefined)
+      if (saving.current || !rows.length || rows.some((row) => row.in_progress)) return false
+      const targets = rows.map((row) => row.parent_id)
       saving.current = true
-      setPending(new Set(ids))
+      setPending(new Set(targets))
       try {
-        const results = await writeTags(changes)
-        queryClient.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (rows) => patchRows(rows, results))
-        // The share list changed: the upload status says so (the warning mark) and drops a stale check.
+        const results = await writeWorth(targets, action)
+        queryClient.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) => patchRows(current, results))
+        // The upload list follows worth: the upload status says so and drops a stale check.
         void queryClient.invalidateQueries({ queryKey: UPLOAD_KEY })
-        lastUndo.current = undo
-        onWritten(ids)
-        return results.length
+        onWritten(targets)
+        setToast({ message: DONE[action](results.length) })
+        return true
+      } catch (error) {
+        setToast({ message: `Couldn't save changes. ${errorText(error)}`, error: true })
+        return false
       } finally {
         saving.current = false
         setPending(EMPTY)
       }
     },
-    [queryClient, onWritten],
-  )
-
-  const undo = useCallback(async () => {
-    const previous = lastUndo.current
-    if (saving.current || !previous || previous.some((change) => byId.get(change.parent_id)?.in_progress))
-      return
-    try {
-      await write(previous, null)
-      setToast({ message: `Undid changes for ${plural(previous.length, "person")}.` })
-    } catch (error) {
-      setToast({ message: `Couldn't undo. ${errorText(error)}`, error: true })
-    }
-  }, [byId, write])
-
-  /** Writes the action for `ids`; true when the server took it, false when skipped or failed. */
-  const apply = useCallback(
-    async (action: TagAction, ids: readonly string[]): Promise<boolean> => {
-      const rows = ids.map((id) => byId.get(id)).filter((row): row is Person => row !== undefined)
-      if (saving.current || !rows.length || rows.some((row) => row.in_progress)) return false
-      const changes = rows.map((row) => ({ parent_id: row.parent_id, tags: nextTags(row, action) }))
-      const previous = rows.map((row) => ({ parent_id: row.parent_id, tags: [...row.tags] }))
-      try {
-        const count = await write(changes, previous)
-        setToast({
-          message: DONE[action](count),
-          action: { label: "Undo", kbd: "Z", onClick: () => void undo() },
-        })
-        return true
-      } catch (error) {
-        setToast({ message: `Couldn't save changes. ${errorText(error)}`, error: true })
-        return false
-      }
-    },
-    [byId, write, undo],
+    [byId, queryClient, onWritten],
   )
 
   const dismissToast = useCallback(() => setToast(null), [])
 
-  return { pending, saving: pending.size > 0, apply, undo, toast, showToast: setToast, dismissToast }
+  return { pending, saving: pending.size > 0, apply, toast, showToast: setToast, dismissToast }
 }

@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
-"""Pure reconcile: local share list + cloud state -> UploadPlan.
+"""Pure reconcile: eligible people + cloud state -> UploadPlan.
 
-Flow: the `yes` share rows with a LinkedIn slug become persons candidates (the
-rest are skipped_no_linkedin, a cloud NOT NULL constraint, not a bug; `confirm`
-rows wait for a human and leave the laptop no more than a `no` does) -> desired
-operator_person_sources rows are one per (person, cloud channel) -> the
-operator's stale powerpacks rows become deletes -> allowed_operator_ids is
-recomputed for every person the run touches -> people new to the cloud get full
-TurboPuffer upserts, people already there get an allowed_operator_ids patch only
--> people the human tagged `private` and the cloud already has get a contact_tags
-row; a cloud tag is dropped only where the human tagged `share`.
-
+Eligible rows with a LinkedIn slug become persons candidates. Desired source rows replace this
+operator's stale powerpacks rows; namespace writes use the resulting allowed_operator_ids.
 No IO. Every bucket is sorted so two runs on the same state emit the same plan.
-
-Changelog:
-  2026-09-24: shared = the three-way share value `yes`; only a human's `private`
-    becomes a cloud tag.
-  2026-09-24: created; namespace grain and share reasons use shared contracts.
 """
 
 from __future__ import annotations
@@ -25,14 +12,11 @@ from packs.indexing.primitives.upload_powerset.models import (
     CloudState,
     LocalPerson,
     NamespacePlan,
-    PRIVATE_TAG,
     SourceRow,
-    TagRow,
     UploadPlan,
 )
 from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACES
-from packs.ingestion.primitives.share.models import ShareDecisionRow
-from packs.ingestion.schemas.share_schema import HUMAN_PRIVATE, HUMAN_SHARE, SHARE_YES
+from packs.ingestion.primitives.share.models import PersonLabelRow
 
 
 def _desired_sources(person: LocalPerson, cloud_id: str) -> list[SourceRow]:
@@ -56,17 +40,16 @@ def _desired_sources(person: LocalPerson, cloud_id: str) -> list[SourceRow]:
 def build_plan(
     *,
     operator_id: str,
-    share_rows: tuple[ShareDecisionRow, ...],
+    share_rows: tuple[PersonLabelRow, ...],
     people: dict[str, LocalPerson],
     cloud: CloudState,
     namespace_names: dict[str, str],
     company_ids_by_person: dict[str, tuple[str, ...]],
     school_ids_by_person: dict[str, tuple[str, ...]],
 ) -> UploadPlan:
-    shared = [row for row in share_rows if row.share == SHARE_YES]
-    persons_upsert = sorted(row.person_id for row in shared if row.public_identifier)
-    skipped_no_linkedin = sorted(row.person_id for row in shared if not row.public_identifier)
-    # Everything the cloud keys by person (source rows, tags, documents) uses the
+    persons_upsert = sorted(row.person_id for row in share_rows if row.public_identifier)
+    skipped_no_linkedin = sorted(row.person_id for row in share_rows if not row.public_identifier)
+    # Everything the cloud keys by person (source rows, documents) uses the
     # cloud's id; a person the cloud lacks is created under the local id.
     cloud_id = {person_id: cloud.cloud_id_by_person.get(person_id, person_id) for person_id in persons_upsert}
 
@@ -110,23 +93,6 @@ def build_plan(
         missing = referenced - cloud.present_entity_ids.get(logical, frozenset())
         namespaces.append(NamespacePlan(logical, namespace_names[logical], tuple(sorted(missing)), ()))
 
-    # Only a human's `private` reaches the cloud as a tag; a machine flag asks a
-    # question, and an unanswered question is not the human's word.
-    private_rows = [row for row in share_rows if row.reason == HUMAN_PRIVATE and row.public_identifier]
-    tags_put = tuple(sorted(
-        (TagRow(cloud.cloud_id_by_person[row.person_id], row.public_identifier, PRIVATE_TAG)
-         for row in private_rows if row.person_id in cloud.cloud_id_by_person
-         and row.public_identifier not in cloud.private_tag_keys),
-        key=lambda row: row.group_key,
-    ))
-    # A cloud private tag is a human decision (the Powerset UI); it yields only
-    # to the human's local word, never to a machine default.
-    human_shared_keys = {row.public_identifier for row in share_rows if row.reason == HUMAN_SHARE}
-    tags_delete = tuple(sorted(
-        (TagRow("", group_key, PRIVATE_TAG) for group_key in cloud.private_tag_keys & human_shared_keys),
-        key=lambda row: row.group_key,
-    ))
-
     return UploadPlan(
         operator_id=operator_id,
         persons_upsert=tuple(persons_upsert),
@@ -135,7 +101,5 @@ def build_plan(
         sources_delete=sources_delete,
         namespaces=tuple(namespaces),
         allowed_operator_ids=allowed,
-        tags_put=tags_put,
-        tags_delete=tags_delete,
         cloud_id_by_person=cloud_id,
     )

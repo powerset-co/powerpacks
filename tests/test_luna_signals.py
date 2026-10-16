@@ -1,5 +1,4 @@
-"""Luna's signals: the Decisions client, the labels and reason from its answers, the share call and
-the share rules. Synthetic data; OpenAI is a mock transport."""
+"""Luna's signals: the Decisions client, worth, labels and the family flags. Synthetic data; OpenAI is a mock transport."""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +12,7 @@ from unittest import mock
 
 import httpx
 
-from test_share_v2 import StoreTests
+from test_people_worth import StoreTests
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import (
     CollectionBundle, MessageChannel, MessageDirection, MessageEntry, Person, ThreadParticipants,
@@ -22,11 +21,10 @@ from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import render_batch
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import (
-    DEFAULT_LIMIT, LABELS_TOKENS_PER_QUESTION, SHARE_REQUEST_TOKENS, Worth,
+    DEFAULT_LIMIT, LABELS_TOKENS_PER_QUESTION, Worth,
 )
 from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
-from packs.ingestion.primitives.share.labels import flag, labels_from_saved, share_decision
-from packs.ingestion.primitives.share.models import HumanTags, LabelRow
+from packs.ingestion.primitives.share.labels import flag, labels_from_saved
 from packs.ingestion.primitives.share.questions import (
     CHOICE_LABELS, EVIDENCE_POLICY, NOUL_LABELS, SCORE_LABELS, label_questions,
 )
@@ -97,6 +95,7 @@ class RequestTests(unittest.TestCase):
                          "[imessage_group  OTHER-IN-GROUP]: See you there.")
 
     def test_questions_use_messages_and_define_warmth_as_reachability_today(self) -> None:
+        self.assertEqual(luna.REQUEST_VERSION, "deep-context-luna-decisions-20261015")
         questions = label_questions() + luna.WORTH_QUESTIONS
         text = json.dumps(questions) + EVIDENCE_POLICY
         self.assertNotIn("facts", text)
@@ -168,7 +167,7 @@ class DecisionsClientTests(unittest.TestCase):
 class WorthRunTests(StoreTests):
     """Worth end to end on a synthetic store, with OpenAI answering through a mock transport."""
 
-    def test_worth_asks_both_requests_and_writes_luna_labels(self) -> None:
+    def test_worth_asks_one_request_and_writes_luna_labels(self) -> None:
         queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
         self.conn.execute("INSERT INTO candidate_sources (candidate_id, source) VALUES ('c1', 'gmail_msgvault')")
         self.conn.execute("INSERT INTO bundles (candidate_id, payload_json, content_fingerprint, collected_at) "
@@ -194,12 +193,12 @@ class WorthRunTests(StoreTests):
                 mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic",
                                              "POWERPACKS_USAGE_LOG": str(root / "usage.jsonl")}):
             manifest = node.run()
-        self.assertEqual((manifest.status, manifest.counts["requests"], len(sent)), ("completed", 2, 2))
-        self.assertEqual(set(phases), {"Reading signals", "Deciding who to share"})
+        self.assertEqual((manifest.status, manifest.counts["requests"], len(sent)), ("completed", 1, 1))
+        self.assertEqual(set(phases), {"Reading signals"})
         labels = json.loads(self.conn.execute("SELECT labels_json FROM worth WHERE candidate_id = 'c1' "
                                               "ORDER BY seq DESC").fetchone()[0])
-        self.assertEqual((labels["worth"], labels["share_call"], labels["version"]),
-                         ("yes", "share", luna.REQUEST_VERSION))
+        self.assertEqual((labels["worth"], labels["version"]), ("yes", luna.REQUEST_VERSION))
+        self.assertNotIn("share_call", labels)
 
     def test_family_request_merges_member_messages_newest_first_and_prices_them(self) -> None:
         queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
@@ -238,7 +237,7 @@ class WorthRunTests(StoreTests):
             estimate = node.estimate()
         self.assertEqual(estimate["families"], 1)
         self.assertEqual(estimate["input_tokens"], decisions.input_tokens(request)
-                         + LABELS_TOKENS_PER_QUESTION * len(request["questions"]) + SHARE_REQUEST_TOKENS)
+                         + LABELS_TOKENS_PER_QUESTION * len(request["questions"]))
 
         # The synthesis cap applies once across the family, after merging the members' messages.
         for candidate_id, days in [("c1", range(1, 22, 2)), ("c2", range(2, 23, 2))]:
@@ -291,11 +290,6 @@ class LabelsTests(unittest.TestCase):
         self.assertFalse(luna.refused(declined))
         self.assertNotIn("is_minor", luna.labels(declined))
 
-    def test_the_share_request_reads_each_label_with_its_confidence(self) -> None:
-        request = luna.share_request(luna.labels(ANSWERS))
-        self.assertEqual(request["input"], "is_recruiter: 0.91\nrelationship_kind: colleague (0.82)\nwarmth: 2.4 of 4")
-        self.assertEqual([question["name"] for question in request["questions"]], ["share_call"])
-
     def test_the_reason_names_what_points_to_the_verdict(self) -> None:
         labels = {"real_relationship": 0.9, "work_signal": 0.7, "professional_standing": 0.5, "noise": 0.1,
                   "transactional_only": 0.5, "evidence_incomplete": 0.2}
@@ -305,54 +299,32 @@ class LabelsTests(unittest.TestCase):
 
 
 def saved(**overrides: Any) -> dict[str, Any]:
-    """A complete saved label set: everything low, a colleague, shared at 0.9."""
+    """A complete saved label set: everything low and a colleague."""
     cells: dict[str, Any] = {name: 0.1 for name in NOUL_LABELS}
     for name in CHOICE_LABELS:
         cells[name], cells[f"{name}_p"] = "unknown", 0.5
     for name in SCORE_LABELS:
         cells[name] = 2.0
-    cells.update({"relationship_kind": "colleague", "share_call": "share", "share_call_p": 0.9})
+    cells["relationship_kind"] = "colleague"
     cells.update(overrides)
     return cells
 
 
-def row(labels: dict[str, Any], *, worth: str = "yes", is_owner: bool = False) -> LabelRow:
-    parsed = labels_from_saved(labels)
-    return LabelRow(person_id="p:1", public_identifier="", is_owner=is_owner, worth=worth, flag=flag(parsed),
-                    probabilities=parsed.probabilities, share_call=parsed.share_call, share_p=parsed.share_p)
-
-
-def decided(labels: dict[str, Any], tags: frozenset[str] = frozenset(), **options: Any) -> tuple[str, str]:
-    held = HumanTags(person_id="p:1", tags=tags, note="", updated_at="2026-10-13") if tags else None
-    decision = share_decision(row(labels, **options), held, updated_at="2026-10-13")
-    return decision.share, decision.reason
-
-
-class ShareRuleTests(unittest.TestCase):
-    def test_you_come_first(self) -> None:
-        self.assertEqual(decided(saved(), is_owner=True), ("no", "owner"))
-        self.assertEqual(decided(saved(share_call="keep_private"), frozenset({"share"})), ("yes", "human_share"))
-        self.assertEqual(decided(saved(), frozenset({"private"})), ("no", "human_private"))
-
+class FlagTests(unittest.TestCase):
     def test_a_declined_yes_no_question_raises_no_flag(self) -> None:
         cells = saved()
         del cells["is_minor"]
-        self.assertEqual(decided(cells), ("yes", "would_vouch"))
+        self.assertEqual(flag(labels_from_saved(cells)), "")
 
-    def test_worth_then_the_flags_keep_people_home(self) -> None:
-        self.assertEqual(decided(saved(), worth="no"), ("no", "worth_no"))
-        self.assertEqual(decided(saved(), worth="maybe"), ("no", "worth_maybe"))
-        self.assertEqual(decided(saved(relationship_kind="family")), ("no", "family"))
-        self.assertEqual(decided(saved(is_family=0.5)), ("no", "family"))
-        self.assertEqual(decided(saved(relationship_kind="romantic_partner")), ("no", "romantic_partner"))
-        self.assertEqual(decided(saved(is_minor=0.7)), ("no", "minor"))
-
-    def test_lunas_call_decides_the_rest_at_any_confidence(self) -> None:
-        self.assertEqual(decided(saved()), ("yes", "would_vouch"))
-        self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.8)), ("no", "not_professional"))
-        # A coin-flip call still decides: nobody is asked to confirm (a wrong share takes a Private tag).
-        self.assertEqual(decided(saved(share_call_p=0.52)), ("yes", "would_vouch"))
-        self.assertEqual(decided(saved(share_call="keep_private", share_call_p=0.52)), ("no", "not_professional"))
+    def test_family_partner_and_minor_flags(self) -> None:
+        for cells, expected in [
+            (saved(), ""),
+            (saved(relationship_kind="family"), "family"),
+            (saved(is_family=0.5), "family"),
+            (saved(relationship_kind="romantic_partner"), "romantic_partner"),
+            (saved(is_minor=0.7), "minor"),
+        ]:
+            self.assertEqual(flag(labels_from_saved(cells)), expected)
 
 
 if __name__ == "__main__":

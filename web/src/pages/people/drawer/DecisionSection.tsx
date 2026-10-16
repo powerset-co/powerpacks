@@ -3,46 +3,47 @@ import { useState } from "react"
 import { DetailsSection } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { label } from "@/lib/people/copy"
-import type { Decision, Person, PersonDetail } from "@/types/people"
+import type { Person, PersonDetail, Worth } from "@/types/people"
 
 import type { SectionProps } from "./sections"
 
-const BADGE: Record<Decision, "ok" | "muted"> = { yes: "ok", no: "muted" }
+const BADGE: Record<Worth, "ok" | "warn" | "muted"> = { yes: "ok", maybe: "warn", no: "muted", "": "muted" }
 
-function worthLine(row: Person): string {
-  const yours = row.worth_source === "human"
-  // A worth reason already names worth in the line above: then only whose call it was.
-  if (row.reason.startsWith("worth_")) return yours ? "Your call" : ""
-  const worth = `Worth: ${label("worth", row.worth || "unjudged").toLowerCase()}`
-  return yours ? `${worth} · your call` : worth
-}
-
-// Why this person is where they are: the reason, the worth call, and any notes. The badge
-// rises in when a write changes the decision, not when the drawer opens on them.
+// The worth call as the badge; under it whose call it was and the reason, a flag that keeps the
+// family off the upload, and any notes. The badge rises in when a write changes the call, not
+// when the drawer opens.
 export function DecisionSection({
   row,
   detail,
   ...section
 }: SectionProps & { row: Person; detail: PersonDetail | null }) {
-  const [opened] = useState(row.share)
-  const why = [worthLine(row), detail?.worth_reason ?? ""].filter(Boolean).join(": ")
+  const [opened] = useState(row.worth)
+  const why = [row.worth_source === "human" ? "Your call" : "", detail?.worth_reason ?? ""]
+    .filter(Boolean)
+    .join(": ")
   return (
     <DetailsSection
       sectionKey="decision"
       title="Decision"
       badge={
         <Badge
-          key={row.share}
-          variant={BADGE[row.share]}
-          className={row.share === opened ? undefined : "rise-in"}
+          key={row.worth}
+          variant={BADGE[row.worth]}
+          className={row.worth === opened ? undefined : "rise-in"}
         >
-          {label("share", row.share)}
+          {label("worth", row.worth || "unjudged")}
         </Badge>
       }
       {...section}
     >
-      <p>{label("reason", row.reason)}</p>
-      {why ? <p className="dim">{why}</p> : null}
+      {why ? <p>{why}</p> : null}
+      {row.flag ? (
+        <p className="dim">
+          {row.worth_source === "human" && row.worth === "yes"
+            ? `${label("reason", row.flag)}: uploads on your call`
+            : `${label("reason", row.flag)}: kept off the upload`}
+        </p>
+      ) : null}
       {detail?.worth_note ? <p className="note">{detail.worth_note}</p> : null}
       {detail?.note ? <p className="note">{detail.note}</p> : null}
     </DetailsSection>

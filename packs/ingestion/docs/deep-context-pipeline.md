@@ -3,7 +3,7 @@
 Created: 2026-07-13
 
 Changelog:
-- 2026-10-13: worth, the labels and the share call come from OpenAI's Luna Decisions API, not JEV.
+- 2026-10-13: worth and the labels come from OpenAI's Luna Decisions API, not JEV.
 - 2026-10-07: rewritten for v2. The design is the Deep Context Spec page; this file is the
   short map from the command the agent runs to the blocks and the store. The v1 narrative
   (stages, settlement, state and repeatability) is in git history before this date.
@@ -39,7 +39,7 @@ stored and spends nothing on what is done.
 | 08 Review | `review/server.py` | the views | `candidate_linkedins`, `candidate_parent`, `worth` (human rows) | RapidAPI on a pasted URL |
 | 09 Realize | `realize/realize.py` | the views, the profile cache | `network-import/merged/people.csv` | — |
 | Index | `packs/indexing/.../index_contacts_pipeline.py` | `people.csv` | `search-index/` | OpenAI |
-| Share | `packs/ingestion/primitives/share/share_list.py` | the views, `current_worth` labels, `facts`, `bundles` | `person_labels`, `share` (tags are the page's) | — |
+| Labels | `packs/ingestion/primitives/share/person_labels.py` | the views, `current_worth` labels, `facts`, `bundles` | `person_labels` (tags are the page's) | — |
 
 Block 04 is empty by design: a candidate holds one identifier, so the pairs v1's slam dunk
 caught are joined at import.
@@ -55,7 +55,7 @@ confirmed, then `li:<member id>`. Stage manifests are under `deep-context/v2-man
 ## What leaves the machine
 
 Message bodies go to OpenAI for synthesis. Facts (never messages) go to OpenAI's Decisions API
-for worth, the labels and the share call, to JEV for the identity check, to Parallel for research,
+for worth and the labels, to JEV for the identity check, to Parallel for research,
 and to OpenAI for the LinkedIn judge. LinkedIn public
 identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by this pipeline.
 

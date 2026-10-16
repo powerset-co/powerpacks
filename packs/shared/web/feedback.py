@@ -1,6 +1,6 @@
 """A note for the Powerset team, filed as one `POST /v2/feedback` row through send_feedback with the
 release: the People drawer's flag sends one about a person, with that person as the drawer showed
-them (who they are, their worth and share call); the side nav's Send feedback sends one about the
+them (who they are, their worth call); the side nav's Send feedback sends one about the
 app, with the page it was sent from. Whoever is signed in to Powerset sends it (account.py).
 
 Standard library only, like the server's persistent handler: it answers before the project's

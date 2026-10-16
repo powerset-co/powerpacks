@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Frozen value types for the Powerset upload, parsed once at the boundary.
 
-Flow: share table row -> ShareDecisionRow from the deep-context store; people.csv row ->
+Flow: eligible PersonLabelRow from the deep-context store; people.csv row ->
 LocalPerson (channel labels already mapped to cloud names); local_person_profiles
 row -> PersonProfile (the persons upsert payload); operator_person_sources row ->
-SourceRow; contact_tags row -> TagRow. Everything downstream of these
+SourceRow. Everything downstream of these
 constructors takes typed values.
 
 Changelog:
-  2026-09-24: the share contract is the store's `share` table row.
   2026-09-24: created; namespace definitions have one owner.
 """
 
@@ -30,7 +29,6 @@ CLOUD_SOURCE_CHANNEL = {
 }
 
 DISCOVERY_METHOD = "powerpacks"
-PRIVATE_TAG = "private"
 
 
 @dataclass(frozen=True)
@@ -100,15 +98,6 @@ class SourceRow:
         """The table's UNIQUE (operator_id, person_id, source_channel, source_identifier)
         minus the operator, which is fixed for one run."""
         return (self.person_id, self.source_channel, self.source_identifier)
-
-
-@dataclass(frozen=True)
-class TagRow:
-    """One contact_tags row: group_key is the LinkedIn public_identifier."""
-
-    person_id: str
-    group_key: str
-    tag: str = PRIVATE_TAG
 
 
 @dataclass(frozen=True)
@@ -184,7 +173,6 @@ class CloudState:
     cloud_id_by_person: dict[str, str]
     operator_sources: tuple[SourceRow, ...]
     operator_ids_by_person: dict[str, tuple[str, ...]]
-    private_tag_keys: frozenset[str]
     operator_source_keys: frozenset[tuple[str, str, str]] = frozenset()
     present_entity_ids: dict[str, frozenset[str]] = field(default_factory=dict)
 
@@ -213,8 +201,6 @@ class UploadPlan:
     sources_delete: tuple[SourceRow, ...]
     namespaces: tuple[NamespacePlan, ...]
     allowed_operator_ids: dict[str, tuple[str, ...]]
-    tags_put: tuple[TagRow, ...]
-    tags_delete: tuple[TagRow, ...]
     cloud_id_by_person: dict[str, str] = field(default_factory=dict)
 
     def counts(self) -> dict[str, Any]:
@@ -223,8 +209,6 @@ class UploadPlan:
             "skipped_no_linkedin": len(self.skipped_no_linkedin),
             "sources_insert": len(self.sources_insert),
             "sources_delete": len(self.sources_delete),
-            "tags_put": len(self.tags_put),
-            "tags_delete": len(self.tags_delete),
             "namespaces": {
                 plan.logical: {"upsert": len(plan.upsert_ids), "patch_people": len(plan.patch_person_ids)}
                 for plan in self.namespaces
@@ -238,7 +222,5 @@ class UploadResult:
     persons_upserted: int = 0
     sources_inserted: int = 0
     sources_deleted: int = 0
-    tags_put: int = 0
-    tags_deleted: int = 0
     docs_upserted: dict[str, int] = field(default_factory=dict)
     docs_patched: dict[str, int] = field(default_factory=dict)

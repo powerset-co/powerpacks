@@ -7,8 +7,8 @@ import {
   type PeoplePayload,
   type Person,
   type PersonDetail,
-  type TagChange,
-  type TagResult,
+  type Worth,
+  type WorthResult,
 } from "@/types/people"
 
 const API = "/api/people/"
@@ -47,13 +47,13 @@ export async function fetchPersonDetail(id: string, signal?: AbortSignal): Promi
   return body<PersonDetail>(response)
 }
 
-/** Posts the tags each parent should hold; returns the re-decided share rows. */
-export async function writeTags(changes: TagChange[]): Promise<TagResult[]> {
-  const response = await fetch(`${API}tags`, {
+/** Writes the human's worth call for each parent; returns their rows as the server now holds them. */
+export async function writeWorth(ids: readonly string[], worth: Worth): Promise<WorthResult[]> {
+  const response = await fetch(`${API}worth`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ people: changes }),
+    body: JSON.stringify({ ids, worth }),
   })
   if (!response.ok) throw await failure(response, "Try again.")
-  return (await body<{ rows: TagResult[] }>(response)).rows
+  return (await body<{ rows: WorthResult[] }>(response)).rows
 }

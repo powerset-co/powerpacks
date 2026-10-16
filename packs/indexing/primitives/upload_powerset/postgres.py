@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Postgres side of the Powerset upload: every statement takes a cursor.
 
-Flow: resolve_operator_id (credentials JWT sub -> users.id) -> the four read
-helpers the plan needs (the cloud id of each of our people it already has, this
-operator's own powerpacks source rows, every operator that can see those people,
-this operator's private contact_tags) -> the four writes (persons upsert,
-operator_person_sources upsert/delete, contact_tags put/delete). Each write
+Flow: resolve_operator_id (credentials JWT sub -> users.id) -> read cloud people and source rows
+-> persons upsert and operator_person_sources upsert/delete. Each write
 sends one multi-row statement per BATCH_ROWS rows and returns the sum of cursor
 rowcount, rather than attempted rows.
 
@@ -32,13 +29,11 @@ from typing import Any, Sequence
 from packs.indexing.primitives.upload_powerset.models import (
     DISCOVERY_METHOD,
     PersonProfile,
-    PRIVATE_TAG,
     SourceRow,
-    TagRow,
 )
 from packs.indexing.primitives.upload_powerset.errors import SAFE_ERRORS
 
-# operator_person_sources.operator_id is VARCHAR; contact_tags.operator_id is uuid.
+# operator_person_sources.operator_id is VARCHAR.
 
 # Rows per write statement: persons' 25 columns make 12,500 bind parameters, far
 # under Postgres' 65,535, and one round trip replaces 500.
@@ -104,23 +99,6 @@ SOURCES_DELETE_SQL = """
       AND s.source_identifier = d.source_identifier
 """
 SOURCES_DELETE_ROW = "(%s::uuid, %s, %s)"
-
-TAG_PUT_SQL = """
-    INSERT INTO contact_tags (operator_id, group_key, tag, person_id)
-    VALUES {values}
-    ON CONFLICT (operator_id, group_key, tag)
-    DO UPDATE SET person_id = COALESCE(EXCLUDED.person_id, contact_tags.person_id)
-"""
-TAG_PUT_ROW = "(%s::uuid, %s, %s, %s::uuid)"
-
-TAG_DELETE_SQL = """
-    DELETE FROM contact_tags c
-    USING (VALUES {values}) AS d(group_key, tag)
-    WHERE c.operator_id::text = %s
-      AND c.group_key = d.group_key
-      AND c.tag = d.tag
-"""
-TAG_DELETE_ROW = "(%s, %s)"
 
 
 def _write_batches(cur: Any, sql: str, row: str, rows: Sequence[tuple[Any, ...]],
@@ -216,14 +194,6 @@ def fetch_operator_ids_by_person(cur: Any, person_ids: Sequence[str]) -> dict[st
     return {person_id: tuple(sorted(operators)) for person_id, operators in by_person.items()}
 
 
-def fetch_private_tag_keys(cur: Any, operator_id: str) -> frozenset[str]:
-    cur.execute(
-        "SELECT group_key FROM contact_tags WHERE operator_id::text = %s AND tag = %s",
-        (operator_id, PRIVATE_TAG),
-    )
-    return frozenset(str(row[0]) for row in cur.fetchall())
-
-
 def upsert_persons(cur: Any, profiles: Sequence[PersonProfile]) -> int:
     return _write_batches(cur, PERSONS_UPSERT_SQL, PERSONS_ROW, [(
         profile.id,
@@ -270,15 +240,3 @@ def delete_sources(cur: Any, operator_id: str, rows: Sequence[SourceRow]) -> int
     return _write_batches(cur, SOURCES_DELETE_SQL, SOURCES_DELETE_ROW, [
         (row.person_id, row.source_channel, row.source_identifier) for row in rows
     ], trailing=(operator_id, DISCOVERY_METHOD))
-
-
-def put_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
-    return _write_batches(cur, TAG_PUT_SQL, TAG_PUT_ROW, [
-        (operator_id, row.group_key, row.tag, row.person_id or None) for row in rows
-    ])
-
-
-def delete_tags(cur: Any, operator_id: str, rows: Sequence[TagRow]) -> int:
-    return _write_batches(cur, TAG_DELETE_SQL, TAG_DELETE_ROW, [
-        (row.group_key, row.tag) for row in rows
-    ], trailing=(operator_id,))

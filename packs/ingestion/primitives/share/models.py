@@ -1,33 +1,11 @@
-"""The typed values every module in the share stage takes.
-
-The stage writes no file state: labels, the share list and human tags are tables in the v2 store
-(`.powerpacks/deep-context/deep-context-v2.sqlite`, schema.py), one row per member candidate of a
-family. Only the run manifest is a file.
-
-Flow: `evidence.py` joins a family's export row, worth and facts into `PersonEvidence` -> `labels.py`
-renders `DeterministicLabels` + `Labels` and decides -> `share_list.py` (the node) writes
-`person_labels` and `share`.
-
-Changelog:
-  2026-10-13: Luna's labels and share call replace JEV's (`Labels`, `LabelRow.share_call`).
-  2026-10-07: v2. A person is a family (its parent id); `candidate_ids` are its members. The row
-    types the v1 store held (`PersonTagRow`, `PersonLabelRow`, `ShareDecisionRow`) live here.
-  2026-09-26: the noul probabilities persist unrounded: the share UI re-decides a tagged person
-    from `person_labels`, and a rounded 0.5999 would cross ACTIVE_P and change `share.labels`.
-  2026-09-24: labels/share/tags left CSV for SQLite tables.
-"""
+"""Typed family evidence, labels and human tags for People and upload."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, fields
-from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, SCORE_LABELS
-
-SHARE_DIR = Path(".powerpacks/share")
-MANIFEST_FILENAME = "manifest.json"
-MANIFEST_PATH = SHARE_DIR / MANIFEST_FILENAME
 
 # Message channels that carry group traffic rather than DMs.
 GROUP_CHANNELS = frozenset({"imessage_group"})
@@ -88,30 +66,13 @@ class DeterministicLabels:
 
 @dataclass(frozen=True)
 class Labels:
-    """Luna's answers reduced to one value per question, and its share call."""
+    """Luna's answers reduced to one value per question."""
 
     choices: dict[str, str]
     choice_p: dict[str, float]
     # Expected level (0.00-4.00 for warmth), not the argmax: the tiers spread.
     scores: dict[str, float]
     probabilities: dict[str, float]
-    share_call: str  # share, ask or keep_private (share/questions.py CALL_*)
-    share_p: float   # the call's probability
-
-
-@dataclass(frozen=True)
-class LabelRow:
-    """One person's label cells, for the share decision. `probabilities` is empty and `share_call`
-    is "" when worth never judged the family (a human decided it)."""
-
-    person_id: str
-    public_identifier: str
-    is_owner: bool
-    worth: str
-    flag: str
-    probabilities: dict[str, float]
-    share_call: str
-    share_p: float
 
 
 @dataclass(frozen=True)
@@ -137,19 +98,6 @@ class PersonLabelRow:
     updated_at: str
 
 
-@dataclass(frozen=True)
-class ShareDecisionRow:
-    """One share decision: who leaves the laptop for Powerset. `person_id` is the export row's id."""
-
-    person_id: str
-    public_identifier: str
-    share: str
-    reason: str
-    labels: str
-    source: str
-    updated_at: str
-
-
 DETERMINISTIC_COLUMNS = tuple(field.name for field in fields(DeterministicLabels))
 
 
@@ -161,5 +109,4 @@ def label_payload(deterministic: DeterministicLabels, labels: Labels | None) -> 
         cells.update({f"{name}_p": round(labels.choice_p[name], 3) for name in CHOICE_LABELS})
         cells.update({name: round(labels.scores[name], 2) for name in SCORE_LABELS})
         cells.update(labels.probabilities)
-        cells.update({"share_call": labels.share_call, "share_call_p": labels.share_p})
     return json.dumps(cells, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

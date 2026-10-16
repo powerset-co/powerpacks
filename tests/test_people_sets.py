@@ -42,8 +42,7 @@ class PeopleCacheTests(unittest.TestCase):
                          (json.dumps(facts.to_payload()), now))
             conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
                          "VALUES ('c1', 'yes', 'human', '', ?)", (now,))
-            queries_share.replace_share(conn, [("c1", "", "Jordan Bravo", "yes", "", "{}", now)],
-                                        [("c1", "", "yes", "", "", "machine", now)])
+            queries_share.replace_labels(conn, [("c1", "", "Jordan Bravo", "yes", "", "{}", now)])
             conn.commit()
             people = SharePeople(conn, root)
             with mock.patch.object(people, "_facts", wraps=people._facts) as build, \
@@ -51,8 +50,8 @@ class PeopleCacheTests(unittest.TestCase):
                 self.assertEqual(people.load()[0].name, "Jordan Bravo")
                 people.load()
                 self.assertEqual(build.call_count, 1)
-                queries_share.decide_share(conn, [("c1", "private", "", now)], [])
-                self.assertEqual(people.load()[0].tags, ("private",))
+                queries_share.write_tags(conn, [("c1", "is_family", "", now)])
+                self.assertEqual(people.load()[0].tags, ("is_family",))
                 self.assertEqual(build.call_count, 1)
                 self.assertEqual(export.call_count, 1)
                 with open_store(root / "store.sqlite") as writer:

@@ -1,13 +1,8 @@
-"""The People page's data routes: people, tags, and upload progress.
+"""The People page's data routes: people, worth, tags, and upload progress.
 
-Flow: `ShareRoutes` mounts under `/api/people/` in the one page server
-(packs/shared/web/server.py, `/people`), after `AppRoutes` (the page and its
-assets); `make_handler` serves the two alone for tests. GET `/api/people/rows` ->
-`SharePeople.load()` as one columnar payload, one row per family; POST
-`/api/people/tags` carries the tags each selected family should hold (absolute
-sets, so undo re-posts the previous sets), writes the tag rows for every member
-of those families and re-decides their share rows through
-`labels.share_decision` from `person_labels`, in one transaction.
+POST /api/people/worth records human worth for every member of the selected families.
+POST /api/people/tags writes the human's boolean labels, preserving their notes.
+Both return the updated People rows under `rows`.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
 GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
@@ -38,13 +33,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import now_iso
-from packs.ingestion.primitives.deep_context_v2.db import queries_share
-from packs.ingestion.primitives.deep_context_v2.db.queries_share import ShareRow, TagRow
+from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share
+from packs.ingestion.primitives.deep_context_v2.db.queries_share import TagRow
 from packs.ingestion.primitives.deep_context_v2.db.store import store_path
 from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
-from packs.ingestion.primitives.share.labels import label_row_from_export, share_decision
-from packs.ingestion.primitives.share.models import HumanTags, PersonLabelRow, ShareDecisionRow
-from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
+from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags, share_rows
 from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
 from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
 from packs.ingestion.primitives.share.web.signals import PeopleSignals
@@ -53,7 +46,6 @@ from packs.ingestion.primitives.share.web.logbook_archive import (
 )
 from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
 from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
-from packs.ingestion.schemas.share_schema import SHARE_YES
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
@@ -88,40 +80,63 @@ def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
         changes[entry["parent_id"]] = frozenset(entry["tags"])
     unknown = sorted(set(changes) - known_ids)
     if unknown:
-        raise ValueError(f"{len(unknown)} person ids are not on the share list")
+        raise ValueError(f"{len(unknown)} person ids are not on the People page")
     return changes
 
 
-def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChanges) -> dict[str, ShareDecisionRow]:
-    """Tag every member of each family and re-decide its share row, all in one transaction. Returns
-    the re-decided row by family."""
-    for row in people.load():
-        if row.parent_id in changes and row.in_progress:
-            raise ValueError(f"{row.name} is being updated; finish the run first")
-    held = TagStore(conn).load()
-    labels = queries_share.labels_by_candidate(conn)
+def parse_worth_request(body: bytes, known_ids: set[str]) -> tuple[tuple[str, ...], str]:
+    """Validate the parent ids and the human's yes/no choice at the HTTP boundary."""
+    try:
+        request = json.loads(body)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"invalid JSON body: {exc}") from exc
+    ids = request.get("ids") if isinstance(request, dict) else None
+    if not isinstance(ids, list) or not ids or not all(isinstance(value, str) for value in ids):
+        raise ValueError("ids must be a non-empty list of parent ids")
+    worth = request.get("worth")
+    if worth not in ("yes", "no"):
+        raise ValueError("worth must be yes or no")
+    if not set(ids) <= known_ids:
+        raise ValueError("Some selected people no longer exist. Reload People and try again.")
+    return tuple(dict.fromkeys(ids)), worth
+
+
+def _members(conn: sqlite3.Connection) -> dict[str, list[str]]:
     members: dict[str, list[str]] = {}
     for row in conn.execute("SELECT parent_id, candidate_id FROM current_parent"):
         members.setdefault(row["parent_id"], []).append(row["candidate_id"])
+    return members
+
+
+def _check_updates(people: SharePeople, parent_ids: set[str]) -> None:
+    for row in people.load():
+        if row.parent_id in parent_ids and row.in_progress:
+            raise ValueError(f"{row.name} is being updated; finish the run first")
+
+
+def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChanges) -> None:
+    """Write tags to every member of each selected family."""
+    _check_updates(people, set(changes))
+    held = TagStore(conn).load()
+    members = _members(conn)
     updated_at = now_iso()
     tag_rows: list[TagRow] = []
-    share_rows: list[ShareRow] = []
-    decided: dict[str, ShareDecisionRow] = {}
     for parent_id, tags in changes.items():
         prior = held.get(parent_id)
-        human = HumanTags(person_id=parent_id, tags=tags, note=prior.note if prior else "", updated_at=updated_at)
-        family = members[parent_id]
-        label = labels[family[0]]
-        decision = share_decision(label_row_from_export(PersonLabelRow(
-            parent_id, label.public_identifier, label.full_name, label.worth, label.flag, label.labels_json,
-            label.updated_at)), human, updated_at=updated_at)
-        decided[parent_id] = decision
-        for candidate_id in family:
-            tag_rows.append((candidate_id, join_tags(tags), human.note, updated_at))
-            share_rows.append((candidate_id, decision.public_identifier, decision.share, decision.reason,
-                               decision.labels, decision.source, updated_at))
-    queries_share.decide_share(conn, tag_rows, share_rows)
-    return decided
+        for candidate_id in members[parent_id]:
+            tag_rows.append((candidate_id, join_tags(tags), prior.note if prior else "", updated_at))
+    queries_share.write_tags(conn, tag_rows)
+
+
+def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, ...], worth: str) -> None:
+    """Record the human's worth for every member, without changing tags or labels."""
+    _check_updates(people, set(ids))
+    members = _members(conn)
+    now = now_iso()
+    with conn:
+        for parent_id in ids:
+            for candidate_id in members[parent_id]:
+                queries_review.insert_worth(conn, candidate_id, worth, "human", now)
 
 
 class ShareRoutes:
@@ -167,7 +182,7 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+        if parsed.path not in {f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
                                f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
                                f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
                                f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
@@ -227,20 +242,25 @@ class ShareRoutes:
             self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=status)
             return True
         known = {row.parent_id for row in self.load()}
+        body = handler.rfile.read(length)
         try:
-            changes = parse_tag_request(handler.rfile.read(length), known)
+            if parsed.path == f"{API_PREFIX}worth":
+                ids, worth = parse_worth_request(body, known)
+            else:
+                changes = parse_tag_request(body, known)
+                ids = tuple(changes)
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return True
         try:
-            decided = decide_tags(self.conn, self.people, changes)
+            if parsed.path == f"{API_PREFIX}worth":
+                decide_worth(self.conn, self.people, ids, worth)
+            else:
+                decide_tags(self.conn, self.people, changes)
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
             return True
-        self._send_json(handler, {"rows": [
-            {"parent_id": parent_id, "share": row.share, "reason": row.reason,
-             "share_source": row.source, "tags": sorted(changes[parent_id])}
-            for parent_id, row in decided.items()]})
+        self._send_json(handler, {"rows": [asdict(row) for row in self.load() if row.parent_id in ids]})
         return True
 
     def _refresh_signals(self, handler: BaseHTTPRequestHandler, *, check: bool) -> None:
@@ -310,7 +330,7 @@ class ShareRoutes:
         (the page offers the sign-in)."""
         try:
             change()
-            answer = sets_payload(self.sets, sum(1 for row in self.load() if row.share == SHARE_YES))
+            answer = sets_payload(self.sets, len(share_rows(self.signals.db_path)))
         except NeedsSignIn as error:
             self._send(handler, json.dumps({"status": "needs_auth", "error": str(error)}).encode(),
                        "application/json; charset=utf-8", status=HTTPStatus.UNAUTHORIZED)

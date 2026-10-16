@@ -1,12 +1,11 @@
 import type { RefObject } from "react"
 
 import type { useSelection } from "@/hooks/useSelection"
-import type { TagAction } from "@/lib/people/facets"
+import type { WorthAction } from "@/lib/people/facets"
 import { TABS, type Tab } from "@/lib/people/view"
 import type { Person } from "@/types/people"
 
 import type { PeopleTableHandle } from "../table/PeopleTable"
-import type { useDecisions } from "./useDecisions"
 import type { useDrawer } from "./useDrawer"
 import { useKeyboard } from "./useKeyboard"
 
@@ -21,8 +20,7 @@ interface ShortcutTargets {
   setTab: (tab: Tab) => void
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
-  decisions: ReturnType<typeof useDecisions>
-  label: (action: TagAction, targets: readonly string[]) => Promise<void>
+  label: (action: WorthAction, targets: readonly string[]) => Promise<void>
   // The selection, else the open person (PeopleWorkspace).
   targets: readonly string[]
 }
@@ -38,12 +36,11 @@ export function usePeopleShortcuts({
   setTab,
   selection,
   drawer,
-  decisions,
   label,
   targets,
 }: ShortcutTargets) {
   const focused = matching[focus]
-  const act = (action: TagAction) => {
+  const act = (action: WorthAction) => {
     if (targets.length) void label(action, targets)
   }
 
@@ -65,9 +62,8 @@ export function usePeopleShortcuts({
       return true
     },
     selectAll: selection.toggleAll,
-    share: () => act("share"),
-    keepPrivate: () => act("private"),
-    undo: () => void decisions.undo(),
+    worthYes: () => act("yes"),
+    worthNo: () => act("no"),
     openFocused: () => {
       if (focused) drawer.toggle(focused.parent_id)
     },

@@ -6,12 +6,13 @@ import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { nextOpenIndex } from "@/lib/advance"
-import type { FacetSet, TagAction } from "@/lib/people/facets"
+import { useFeatures } from "@/lib/features"
+import type { FacetSet, WorthAction } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
 import { writeView, type Tab } from "@/lib/people/view"
-import { personKey, type Person } from "@/types/people"
+import { personKey, worthTab, type Person } from "@/types/people"
 
 import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
@@ -37,7 +38,7 @@ interface PeopleWorkspaceProps {
   onView: (slugs: readonly string[]) => void
 }
 
-// The loaded page: every person once, filtered client-side, with one write for share / private tags.
+// The loaded page: every person once, filtered client-side, with one write for the worth call.
 export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWorkspaceProps) {
   // The saved logbooks fill the Logbook column; while they can't be read the rows still show.
   const catalog = useQuery(entriesQuery)
@@ -52,8 +53,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
-    const counts: Record<Tab, number> = { all: rows.length, yes: 0, no: 0 }
-    for (const row of rows) counts[row.share] += 1
+    const counts: Record<Tab, number> = { all: rows.length, yes: 0, maybe: 0, no: 0, unjudged: 0 }
+    for (const row of rows) counts[worthTab(row.worth)] += 1
     return counts
   }, [rows])
   const selection = useSelection(matching, personKey)
@@ -89,7 +90,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { open: openPerson, close: closeDrawer } = drawer
   const { apply } = decisions
   const label = useCallback(
-    async (action: TagAction, targets: readonly string[]) => {
+    async (action: WorthAction, targets: readonly string[]) => {
       if (openId && targets.includes(openId)) {
         advanceFrom.current = { id: openId, index: matching.findIndex((row) => row.parent_id === openId) }
       }
@@ -187,7 +188,6 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     setTab,
     selection,
     drawer,
-    decisions,
     label,
     targets,
   })
@@ -195,14 +195,16 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
   // The search line's right end; it changes with the selection, never with j/k.
   const { showToast } = decisions
+  // The upload is a local feature (the Share network switch); without it the page is worth and tags.
+  const features = useFeatures()
   const actions = useMemo(
     () => (
       <>
         <RefreshSignals people={[...selection.selected]} onDone={refresh} />
-        <ShareUpload onToast={(message) => showToast({ message })} />
+        {features.share ? <ShareUpload onToast={(message) => showToast({ message })} /> : null}
       </>
     ),
-    [selection.selected, refresh, showToast],
+    [selection.selected, refresh, showToast, features.share],
   )
   return (
     <PeopleShell

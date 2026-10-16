@@ -1,15 +1,8 @@
-"""Luna's two requests for one family, and what their answers mean.
+"""Luna's worth and label request for one family.
 
-Request 1 asks the share-label questions (share/questions.py) and worth's own over the family's
-raw messages and message counts: worth is the `worth` choice, its reason comes from worth's yes/no
-answers (reason.py), and every answer becomes a label. Request 2 asks the share question over those
-labels and their confidences. Both go to OpenAI's Decisions API (deep_context_v2/decisions.py),
-cached on disk by REQUEST_VERSION and the exact request.
-
-Created: 2026-10-06
-Changelog:
-  2026-10-13: Luna Decisions replace JEV and its frozen worth model. The dossier left the request
-    (it repeated the facts line by line). Request 2, the share call, is new.
+The questions read the family's raw messages, profile and message counts. Worth is the
+`worth` choice; its reason comes from worth's yes/no answers (reason.py). Answers are
+cached by REQUEST_VERSION and the exact request.
 """
 from __future__ import annotations
 
@@ -29,10 +22,10 @@ from packs.ingestion.primitives.deep_context_v2.synthesize.facts import Synthesi
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import batches, render_batch
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import CHUNK_CHARS, MAX_BATCHES
 from packs.ingestion.primitives.share.questions import (
-    CHOICE_LABELS, EVIDENCE_POLICY, SCORE_LABELS, SHARE_QUESTION, label_questions,
+    CHOICE_LABELS, EVIDENCE_POLICY, SCORE_LABELS, label_questions,
 )
 
-# Both requests' questions: a bump asks every family again.
+# A bump asks every family again.
 REQUEST_VERSION = "deep-context-luna-decisions-20261015"
 
 _HERE = Path(__file__).parent
@@ -155,7 +148,6 @@ def refused(answers: list[Answer]) -> bool:
     next run. A refused yes/no question only leaves that label out (Luna declines is_minor for some)."""
     asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
     asked.update(question["name"] for question in WORTH_QUESTIONS if question["type"] == "choice")
-    asked.add(SHARE_QUESTION["name"])
     return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)
 
 
@@ -176,21 +168,3 @@ def labels(answers: list[Answer]) -> Labels:
             result[name + "_p"] = next(option["probability"] for option in answer["probabilities"]
                                        if option["value"] == answer["choice"])
     return result
-
-
-# ---- request 2: the share call
-
-
-def share_request(labels: Labels) -> dict[str, Any]:
-    """Request 2: request 1's answers as lines of text, each with its confidence."""
-    lines: list[str] = []
-    for name, value in labels.items():
-        if name.endswith("_p"):
-            continue
-        if isinstance(value, str):
-            lines.append(f"{name}: {value} ({labels[name + '_p']:.2f})")
-        elif name == "warmth":
-            lines.append(f"warmth: {value:.1f} of 4")
-        else:
-            lines.append(f"{name}: {value:.2f}")
-    return {"model": MODEL, "input": "\n".join(lines), "questions": [SHARE_QUESTION]}

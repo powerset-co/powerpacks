@@ -13,23 +13,21 @@ const BRANDS: Readonly<Record<string, string>> = {
 }
 
 export type TextKind =
-  "share" | "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
+  "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
-  share: { yes: "Sharing", no: "Not sharing" },
   reason: {
     worth_yes: "Worth: yes",
     worth_maybe: "Worth: maybe",
     worth_no: "Worth: no",
+    unjudged: "Not assessed",
     owner: "You (the owner)",
-    human_share: "You chose to share",
-    human_private: "You chose to keep private",
+    human_worth: "Your call",
     family: "Family",
     romantic_partner: "Partner",
+    partner: "Partner",
     minor: "Minor",
-    would_vouch: "Professional contact",
-    not_professional: "Not a professional contact",
     // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",
@@ -124,16 +122,16 @@ export const UPLOAD_TITLE: Readonly<Record<UploadPhase, string>> = {
 
 // A failed phase shows the server's sentence instead.
 export const UPLOAD_SENTENCE: Readonly<Record<CalmPhase, string>> = {
-  idle: "Only people marked Share are uploaded.",
+  idle: "Only people worth it are uploaded.",
   checking: "Counting who will upload. Nothing is shared yet.",
-  ready: "Only people marked Share with a LinkedIn profile upload.",
+  ready: "Only people worth it with a LinkedIn profile upload.",
   uploading: "Closing keeps the upload running.",
-  completed: "Only people marked Share are uploaded.",
+  completed: "Only people worth it are uploaded.",
 }
 
 // The check's plan, in order; a zero row is hidden except what will upload.
 export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
-  { key: "marked_share", label: "Marked Share" },
+  { key: "marked_share", label: "Worth it" },
   { key: "with_linkedin", label: "With LinkedIn, will upload" },
   { key: "without_linkedin", label: "Without LinkedIn, stay local" },
   { key: "new_to_cloud", label: "New to the cloud" },

@@ -5,9 +5,11 @@ import { body, failure } from "@/lib/api/http"
 export interface Features {
   sets: boolean
   auto_reply: boolean
+  /** The People page's Share network upload. */
+  share: boolean
 }
 
-const DEFAULTS: Features = { sets: false, auto_reply: false }
+const DEFAULTS: Features = { sets: false, auto_reply: false, share: false }
 const KEY = ["features"] as const
 
 async function request(features?: Features): Promise<Features> {

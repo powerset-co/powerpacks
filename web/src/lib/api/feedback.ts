@@ -25,8 +25,8 @@ export async function postFeedback(record: FeedbackRecord): Promise<FeedbackRepl
   return body<FeedbackReply>(response)
 }
 
-/** A note about one person for the Powerset team, with who they are and the worth and share call
- *  the drawer showed; throws why it did not go out. */
+/** A note about one person for the Powerset team, with who they are and the worth call the
+ *  drawer showed; throws why it did not go out. */
 export async function sendPersonFeedback(comment: string, row: Person): Promise<void> {
   const person = {
     parent_id: row.parent_id,
@@ -36,8 +36,6 @@ export async function sendPersonFeedback(comment: string, row: Person): Promise<
     company: row.company,
     worth: row.worth,
     worth_source: row.worth_source,
-    share: row.share,
-    share_source: row.share_source,
     reason: row.reason,
     labels: row.labels,
     confidence: row.confidence,

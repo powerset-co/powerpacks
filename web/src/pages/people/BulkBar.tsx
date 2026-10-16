@@ -1,7 +1,7 @@
 import { ActionBar, ActionBarRule, Kbd } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { LOGBOOK } from "@/lib/people/copy"
-import type { TagAction } from "@/lib/people/facets"
+import type { WorthAction } from "@/lib/people/facets"
 
 const BAR_BUTTON = "min-h-[30px]"
 
@@ -17,11 +17,11 @@ interface BulkBarProps {
   building: boolean
   logbook: LogbookAction | null
   onLogbook: () => void
-  onAction: (action: TagAction) => void
+  onAction: (action: WorthAction) => void
   onClear: () => void
 }
 
-// Share / Keep private for the selection or the open person, on the shared action bar.
+// Worth it / Not worth it for the selection or the open person, on the shared action bar.
 export function BulkBar({
   label,
   selection,
@@ -39,12 +39,12 @@ export function BulkBar({
         shape="pill"
         className={BAR_BUTTON}
         disabled={disabled}
-        onClick={() => onAction("share")}
+        onClick={() => onAction("yes")}
       >
-        Share <Kbd className="ml-0.5">S</Kbd>
+        Worth it <Kbd className="ml-0.5">Y</Kbd>
       </Button>
-      <Button shape="pill" className={BAR_BUTTON} disabled={disabled} onClick={() => onAction("private")}>
-        Keep private <Kbd className="ml-0.5">P</Kbd>
+      <Button shape="pill" className={BAR_BUTTON} disabled={disabled} onClick={() => onAction("no")}>
+        Not worth it <Kbd className="ml-0.5">N</Kbd>
       </Button>
       <ActionBarRule />
       {logbook === "view" ? (

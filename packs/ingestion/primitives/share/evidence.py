@@ -68,7 +68,7 @@ class ShareEvidence:
         worth: dict[str, sqlite3.Row] = {}
         for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
             worth[row["parent_id"]] = row
-        # Every member of the family, facts or not: each gets a label and a share row.
+        # Every member of the family, facts or not: each gets a label row.
         candidates: dict[str, list[str]] = {}
         for row in self.conn.execute("SELECT parent_id, candidate_id FROM current_parent ORDER BY parent_id, candidate_id"):
             candidates.setdefault(row["parent_id"], []).append(row["candidate_id"])

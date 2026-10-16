@@ -1,7 +1,7 @@
 """The People page's read boundary: one typed row per family, joined once from the v2 store.
 
 Flow: realize's export rows (one per family: name, profile fields, channels, counts) + the store's
-`current_share`, `person_labels`, `current_tags`, `current_worth` and the members' facts ->
+`person_labels`, `current_tags`, `current_worth` and the members' facts ->
 `SharePerson` rows -> one JSON payload for the page. `detail(id)` adds what only the drawer
 shows: the dossier (the review card's fragment), every label cell, the worth reason, the contact
 identifiers.
@@ -22,7 +22,7 @@ from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
-from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Share, Tags
+from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
@@ -74,9 +74,7 @@ class SharePerson:
     warmth: float | None
     labels: tuple[str, ...]
     flag: str
-    share: str
     reason: str
-    share_source: str
     tags: tuple[str, ...]
     is_owner: bool
     linkedin_only: bool
@@ -96,8 +94,8 @@ class ShareCounts:
     def of(cls, rows: tuple[SharePerson, ...]) -> "ShareCounts":
         return cls(
             people=len(rows),
-            yes=sum(row.share == "yes" for row in rows),
-            no=sum(row.share == "no" for row in rows),
+            yes=sum(row.worth == "yes" for row in rows),
+            no=sum(row.worth == "no" for row in rows),
         )
 
 
@@ -186,27 +184,24 @@ class SharePeople:
         return {parent_id: family_facts(family).to_payload() for parent_id, family in members.items()}
 
     def load(self) -> tuple[SharePerson, ...]:
-        decisions: dict[str, Share] = {row.parent_id: row for row in queries_share.current_share(self.conn)}
-        if not decisions:
-            return ()
         rows = self.export_rows()
-        labels: dict[str, Labels] = queries_share.labels_by_candidate(self.conn)
+        labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn)
         tags: dict[str, Tags] = queries_share.current_tags(self.conn)
         worth: dict[str, sqlite3.Row] = {}
-        for row in self.conn.execute("SELECT parent_id, worth, decided_by FROM current_worth"):
+        for row in self.conn.execute("SELECT parent_id, worth, decided_by, reason FROM current_worth"):
             worth[row["parent_id"]] = row
         people: list[SharePerson] = []
-        for parent_id, decision in decisions.items():
+        for parent_id, label in labels.items():
             row = rows[parent_id]
-            label = labels[decision.candidate_id]
             cells = parse_json_object(label.labels_json)
             fact = self._family_facts[parent_id]
             fact_title, fact_company = _facts_title(fact)
             held = tags.get(parent_id)
+            decision = worth.get(parent_id)
             people.append(SharePerson(
                 parent_id=parent_id,
                 public_identifier=row["public_identifier"],
-                in_progress=row["public_identifier"] != decision.public_identifier,
+                in_progress=row["public_identifier"] != label.public_identifier,
                 name=str(fact.get("canonical_name") or "") or row["full_name"],
                 avatar_url=row["profile_picture_url"],
                 title=row["current_title"] or fact_title,
@@ -218,8 +213,8 @@ class SharePeople:
                 recency_days=cells.get("recency_days"),
                 cadence=str(cells.get("cadence") or ""),
                 direction=str(cells.get("direction") or ""),
-                worth=label.worth,
-                worth_source=worth[parent_id]["decided_by"],
+                worth=decision["worth"] if decision is not None else "",
+                worth_source=decision["decided_by"] if decision is not None else "",
                 relationship_kind=str(cells.get("relationship_kind") or ""),
                 mode=str(cells.get("mode") or ""),
                 hierarchy=str(cells.get("hierarchy") or ""),
@@ -229,9 +224,7 @@ class SharePeople:
                 warmth=cells.get("warmth"),
                 labels=tuple(name for name in NOUL_LABELS if float(cells.get(name, 0.0)) >= ACTIVE_P),
                 flag=label.flag,
-                share=decision.share,
-                reason=decision.reason,
-                share_source=decision.source,
+                reason=_reason(bool(cells.get("is_owner")), decision, label.flag),
                 tags=tuple(sorted(split_tags(held.tags))) if held else (),
                 is_owner=bool(cells.get("is_owner")),
                 linkedin_only=bool(cells.get("linkedin_only")),
@@ -248,8 +241,7 @@ class SharePeople:
             return None
         card = load_card(self.conn, self.data_root, parent_id)
         facts = card.facts.to_payload()
-        decision = next(share for share in queries_share.current_share(self.conn) if share.parent_id == parent_id)
-        label = queries_share.labels_by_candidate(self.conn)[decision.candidate_id]
+        label = queries_share.labels_by_parent(self.conn)[parent_id]
         cells = parse_json_object(label.labels_json)
         held = queries_share.current_tags(self.conn).get(parent_id)
         worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
@@ -283,6 +275,18 @@ class SharePeople:
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),
         )
+
+
+def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:
+    """The first rule that places the family, as the page's key: the owner, the human's call, a flag
+    that keeps the family off the upload, else the machine's worth or none."""
+    if is_owner:
+        return "owner"
+    if decision is not None and decision["decided_by"] == "human":
+        return "human_worth"
+    if flag:
+        return flag
+    return f"worth_{decision['worth']}" if decision is not None else "unjudged"
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))
