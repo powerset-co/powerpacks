@@ -19,7 +19,13 @@ from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web import RESULTS_JS
 from packs.search.primitives.deep_search.results_web.feedback import build_feedback_request, record_fit_label
-from packs.search.primitives.deep_search.results_web.model import CandidateJudgment, load_searches
+from packs.search.primitives.deep_search.results_web.model import (
+    CandidateJudgment,
+    Trait,
+    load_search,
+    load_searches,
+    record_quick_search,
+)
 from packs.search.primitives.deep_search.results_web.rendering import render_page, render_search_body
 from packs.search.primitives.deep_search.results_web.server import make_handler
 
@@ -282,6 +288,8 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual([pond.result_count for pond in search.ponds], [50, 20])
         self.assertEqual([pond.reviewed_count for pond in search.ponds], [2, 1])
         self.assertEqual([pond.below_threshold for pond in search.ponds], [False, True])
+        # Deep-search ponds record no filters; the page shows their chain.
+        self.assertEqual([(pond.filters, pond.traits) for pond in search.ponds], [({}, ()), ({}, ())])
         candidate = search.groups[0].candidates[0]
         self.assertEqual(candidate.title, "Senior Software Engineer")
         self.assertEqual(candidate.company, "Bravo Systems")
@@ -294,6 +302,29 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(rows["jordan-role-prior"].traits[0].name, "Works across teams")
         self.assertEqual(rows["jordan-role"].final_score, 0.72)
         self.assertEqual(rows["jordan-role-prior"].final_score, 0.88)
+
+    def test_quick_search_records_the_filters_and_traits_it_ran_with(self):
+        filters = {"seniority_bands": ["mid", "senior"], "metro_areas": ["Austin Metropolitan Area"],
+                   "bm25_queries": ["technical recruiter"]}
+        traits = [{"value": "Technical recruiter", "temporal": "current", "meaning": "role"}]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / ".powerpacks" / "deep-search"
+            root.mkdir(parents=True)
+            artifacts = self._pond_artifacts(
+                base, "quick", score=0.78, title="Technical Recruiter", company="Example Labs",
+                query="technical recruiters in Austin")["arm"]["artifacts"]
+            record_quick_search(root, "recruiters-austin", query="technical recruiters in Austin",
+                                filters=filters, traits=traits, created_at="2026-10-16T00:00:00Z",
+                                jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"],
+                                status="completed")
+            search = load_search(root, "recruiters-austin")
+        assert search is not None
+        pond = search.ponds[0]
+        self.assertEqual(pond.query, "technical recruiters in Austin")
+        self.assertEqual(pond.filters, filters)
+        self.assertEqual(pond.traits, (Trait(value="Technical recruiter", temporal="current", meaning="role"),))
+        self.assertEqual(json.loads(json.dumps(asdict(pond)))["traits"], traits)
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:

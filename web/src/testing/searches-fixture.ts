@@ -172,6 +172,8 @@ function pond(pond_n: number, candidates: PondCandidate[], fields: Partial<Pond>
     result_count: 40 * pond_n,
     cost_usd: 0.5,
     candidates,
+    filters: {},
+    traits: [],
     ...fields,
   }
 }
@@ -298,6 +300,37 @@ export const RUN: SearchRunPayload = {
       },
     ],
     team_fetched_at: "2026-09-20T00:00:00Z",
+    team_status: "",
+  },
+  ratings: RATINGS,
+}
+
+// A quick search from the chat: one pond, no JD, titled by its query, saved with the traits and
+// filters it ran with; its people carry their pond score, traits and reasoning.
+export const QUICK_RUN: SearchRunPayload = {
+  search: {
+    run_id: RUN_ID,
+    title: "technical recruiters in Austin",
+    company: "",
+    created_at: "2026-10-16T09:00:00Z",
+    total_cost_usd: 0,
+    ponds: [
+      pond(1, [JORDAN, MORGAN], {
+        query: "technical recruiters in Austin",
+        filters: {
+          seniority_bands: ["mid", "senior"],
+          bm25_queries: ["technical recruiter", "technology recruiter"],
+          metro_areas: ["Austin Metropolitan Area"],
+          years_experience_min: 3,
+        },
+        traits: [{ value: "Technical recruiter", temporal: "current", meaning: "role" }],
+      }),
+    ],
+    groups: [],
+    jd_text: "",
+    candidates: [candidate(JORDAN), candidate(MORGAN)],
+    team: [],
+    team_fetched_at: "",
     team_status: "",
   },
   ratings: RATINGS,

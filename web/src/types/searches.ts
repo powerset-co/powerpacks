@@ -125,6 +125,16 @@ export interface PinJudgment {
   status: string
 }
 
+/** A filter's value as the search payload holds it: names, one line, a number or a toggle. */
+export type FilterValue = string[] | string | number | boolean
+
+/** One trait a search asked for: its value and the temporal it applies to. */
+export interface Trait {
+  value: string
+  temporal: string
+  meaning: string
+}
+
 export interface Pond {
   run_id: string
   pond_n: number
@@ -136,6 +146,9 @@ export interface Pond {
   result_count: number
   cost_usd: number
   candidates: PondCandidate[]
+  /** A quick search records the filters and traits it ran with; a deep-search pond has none. */
+  filters: Record<string, FilterValue>
+  traits: Trait[]
 }
 
 export interface NetworkSource {

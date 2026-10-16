@@ -2,7 +2,7 @@
 // expand payload's `role_search_filters` keys; the skill writes them back under the same names.
 
 import { FUNDING_STAGES as STAGES, SENIORITY_BANDS as BANDS } from "./companyFilters"
-import type { FilterValue } from "./preparedSearch"
+import type { FilterValue } from "@/types/searches"
 
 /** The seniority bands the index knows, most senior first on the card. */
 export const SENIORITY_BANDS = BANDS.map((band) => band.id).reverse()
@@ -187,10 +187,37 @@ export function fieldFor(key: string, value: FilterValue | null | undefined): Fi
   return { label, control: { kind: "text", key } }
 }
 
+/** The filters by key: a key's value as the payload holds it, or null once removed. */
+export type Values = Map<string, FilterValue | null>
+
 /** True when any of the field's keys holds a value in `values`. */
-export function fieldHasValue(field: Field, values: Map<string, FilterValue | null>): boolean {
+export function fieldHasValue(field: Field, values: Values): boolean {
   return fieldKeys(field).some((key) => {
     const value = values.get(key)
     return value !== null && value !== undefined && !(Array.isArray(value) && value.length === 0)
   })
+}
+
+/**
+ * The fields with a value now or as prepared (an emptied row stays until the card sends), in the
+ * table's order, then any key the table doesn't name.
+ */
+export function filledFields(values: Values, prepared: Values): Field[] {
+  const known = FIELDS.filter((field) => fieldHasValue(field, values) || fieldHasValue(field, prepared))
+  const named = new Set(FIELDS.flatMap(fieldKeys))
+  const other = [...values.keys()]
+    .filter((key) => !named.has(key))
+    .map((key) => fieldFor(key, values.get(key) ?? prepared.get(key)))
+  return [...known, ...other]
+}
+
+/** A list value's names; a single name as a one-item list; nothing for the rest. */
+export function names(value: FilterValue | null | undefined): string[] {
+  if (Array.isArray(value)) return value
+  return typeof value === "string" && value.trim() !== "" ? [value] : []
+}
+
+/** A one-line value as text; nothing for a list or an absent key. */
+export function scalar(value: FilterValue | null | undefined): string {
+  return value === null || value === undefined || Array.isArray(value) ? "" : String(value)
 }

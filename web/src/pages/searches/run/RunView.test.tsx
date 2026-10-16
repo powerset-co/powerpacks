@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { FeedbackOutcome } from "@/lib/searches/feedback"
-import { RANKED_NAMES, RUN, RUN_ID } from "@/testing/searches-fixture"
-import type { FeedbackRecord, Tagged } from "@/types/searches"
+import { QUICK_RUN, RANKED_NAMES, RUN, RUN_ID } from "@/testing/searches-fixture"
+import type { FeedbackRecord, SearchRunPayload, Tagged } from "@/types/searches"
 
 import type { Feedback } from "../hooks/useFeedback"
 import { searchRunKey, useSearchRun } from "../hooks/useSearchRun"
@@ -71,10 +71,14 @@ function Harness({ feedback, onToast }: { feedback: Feedback; onToast: () => voi
   ) : null
 }
 
-function renderRun(tags: Tagged | null = null, stopped: Pick<Feedback, "pending" | "failure"> = NOT_STOPPED) {
+function renderRun(
+  tags: Tagged | null = null,
+  stopped: Pick<Feedback, "pending" | "failure"> = NOT_STOPPED,
+  payload: SearchRunPayload = RUN,
+) {
   const saves = tagServer(tags)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  client.setQueryData(searchRunKey(RUN_ID), RUN)
+  client.setQueryData(searchRunKey(RUN_ID), payload)
   const submit = vi.fn((_record: FeedbackRecord) => Promise.resolve<FeedbackOutcome>("sent"))
   const retry = vi.fn(() => Promise.resolve())
   const feedback: Feedback = { ...stopped, submit, retry, signIn: () => Promise.resolve() }
@@ -137,6 +141,34 @@ describe("RunView", () => {
     fireEvent.click(pondTwo())
     expect(pondTwo().getAttribute("aria-pressed")).toBe("false")
     expect(rowNames()).toEqual(RANKED_NAMES.flat())
+  })
+
+  it("shows a quick search's traits and filters where the chain sat, and one score per person", () => {
+    renderRun(null, NOT_STOPPED, QUICK_RUN)
+    expect(document.querySelector("[data-ponds]")).toBeNull()
+    expect(screen.queryByText(/Kept/)).toBeNull()
+    const filters = within(screen.getByRole("region", { name: "Search filters" }))
+    // The title is the query, so no Query row.
+    expect(filters.queryByText("Query")).toBeNull()
+    expect(filters.getByText("Traits")).toBeTruthy()
+    expect(filters.getByText("Technical recruiter").textContent).toBe("Technical recruiter (current)")
+    expect(filters.getByText("Seniority")).toBeTruthy()
+    expect(filters.getByText("mid")).toBeTruthy()
+    expect(filters.getByText("Keywords")).toBeTruthy()
+    expect(filters.getByText("Location")).toBeTruthy()
+    expect(filters.getByText("Austin Metropolitan Area").textContent).toBe("Austin Metropolitan Area · metro")
+    expect(filters.getByText("Years")).toBeTruthy()
+    expect(filters.getByText("3 – any")).toBeTruthy()
+    // One badge per row, the pond score, with the reasoning beside it; the trait badges are the drawer's.
+    const jordan = row("p-jordan")
+    expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["80%"])
+    expect(jordan.getByText("Leads the current reliability platform.")).toBeTruthy()
+    expect(document.querySelector(".result-row .traits")).toBeNull()
+    fireEvent.click(main("p-jordan"))
+    expect(
+      within(drawer() ?? document.body).getByText("Backend depth:").parentElement?.textContent,
+    ).toContain("Built the API layer.")
+    expect(within(drawer() ?? document.body).getByText("90%")).toBeTruthy()
   })
 
   it("shows the header, the pond chain and both score tables in the documented order", () => {

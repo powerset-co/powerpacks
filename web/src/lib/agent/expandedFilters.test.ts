@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 
-import type { FilterValue } from "./preparedSearch"
+import type { FilterValue } from "@/types/searches"
 
 import { fromExpanded, toExpanded } from "./expandedFilters"
 

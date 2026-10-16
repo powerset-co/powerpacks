@@ -7,11 +7,9 @@
 
 import { isRecord } from "@/lib/utils"
 import type { Entry } from "@/types/agent"
+import type { FilterValue } from "@/types/searches"
 
 const PRIMITIVE = "search_network_pipeline"
-
-/** A filter's value as the payload holds it: a list of names, a word, a number, a yes/no. */
-export type FilterValue = string[] | string | number | boolean
 
 export interface SearchFilter {
   /** The payload's key, as an edit names it back to the agent: `metro_areas`. */

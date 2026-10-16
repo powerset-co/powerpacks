@@ -1241,6 +1241,17 @@ class PreviewFilterKeysTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertEqual(preview["filters"][key], value)
 
+    def test_preview_filters_are_the_present_keys_without_the_toggles_beside_traits(self):
+        module = load_pipeline_module()
+        payload = {
+            "role_search_filters": {"cities": ["Boston"], "is_current_role": True, "seniority_bands": [],
+                                    "semantic_query": "people who ship", "role_core_patterns": [{"regex": "x"}]},
+            "traits": [{"value": "Engineer", "temporal": "current", "meaning": "role"}],
+        }
+        self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"]})
+        payload["traits"] = []
+        self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"], "is_current_role": True})
+
     def test_powerset_preview_carries_the_same_keys(self):
         module = load_pipeline_module()
         payload = {"normalized_query": "scientists", "role_search_filters": {"cities": ["Boston"], **self.EDITABLE}}

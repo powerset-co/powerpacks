@@ -7,6 +7,7 @@ import { PondChain } from "./PondChain"
 import { ResultsTable, type ResultItem } from "./ResultsTable"
 import type { RowContext } from "./RowActions"
 import { RunHeader } from "./RunHeader"
+import { SearchFilters } from "./SearchFilters"
 
 export interface SearchRunProps {
   search: SearchResult
@@ -49,8 +50,8 @@ function emptyText(search: SearchResult, mode: Results["mode"], pondAt: number, 
     : "This run has no ponds yet."
 }
 
-// One saved run: header (with the job description and the team), pond chain, the toolbar,
-// the people the filters keep.
+// One saved run: header (with the job description and the team), the pond chain (or, with one
+// pond, the search it ran), the toolbar, the people the filters keep.
 export function SearchRun(props: SearchRunProps) {
   const { search, mode, pondAt, sections, filtered } = props
   // One identity per filtered list: the table's row keys and measurements follow it.
@@ -58,11 +59,15 @@ export function SearchRun(props: SearchRunProps) {
   return (
     <div className="search-run" data-search-run>
       <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
-      <PondChain
-        ponds={search.ponds}
-        selected={mode === "ponds" ? pondAt : props.pondOnly}
-        onSelect={mode === "ponds" ? props.onPond : props.onPondOnly}
-      />
+      {search.ponds.length > 1 ? (
+        <PondChain
+          ponds={search.ponds}
+          selected={mode === "ponds" ? pondAt : props.pondOnly}
+          onSelect={mode === "ponds" ? props.onPond : props.onPondOnly}
+        />
+      ) : (
+        search.ponds.map((pond) => <SearchFilters key={pond.pond_n} title={search.title} pond={pond} />)
+      )}
       <div className="run-toolbar" data-run-toolbar>
         {props.toolbar}
       </div>
