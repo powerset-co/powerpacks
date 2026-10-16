@@ -40,6 +40,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
+import postgres_client as pg  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
@@ -1164,7 +1165,24 @@ def record_quick_run(result: dict[str, Any]) -> None:
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
     record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
-                        jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"])
+                        jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
+                        person_attribution=quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file")))
+
+def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> dict[str, Any]:
+    """Who in the set knows each person of a run on a Powerset set, and through which channels: the
+    lookup the deep runs make (person_attribution.py), so the rows show their sources. A local run
+    has no set, so nothing."""
+    if ledger.get("mode")=="local_duckdb" or not env_file:
+        return {}
+    scope=latest_step(state,"resolve_set_operators")
+    people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
+    if not people or not scope.get("operator_ids"):
+        return {}
+    try:
+        return pg.fetch_network_attribution(people, env_file=Path(env_file), allowed_operator_ids=list(scope["operator_ids"]))
+    except Exception as e:
+        print(f"search: network attribution lookup failed ({type(e).__name__}); the rows show no sources", file=sys.stderr, flush=True)
+        return {}
 
 def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_kwargs) -> None:
     if done(ledger, "llm_rerank_candidates") or ledger["artifacts"].get("query_results_csv"):
@@ -1174,7 +1192,7 @@ def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_
     out = require_ok(run(cmd, timeout=args.timeout, **run_kwargs), "persist_search_results")
     ledger["artifacts"].update(collect_artifacts(out))
     save(lp, ledger)
-    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running"})
+    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running", "env_file": args.env_file})
     print(f"search: {out['row_count']} screened, not ranked yet; results page already lists them",
           file=sys.stderr, flush=True)
 
@@ -1191,14 +1209,14 @@ def cmd_run(args):
                 raise Failed(f"--payload-json is not a prepared payload: {payload_json}")
             write_json(payload_json, apply_card_edits(prepared, edits, payload_json.parent))
         result=run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)
-        record_quick_run(result)
+        record_quick_run({**result, "env_file": args.env_file})
         emit(result); return 0
     except Blocked as e: emit(e.payload); return e.code
     except Exception as e:
         lp = ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
         ledger = load_ledger(lp)
         if ledger["artifacts"].get("jsonl"):
-            record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed"})
+            record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed", "env_file": args.env_file})
         emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
 def cmd_prepare(args):
