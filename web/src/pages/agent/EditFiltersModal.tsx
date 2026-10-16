@@ -23,7 +23,6 @@ import {
   MessageSquare,
   ChevronRight,
   ChevronsUpDown,
-  X,
 } from "lucide-react"
 import { AutocompleteInput, type EntityValue } from "./AutocompleteInput"
 import {
@@ -105,7 +104,6 @@ const SECTIONS: SectionConfig[] = [
     getActiveCount: (f) => {
       let count = f.education_ids?.length || 0
       if (f.degree_levels?.length) count += f.degree_levels.length
-      if (f.fields_of_study?.length) count += f.fields_of_study.length
       if (f.graduation_year_min != null || f.graduation_year_max != null) count += 1
       return count
     },
@@ -183,10 +181,6 @@ export function EditFiltersModalV2({
   local = false,
 }: EditFiltersModalV2Props) {
   const [activeSection, setActiveSection] = useState<FilterSection>("roles")
-  // A local search has no investors or interaction counts (the local index does not hold them
-  // and the run refuses the keys), so the modal does not offer them.
-  const visibleSections = local ? SECTIONS.filter((section) => section.id !== "interactions") : SECTIONS
-
   // Helper functions
   const toEntityItems = (values: EntityValue[]): EntityItem[] =>
     values.map((v) => ({
@@ -475,42 +469,6 @@ export function EditFiltersModalV2({
                 </PopoverContent>
               </Popover>
             </div>
-
-            {/* Fields of Study */}
-            {filters.fields_of_study?.length > 0 && (
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <Label>Fields of Study</Label>
-                  <button
-                    className="text-xs text-muted-foreground underline hover:text-foreground transition-colors"
-                    onClick={() => onUpdate("fields_of_study", [])}
-                  >
-                    clear
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {filters.fields_of_study.map((f: EntityItem) => (
-                    <Badge key={f.id} variant="secondary" className="gap-1 pr-1">
-                      {f.display_value}
-                      <button
-                        onClick={() =>
-                          onUpdate(
-                            "fields_of_study",
-                            filters.fields_of_study.filter((x: EntityItem) => x.id !== f.id),
-                          )
-                        }
-                        className="ml-0.5 rounded-full hover:bg-muted-foreground/20 p-0.5"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Extracted from your query (e.g., Psychology, Computer Science)
-                </p>
-              </div>
-            )}
 
             {/* Graduation Year */}
             <div className="space-y-2">
@@ -1194,51 +1152,53 @@ export function EditFiltersModalV2({
               </div>
             </div>
 
-            {/* Collective (Set) */}
-            <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Collective (Set)</Label>
-                {(filters.set_interaction_min != null || filters.set_interaction_max != null) && (
-                  <button
-                    className="text-xs text-muted-foreground underline hover:text-foreground transition-colors"
-                    onClick={() => {
-                      onUpdate("set_interaction_min", null)
-                      onUpdate("set_interaction_max", null)
+            {/* Collective (Set): a set has no local meaning */}
+            {!local && (
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <Label>Collective (Set)</Label>
+                  {(filters.set_interaction_min != null || filters.set_interaction_max != null) && (
+                    <button
+                      className="text-xs text-muted-foreground underline hover:text-foreground transition-colors"
+                      onClick={() => {
+                        onUpdate("set_interaction_min", null)
+                        onUpdate("set_interaction_max", null)
+                      }}
+                    >
+                      clear
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground/60">
+                  People anyone in your network/team has interacted with
+                </p>
+                <div className={RANGE_ROW_CLASS}>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Min"
+                    value={filters.set_interaction_min ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
+                      if (v === null || (!isNaN(v) && v >= 0)) onUpdate("set_interaction_min", v)
                     }}
-                  >
-                    clear
-                  </button>
-                )}
+                    className={RANGE_INPUT_CLASS}
+                  />
+                  <span className="text-muted-foreground text-sm">to</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Max"
+                    value={filters.set_interaction_max ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
+                      if (v === null || (!isNaN(v) && v >= 0)) onUpdate("set_interaction_max", v)
+                    }}
+                    className={RANGE_INPUT_CLASS}
+                  />
+                </div>
               </div>
-              <p className="text-[11px] text-muted-foreground/60">
-                People anyone in your network/team has interacted with
-              </p>
-              <div className={RANGE_ROW_CLASS}>
-                <Input
-                  type="number"
-                  min="0"
-                  placeholder="Min"
-                  value={filters.set_interaction_min ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
-                    if (v === null || (!isNaN(v) && v >= 0)) onUpdate("set_interaction_min", v)
-                  }}
-                  className={RANGE_INPUT_CLASS}
-                />
-                <span className="text-muted-foreground text-sm">to</span>
-                <Input
-                  type="number"
-                  min="0"
-                  placeholder="Max"
-                  value={filters.set_interaction_max ?? ""}
-                  onChange={(e) => {
-                    const v = e.target.value === "" ? null : parseInt(e.target.value, 10)
-                    if (v === null || (!isNaN(v) && v >= 0)) onUpdate("set_interaction_max", v)
-                  }}
-                  className={RANGE_INPUT_CLASS}
-                />
-              </div>
-            </div>
+            )}
           </div>
         )
     }
@@ -1259,7 +1219,7 @@ export function EditFiltersModalV2({
           {/* Sidebar */}
           <div className="shrink-0 border-b bg-muted/30 sm:w-48 sm:border-b-0 sm:border-r">
             <nav className="flex gap-1 overflow-x-auto p-2 sm:block sm:space-y-1">
-              {visibleSections.map((section) => {
+              {SECTIONS.map((section) => {
                 const Icon = section.icon
                 const activeCount = section.getActiveCount(filters)
                 const isActive = activeSection === section.id

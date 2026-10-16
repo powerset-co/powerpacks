@@ -482,6 +482,11 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     ]:
         if payload.get(payload_key) is not None:
             filters.append(comparison(field, op, payload[payload_key]))
+    if search_backend_mode.is_local_backend_configured():
+        # The local index counts the owner's own interactions with each person; a set has no local meaning.
+        for payload_key, op in (("operator_interaction_min", "Gte"), ("operator_interaction_max", "Lte")):
+            if payload.get(payload_key) is not None:
+                filters.append(comparison("total_interactions", op, payload[payload_key]))
 
     if not filters:
         return None

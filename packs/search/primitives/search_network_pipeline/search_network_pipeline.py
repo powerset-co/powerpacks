@@ -62,13 +62,8 @@ LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_TOP_K = {"powerset": 10000, "local": 1000}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
-UNSUPPORTED_LOCAL_FILTERS = {
-    "investor_names",
-    "operator_interaction_min",
-    "operator_interaction_max",
-    "set_interaction_min",
-    "set_interaction_max",
-}
+# The local index holds no investors and knows no set: a local run drops these with a note.
+UNSUPPORTED_LOCAL_FILTERS = {"investor_names", "set_interaction_min", "set_interaction_max"}
 COMPANY_RESOLVE_FILTER_KEYS = {
     "company_names", "company_ids", "current_company_names", "company_semantic_queries",
     "sector_types", "entity_types", "technology_types", "customer_types", "customer_type",
@@ -597,8 +592,8 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
         filters.pop(key, None)
 
     unsupported = sorted(key for key in UNSUPPORTED_LOCAL_FILTERS if is_present(filters.get(key)))
-    if unsupported:
-        raise Failed(f"local backend does not support these remote-only filters yet: {', '.join(unsupported)}")
+    for key in UNSUPPORTED_LOCAL_FILTERS:
+        filters.pop(key, None)
 
     sanitized["role_search_filters"] = filters
     notes = sanitized.get("notes")
@@ -606,9 +601,11 @@ def prepare_local_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], list
         notes = []
     if ignored_scope_keys:
         notes.append(f"local backend ignores remote scope keys: {', '.join(ignored_scope_keys)}")
+    if unsupported:
+        notes.append(f"the local index has no investors or set interactions; ignored: {', '.join(unsupported)}")
     notes.append("Local search scope is the DuckDB file; no set_id/operator resolution is used.")
     sanitized["notes"] = notes
-    return sanitized, ignored_scope_keys
+    return sanitized, ignored_scope_keys + unsupported
 
 def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[str, Any]) -> dict[str, Any]:
     out = json.loads(json.dumps(payload))

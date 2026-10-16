@@ -248,14 +248,16 @@ it("shows money in millions and sends dollars", () => {
   expect(sent().filters).toEqual({ funding_amount_max: 40_000_000 })
 })
 
-it("drops a row emptied before Execute once the card is read-only, and offers no local-only filters", () => {
+it("drops a row emptied before Execute once the card is read-only, and offers no investors or set interactions locally", () => {
   const { rerender } = render(<SearchCard search={{ ...SEARCH, local: true }} actions={true} />)
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years min" }), { target: { value: "" } })
   // Still there while editing, so it can be refilled.
   expect(screen.getByRole("spinbutton", { name: "Years min" })).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
   const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
-  expect(within(dialog).queryByRole("button", { name: /^Interactions/ })).toBeNull()
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Interactions/ }))
+  expect(within(dialog).getByText("Individual (You)")).toBeTruthy()
+  expect(within(dialog).queryByText("Collective (Set)")).toBeNull()
   fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
   expect(within(dialog).queryByText("Investors")).toBeNull()
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))

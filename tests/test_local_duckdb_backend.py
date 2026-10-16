@@ -939,6 +939,40 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual([row["base_id"] for row in low_rows], ["person-engineer"])
         self.assertEqual(low_rows[0]["x_twitter_followers"], 120)
 
+    def test_stage_bounds_know_series_e_to_i(self) -> None:
+        turbopuffer_resolve = load_module(
+            "turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
+        for module in (resolve_companies, turbopuffer_resolve):
+            with self.subTest(module=module.__name__):
+                self.assertEqual(module.normalize_stage("Series E"), 7)
+                self.assertEqual(module.normalize_stage("series-f"), 8)
+                self.assertEqual(module.normalize_stage("series_h"), 10)
+                self.assertEqual(module.normalize_stage("series i"), 11)
+                self.assertEqual(module.normalize_stage("series_d"), 6)
+
+    def test_interactions_with_you_filter_the_local_index(self) -> None:
+        """The owner's interaction count per person is a local column; a set has no local meaning."""
+        base = {"base_candidate_ids": ["person-founder", "person-engineer"], "is_current_role": True}
+        frequent = asyncio.run(local_backend.filter_only_rows_for_namespace(
+            "people",
+            search_common.filters_from_role_payload({**base, "operator_interaction_min": 5}),
+            ["base_id"],
+        ))
+        rare = asyncio.run(local_backend.filter_only_rows_for_namespace(
+            "people",
+            search_common.filters_from_role_payload({**base, "operator_interaction_max": 5}),
+            ["base_id"],
+        ))
+        # The fixture profiles count 12 interactions with the founder and none with the engineer.
+        self.assertEqual([row["base_id"] for row in frequent], ["person-founder"])
+        self.assertEqual([row["base_id"] for row in rare], ["person-engineer"])
+        local_backend.configure_local_backend(None)
+        try:
+            self.assertNotIn("total_interactions", json.dumps(
+                search_common.filters_from_role_payload({**base, "operator_interaction_min": 5})))
+        finally:
+            local_backend.configure_local_backend(self.db_path)
+
     def test_education_prefilter_feeds_role_search(self) -> None:
         payload = {"education_ids": ["school-stanford"], "degree_levels": ["bachelors"], "fields_of_study": ["computer science"]}
         base_ids, meta = asyncio.run(apply_prefilters.education_base_ids(payload, page_size=1000, max_ids=10))
