@@ -29,7 +29,6 @@ import { AutocompleteInput, type EntityValue } from "./AutocompleteInput"
 import {
   type ExpandedFilters,
   type EntityItem,
-  type RolePattern,
   flattenPersonLocations,
   flattenCompanyLocations,
   unflattenPersonLocations,
@@ -67,7 +66,7 @@ interface EditFiltersModalV2Props {
   filters: ExpandedFilters
   onUpdate: (
     key: keyof ExpandedFilters,
-    values: EntityItem[] | string[] | number | boolean | string | RolePattern[] | null,
+    values: EntityItem[] | string[] | number | boolean | string | null,
   ) => void
   onApply: () => void
 }

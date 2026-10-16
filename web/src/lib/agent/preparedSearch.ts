@@ -1,7 +1,7 @@
 // The search a chat's `search_network_pipeline.py prepare` command made, before it runs: the
 // last JSON object the command printed (emit, indent=2, so only it opens a line with `{`). The
 // query is at its top; the filters, the role intent and the traits sit under `preview`; the local
-// index adds the pool estimate and the runtime notes. A prepare blocked on its extraction
+// index adds the runtime notes. A prepare blocked on its extraction
 // (`blocked_user_action`) carries its `runtime_blockers`. The company fast path prints no filters
 // and is no search card.
 
@@ -32,8 +32,6 @@ export interface PreparedSearch {
   filters: SearchFilter[]
   /** Empty when the preview carries none, as replies from older builds. */
   traits: SearchTrait[]
-  /** How many people in the local index the filters match; null when the backend gives no count. */
-  pool: { matched: number; total: number } | null
   notes: string[]
   /** Why the search cannot run as prepared; set only on a blocked prepare, which is never executed. */
   blockers: string[]
@@ -95,19 +93,11 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
   const preview = printed.preview
   if (!isRecord(preview.filters)) return null
 
-  const estimate = preview.pool_estimate
-  const pool =
-    isRecord(estimate) &&
-    typeof estimate.matched_people === "number" &&
-    typeof estimate.total_people === "number"
-      ? { matched: estimate.matched_people, total: estimate.total_people }
-      : null
   const blockers = printed.status === "blocked_user_action" ? lines(preview.runtime_blockers) : []
   return {
     query: printed.query,
     filters: searchFilters(preview.filters, preview.role_title_intent),
     traits: searchTraits(preview.traits),
-    pool,
     notes: lines(preview.runtime_notes),
     blockers,
   }

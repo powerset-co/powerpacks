@@ -38,7 +38,6 @@ const SEARCH: PreparedSearch = {
     { value: "VP of Finance", temporal: "current", meaning: "role" },
     { value: "investment banking", temporal: "past", meaning: "experience" },
   ],
-  pool: null,
   notes: [],
   blockers: [],
 }

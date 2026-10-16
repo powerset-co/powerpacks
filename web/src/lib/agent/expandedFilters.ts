@@ -12,16 +12,10 @@ export interface EntityItem {
   metadata?: Record<string, unknown> | null
 }
 
-export interface RolePattern {
-  regex: string
-  examples: string[]
-}
-
 export interface ExpandedFilters {
   company_ids: EntityItem[]
   role_ids: EntityItem[]
   education_ids: EntityItem[]
-  education_op?: "and" | "or"
   investors: EntityItem[]
   cities: EntityItem[]
   states: EntityItem[]
@@ -61,15 +55,9 @@ export interface ExpandedFilters {
   age_max: number | null
   position_after_date: string | null
   position_before_date: string | null
-  is_current: boolean | null
   role_semantic_query: string | null
   role_bm25_queries: string[] | null
-  role_core_patterns: RolePattern[] | null
-  role_adjacent_patterns: RolePattern[] | null
-  role_query_type: string | null
   company_semantic_queries: EntityItem[]
-  role_function: string | null
-  company_adjacency_queries: string[]
   x_followers_min: number | null
   x_followers_max: number | null
   li_followers_min: number | null
@@ -228,15 +216,9 @@ export function toExpanded(
     age_max: number("age_max"),
     position_after_date: text("position_after_date"),
     position_before_date: text("position_before_date"),
-    is_current: null,
     role_semantic_query: text("role_semantic_query"),
     role_bm25_queries: names(values.get("bm25_queries")),
-    role_core_patterns: null,
-    role_adjacent_patterns: null,
-    role_query_type: null,
     company_semantic_queries: list("company_semantic_queries"),
-    role_function: null,
-    company_adjacency_queries: [],
     x_followers_min: number("x_followers_min"),
     x_followers_max: number("x_followers_max"),
     li_followers_min: number("li_followers_min"),
