@@ -336,6 +336,8 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "position_after_date","position_before_date","is_current_role","is_current_company",
         "tech_skills","x_followers_min","li_followers_min","operator_interaction_min",
     ]:
+        if payload.get("traits") and k in ("is_current_role", "is_current_company"):
+            continue
         v=f.get(k)
         if v not in (None, [], ""):
             filters[k]=v
@@ -350,6 +352,7 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "set_scope": f.get("set_id") or "env/default set or personal-set fallback",
         "role_title_intent": role or None,
         "filters": filters,
+        "traits": payload.get("traits") or [],
         "runtime_blockers": quality_issues,
     }
 
@@ -745,6 +748,8 @@ def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: 
     filters = payload_filters(payload)
     visible_filters = {}
     for key in PREVIEW_FILTER_KEYS:
+        if payload.get("traits") and key in ("is_current_role", "is_current_company"):
+            continue
         value = filters.get(key)
         if is_present(value):
             visible_filters[key] = value
@@ -775,6 +780,7 @@ def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: 
         "ignored_remote_scope_keys": removed_scope_keys,
         "role_title_intent": role or None,
         "filters": visible_filters,
+        "traits": payload.get("traits") or [],
         "pool_estimate": pool,
         "runtime_notes": runtime_notes,
     }

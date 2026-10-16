@@ -175,6 +175,35 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIn("semantic_query", preview["role_title_intent"])
         self.assertEqual(preview["filters"]["metro_areas"], ["San Francisco Bay Area"])
 
+    def test_compact_previews_carry_payload_traits(self):
+        traits = [
+            {"meaning": "role", "temporal": "current", "value": "VP of Finance"},
+            {"meaning": "industry", "temporal": "past", "value": "Healthcare"},
+        ]
+        for payload in [{"traits": traits}, {}, {"traits": []}, {"traits": None}]:
+            with self.subTest(payload=payload):
+                preview = search.compact_preview(payload, Path("payload.json"), [])
+                self.assertEqual(preview["traits"], payload.get("traits") or [])
+                with mock.patch.object(search, "local_pool_estimate", return_value={}):
+                    local_preview = search.compact_preview_local(
+                        payload, Path("payload.json"), Path("db.duckdb"), []
+                    )
+                self.assertEqual(local_preview["traits"], payload.get("traits") or [])
+
+    def test_compact_previews_hide_current_filters_only_with_traits(self):
+        filters = {"is_current_role": True, "is_current_company": False, "countries": ["US"]}
+        for traits in [[{"meaning": "role", "temporal": "current", "value": "Engineer"}], [], None]:
+            payload = {"role_search_filters": filters, "traits": traits}
+            with self.subTest(traits=traits):
+                preview = search.compact_preview(payload, Path("payload.json"), [])
+                with mock.patch.object(search, "local_pool_estimate", return_value={}):
+                    local_preview = search.compact_preview_local(
+                        payload, Path("payload.json"), Path("db.duckdb"), []
+                    )
+                expected = {"countries": ["US"]} if traits else filters
+                self.assertEqual(preview["filters"], expected)
+                self.assertEqual(local_preview["filters"], expected)
+
     def test_prepare_quality_gate_rejects_short_title_semantic_query(self):
         payload = {
             "role_search_filters": {
