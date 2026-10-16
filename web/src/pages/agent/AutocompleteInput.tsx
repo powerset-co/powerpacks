@@ -25,7 +25,6 @@ interface AutocompleteInputProps {
   className?: string
   maxDisplayed?: number
   id?: string
-  groupBy?: string // Field name to group by (e.g., "type")
 }
 
 export const AutocompleteInput = ({
@@ -37,7 +36,6 @@ export const AutocompleteInput = ({
   className,
   maxDisplayed,
   id,
-  groupBy,
 }: AutocompleteInputProps) => {
   const [inputValue, setInputValue] = useState("")
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
@@ -232,28 +230,6 @@ export const AutocompleteInput = ({
   // service a search finds nothing, and Enter keeps the typed name, so no "No results" box.
   const showDropdown = isFocused && showSuggestions && (isLoading || displaySuggestions.length > 0)
 
-  // Group suggestions by the specified field
-  const groupedSuggestions = groupBy
-    ? displaySuggestions.reduce(
-        (acc, suggestion) => {
-          const key = (suggestion as any)[groupBy] || "Other"
-          if (!acc[key]) acc[key] = []
-          acc[key].push(suggestion)
-          return acc
-        },
-        {} as Record<string, Suggestion[]>,
-      )
-    : null
-
-  // Type display names for better formatting
-  const typeDisplayNames: Record<string, string> = {
-    city: "Cities",
-    state: "States",
-    country: "Countries",
-    metro_area: "Metro Areas",
-    macro_region: "Macro Regions",
-  }
-
   return (
     <div ref={wrapperRef} className={cn("relative", className)}>
       <div className="space-y-2">
@@ -286,33 +262,7 @@ export const AutocompleteInput = ({
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-72 overflow-auto">
           {isLoading ? (
             <div className="p-3 text-sm text-muted-foreground">Loading...</div>
-          ) : groupedSuggestions ? (
-            // Grouped display
-            Object.entries(groupedSuggestions).map(([groupKey, groupSuggestions]) => (
-              <div key={groupKey}>
-                <div className="px-3 py-1.5 text-xs font-semibold text-primary bg-muted/50 sticky top-0">
-                  {typeDisplayNames[groupKey] || groupKey.toUpperCase()}
-                </div>
-                {groupSuggestions.map((suggestion) => {
-                  const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
-                  return (
-                    <button
-                      key={suggestion.id}
-                      onClick={() => handleSelectSuggestion(suggestion)}
-                      className={cn(
-                        "w-full text-left px-3 py-2 hover:bg-accent text-sm transition-colors flex items-center justify-between",
-                        isSelected && "bg-accent/50",
-                      )}
-                    >
-                      <span>{suggestion.display_value}</span>
-                      {isSelected && <Check className="h-4 w-4 text-primary" />}
-                    </button>
-                  )
-                })}
-              </div>
-            ))
           ) : (
-            // Flat display
             displaySuggestions.map((suggestion) => {
               const isSelected = normalizedValue.some((v) => v.id === suggestion.id)
               return (

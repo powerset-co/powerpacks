@@ -318,17 +318,19 @@ For both local and Powerset previews:
     same `--output-dir` for the sent `query` (restated around the sent traits when both came),
     or, when only the traits changed, for the preview's query restated around the new traits.
     Keywords and filters never go into the query, and no `filters` come with a changed query or
-    trait: the new prepare derives its own. On the new payload, replace `traits` with the sent
-    list when one came (their values and temporals as sent). Then show the new preview and ask
-    the usual question, even though the reply said `then execute`: the user approved the search
-    as it was, and a new prepare is a new search. Only `execute` on the new card runs it. Retrieval and LLM filtering use the prepared query; do not run the old
+    trait: the new prepare derives its own. Leave the new payload as the prepare wrote it (its
+    traits and their meanings included: the sent traits shaped the query, nothing else), so the
+    card the user sees is what would run. Then show the new preview and ask the usual question,
+    even though the reply said `then execute`: the user approved the search as it was, and a new
+    prepare is a new search. Only `execute` on the new card runs it. Retrieval and LLM filtering use the prepared query; do not run the old
     `execute_command` for a changed query or trait value.
   - Otherwise, write each key of `filters` into `role_search_filters` as sent (`null` removes
     the key; a key not sent is left unchanged), log the keys as `filter_edit`, and when
     `traits` is present replace the payload's `traits` with it (a changed `temporal` alone is
-    an in-place edit). When `bm25_queries` is sent (a list or `null`), also delete
-    `role_bm25_queries` from `role_search_filters` when it is there (the older alias would bring
-    the removed keywords back at run time), and drop
+    an in-place edit). A sent key also deletes its older `role_` alias from `role_search_filters`
+    when it is there (`bm25_queries` → `role_bm25_queries`, `semantic_query` →
+    `role_semantic_query`): the run would restore a cleared value from the alias. When
+    `bm25_queries` is sent (a list or `null`), also drop
     every `role_core_patterns` entry that holds an example no longer in it: the run merges the
     examples back into the keywords and retrieval matches the entry's regex, so a removed
     keyword would return either way. The kept examples are already in `bm25_queries`.

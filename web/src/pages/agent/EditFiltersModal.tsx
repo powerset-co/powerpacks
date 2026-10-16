@@ -590,7 +590,6 @@ export function EditFiltersModalV2({
                   value={toEntityValues(personLocations)}
                   onChange={(v) => handlePersonLocationUpdate(toEntityItems(v))}
                   onSearch={(q) => handleSearch(q, "location")}
-                  groupBy="type"
                 />
                 {kindPicker(personKind, setPersonKind, "Person location kind")}
               </div>
@@ -649,7 +648,6 @@ export function EditFiltersModalV2({
                   value={toEntityValues(companyLocations)}
                   onChange={(v) => handleCompanyLocationUpdate(toEntityItems(v))}
                   onSearch={(q) => handleSearch(q, "location")}
-                  groupBy="type"
                 />
                 {kindPicker(companyKind, setCompanyKind, "Company location kind")}
               </div>

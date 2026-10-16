@@ -10,9 +10,7 @@ export default {
         background: "var(--background)",
         foreground: "var(--foreground)",
         border: "var(--border)",
-        // The cloud app's fields (the Edit Filters modal) draw their border from `input`; the app's
-        // own fields draw theirs from `border`, so the two are the same line.
-        input: "var(--border)",
+        input: "var(--input)",
         ring: "var(--primary)",
         card: { DEFAULT: "var(--card)", foreground: "var(--foreground)" },
         popover: { DEFAULT: "var(--card)", foreground: "var(--foreground)" },
