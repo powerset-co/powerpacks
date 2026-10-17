@@ -44,9 +44,10 @@ function serve(sent: unknown[]) {
     if (url.startsWith("/api/team/thread?"))
       return Promise.resolve(new Response(JSON.stringify({ messages: THREAD })))
     if (url === "/api/team/ask") {
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}")
+      const body: unknown = JSON.parse(typeof init?.body === "string" ? init.body : "{}")
       sent.push(body)
-      const added = { id: "m3", direction: "out", text: body.text, at: new Date(NOW).toISOString() }
+      const text = typeof body === "object" && body !== null && "text" in body ? String(body.text) : ""
+      const added = { id: "m3", direction: "out", text, at: new Date(NOW).toISOString() }
       return Promise.resolve(new Response(JSON.stringify({ messages: [...THREAD, added] })))
     }
     return Promise.resolve(new Response("not found", { status: 404 }))
@@ -83,5 +84,5 @@ it("lists teammates with their agents' presence and opens a thread on pick", asy
   fireEvent.keyDown(within(thread).getByRole("textbox"), { key: "Enter" })
   await waitFor(() => expect(within(thread).getByText("Restart and check again")).toBeTruthy())
   expect(sent).toEqual([{ operator_id: "op-1", text: "Restart and check again" }])
-  expect((within(thread).getByRole("textbox") as HTMLTextAreaElement).value).toBe("")
+  expect(within(thread).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
 })
