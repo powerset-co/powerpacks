@@ -74,7 +74,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const search = useRef<HTMLInputElement>(null)
 
   const { clear: clearSelection } = selection
-  const { openId, refresh } = drawer
+  const { openId, refresh, close: closeOpen } = drawer
   const onWritten = useCallback(
     (ids: readonly string[]) => {
       clearSelection()
@@ -82,7 +82,14 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     },
     [clearSelection, openId, refresh],
   )
-  const decisions = useDecisions(byId, onWritten)
+  const onDeleted = useCallback(
+    (ids: readonly string[]) => {
+      clearSelection()
+      if (openId && ids.includes(openId)) closeOpen()
+    },
+    [clearSelection, openId, closeOpen],
+  )
+  const decisions = useDecisions(byId, onWritten, onDeleted)
 
   // Quick labeling: a label on the open person moves the drawer to whoever is next
   // (lib/advance.ts) once the list reflects the write; nothing cycles.
@@ -189,6 +196,10 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     selection,
     drawer,
     label,
+    askDelete: decisions.askDelete,
+    confirmDelete: decisions.confirmDelete,
+    armed: decisions.armed,
+    dismissToast: decisions.dismissToast,
     targets,
   })
 
@@ -284,6 +295,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             logbook={barLogbook}
             onLogbook={() => (barLogbook === "view" ? onView(saved) : void logbook.build(targets))}
             onAction={(action) => void label(action, targets)}
+            onDelete={() => decisions.askDelete(targets)}
             onClear={selection.selected.size ? clearSelection : closeDrawer}
           />
           <Toast

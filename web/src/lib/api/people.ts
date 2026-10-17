@@ -47,6 +47,17 @@ export async function fetchPersonDetail(id: string, signal?: AbortSignal): Promi
   return body<PersonDetail>(response)
 }
 
+/** Deletes each parent's family from the store for good; returns how many were deleted. */
+export async function deletePeople(ids: readonly string[]): Promise<number> {
+  const response = await fetch(`${API}delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  })
+  if (!response.ok) throw await failure(response, "Try again.")
+  return (await body<{ deleted: number }>(response)).deleted
+}
+
 /** Writes the human's worth call for each parent; returns their rows as the server now holds them. */
 export async function writeWorth(ids: readonly string[], worth: Worth): Promise<WorthResult[]> {
   const response = await fetch(`${API}worth`, {

@@ -183,6 +183,13 @@ class SharePeople:
             self._stamp = stamp
         return self._rows
 
+    def delete(self, parent_ids: tuple[str, ...]) -> None:
+        """Delete each family for good. This connection's own commits leave data_version as it was and land in
+        the WAL, not the store file, so the export rows are rebuilt on the next read by forgetting the stamp."""
+        for parent_id in parent_ids:
+            queries_share.delete_family(self.conn, parent_id)
+        self._stamp = 0
+
     def _store_mtime(self) -> int:
         path = self.conn.execute("PRAGMA database_list").fetchone()[2]
         return Path(path).stat().st_mtime_ns if path else 0

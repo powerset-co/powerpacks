@@ -1,4 +1,4 @@
-"""Read and write the People labels, human tags and local sets."""
+"""Read and write the People labels, human tags and local sets; delete a family for good."""
 from __future__ import annotations
 
 import sqlite3
@@ -78,6 +78,25 @@ def write_tags(conn: sqlite3.Connection, tags: list[TagRow]) -> None:
             "INSERT INTO person_tags (candidate_id, tags, note, updated_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT (candidate_id) DO UPDATE SET tags = excluded.tags, note = excluded.note, updated_at = excluded.updated_at",
             tags)
+
+
+def delete_family(conn: sqlite3.Connection, parent_id: str) -> None:
+    """Delete the family and its member candidates from every table, in one transaction.
+    candidate_names, candidate_identifiers, candidate_sources, bundles and facts go by ON DELETE CASCADE;
+    the tables below reference candidates without it, so they go first."""
+    members = [row["candidate_id"] for row in
+               conn.execute("SELECT candidate_id FROM current_parent WHERE parent_id = ?", (parent_id,))]
+    marks = ", ".join("?" * len(members))
+    with conn:
+        conn.execute(f"DELETE FROM pair_verdicts WHERE candidate_a IN ({marks}) OR candidate_b IN ({marks})",
+                     members + members)
+        for table in ("worth", "candidate_linkedins", "person_tags", "person_labels"):
+            conn.execute(f"DELETE FROM {table} WHERE candidate_id IN ({marks})", members)
+        conn.execute(f"DELETE FROM candidate_parent WHERE candidate_id IN ({marks}) OR parent_id = ?",
+                     [*members, parent_id])
+        conn.execute("DELETE FROM research WHERE parent_id = ?", (parent_id,))
+        conn.execute("DELETE FROM review_queue WHERE parent_id = ?", (parent_id,))
+        conn.execute(f"DELETE FROM candidates WHERE candidate_id IN ({marks})", members)
 
 
 # ---- the sets on this machine (sets.py): made here, or joined by accepting an invite

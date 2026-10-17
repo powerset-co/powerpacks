@@ -193,6 +193,75 @@ class PeopleWorthTests(StoreTests):
         self.assertEqual((row["worth"], row["worth_source"]), ("yes", "human"))
         self.assertNotIn("share", payload["columns"])
 
+    def _family_rows(self, candidates: tuple[str, ...], parent_id: str) -> dict[str, int]:
+        """table -> rows naming one of the candidates or the parent, for every table keyed by either."""
+        found: dict[str, int] = {}
+        for (table,) in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name <> 'sqlite_sequence'"):
+            columns = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+            keys = [column for column in ("candidate_id", "candidate_a", "candidate_b") if column in columns]
+            clauses = [f"{column} IN ({', '.join('?' * len(candidates))})" for column in keys]
+            params: list[str] = [value for _ in keys for value in candidates]
+            if "parent_id" in columns:
+                clauses.append("parent_id = ?")
+                params.append(parent_id)
+            if clauses:
+                found[table] = self.conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {' OR '.join(clauses)}", params).fetchone()[0]
+        return found
+
+    def _seed_every_table(self, candidates: tuple[str, str], parent_id: str) -> None:
+        first, second = candidates
+        self.conn.executemany("INSERT INTO candidate_names VALUES (?, ?)", [(c, f"name {c}") for c in candidates])
+        self.conn.executemany("INSERT INTO bundles VALUES (?, '{}', 'f', ?)", [(c, NOW) for c in candidates])
+        self.conn.execute("INSERT INTO pair_verdicts VALUES (?, ?, 's', 1, 0.9, 'same', ?)", (first, second, NOW))
+        self.conn.execute("INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
+                          "judgment_fingerprint, confidence, reason, created_at) VALUES "
+                          "(?, 'https://www.linkedin.com/in/example', '7', 'research', 'needs_review', 'machine', 'j', 0.5, '', ?)",
+                          (first, NOW))
+        self.conn.execute("INSERT INTO research VALUES (?, ?, 'failed', NULL, ?)", (f"h-{parent_id}", parent_id, NOW))
+        self.conn.execute("INSERT INTO review_queue VALUES (?, 'detach', '', '', ?)", (parent_id, NOW))
+        self.conn.commit()
+
+    def test_delete_removes_every_row_of_one_family_and_none_of_the_other(self) -> None:
+        from packs.ingestion.primitives.share.person_labels import PersonLabels
+        queries.upsert_candidates(self.conn, [("c3", "Riley Echo", 0, "{}", NOW), ("c4", "Riley E", 0, "{}", NOW)])
+        self._parent("p:b", "c3", "c4")
+        self._facts("c3", "Riley Echo")
+        self.conn.executemany("INSERT INTO candidate_sources VALUES (?, 'imessage')", [("c3",), ("c4",)])
+        self.conn.executemany("INSERT INTO candidate_identifiers VALUES (?, 'phone', ?, ?)",
+                              [("c3", "+15550100", "+15550100"), ("c4", "+15550101", "+15550101")])
+        self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
+                          "VALUES ('c3', 'yes', 'machine', 'close', 'v1', ?)", (NOW,))
+        self.conn.commit()
+        PersonLabels(self.conn, self.root).run()
+        queries_share.write_tags(self.conn, [("c3", "is_family", "", NOW)])
+        self._seed_every_table(("c1", "c2"), "p:a")
+        self._seed_every_table(("c3", "c4"), "p:b")
+        self.conn.execute("INSERT INTO pair_verdicts VALUES ('c1', 'c3', 's', 0, 0.9, 'different', ?)", (NOW,))
+        self.conn.commit()
+        self.assertEqual({row.parent_id for row in self.people.load()}, {"p:a", "p:b"})
+        kept = self._family_rows(("c3", "c4"), "p:b")
+        deleted = self._family_rows(("c1", "c2"), "p:a")
+        keyed = {table for table, count in deleted.items() if count}
+        self.assertTrue({"candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "bundles", "facts",
+                         "candidate_parent", "pair_verdicts", "worth", "candidate_linkedins", "research", "person_tags",
+                         "person_labels", "review_queue"} <= keyed)
+
+        self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a"]}), (200, {"deleted": 1}))
+
+        self.assertEqual(set(self._family_rows(("c1", "c2"), "p:a").values()), {0})
+        kept["pair_verdicts"] -= 1  # the one verdict that paired c1 with c3
+        self.assertEqual(self._family_rows(("c3", "c4"), "p:b"), kept)
+        self.assertEqual(set(self.people.export_rows()), {"p:b"})
+        self.assertIsNone(self.people.detail("p:a"))
+        self.assertEqual([row.parent_id for row in self.people.load()], ["p:b"])
+
+    def test_delete_of_an_unknown_id_is_a_conflict_and_deletes_nothing(self) -> None:
+        before = self._family_rows(("c1", "c2"), "p:a")
+        self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a", "p:missing"]})[0], 409)
+        for request in ({"ids": []}, {"ids": [1]}, []):
+            self.assertEqual(self.post("/api/people/delete", request)[0], 400)
+        self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), before)
+
 
 class WorthMigrationTests(StoreTests):
     def test_schema_four_drops_derived_share_and_only_the_retired_tags(self) -> None:
