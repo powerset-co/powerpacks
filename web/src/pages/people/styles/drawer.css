@@ -19,7 +19,8 @@
 }
 .drawer-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 /* A saved logbook's icon takes the accent: there is something to read. */
 .drawer-icon[data-logbook="saved"] {

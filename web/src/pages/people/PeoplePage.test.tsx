@@ -383,8 +383,6 @@ describe("PeoplePage", () => {
     fireEvent.click(updating)
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
     expect(within(drawer).getByText("Jordan Bravo is being updated; finish the run first.")).toBeTruthy()
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Keep" }).disabled).toBe(true)
-    expect(within(drawer).getByRole<HTMLButtonElement>("button", { name: "Skip" }).disabled).toBe(true)
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Keep Y" }).disabled).toBe(true)

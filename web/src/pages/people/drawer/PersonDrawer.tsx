@@ -2,16 +2,14 @@ import { useMemo } from "react"
 
 import { Drawer } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
-import type { WorthAction } from "@/lib/people/facets"
 import type { Person } from "@/types/people"
 
 import type { DetailState } from "../hooks/usePersonDetail"
 import "../styles/drawer.css"
-import { DecisionSection } from "./DecisionSection"
 import { DetailSections } from "./DetailSections"
 import { DetailFailed, DetailLoading } from "./DetailStatus"
 import { RefreshSignals } from "../head/RefreshSignals"
-import { DrawerActions, LogbookButton } from "./DrawerActions"
+import { LogbookButton } from "./DrawerActions"
 import { DrawerHeader } from "./DrawerHeader"
 import { PersonFeedback } from "./PersonFeedback"
 import type { SectionState } from "./sections"
@@ -24,7 +22,6 @@ interface PersonDrawerProps {
   detail: DetailState
   saving: boolean
   building: boolean
-  onAction: (action: WorthAction) => void
   onLogbook: () => void
   onView: (slugs: string[]) => void
   onClose: () => void
@@ -33,7 +30,7 @@ interface PersonDrawerProps {
 
 // The person in the shared drawer. Which sections are open carries across people.
 export function PersonDrawer(props: PersonDrawerProps) {
-  const { open, section, saving, building, onAction, onLogbook, onView, onClose, onRetry } = props
+  const { open, section, saving, building, onLogbook, onView, onClose, onRetry } = props
   const next = useMemo(() => ({ row: props.row, detail: props.detail }), [props.row, props.detail])
   const swap = useDrawerSwap(props.row?.parent_id ?? null, next, open)
   const { row, detail } = swap.content
@@ -49,34 +46,20 @@ export function PersonDrawer(props: PersonDrawerProps) {
     >
       {row ? (
         <>
-          <DrawerHeader
-            row={row}
-            detail={ready}
-            action={
-              <>
-                <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
-                <LogbookButton
-                  row={row}
-                  disabled={saving || swap.leaving || row.in_progress}
-                  building={building}
-                  onBuild={onLogbook}
-                  onView={() => {
-                    if (row.logbook) onView([row.logbook])
-                  }}
-                />
-                <PersonFeedback row={row} />
-              </>
-            }
-            onClose={onClose}
-          />
+          <DrawerHeader row={row} detail={ready} action={<PersonFeedback row={row} />} onClose={onClose} />
           {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
-          <DrawerActions
-            row={row}
-            saving={saving}
-            disabled={saving || swap.leaving || row.in_progress}
-            onAction={onAction}
-          />
-          <DecisionSection row={row} detail={ready} {...section("decision")} />
+          <div className="drawer-actions">
+            <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
+            <LogbookButton
+              row={row}
+              disabled={saving || swap.leaving || row.in_progress}
+              building={building}
+              onBuild={onLogbook}
+              onView={() => {
+                if (row.logbook) onView([row.logbook])
+              }}
+            />
+          </div>
           {detail.status === "loading" ? <DetailLoading /> : null}
           {detail.status === "failed" ? <DetailFailed onRetry={onRetry} /> : null}
           {ready ? <DetailSections row={row} detail={ready} section={section} /> : null}

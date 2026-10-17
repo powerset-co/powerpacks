@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
-import { DrawerIconTip, ProgressBar, RefreshIcon, Spinner } from "@/components/shared"
+import { ProgressBar, RefreshIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -128,18 +128,16 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {icon ? (
-          <button
-            type="button"
-            className="drawer-icon group"
-            aria-label={TITLE}
+          <Button
+            shape="pill"
+            size="sm"
+            title="Re-reads this person's saved facts. Asks before anything costs money."
             disabled={checking}
             onClick={openOrCheck}
           >
-            {running ? <Spinner /> : <RefreshIcon className="size-[15px]" />}
-            <DrawerIconTip name={TITLE}>
-              Re-runs worth and the share call on saved facts. Asks before anything costs money.
-            </DrawerIconTip>
-          </button>
+            {running ? <Spinner /> : <RefreshIcon className="size-[14px]" />}
+            {TITLE}
+          </Button>
         ) : (
           <Button disabled={checking} onClick={openOrCheck}>
             {running ? "Refreshing signals…" : TITLE}{" "}
