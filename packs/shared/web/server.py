@@ -108,13 +108,11 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     collaboration: dict[str, CollaborationRoutes] = {}
 
     def network_routes() -> tuple[ReviewApi, Any]:
-        """Called under the store lock. The Ask the Set daemon starts with the store too."""
+        """Called under the store lock."""
         if "routes" not in network:
             conn = open_store(root / STORE, shared=True)
             network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
             collaboration["routes"] = CollaborationRoutes(Collaboration(network["routes"][1].sets, searches))
-            threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
-                             name="asks", daemon=True).start()
         return network["routes"]
 
     class LazySets:
@@ -126,6 +124,8 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
+    threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
+                     name="asks", daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def _relay(self) -> None:
@@ -141,7 +141,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/api/relay":
                 with store_lock:
-                    network_routes()  # the daemon the dot reports on starts with the store
+                    network_routes()
                 self._relay()
                 return
             if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
@@ -294,7 +294,8 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= MAX_FEATURE_REQUEST_BYTES:
                         raise ValueError("invalid request size")
-                    flags = features.FeatureFlags.parse(json.loads(self.rfile.read(length)))
+                    flags = features.FeatureFlags.parse(json.loads(self.rfile.read(length)),
+                                                        support=features.read(root).support)
                     self._json(features.save(root, flags))
                 except ValueError as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)

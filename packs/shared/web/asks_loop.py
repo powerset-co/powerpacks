@@ -1,7 +1,7 @@
-"""Pull this laptop's agent messages, answer teammate debug checks, and announce its presence.
+"""Poll the inbox, answer Powerset support and set debug requests, and announce set presence.
 
 Changelog:
-- 2026-10-13: stay off the relay while Sets is off in Settings: no inbox pull, presence or debug answers.
+- 2026-10-17: Powerset accounts poll and handle support independently of Sets; support runs serially.
 - 2026-10-12: poll the authenticated HTTP inbox independently of NATS presence.
 - 2026-10-08: add the local NATS loop with durable task delivery.
 - 2026-10-08: re-fetch the connection and reconnect every REFRESH_SECONDS, before a 24 h credential expires.
@@ -36,15 +36,16 @@ from packs.ingestion.primitives.share.web.sets import Sets
 from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.shared.web import features
+from packs.shared.web import account, features, support
 
 HEARTBEAT_SECONDS = 30
 REFRESH_SECONDS = 20 * 3600
 SIGNED_OUT_SECONDS = 300
 MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
+SUPPORT_POLL_SECONDS = 2
 _LOG = logging.getLogger(__name__)
-# Only teammate debug checks run here. Questions are answered by the recipient's Codex harness.
+# Set debug checks; support has its own serial worker, questions the recipient's Codex harness.
 ANSWERED_HERE = {"debug_request": agent_debug.answer}
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
 STATUS = {"state": "offline"}
@@ -113,7 +114,8 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
     while True:
         WAKE.clear()
         delay = HEARTBEAT_SECONDS
-        if not features.read(repo_root).sets:  # off in Settings: this laptop stays off the relay
+        flags = features.read(repo_root)
+        if not flags.sets and not account.is_team(account.read(repo_root)["email"]):
             STATUS["state"] = "offline"
             await asyncio.to_thread(WAKE.wait, delay)
             continue
@@ -134,10 +136,17 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
             STATUS["state"] = "connected"
             backoff = 1
             try:
-                await asyncio.to_thread(_answer_pending, repo_root=repo_root, env_file=env_file)
+                if flags.sets:
+                    await asyncio.to_thread(_answer_pending, repo_root=repo_root, env_file=env_file)
             except (SystemExit, Exception) as exc:
                 _LOG.warning("Inbox debug checks: %s", type(exc).__name__)
         await asyncio.to_thread(WAKE.wait, delay)
+
+
+async def _support(*, repo_root: Path, env_file: Path) -> None:
+    while True:
+        await asyncio.to_thread(support.answer_pending, repo_root=repo_root, env_file=env_file)
+        await asyncio.sleep(SUPPORT_POLL_SECONDS)
 
 
 async def _connected(connection: dict, *, repo_root: Path, env_file: Path, device_id: str) -> None:
@@ -215,6 +224,7 @@ async def _presence(*, repo_root: Path, env_file: Path, device_id: str) -> None:
 async def _run(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     await asyncio.gather(
         _poll(repo_root=repo_root, env_file=env_file),
+        _support(repo_root=repo_root, env_file=env_file),
         _presence(repo_root=repo_root, env_file=env_file, device_id=device_id),
     )
 

@@ -277,13 +277,38 @@ class DebugResult:
         return cls(_uuid(payload.get("request_id"), "request_id"), typed)
 
 
+@dataclass(frozen=True)
+class SupportRequest:
+    text: str
+    thread_id: str
+
+    @classmethod
+    def parse(cls, payload: dict[str, Any]) -> SupportRequest:
+        return cls(_text(payload.get("text"), "text", limit=MAX_RESULT),
+                   _text(payload.get("thread_id"), "thread_id"))
+
+
+@dataclass(frozen=True)
+class SupportResult:
+    text: str
+    thread_id: str
+    request_id: str
+
+    @classmethod
+    def parse(cls, payload: dict[str, Any]) -> SupportResult:
+        return cls(_text(payload.get("text"), "text", limit=MAX_RESULT),
+                   _text(payload.get("thread_id"), "thread_id"),
+                   _uuid(payload.get("request_id"), "request_id"))
+
+
 Payload = Union[SetInvite, SetInviteReply, SetDeleted, SetLeft, SetMembers, Ask, AskAnswer, DebugRequest,
-                DebugResult, SetChat, SetQuestion, SetQuestionReply]
+                DebugResult, SetChat, SetQuestion, SetQuestionReply, SupportRequest, SupportResult]
 KINDS: dict[str, type[Payload]] = {
     "set_invite": SetInvite, "set_invite_reply": SetInviteReply, "set_deleted": SetDeleted, "set_left": SetLeft,
     "set_members": SetMembers,
     "ask": Ask, "ask_answer": AskAnswer, "debug_request": DebugRequest, "debug_result": DebugResult,
     "set_chat": SetChat, "set_question": SetQuestion, "set_question_reply": SetQuestionReply,
+    "support_request": SupportRequest, "support_result": SupportResult,
 }
 
 

@@ -15,6 +15,10 @@ from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_
 ENV_TEMPLATE = Path("packs/powerset/templates/env.powerset.example")
 
 
+def is_team(email: object) -> bool:
+    return isinstance(email, str) and email.lower().endswith("@powerset.co")
+
+
 def config(root: Path) -> dict[str, str]:
     """The checkout's settings: the template's defaults, its `.env`, then the real environment."""
     values = _read_env_file(root / ENV_TEMPLATE)

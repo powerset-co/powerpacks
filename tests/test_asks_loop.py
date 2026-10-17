@@ -77,6 +77,7 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.env_file = self.root / ".env"
         self.owner = str(uuid4())
+        self.account = self.enterContext(patch.object(asks_loop.account, "read", return_value={"email": "casey@example.com"}))
         features.save(self.root, features.FeatureFlags(sets=True))
         self.worker = Mock(return_value={})
         self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"debug_request": self.worker}))
@@ -114,6 +115,16 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await asks_loop._poll(repo_root=self.root, env_file=self.env_file)
         self.assertEqual(seen, [(0, "offline", 30), (1, "connected", 30)])
+
+    async def test_team_inbox_polls_with_sets_off_without_reading_sets_or_answering_debug(self):
+        self.account.return_value = {"email": "casey@powerset.co"}
+        features.save(self.root, features.FeatureFlags(sets=False, support=False))
+        self.write_message("debug_request")
+        await self.poll(2)
+        self.assertEqual(self.pull.call_count, 2)
+        self.assertEqual(asks_loop.STATUS["state"], "connected")
+        self.members.assert_not_called()
+        self.worker.assert_not_called()
 
     async def test_success_polls_immediately_then_every_thirty_seconds(self):
         wait = await self.poll(2)
@@ -307,6 +318,19 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AskLoopServerTests(unittest.TestCase):
+    def test_server_mount_starts_inbox_without_opening_sets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            started = threading.Event()
+            with patch.object(asks_loop, "run", side_effect=lambda **kwargs: started.set()) as loop, \
+                    patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
+                    patch("packs.ingestion.primitives.deep_context_v2.db.store.open_store") as store:
+                server.mounted_handler(root)
+                self.assertTrue(started.wait(2))
+                loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
+                store.assert_not_called()
+                self.assertFalse((root / server.STORE).exists())
+
     def test_fresh_store_routes_start_one_daemon_and_keep_sets(self):
         for method, path in (("GET", "/api/people/sets"), ("GET", "/api/relay"),
                              ("POST", "/api/relay/connect"), ("GET", "/api/collaboration")):
