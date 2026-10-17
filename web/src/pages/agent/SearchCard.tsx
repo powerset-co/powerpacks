@@ -443,38 +443,50 @@ function Traits({
   return (
     <Row label="Traits">
       {editable ? (
-        traits.map((trait, index) => (
-          // Index keys: a trait's value changes as it is typed.
-          <span key={index} className={EDIT_CHIP}>
-            <ChipField
-              label={`Trait ${index + 1}`}
-              value={trait.value}
-              onChange={(value) =>
-                onChange(traits.map((each, at) => (at === index ? { ...each, value } : each)))
-              }
-            />
-            <button
-              type="button"
-              aria-label={`${trait.value}: ${trait.temporal}`}
+        traits.map((trait, index) => {
+          const cycle = () => {
+            const next = TEMPORALS[(TEMPORALS.indexOf(trait.temporal) + 1) % TEMPORALS.length] ?? "all"
+            onChange(traits.map((each, at) => (at === index ? { ...each, temporal: next } : each)))
+          }
+          return (
+            // Index keys: a trait's value changes as it is typed. The whole chip cycles the temporal;
+            // the field keeps its click for editing and the × its own.
+            // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- the temporal button is the keyboard control
+            <span
+              key={index}
+              className={cn(EDIT_CHIP, "cursor-pointer")}
               title="Click to change: all, current, past"
-              onClick={() => {
-                const next = TEMPORALS[(TEMPORALS.indexOf(trait.temporal) + 1) % TEMPORALS.length] ?? "all"
-                onChange(traits.map((each, at) => (at === index ? { ...each, temporal: next } : each)))
+              onClick={(event) => {
+                if (event.target instanceof HTMLElement && event.target.closest("input, button")) return
+                cycle()
               }}
-              className="cursor-pointer border-0 bg-transparent p-0 text-faint hover:text-foreground"
             >
-              ({trait.temporal})
-            </button>
-            <button
-              type="button"
-              aria-label={`Remove ${trait.value}`}
-              onClick={() => onChange(traits.filter((_, at) => at !== index))}
-              className={REMOVE}
-            >
-              {CLOSE_MARK}
-            </button>
-          </span>
-        ))
+              <ChipField
+                label={`Trait ${index + 1}`}
+                value={trait.value}
+                onChange={(value) =>
+                  onChange(traits.map((each, at) => (at === index ? { ...each, value } : each)))
+                }
+              />
+              <button
+                type="button"
+                aria-label={`${trait.value}: ${trait.temporal}`}
+                onClick={cycle}
+                className="cursor-pointer border-0 bg-transparent p-0 text-faint hover:text-foreground"
+              >
+                ({trait.temporal})
+              </button>
+              <button
+                type="button"
+                aria-label={`Remove ${trait.value}`}
+                onClick={() => onChange(traits.filter((_, at) => at !== index))}
+                className={REMOVE}
+              >
+                {CLOSE_MARK}
+              </button>
+            </span>
+          )
+        })
       ) : (
         <TraitChips traits={traits} />
       )}

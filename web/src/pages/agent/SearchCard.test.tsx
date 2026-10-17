@@ -226,6 +226,17 @@ it("sends a changed end of a select pair, the other end untouched", () => {
   expect(sent().filters).toEqual({ funding_stage_max: "series_b" })
 })
 
+it("cycles the temporal from a click anywhere on the trait chip, not only its text", () => {
+  render(<SearchCard search={SEARCH} actions={true} />)
+  const text = screen.getByRole("button", { name: "VP of Finance: current" })
+  if (!text.parentElement) throw new Error("the temporal has no chip")
+  fireEvent.click(text.parentElement)
+  expect(screen.getByRole("button", { name: "VP of Finance: past" })).toBeTruthy()
+  // A click in the field edits the value; it does not cycle.
+  fireEvent.click(screen.getByRole("textbox", { name: "Trait 1" }))
+  expect(screen.getByRole("button", { name: "VP of Finance: past" })).toBeTruthy()
+})
+
 it("sends a temporal change with the filter edits beside it: an in-place edit, not a new search", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
