@@ -59,17 +59,20 @@ it("shows the remote assist switch as saved and flips it", async () => {
   await waitFor(() => expect(box.checked).toBe(false))
 })
 
-it("has nothing to set yet in a browser", () => {
+it("offers Remote assist in a browser, and no Repair setup", async () => {
+  vi.stubGlobal("fetch", serveFeatures({ sets: false, auto_reply: false, share: false, support: false }))
   mount()
   expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy()
-  expect(screen.getByText("Nothing to set yet.")).toBeTruthy()
+  expect(
+    await screen.findByRole("checkbox", { name: "Let the Powerset team work on this install" }),
+  ).toBeTruthy()
+  expect(screen.queryByRole("heading", { name: "Repair setup" })).toBeNull()
 })
 
 it("offers Repair setup in the desktop app: the Connect list, Done going home", () => {
   vi.mocked(isDesktop).mockReturnValue(true)
   mount()
   expect(screen.getByRole("heading", { name: "Repair setup" })).toBeTruthy()
-  expect(screen.queryByText("Nothing to set yet.")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "Done" }))
   expect(screen.getByText("People page")).toBeTruthy()
 })
