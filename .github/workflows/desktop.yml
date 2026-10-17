@@ -96,13 +96,13 @@ jobs:
       # The bundled uv runs it with no install step. A signed build signs the dmg too.
       - name: Package the dmg
         run: |
-          out=desktop/src-tauri/target/release/bundle/dmg
+          out=src-tauri/target/release/bundle/dmg
           mkdir -p "$out"
-          PP_APP=desktop/src-tauri/target/release/bundle/macos/Powerpacks.app \
-          PP_BG=desktop/dmg/dmg-background.png \
-          PP_ICON=desktop/src-tauri/icons/icon.icns \
-            desktop/src-tauri/binaries/uv-aarch64-apple-darwin run --with dmgbuild \
-              dmgbuild -s desktop/dmg/settings.py Powerpacks "$out/Powerpacks-macos-arm64.dmg"
+          PP_APP=src-tauri/target/release/bundle/macos/Powerpacks.app \
+          PP_BG=dmg/dmg-background.png \
+          PP_ICON=src-tauri/icons/icon.icns \
+            src-tauri/binaries/uv-aarch64-apple-darwin run --with dmgbuild \
+              dmgbuild -s dmg/settings.py Powerpacks "$out/Powerpacks-macos-arm64.dmg"
           [ -z "$APPLE_SIGNING_IDENTITY" ] || codesign --force --sign "$APPLE_SIGNING_IDENTITY" "$out/Powerpacks-macos-arm64.dmg"
         shell: bash
         env:
