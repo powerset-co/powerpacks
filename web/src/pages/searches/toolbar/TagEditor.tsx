@@ -101,7 +101,7 @@ export function TagEditor({ personName, tags, applied, disabled, onToggle, onRem
             data-open={chip.open}
             onTransitionEnd={chip.onTransitionEnd}
             className={cn(
-              "rise h-5 min-w-0 max-w-[100px] truncate rounded-full bg-secondary px-[7px] py-0.5 text-[10px] font-semibold leading-4 text-foreground",
+              "rise h-5 min-w-0 max-w-[100px] truncate rounded-full bg-secondary px-[7px] py-0.5 text-[11px] font-semibold leading-4 text-foreground",
               chipsAtMount.has(chip.key) && "rise-settled",
             )}
           >

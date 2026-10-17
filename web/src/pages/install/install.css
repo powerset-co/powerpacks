@@ -18,7 +18,7 @@
 }
 .install-page .empty-state .install-message {
   color: var(--foreground);
-  font-size: 14px;
+  font-size: 13px;
 }
 .install-page .empty-state .install-message > span {
   display: block;

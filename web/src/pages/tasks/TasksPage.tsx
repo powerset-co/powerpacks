@@ -235,7 +235,7 @@ interface HistoryProps {
 function History({ runs, selected, onSelect }: HistoryProps) {
   return (
     <section aria-labelledby="history" className="flex flex-col gap-3">
-      <h2 id="history" className="m-0 text-[10.5px] font-semibold uppercase tracking-[.1em] text-faint">
+      <h2 id="history" className="m-0 text-[11px] font-semibold uppercase tracking-[.1em] text-faint">
         Run history
       </h2>
       {runs.length === 0 ? (
@@ -281,7 +281,7 @@ function RunDetail({ run }: { run: TaskRun }) {
         <span className="font-semibold">{RUNNER_TITLE[run.runner]}</span>
         <span className="text-faint">{new Date(run.started_at).toLocaleString()}</span>
       </header>
-      <p className="m-0 whitespace-pre-wrap text-[12.5px] leading-relaxed">
+      <p className="m-0 whitespace-pre-wrap text-[13px] leading-relaxed">
         {run.summary || "This run left no report."}
       </p>
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-3">

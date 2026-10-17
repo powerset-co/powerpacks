@@ -108,7 +108,7 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
             </span>
             <StatusMark status={entry.status} />
           </summary>
-          <pre className="m-0 max-h-72 overflow-auto border-t border-line bg-background px-3 py-2.5 font-mono text-[11.5px] leading-[1.55] text-muted-foreground">
+          <pre className="m-0 max-h-72 overflow-auto border-t border-line bg-background px-3 py-2.5 font-mono text-[12px] leading-[1.55] text-muted-foreground">
             {entry.output.trim() || "No output."}
           </pre>
         </details>
@@ -123,7 +123,7 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
             </span>
             <StatusMark status={entry.status} />
           </summary>
-          <ul className="m-0 list-none border-t border-line bg-background px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
+          <ul className="m-0 list-none border-t border-line bg-background px-3 py-2 font-mono text-[12px] text-muted-foreground">
             {entry.paths.map((path) => (
               <li key={path}>{path}</li>
             ))}

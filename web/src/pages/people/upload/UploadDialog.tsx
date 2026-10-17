@@ -33,7 +33,7 @@ export function UploadDialog({ upload }: { upload: Upload }) {
   return (
     <DialogContent className="gap-5 p-6" onKeyDown={(event) => event.stopPropagation()}>
       <DialogHeader>
-        <DialogTitle className="text-lg font-semibold">{title(upload)}</DialogTitle>
+        <DialogTitle className="text-base font-semibold">{title(upload)}</DialogTitle>
         <DialogDescription className={cn("text-[13px]", "error" in view && "text-bad")}>
           {sentence(view)}
         </DialogDescription>

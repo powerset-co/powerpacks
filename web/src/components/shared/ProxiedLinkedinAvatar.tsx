@@ -8,7 +8,7 @@ import { initials } from "./initials"
 export type AvatarSize = 26 | 40
 
 const SIZE_CLASS: Record<AvatarSize, string> = {
-  26: "size-[26px] basis-[26px] text-[10px]",
+  26: "size-[26px] basis-[26px] text-[11px]",
   40: "size-10 basis-10 text-xs",
 }
 

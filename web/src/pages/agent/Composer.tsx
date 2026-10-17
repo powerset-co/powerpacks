@@ -93,7 +93,7 @@ export function Composer({
             onDraftChange?.(event.target.value)
           }}
           onKeyDown={onKeyDown}
-          className="max-h-[240px] min-h-[52px] resize-none border-0 bg-transparent px-4 pb-1 pt-3.5 text-[14px] leading-[1.5] text-foreground outline-none placeholder:text-faint focus-visible:outline-none"
+          className="max-h-[240px] min-h-[52px] resize-none border-0 bg-transparent px-4 pb-1 pt-3.5 text-[13px] leading-[1.5] text-foreground outline-none placeholder:text-faint focus-visible:outline-none"
         />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

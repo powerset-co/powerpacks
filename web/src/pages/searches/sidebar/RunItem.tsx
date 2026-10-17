@@ -1,7 +1,7 @@
 import { memo } from "react"
 
 import { plural } from "@/lib/copy"
-import { peopleCounts, runDate, statusText } from "@/lib/searches/copy"
+import { isComplete, peopleCounts, runDate, statusText } from "@/lib/searches/copy"
 import type { SearchCard } from "@/types/searches"
 
 interface RunItemProps {
@@ -26,7 +26,7 @@ export const RunItem = memo(function RunItem({ card, selected, highlighted, onOp
       <b className="run-item-title">{card.title}</b>
       <span className="run-item-meta">
         {card.company ? <span className="run-item-company">{card.company}</span> : null}
-        <span data-status={card.status}>{statusText(card.status)}</span>
+        {isComplete(card.status) ? null : <span data-status={card.status}>{statusText(card.status)}</span>}
       </span>
       <span className="run-item-foot">
         <span title={peopleCounts(card)} data-people-counts>

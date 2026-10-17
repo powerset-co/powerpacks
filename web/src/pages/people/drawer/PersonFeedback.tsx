@@ -33,7 +33,7 @@ export function PersonFeedback({ row }: { row: Person }) {
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Person feedback</DialogTitle>
+          <DialogTitle className="text-base font-semibold">Person feedback</DialogTitle>
           <DialogDescription className="text-[13px]">{row.name}</DialogDescription>
         </DialogHeader>
         <FeedbackForm

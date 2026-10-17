@@ -96,7 +96,7 @@ export function CatalogList({ cards, selectedId, onOpen }: CatalogListProps) {
           </section>
         ))}
         {visible.length ? null : (
-          <EmptyState className="my-6 px-3 text-[12.5px]" data-catalog-empty>
+          <EmptyState className="my-6 px-3 text-[13px]" data-catalog-empty>
             No searches match
           </EmptyState>
         )}

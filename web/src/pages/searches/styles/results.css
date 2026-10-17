@@ -18,7 +18,7 @@
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -104,7 +104,7 @@
   min-width: 0;
 }
 .result-who b {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 650;
   overflow-wrap: anywhere;
 }
@@ -116,7 +116,7 @@
 }
 .result-who small {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 /* rendering.py .network-context: the source pills, and the operator stack at the right. */
@@ -262,7 +262,7 @@
   background: color-mix(in srgb, var(--primary) 25%, transparent);
   box-shadow: 0 0 0 1.5px var(--background);
   color: var(--foreground);
-  font-size: 8.5px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: -0.04em;
   line-height: 1;
@@ -364,13 +364,13 @@ section.review-sections {
 .review-sections h4 {
   margin: 0;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .drawer-inner .review-sections p {
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .evidence-clamped {
   display: -webkit-box;
@@ -450,7 +450,7 @@ section.review-sections {
   border-radius: 999px;
   background: var(--ok-soft);
   color: var(--ok);
-  font-size: 9.5px;
+  font-size: 11px;
   font-style: normal;
   font-weight: 700;
 }
@@ -460,7 +460,7 @@ section.review-sections {
 }
 .career-org {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .career-org a {
   color: inherit;

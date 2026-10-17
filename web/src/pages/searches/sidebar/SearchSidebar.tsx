@@ -19,7 +19,7 @@ export function SearchSidebar({ cards, error, selectedId, onOpen }: SearchSideba
   if (cards?.length) return <CatalogList cards={cards} selectedId={selectedId} onOpen={onOpen} />
   if (cards) {
     return (
-      <EmptyState className="my-8 px-4 text-[12.5px]" data-catalog-empty>
+      <EmptyState className="my-8 px-4 text-[13px]" data-catalog-empty>
         <b className="mb-1 block text-foreground">No completed searches</b>
         New searches will appear here when they have CE scores.
       </EmptyState>
@@ -27,7 +27,7 @@ export function SearchSidebar({ cards, error, selectedId, onOpen }: SearchSideba
   }
   if (error) {
     return (
-      <EmptyState className="my-8 px-4 text-[12.5px]" data-catalog-empty>
+      <EmptyState className="my-8 px-4 text-[13px]" data-catalog-empty>
         {error.message}
       </EmptyState>
     )

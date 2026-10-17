@@ -60,7 +60,7 @@ export function SearchFeedbackDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">
+          <DialogTitle className="text-base font-semibold">
             {candidate ? "Candidate feedback" : "Search feedback"}
           </DialogTitle>
           <DialogDescription className="text-[13px]">

@@ -29,7 +29,7 @@
 .run-head-id h1 {
   margin: 0;
   overflow: hidden;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.01em;
   line-height: 1.25;
@@ -66,7 +66,7 @@
   padding: 12px 14px 20px;
   overflow-y: auto;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
   white-space: pre-wrap;
   scrollbar-width: thin;
@@ -152,7 +152,7 @@ button.pond-card:hover {
   border: 1px solid var(--primary);
   border-radius: 50%;
   color: var(--primary);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 800;
 }
 .pond-query {
@@ -211,7 +211,7 @@ button.pond-card:hover {
   top: 0;
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -244,5 +244,5 @@ button.pond-card:hover {
 .team-status {
   margin: 6px 0 0;
   color: var(--faint);
-  font-size: 11.5px;
+  font-size: 12px;
 }

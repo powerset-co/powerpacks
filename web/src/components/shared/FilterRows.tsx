@@ -8,7 +8,7 @@ import { type Field, type Values, names, scalar } from "@/lib/agent/searchFields
 import { titleCase } from "@/lib/people/copy"
 import type { FilterValue, Trait } from "@/types/searches"
 
-export const CHIP = "rounded-full border border-line px-2.5 py-1 text-[11.5px] font-semibold leading-snug"
+export const CHIP = "rounded-full border border-line px-2.5 py-1 text-[12px] font-semibold leading-snug"
 
 /** A label on the left, the field's values on the right. */
 export function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -58,7 +58,7 @@ export function ReadRow({ field, values }: { field: Field; values: Values }) {
     case "text":
       return (
         <Row label={field.label}>
-          <span className="text-[12.5px]">{scalar(values.get(control.key))}</span>
+          <span className="text-[13px]">{scalar(values.get(control.key))}</span>
         </Row>
       )
     case "pair": {
@@ -69,7 +69,7 @@ export function ReadRow({ field, values }: { field: Field; values: Values }) {
       const [low, high] = control.keys.map((key) => shown(values.get(key)))
       return (
         <Row label={field.label}>
-          <span className="text-[12.5px]">{range(low ?? "", high ?? "")}</span>
+          <span className="text-[13px]">{range(low ?? "", high ?? "")}</span>
         </Row>
       )
     }
@@ -77,14 +77,14 @@ export function ReadRow({ field, values }: { field: Field; values: Values }) {
       const [low, high] = control.keys.map((key) => scalar(values.get(key)))
       return (
         <Row label={field.label}>
-          <span className="text-[12.5px]">{range(low ?? "", high ?? "")}</span>
+          <span className="text-[13px]">{range(low ?? "", high ?? "")}</span>
         </Row>
       )
     }
     case "toggle":
       return (
         <Row label={field.label}>
-          <span className="text-[12.5px]">{values.get(control.key) === true ? "yes" : "no"}</span>
+          <span className="text-[13px]">{values.get(control.key) === true ? "yes" : "no"}</span>
         </Row>
       )
   }

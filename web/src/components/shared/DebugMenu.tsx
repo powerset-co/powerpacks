@@ -85,7 +85,7 @@ function DesktopDebugMenu() {
           aria-label="Debug"
           className="rise-in w-[220px] rounded-[var(--radius-m)] border border-line-strong bg-card p-1.5 shadow-[var(--shadow-2)]"
         >
-          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
+          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[.08em] text-faint">
             Go to
           </p>
           {PAGES.map(({ label, href }) => (
@@ -136,7 +136,7 @@ function DesktopDebugMenu() {
             />
           </label>
           <div className="my-1.5 border-t border-line" />
-          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">
+          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[.08em] text-faint">
             Local features
           </p>
           <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">

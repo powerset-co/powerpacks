@@ -8,6 +8,16 @@ export default {
     extend: {
       // A bare `border-b` draws the app's line, not Tailwind's light grey.
       borderColor: { DEFAULT: "var(--line)" },
+      // design.md: five sizes. xs 12 (details), sm 13 (body), base 15 (names, dialog titles),
+      // lg and up 20 (page titles).
+      fontSize: {
+        xs: ["12px", "16px"],
+        sm: ["13px", "18px"],
+        base: ["15px", "22px"],
+        lg: ["20px", "26px"],
+        xl: ["20px", "26px"],
+        "2xl": ["20px", "26px"],
+      },
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",

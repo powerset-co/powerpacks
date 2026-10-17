@@ -75,9 +75,7 @@ export function SetsPage() {
 
       {sets.data?.invites.length ? (
         <section className="flex flex-col gap-2" aria-label={SETS.invites}>
-          <h2 className="m-0 text-[10.5px] font-bold uppercase tracking-[.08em] text-faint">
-            {SETS.invites}
-          </h2>
+          <h2 className="m-0 text-[11px] font-bold uppercase tracking-[.08em] text-faint">{SETS.invites}</h2>
           {sets.data.invites.map((invite) => (
             <InviteCard
               key={invite.id}
@@ -171,8 +169,8 @@ function InviteCard({
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-m)] border border-[color-mix(in_srgb,var(--primary)_35%,transparent)] bg-card px-4 py-3">
       <div className="min-w-0 flex-1">
-        <p className="m-0 text-[14px] font-semibold">{invite.set_name}</p>
-        <p className="m-0 mt-0.5 break-words text-[12.5px] text-muted-foreground">
+        <p className="m-0 text-[13px] font-semibold">{invite.set_name}</p>
+        <p className="m-0 mt-0.5 break-words text-[13px] text-muted-foreground">
           {SETS.invitedYou(invite.from, invite.from_email)}
         </p>
       </div>
@@ -203,7 +201,7 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
     <section className="rounded-[var(--radius-l)] border border-line bg-card shadow-[var(--shadow-1)]">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line px-5 py-4">
         <div className="min-w-0">
-          <h2 className="m-0 break-words text-lg font-semibold">{set.name}</h2>
+          <h2 className="m-0 break-words text-base font-semibold">{set.name}</h2>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge variant="info">{SETS.people(set.person_count)}</Badge>
             <Badge variant="muted">{SETS.members(set.member_count)}</Badge>
@@ -211,7 +209,7 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
           </div>
         </div>
         {confirming ? (
-          <div className="flex items-center gap-2 text-[12.5px]">
+          <div className="flex items-center gap-2 text-[13px]">
             <span>{owner ? SETS.confirmDelete(set.name) : SETS.confirmLeave(set.name)}</span>
             <Button size="sm" variant="bad" disabled={busy} onClick={onDelete}>
               {owner ? SETS.delete : SETS.leave}
@@ -233,7 +231,7 @@ function SetCard({ set, busy, confirming, onConfirm, onInvite, onDelete }: SetCa
       ) : null}
       <table className="w-full border-collapse text-[13px]">
         <thead>
-          <tr className="text-left text-[10.5px] uppercase tracking-[.08em] text-faint">
+          <tr className="text-left text-[11px] uppercase tracking-[.08em] text-faint">
             <th className="px-5 py-2.5 font-bold">{SETS.memberHead}</th>
             <th className="px-3 py-2.5 font-bold">{SETS.roleHead}</th>
             <th className="px-3 py-2.5 text-right font-bold">{SETS.sharesHead}</th>
@@ -281,7 +279,7 @@ function Identity({ name, email }: { name: string; email: string }) {
     <span className="flex min-w-0 items-center gap-2.5">
       <span
         aria-hidden="true"
-        className="grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-[10px] font-bold text-muted-foreground"
+        className="grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-bold text-muted-foreground"
       >
         {initials(shown)}
       </span>

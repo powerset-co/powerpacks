@@ -56,10 +56,12 @@ export const FilterBar = memo(
             aria-label="Decision"
             value={tab}
             onChange={(value) => onTab(must(TABS.find((option) => option === value)))}
-            options={TABS.map((option) => ({
-              value: option,
-              label: `${option === "all" ? "All" : label("worth", option)} · ${totals[option].toLocaleString()}`,
-            }))}
+            options={TABS.filter((option) => option === "all" || option === tab || totals[option] > 0).map(
+              (option) => ({
+                value: option,
+                label: `${option === "all" ? "All" : label("worth", option)} · ${totals[option].toLocaleString()}`,
+              }),
+            )}
           />
           <Select
             aria-label="Relationship"

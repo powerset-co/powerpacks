@@ -107,7 +107,7 @@ function Choice({
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-primary-soft text-primary">
             <SparkIcon className="size-[18px]" />
           </span>
-          <span className="text-[13.5px] font-bold">Start setup</span>
+          <span className="text-[13px] font-bold">Start setup</span>
           <span className="text-xs leading-snug text-muted-foreground">
             Sign in, import your contacts and build your network from scratch.
           </span>
@@ -132,7 +132,7 @@ function Choice({
           <span className="grid size-9 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground group-hover:text-primary">
             <ImportIcon className="size-[18px]" />
           </span>
-          <span className="text-[13.5px] font-bold">Import existing data</span>
+          <span className="text-[13px] font-bold">Import existing data</span>
           <span className="text-xs leading-snug text-muted-foreground">
             {source === undefined
               ? "Looking for a Powerpacks install on this computer…"

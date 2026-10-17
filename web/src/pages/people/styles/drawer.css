@@ -95,7 +95,7 @@
   position: relative;
   display: grid;
   gap: 2px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
 }
 /* The dot sits on the line, centred at 4px from the list's left edge. */
@@ -132,7 +132,7 @@
   margin: 0;
   padding-left: 16px;
   list-style: disc;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--foreground);
 }
@@ -165,7 +165,7 @@
   grid-template-columns: 170px minmax(0, 1fr) 40px;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .barrow .name {
   color: var(--foreground);

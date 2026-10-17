@@ -38,7 +38,7 @@ function Contact({ pills, values }: { pills: readonly Channel[]; values: readonl
           <button
             type="button"
             aria-expanded={pinned}
-            className="h-5 rounded-full border border-line px-1.5 text-[10px] font-semibold tabular-nums hover:text-foreground"
+            className="h-5 rounded-full border border-line px-1.5 text-[11px] font-semibold tabular-nums hover:text-foreground"
             onClick={() => setPinned(!pinned)}
           >
             +{rest.length}
