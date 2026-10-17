@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
 - 2026-10-14: GET/POST /api/search/scope: where chat searches, a Powerset set or the local index (search_scope.py).
 - 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
 - 2026-10-13: GET /api/install/connect reads the Connect screen's run; its QR is /api/install/qr?connect=1.
@@ -126,8 +127,6 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
-    threading.Thread(target=asks_loop.run, kwargs={"repo_root": root, "env_file": root / ".env"},
-                     name="asks", daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def _relay(self) -> None:
@@ -456,6 +455,18 @@ def _announce(status: str, url: str, **extra: object) -> None:
     print(json.dumps({"primitive": PRIMITIVE, "status": status, "url": url, **extra}, indent=2), flush=True)
 
 
+def _run_asks(root: Path) -> None:
+    while True:
+        _load_project_packages(root)
+        try:
+            from packs.shared.web import asks_loop
+        except ModuleNotFoundError:
+            time.sleep(2)  # Setup can start the server before the project environment exists.
+            continue
+        break
+    asks_loop.run(repo_root=root, env_file=root / ".env")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="The one local Powerpacks page server.")
     parser.add_argument("command", choices=("serve", "start"), help="serve in the foreground, or start detached")
@@ -480,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(url)
         return 0
     with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
+        threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
             webbrowser.open(url)

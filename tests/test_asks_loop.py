@@ -318,20 +318,45 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AskLoopServerTests(unittest.TestCase):
-    def test_server_mount_starts_inbox_without_opening_sets(self):
+    def test_server_starts_one_inbox_daemon_with_only_team_requests(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             started = threading.Event()
-            with patch.object(asks_loop, "run", side_effect=lambda **kwargs: started.set()) as loop, \
-                    patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
-                    patch("packs.ingestion.primitives.deep_context_v2.db.store.open_store") as store:
-                server.mounted_handler(root)
-                self.assertTrue(started.wait(2))
-                loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
-                store.assert_not_called()
-                self.assertFalse((root / server.STORE).exists())
+            daemon = []
 
-    def test_fresh_store_routes_start_one_daemon_and_keep_sets(self):
+            def run(**kwargs):
+                daemon.append(threading.current_thread().daemon)
+                started.set()
+
+            with ThreadingHTTPServer(("127.0.0.1", 0), server.persistent_handler(root)) as page, \
+                    patch.object(Path, "cwd", return_value=root), \
+                    patch.object(server, "owned_listener", return_value=None), \
+                    patch.object(server, "ThreadingHTTPServer", return_value=page), \
+                    patch.object(server, "_announce"), \
+                    patch.object(server, "mounted_handler") as mount, \
+                    patch.object(server.account, "read", return_value={"email": "jordan@powerset.co"}), \
+                    patch.object(server.team, "members", return_value={"members": []}), \
+                    patch.object(asks_loop, "run", side_effect=run) as loop:
+                thread = threading.Thread(target=server.main, args=(["serve", "--port", "0"],), daemon=True)
+                thread.start()
+                try:
+                    self.assertTrue(started.wait(2))
+                    for path in ("/team", "/api/team", "/api/account", "/api/features"):
+                        client = http.client.HTTPConnection(*page.server_address, timeout=5)
+                        client.request("GET", path)
+                        response = client.getresponse()
+                        response.read()
+                        client.close()
+                        self.assertEqual(response.status, 200, path)
+                    loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
+                    self.assertEqual(daemon, [True])
+                    mount.assert_not_called()
+                    self.assertFalse((root / server.STORE).exists())
+                finally:
+                    page.shutdown()
+                    thread.join()
+
+    def test_fresh_store_routes_keep_sets(self):
         for method, path in (("GET", "/api/people/sets"), ("GET", "/api/relay"),
                              ("POST", "/api/relay/connect"), ("GET", "/api/collaboration")):
             with self.subTest(method=method, path=path), tempfile.TemporaryDirectory() as directory:
@@ -340,15 +365,7 @@ class AskLoopServerTests(unittest.TestCase):
     def check_fresh_store_routes(self, root, method, path):
         with patch.object(Sets, "me", return_value=Member("Casey", "casey@example.com", "owner", "synthetic-owner")), \
                 patch.object(Sets, "people", return_value=0), patch.object(Sets, "message") as sent:
-            started = threading.Event()
-            daemon = []
-
-            def run(**kwargs):
-                daemon.append(threading.current_thread().daemon)
-                started.set()
-
-            with patch.object(asks_loop, "run", side_effect=run) as loop, \
-                    patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
+            with patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
                     patch("packs.ingestion.primitives.share.web.logbook.default_paths",
                           return_value={"gmail": root / "synthetic-gmail.sqlite"}), \
                     ThreadingHTTPServer(("127.0.0.1", 0), server.persistent_handler(root)) as page:
@@ -365,10 +382,8 @@ class AskLoopServerTests(unittest.TestCase):
                     return payload
 
                 try:
-                    loop.assert_not_called()
                     self.assertFalse((root / server.STORE).exists())
                     request(method, path)
-                    self.assertTrue(started.wait(2))
                     self.assertTrue((root / server.STORE).is_file())
                     created = request("POST", "/api/people/sets", {"name": "Synthetic recruiting"})
                     set_id = created["sets"][1]["set_id"]
@@ -378,8 +393,6 @@ class AskLoopServerTests(unittest.TestCase):
                     with open_store(root / server.STORE) as conn:
                         self.assertEqual(conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 0)
                         self.assertEqual(conn.execute("SELECT name FROM sets").fetchone()[0], "Synthetic recruiting")
-                    loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
-                    self.assertEqual(daemon, [True])
                     sent.assert_not_called()
                 finally:
                     page.shutdown()
