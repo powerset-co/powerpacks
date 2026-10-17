@@ -93,7 +93,8 @@ jobs:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
       # The dmg: dmgbuild writes the drag-to-Applications window itself (desktop/dmg/settings.py);
       # Tauri's dmg step needs Finder, which the runner cannot drive, and shipped a plain listing.
-      # The bundled uv runs it with no install step. A signed build signs the dmg too.
+      # The bundled uv runs it with no install step. The app inside is what Tauri signed and
+      # notarized; the disk image itself carries no signature (Gatekeeper judges the app).
       - name: Package the dmg
         run: |
           out=src-tauri/target/release/bundle/dmg
@@ -101,12 +102,9 @@ jobs:
           PP_APP=src-tauri/target/release/bundle/macos/Powerpacks.app \
           PP_BG=dmg/dmg-background.png \
           PP_ICON=src-tauri/icons/icon.icns \
-            src-tauri/binaries/uv-aarch64-apple-darwin run --with dmgbuild \
+            src-tauri/binaries/uv-aarch64-apple-darwin run --no-project --with dmgbuild \
               dmgbuild -s dmg/settings.py Powerpacks "$out/Powerpacks-macos-arm64.dmg"
-          [ -z "$APPLE_SIGNING_IDENTITY" ] || codesign --force --sign "$APPLE_SIGNING_IDENTITY" "$out/Powerpacks-macos-arm64.dmg"
         shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - uses: actions/upload-artifact@v4
         with:
           name: Powerpacks-macos-arm64
