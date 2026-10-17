@@ -44,7 +44,6 @@ export function SidebarFooter({ rail }: { rail: boolean }) {
     <div className="mt-auto flex flex-col">
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
-      <Version rail={rail} />
     </div>
   )
 }
@@ -65,13 +64,16 @@ function useUpdate(): Update | null {
   return query.data ?? null
 }
 
-/** The app's own version under the account row, from the update check (the desktop app only). */
-function Version({ rail }: { rail: boolean }) {
+/** The app's own version at the foot of the account menu, from the update check (the desktop app only). */
+function Version() {
   const update = useUpdate()
-  if (rail || update === null) return null
+  if (update === null) return null
   return (
-    <span className="px-3 pb-2 text-[10.5px] text-faint tabular-nums" title="Powerpacks version">
-      v{update.current}
+    <span
+      className="block px-2 pt-1.5 pb-0.5 text-[10.5px] text-faint tabular-nums"
+      title="Powerpacks version"
+    >
+      Powerpacks v{update.current}
     </span>
   )
 }
@@ -291,6 +293,7 @@ function Profile({ rail }: { rail: boolean }) {
       >
         {busy ? "Signing in…" : signedIn ? "Reconnect Powerset" : "Sign in to Powerset"}
       </MenuItem>
+      <Version />
     </div>
   )
   const trigger = {
