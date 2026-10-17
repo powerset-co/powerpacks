@@ -269,9 +269,6 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             section={drawer.section}
             saving={decisions.saving}
             building={logbook.building}
-            onAction={(action) => {
-              if (openId) void label(action, [openId])
-            }}
             onLogbook={() => {
               if (openId) void logbook.build([openId])
             }}

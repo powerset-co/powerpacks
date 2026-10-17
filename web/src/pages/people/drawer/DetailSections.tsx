@@ -3,6 +3,7 @@ import { eventDate } from "@/lib/people/copy"
 import type { Person, PersonDetail } from "@/types/people"
 
 import { ConfidenceSection } from "./ConfidenceSection"
+import { DecisionSection } from "./DecisionSection"
 import { FactsSection } from "./FactsSection"
 import { RelationshipSection } from "./RelationshipSection"
 import type { SectionState } from "./sections"
@@ -13,10 +14,13 @@ interface DetailSectionsProps {
   section: SectionState
 }
 
-// Everything after the decision, in page order; a section with nothing to say is left out.
+// The drawer's sections in page order: the call (folded), then what we know, then how it reads.
+// A section with nothing to say is left out.
 export function DetailSections({ row, detail, section }: DetailSectionsProps) {
   return (
     <>
+      <DecisionSection row={row} detail={detail} {...section("decision")} />
+      <FactsSection detail={detail} {...section("facts")} />
       {detail.events.length ? (
         <DetailsSection
           sectionKey="timeline"
@@ -34,7 +38,6 @@ export function DetailSections({ row, detail, section }: DetailSectionsProps) {
           </ol>
         </DetailsSection>
       ) : null}
-      <FactsSection detail={detail} {...section("facts")} />
       <RelationshipSection row={row} detail={detail} {...section("relationship")} />
       {detail.topics.length ? (
         <DetailsSection

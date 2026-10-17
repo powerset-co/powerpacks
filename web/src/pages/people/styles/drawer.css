@@ -17,9 +17,25 @@
 .drawer-top .sub.sources a:hover {
   text-decoration: underline;
 }
+/* Feedback and Close sit over the header's top right corner and take no column: only the name
+   line stops short of them; the lines under it run the full width. */
+.person-top {
+  position: relative;
+}
+.person-top .drawer-top-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 6px;
+}
+.person-top .who .name-row {
+  padding-right: 72px;
+}
 .drawer-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 /* A saved logbook's icon takes the accent: there is something to read. */
 .drawer-icon[data-logbook="saved"] {
