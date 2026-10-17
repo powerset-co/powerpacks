@@ -26,7 +26,7 @@ export function FullAccessTip({ onEnable, onDismiss }: FullAccessTipProps) {
         type="button"
         aria-label="Dismiss"
         onClick={onDismiss}
-        className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-[18px] leading-none text-faint hover:bg-secondary hover:text-foreground"
+        className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent text-[20px] leading-none text-faint hover:bg-secondary hover:text-foreground"
       >
         {CLOSE_MARK}
       </button>

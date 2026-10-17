@@ -32,7 +32,7 @@ function Welcome() {
     <div className="rise-in flex flex-col items-center gap-7 pt-[14vh] text-center max-[680px]:pt-[6vh]">
       <PowersetMark className="size-12 rounded-[12px] shadow-[var(--shadow-2)]" />
       <div className="flex flex-col gap-1.5">
-        <h1 className="m-0 text-[22px] font-semibold tracking-[-.01em]">Who are you looking for?</h1>
+        <h1 className="m-0 text-[20px] font-semibold tracking-[-.01em]">Who are you looking for?</h1>
         <p className="m-0 text-muted-foreground">
           Ask about people, companies and intros across your network.
         </p>

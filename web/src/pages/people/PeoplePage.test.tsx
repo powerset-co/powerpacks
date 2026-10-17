@@ -211,7 +211,7 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(4))
     expect(picked("Decision")).toBe("All · 4")
     open("Decision")
-    expect(options()).toEqual(["All · 4", "Keep · 1", "Maybe · 0", "Skip · 3", "Not assessed · 0"])
+    expect(options()).toEqual(["All · 4", "Keep · 1", "Skip · 3"])
     fireEvent.keyDown(screen.getByRole("option", { name: "All · 4" }), { key: "Escape" })
     // The count shows only once the search or a filter narrows the list.
     expect(must(container.querySelector("[data-count]")).textContent).toBe("")

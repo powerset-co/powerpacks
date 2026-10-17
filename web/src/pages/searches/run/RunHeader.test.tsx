@@ -23,7 +23,7 @@ describe("RunHeader", () => {
 
   it("says a completed search is complete", () => {
     render(<RunHeader search={SCREENED} status="completed" people={25} actions={null} />)
-    expect(screen.getByText("Search complete").dataset.status).toBe("completed")
+    expect(screen.queryByText("Search complete")).toBeNull()
     expect(screen.queryByText("Running")).toBeNull()
   })
 })

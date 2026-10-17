@@ -69,7 +69,7 @@ export function ScoreDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Score {candidate.name}</DialogTitle>
+          <DialogTitle className="text-base font-semibold">Score {candidate.name}</DialogTitle>
           <DialogDescription className="text-[13px]">{context}</DialogDescription>
         </DialogHeader>
         <ScoreForm

@@ -30,12 +30,8 @@ export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
         {search.jd_text ? <small>{search.company || "Company unknown"}</small> : null}
         <h1>{search.title}</h1>
         <p className="run-head-facts">
-          {status === undefined ? null : (
-            <Badge
-              variant={isComplete(status) ? "ok" : "muted"}
-              className="run-head-status"
-              data-status={status}
-            >
+          {status === undefined || isComplete(status) ? null : (
+            <Badge variant="muted" className="run-head-status" data-status={status}>
               {statusText(status)}
             </Badge>
           )}

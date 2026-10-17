@@ -401,7 +401,7 @@ function FieldRow({
       const on = values.get(control.key) === true
       return (
         <Row label={field.label}>
-          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12.5px]">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-[13px]">
             <input
               type="checkbox"
               aria-label={field.label}

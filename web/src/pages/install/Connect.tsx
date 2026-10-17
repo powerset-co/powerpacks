@@ -78,7 +78,7 @@ function Row({
         {icon}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[13.5px] font-bold">{title}</span>
+        <span className="text-[13px] font-bold">{title}</span>
         <span className="text-xs leading-snug text-muted-foreground">{why}</span>
         {children}
       </div>

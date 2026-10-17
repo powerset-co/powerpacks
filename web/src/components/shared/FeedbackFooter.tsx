@@ -9,7 +9,7 @@ interface FeedbackFooterProps {
 export function FeedbackFooter({ action, disabled }: FeedbackFooterProps) {
   return (
     <DialogFooter className="items-center justify-between">
-      <span className="text-[10px] text-muted-foreground">⌘ / Ctrl + Enter to {action.toLowerCase()}</span>
+      <span className="text-[11px] text-muted-foreground">⌘ / Ctrl + Enter to {action.toLowerCase()}</span>
       <span className="inline-flex gap-2">
         <DialogClose asChild>
           <Button type="button">Cancel</Button>

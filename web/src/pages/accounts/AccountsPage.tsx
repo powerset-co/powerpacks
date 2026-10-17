@@ -220,7 +220,7 @@ function CardAction({ account, onReconnect, onSync }: Omit<AccountCardProps, "jo
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-[10.5px] font-semibold uppercase tracking-[.08em] text-faint">{label}</dt>
+      <dt className="text-[11px] font-semibold uppercase tracking-[.08em] text-faint">{label}</dt>
       <dd className="m-0 text-sm tabular-nums">{value}</dd>
     </div>
   )

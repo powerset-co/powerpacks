@@ -29,7 +29,7 @@ export function AppFeedback({
         }}
       >
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Send feedback</DialogTitle>
+          <DialogTitle className="text-base font-semibold">Send feedback</DialogTitle>
           <DialogDescription className="text-[13px]">It goes to the Powerset team.</DialogDescription>
         </DialogHeader>
         <FeedbackForm

@@ -101,7 +101,7 @@ export function ScheduleDialog({
                       aria-label={long}
                       disabled={busy}
                       onClick={() => onSchedule({ ...schedule, day: value })}
-                      className="min-h-7 cursor-pointer rounded-full border border-border bg-transparent px-2.5 text-[11.5px] font-semibold leading-none text-muted-foreground transition-[color,border-color,background-color] duration-fast ease-out hover:border-line-strong hover:text-foreground aria-checked:border-primary aria-checked:bg-primary-soft aria-checked:text-foreground disabled:cursor-default disabled:opacity-40"
+                      className="min-h-7 cursor-pointer rounded-full border border-border bg-transparent px-2.5 text-[12px] font-semibold leading-none text-muted-foreground transition-[color,border-color,background-color] duration-fast ease-out hover:border-line-strong hover:text-foreground aria-checked:border-primary aria-checked:bg-primary-soft aria-checked:text-foreground disabled:cursor-default disabled:opacity-40"
                     >
                       {short}
                     </button>

@@ -69,10 +69,7 @@ function Version() {
   const update = useUpdate()
   if (update === null) return null
   return (
-    <span
-      className="block px-2 pt-1.5 pb-0.5 text-[10.5px] text-faint tabular-nums"
-      title="Powerpacks version"
-    >
+    <span className="block px-2 pt-1.5 pb-0.5 text-[11px] text-faint tabular-nums" title="Powerpacks version">
       Powerpacks v{update.current}
     </span>
   )
@@ -150,7 +147,7 @@ function UpdatePane({ rail }: { rail: boolean }) {
             type="button"
             aria-label="Dismiss this update"
             onClick={dismiss}
-            className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[16px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+            className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[15px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
           >
             {CLOSE_MARK}
           </button>

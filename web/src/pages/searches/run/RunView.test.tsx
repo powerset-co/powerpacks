@@ -186,7 +186,7 @@ describe("RunView", () => {
     renderEveryPond()
     const header = within(screen.getByRole("banner"))
     expect(header.getByRole("heading", { name: "Backend Engineer" })).toBeTruthy()
-    expect(header.getByText("Search complete")).toBeTruthy()
+    expect(header.queryByText("Search complete")).toBeNull()
     expect(header.getByText("6 people")).toBeTruthy()
     expect(header.getByText("$1.25")).toBeTruthy()
     expect(header.getByRole("button", { name: "Send feedback about Backend Engineer" })).toBeTruthy()

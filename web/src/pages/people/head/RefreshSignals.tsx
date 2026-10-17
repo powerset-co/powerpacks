@@ -153,7 +153,7 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
       </DialogTrigger>
       <DialogContent className="gap-5 p-6" onKeyDown={(event) => event.stopPropagation()}>
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">{TITLE}</DialogTitle>
+          <DialogTitle className="text-base font-semibold">{TITLE}</DialogTitle>
           <DialogDescription className="text-[13px]">
             {shown
               ? `${plural(shown.people, "person")} · ${duration(shown.estimated_seconds)}`

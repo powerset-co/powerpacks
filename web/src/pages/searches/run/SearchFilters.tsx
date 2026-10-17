@@ -17,7 +17,7 @@ export function SearchFilters({ title, pond }: SearchFiltersProps) {
     <section className="run-filters" aria-label="Search filters">
       {pond.query !== title && (
         <Row label="Query">
-          <span className="text-[12.5px]">{pond.query}</span>
+          <span className="text-[13px]">{pond.query}</span>
         </Row>
       )}
       {pond.traits.length > 0 && (
