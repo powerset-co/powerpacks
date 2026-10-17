@@ -334,6 +334,18 @@
   align-items: center;
   gap: 8px;
 }
+.review-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.review-name h2 {
+  margin: 0;
+}
+.review-name .result-linkedin {
+  margin-right: 0;
+}
 .review-role {
   display: flex;
   align-items: center;
