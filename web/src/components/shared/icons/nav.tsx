@@ -41,6 +41,17 @@ export function PeopleIcon(props: IconProps) {
   )
 }
 
+/** Two heads side by side: the Powerset team. */
+export function TeamIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <circle cx="8" cy="8.5" r="3" />
+      <circle cx="16" cy="8.5" r="3" />
+      <path d="M2.5 19a5.5 5.5 0 0 1 11 0M10.5 19a5.5 5.5 0 0 1 11 0" />
+    </svg>
+  )
+}
+
 export function TasksIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>

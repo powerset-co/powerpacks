@@ -8,7 +8,7 @@ import { useSetupDone } from "@/hooks/useSetupDone"
 import { Sidebar } from "./Sidebar"
 
 const auth = vi.hoisted(() => ({ fetchAccount: vi.fn(), signIn: vi.fn(), sendAppFeedback: vi.fn() }))
-vi.mock("@/lib/api/account", () => auth)
+vi.mock("@/lib/api/account", () => ({ ...auth, ACCOUNT_KEY: ["account"] }))
 vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn, sendAppFeedback: auth.sendAppFeedback }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true }))
 vi.mock("@/lib/api/update", () => ({

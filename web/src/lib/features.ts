@@ -7,9 +7,11 @@ export interface Features {
   auto_reply: boolean
   /** The People page's Share network upload. */
   share: boolean
+  /** Remote assist: the Powerset team may work on this install through its agent. */
+  support: boolean
 }
 
-const DEFAULTS: Features = { sets: false, auto_reply: false, share: false }
+const DEFAULTS: Features = { sets: false, auto_reply: false, share: false, support: false }
 const KEY = ["features"] as const
 
 async function request(features?: Features): Promise<Features> {

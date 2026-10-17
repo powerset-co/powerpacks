@@ -43,6 +43,8 @@ class ParseTests(unittest.TestCase):
             ("set_deleted", {"set_id": set_id}), ("set_left", {"set_id": set_id}),
             ("ask_answer", {"ask_id": str(uuid4()), "answers": [{"public_identifier": "alex", "answer": {"declined": True, "reason": "not_in_store"}}]}),
             ("debug_result", {"request_id": str(uuid4()), "results": {"git": {"ok": True, "output": "main"}}}),
+            ("support_request", {"text": "Fix setup", "thread_id": "support-thread"}),
+            ("support_result", {"text": "Setup repaired", "thread_id": "support-thread", "request_id": str(uuid4())}),
         ]:
             with self.subTest(kind=kind):
                 self.assertEqual(parse(message(kind, payload)).kind, kind)
@@ -66,6 +68,10 @@ class ParseTests(unittest.TestCase):
                                                          "relationship": "", "last_contact": None, "confidence": 1}}]}),
             "member list with a stranger role": message("set_members", {"set_id": str(uuid4()), "members": [
                 {"name": "x", "email": "x", "role": "admin", "operator_id": str(uuid4())}]}),
+            "support without a thread": message("support_request", {"text": "Fix setup"}),
+            "support text must be a string": message("support_request", {"text": [], "thread_id": "thread"}),
+            "support result without a request": message("support_result", {"text": "Done", "thread_id": "thread"}),
+            "support text too long": message("support_request", {"text": "x" * 25001, "thread_id": "thread"}),
         }
         for name, raw in cases.items():
             with self.subTest(name), self.assertRaises(Rejected):

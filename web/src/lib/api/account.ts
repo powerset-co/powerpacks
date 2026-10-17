@@ -8,6 +8,9 @@ export interface Account {
   picture: string | null
 }
 
+/** The account query's key: the footer, the side nav and sign-in all share one read. */
+export const ACCOUNT_KEY = ["account"] as const
+
 export async function fetchAccount(signal?: AbortSignal): Promise<Account> {
   const response = await fetch("/api/account", { signal, cache: "no-store" })
   if (!response.ok) throw await failure(response, "Couldn't read who is signed in.")

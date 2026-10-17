@@ -8,6 +8,7 @@ import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { AccountsPage } from "@/pages/accounts/AccountsPage"
+import { TeamPage } from "./pages/team/TeamPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
 import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
@@ -86,6 +87,7 @@ export function App() {
               }
             />
             <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/team" element={<TeamPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             {desktop ? <Route path="/debug/broken" element={<BrokenPage />} /> : null}

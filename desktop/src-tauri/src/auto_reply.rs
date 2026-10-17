@@ -13,6 +13,10 @@ struct FeatureFlags {
     #[serde(rename = "sets")]
     _sets: bool,
     auto_reply: bool,
+    #[serde(default, rename = "share")]
+    _share: bool,
+    #[serde(default, rename = "support")]
+    _support: bool,
 }
 
 pub fn enabled(root: &Path) -> Result<bool, String> {
@@ -85,6 +89,8 @@ mod tests {
         fs::write(&features, r#"{"sets":true,"auto_reply":false}"#).unwrap();
         assert!(!allowed(&root));
         fs::write(&features, r#"{"sets":true,"auto_reply":true}"#).unwrap();
+        assert!(allowed(&root));
+        fs::write(&features, r#"{"sets":true,"auto_reply":true,"share":false,"support":true}"#).unwrap();
         assert!(allowed(&root));
         save(&root, false).unwrap();
         assert!(!allowed(&root));

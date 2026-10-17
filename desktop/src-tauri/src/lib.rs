@@ -13,6 +13,7 @@ mod codex;
 mod crash;
 mod onboard;
 mod paths;
+mod restart;
 mod source;
 mod update;
 
@@ -430,6 +431,7 @@ pub fn run() {
             main_window(app.handle())?;
             boot::launch(app.handle().clone());
             auto_reply::launch(app.handle().clone());
+            restart::launch(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())

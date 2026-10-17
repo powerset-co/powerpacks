@@ -44,6 +44,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_agent_messages \
   tests.test_agent_debug \
   tests.test_asks_loop \
+  tests.test_remote_assist \
   tests.test_ask_set \
   tests.test_ask_worker \
   tests.test_install_coordinator \
