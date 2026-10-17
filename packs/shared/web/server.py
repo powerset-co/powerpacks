@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -51,7 +52,7 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account, features, feedback, search_scope
+from packs.shared.web import account, features, feedback, search_scope, team
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
@@ -60,6 +61,7 @@ START_TIMEOUT_SECONDS = 10
 MAX_FEATURE_REQUEST_BYTES = 1024
 MAX_SCOPE_REQUEST_BYTES = 1024
 MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
+MAX_TEAM_REQUEST_BYTES = 160 * 1024  # support text, including UTF-8 and JSON escaping
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
@@ -205,6 +207,42 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             self.send_header("Location", location)
             self.end_headers()
 
+        def _team(self, parsed: urllib.parse.ParseResult) -> bool:
+            if (self.command, parsed.path) not in {
+                    ("GET", "/api/team"), ("GET", "/api/team/thread"), ("POST", "/api/team/ask")}:
+                return False
+            me = account.read(root)
+            if not account.is_team(me["email"]):
+                self._json({"error": "Team requires a @powerset.co account"}, HTTPStatus.FORBIDDEN)
+                return True
+            origin = (self.headers.get("Origin") or "").strip()
+            host = (self.headers.get("Host") or "").strip()
+            scheme = "https" if getattr(self.connection, "cipher", None) else "http"
+            hostname = (urllib.parse.urlsplit(f"//{host}").hostname or "").lower()
+            if origin and (origin != f"{scheme}://{host}" or hostname not in {"127.0.0.1", "localhost", "::1"}):
+                self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
+                return True
+            try:
+                if parsed.path == "/api/team":
+                    self._json(team.members(root, me["email"]))
+                elif parsed.path == "/api/team/thread":
+                    query = urllib.parse.parse_qs(parsed.query)
+                    self._json(team.thread(root, query.get("operator_id", [""])[0]))
+                else:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_TEAM_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    self._json(team.ask(root, self.rfile.read(length)))
+            except urllib.error.HTTPError as error:
+                self._json(json.load(error), HTTPStatus(error.code))
+            except ValueError as error:
+                self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            except SystemExit:
+                self._json({"error": "Sign in to Powerset again"}, HTTPStatus.UNAUTHORIZED)
+            except OSError as error:
+                self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+            return True
+
         def _dispatch(self, method: str) -> None:
             try:
                 handler = mount()
@@ -219,6 +257,8 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if self._team(parsed):
+                return
             if parsed.path == "/healthz":
                 self._json(identity)
                 return
@@ -275,6 +315,8 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
+            if self._team(parsed):
+                return
             if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope"):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
