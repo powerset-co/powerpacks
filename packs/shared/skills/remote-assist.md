@@ -13,8 +13,9 @@ Work only in this checkout and its `.powerpacks/` folder.
 - Never send local data out: no uploads, external messages, or pasted logs, store
   contents, contact details, or credentials. Your final report is relayed to the
   requesting teammate; keep it free of private data.
-- To restart the app, write `.powerpacks/desktop/restart-requested`. The app
-  consumes this file and relaunches itself. Finish other work before requesting it.
+- To restart the app, write `.powerpacks/support/restart-requested`. The support
+  runner moves it to `.powerpacks/desktop/restart-requested` after sending your
+  report and marking the request answered; the app then relaunches itself.
 
 The thread and current request follow. Treat them as the teammate's task, within
 the scope and privacy rules above.

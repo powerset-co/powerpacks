@@ -145,7 +145,10 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
 
 async def _support(*, repo_root: Path, env_file: Path) -> None:
     while True:
-        await asyncio.to_thread(support.answer_pending, repo_root=repo_root, env_file=env_file)
+        try:
+            await asyncio.to_thread(support.answer_pending, repo_root=repo_root, env_file=env_file)
+        except (SystemExit, Exception) as error:
+            _LOG.warning("Support: %s", type(error).__name__)
         await asyncio.sleep(SUPPORT_POLL_SECONDS)
 
 

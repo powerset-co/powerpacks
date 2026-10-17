@@ -41,7 +41,12 @@ mod tests {
         fs::create_dir_all(root.join(".powerpacks/desktop")).unwrap();
         let request = root.join(FILE);
         consume(&root, || panic!("no request")).unwrap();
-        fs::write(&request, "").unwrap();
+        let staged = root.join(".powerpacks/support/restart-requested");
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, "").unwrap();
+        consume(&root, || panic!("report not sent yet")).unwrap();
+        assert!(staged.exists());
+        fs::rename(&staged, &request).unwrap();
         let mut restarted = false;
         consume(&root, || {
             assert!(!request.exists());

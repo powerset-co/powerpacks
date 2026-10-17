@@ -234,7 +234,12 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                         raise ValueError("invalid request size")
                     self._json(team.ask(root, self.rfile.read(length)))
             except urllib.error.HTTPError as error:
-                self._json(json.load(error), HTTPStatus(error.code))
+                body = error.read().decode("utf-8", errors="replace")
+                try:
+                    reply = json.loads(body)
+                except json.JSONDecodeError:
+                    reply = {"error": body}
+                self._json(reply, error.code)
             except ValueError as error:
                 self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
             except SystemExit:

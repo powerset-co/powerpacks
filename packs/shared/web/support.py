@@ -5,12 +5,14 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.agent_inbox.messages import MAX_RESULT, SupportRequest, SupportResult
+from packs.powerset.primitives.install.controller import permission_app
 from packs.shared.web import account, features
 
 GUIDE = Path("packs/shared/skills/remote-assist.md")
@@ -48,11 +50,13 @@ def _run(message: dict, repo_root: Path) -> str:
     home.mkdir(parents=True, exist_ok=True)
     prompt = (repo_root / GUIDE).read_text(encoding="utf-8")
     prompt += f"\n\nThread so far:\n{_thread(message, repo_root)}\n\nRequest:\n{message['payload']['text']}"
-    # Desktop puts its bundled binaries first on PATH (paths::adopt_path).
+    app = permission_app() if sys.platform == "darwin" else None
+    bundled = Path(app) / "Contents/MacOS/codex" if app else None
+    binary = str(bundled) if bundled and bundled.is_file() else "codex"
     with report.with_suffix(".log").open("w", encoding="utf-8") as log:
         try:
             subprocess.run(
-                ["codex", "-c", "cli_auth_credentials_store=file",
+                [binary, "-c", "cli_auth_credentials_store=file",
                  "-c", "sandbox_workspace_write.network_access=true",
                  "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write",
                  "--output-last-message", str(report), prompt],
@@ -91,3 +95,9 @@ def answer_pending(*, repo_root: Path, env_file: Path) -> None:
             _LOG.warning("Support request %s: %s", message["id"], type(error).__name__)
             return
         write_json(path, {**message, "answered_at": now_iso()})
+        staged = repo_root / ".powerpacks/support/restart-requested"
+        if staged.exists():
+            restart = repo_root / ".powerpacks/desktop/restart-requested"
+            restart.parent.mkdir(parents=True, exist_ok=True)
+            staged.replace(restart)
+            return
