@@ -38,13 +38,7 @@
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-",
-      "entitlements": "Entitlements.plist",
-      "dmg": {
-        "background": "dmg/dmg-background.png",
-        "windowSize": { "width": 660, "height": 400 },
-        "appPosition": { "x": 180, "y": 180 },
-        "applicationFolderPosition": { "x": 480, "y": 180 }
-      }
+      "entitlements": "Entitlements.plist"
     },
     "externalBin": [
       "binaries/uv",

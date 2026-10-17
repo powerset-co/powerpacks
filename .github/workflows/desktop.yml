@@ -74,7 +74,7 @@ jobs:
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
             config=(--config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$APPLE_SIGNING_IDENTITY\"}}}")
           fi
-          pnpm tauri build --bundles app,dmg "${config[@]}"
+          pnpm tauri build --bundles app "${config[@]}"
         shell: bash
         env:
           RELEASE: ${{ inputs.release }}
@@ -91,6 +91,22 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+      # The dmg: dmgbuild writes the drag-to-Applications window itself (desktop/dmg/settings.py);
+      # Tauri's dmg step needs Finder, which the runner cannot drive, and shipped a plain listing.
+      # The bundled uv runs it with no install step. A signed build signs the dmg too.
+      - name: Package the dmg
+        run: |
+          out=desktop/src-tauri/target/release/bundle/dmg
+          mkdir -p "$out"
+          PP_APP=desktop/src-tauri/target/release/bundle/macos/Powerpacks.app \
+          PP_BG=desktop/dmg/dmg-background.png \
+          PP_ICON=desktop/src-tauri/icons/icon.icns \
+            desktop/src-tauri/binaries/uv-aarch64-apple-darwin run --with dmgbuild \
+              dmgbuild -s desktop/dmg/settings.py Powerpacks "$out/Powerpacks-macos-arm64.dmg"
+          [ -z "$APPLE_SIGNING_IDENTITY" ] || codesign --force --sign "$APPLE_SIGNING_IDENTITY" "$out/Powerpacks-macos-arm64.dmg"
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
       - uses: actions/upload-artifact@v4
         with:
           name: Powerpacks-macos-arm64
