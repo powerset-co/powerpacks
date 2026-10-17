@@ -1,9 +1,9 @@
 // The drawer's sections in page order, and the props each section shell takes.
 
 export type SectionKey =
-  "facts" | "timeline" | "relationship" | "decision" | "topics" | "dossier" | "confidence"
+  "decision" | "facts" | "timeline" | "relationship" | "topics" | "dossier" | "confidence"
 
-export const OPEN_BY_DEFAULT: ReadonlySet<SectionKey> = new Set(["facts"])
+export const OPEN_BY_DEFAULT: ReadonlySet<SectionKey> = new Set(["facts", "timeline"])
 
 export interface SectionProps {
   open: boolean

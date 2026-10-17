@@ -85,7 +85,7 @@ export function DrawerHeader({ row, detail, action, onClose }: DrawerHeaderProps
   const headline = orNone(detail?.headline) ?? [row.title, row.company].filter(Boolean).join(" · ")
   const channels = toChannels(row.channels)
   return (
-    <div className="drawer-top">
+    <div className="drawer-top person-top">
       <ProxiedLinkedinAvatar name={row.name} size={40} src={avatar} />
       <div className="who">
         <div className="name-row">
@@ -112,8 +112,10 @@ export function DrawerHeader({ row, detail, action, onClose }: DrawerHeaderProps
         </div>
         <ContactLine row={row} />
       </div>
-      {action}
-      <DrawerClose onClose={onClose} />
+      <span className="drawer-top-actions">
+        {action}
+        <DrawerClose onClose={onClose} />
+      </span>
     </div>
   )
 }

@@ -14,11 +14,12 @@ interface DetailSectionsProps {
   section: SectionState
 }
 
-// The drawer's sections in page order: what we know first, then how it reads, then the call.
+// The drawer's sections in page order: the call (folded), then what we know, then how it reads.
 // A section with nothing to say is left out.
 export function DetailSections({ row, detail, section }: DetailSectionsProps) {
   return (
     <>
+      <DecisionSection row={row} detail={detail} {...section("decision")} />
       <FactsSection detail={detail} {...section("facts")} />
       {detail.events.length ? (
         <DetailsSection
@@ -38,7 +39,6 @@ export function DetailSections({ row, detail, section }: DetailSectionsProps) {
         </DetailsSection>
       ) : null}
       <RelationshipSection row={row} detail={detail} {...section("relationship")} />
-      <DecisionSection row={row} detail={detail} {...section("decision")} />
       {detail.topics.length ? (
         <DetailsSection
           sectionKey="topics"
