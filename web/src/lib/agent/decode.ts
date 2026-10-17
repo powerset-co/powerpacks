@@ -123,11 +123,13 @@ export function decodeThreadSummary(raw: unknown): ThreadSummary | null {
   const id = text(raw, "id")
   if (id === null) return null
   const title = (text(raw, "name") ?? text(raw, "preview") ?? "").trim().split("\n")[0] ?? ""
+  // The last message's time when the app found the chat's file; Codex's own updatedAt moves on a view.
+  const lastMessage = text(raw, "lastMessageAt")
   const updated = number(raw, "updatedAt") ?? number(raw, "createdAt") ?? 0
   return {
     id,
     title: title.slice(0, TITLE_CHARS) || "New chat",
-    updatedAt: new Date(updated * MS_PER_SECOND),
+    updatedAt: lastMessage ? new Date(lastMessage) : new Date(updated * MS_PER_SECOND),
   }
 }
 

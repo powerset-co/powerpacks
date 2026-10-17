@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { decodeNotification, decodeRequest, decodeStatus } from "./decode"
+import { decodeNotification, decodeRequest, decodeStatus, decodeThreadSummary } from "./decode"
 
 describe("decodeStatus", () => {
   it("reads a ChatGPT account", () => {
@@ -128,5 +128,19 @@ describe("decodeRequest", () => {
       paths: [],
       grant: { network: { enabled: true } },
     })
+  })
+})
+
+describe("decodeThreadSummary", () => {
+  it("sorts a chat by its last message, not by Codex's updatedAt which moves on a view", () => {
+    const viewed = decodeThreadSummary({
+      id: "t1",
+      preview: "a chat",
+      updatedAt: 1_800_000_000,
+      lastMessageAt: "2026-10-16T09:05:25Z",
+    })
+    const plain = decodeThreadSummary({ id: "t2", preview: "another", updatedAt: 1_700_000_000 })
+    expect(viewed?.updatedAt.toISOString()).toBe("2026-10-16T09:05:25.000Z")
+    expect(plain?.updatedAt.getTime()).toBe(1_700_000_000_000)
   })
 })
