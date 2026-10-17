@@ -44,6 +44,7 @@ export function SidebarFooter({ rail }: { rail: boolean }) {
     <div className="mt-auto flex flex-col">
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
+      <Version rail={rail} />
     </div>
   )
 }
@@ -62,6 +63,17 @@ function useUpdate(): Update | null {
     retry: false,
   })
   return query.data ?? null
+}
+
+/** The app's own version under the account row, from the update check (the desktop app only). */
+function Version({ rail }: { rail: boolean }) {
+  const update = useUpdate()
+  if (rail || update === null) return null
+  return (
+    <span className="px-3 pb-2 text-[10.5px] text-faint tabular-nums" title="Powerpacks version">
+      v{update.current}
+    </span>
+  )
 }
 
 // Before the download's first bytes arrive.
