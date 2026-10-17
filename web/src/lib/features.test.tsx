@@ -6,7 +6,11 @@ import { useFeatures, useUpdateFeatures } from "./features"
 
 function Controls() {
   const update = useUpdateFeatures()
-  return <button onClick={() => update.mutate({ sets: true, auto_reply: true, share: false, support: false })}>Enable</button>
+  return (
+    <button onClick={() => update.mutate({ sets: true, auto_reply: true, share: false, support: false })}>
+      Enable
+    </button>
+  )
 }
 
 function Consumer() {
