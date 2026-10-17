@@ -138,6 +138,11 @@ it("shows who is signed in by picture, name and email", async () => {
   expect(screen.getByText("CB")).toBeTruthy()
 })
 
+it("shows the app's version under the account row", async () => {
+  mount()
+  await waitFor(() => expect(screen.getByTitle("Powerpacks version").textContent).toBe("v3.27.0"))
+})
+
 it("names a login that stored no name by its email", async () => {
   auth.fetchAccount.mockResolvedValue({
     signed_in: true,
