@@ -8,8 +8,9 @@
 //! with `codex_respond`.
 
 use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -333,11 +334,91 @@ impl Codex {
         self.call(app, Some(cwd), "thread/resume", params).await
     }
 
-    /// This app's chats, newest first.
+    /// This app's chats, newest first. Codex's `updatedAt` moves whenever a chat is opened (a resume
+    /// appends a settings line to its file), so each chat also carries `lastMessageAt`: the time of
+    /// its last message, which the page sorts by.
     pub async fn threads(&self, app: &AppHandle, cwd: &Path) -> Reply {
         // No source filter: Codex records app-server chats as `vscode`; the folder already scopes them.
         let params = json!({ "cwd": cwd, "limit": THREAD_LIST_LIMIT,
                              "sortKey": "updated_at", "archived": false });
-        self.call(app, Some(cwd), "thread/list", params).await
+        let mut reply = self.call(app, Some(cwd), "thread/list", params).await?;
+        let sessions = cwd.join(CODEX_HOME).join("sessions");
+        if let Some(threads) = reply.get_mut("data").and_then(Value::as_array_mut) {
+            for thread in threads {
+                let Some(id) = thread.get("id").and_then(Value::as_str).map(str::to_owned) else {
+                    continue;
+                };
+                if let Some(at) = rollout_file(&sessions, &id).and_then(|file| last_message_at(&file)) {
+                    thread["lastMessageAt"] = json!(at);
+                }
+            }
+        }
+        Ok(reply)
+    }
+}
+
+/// The chat's rollout file under `sessions/YYYY/MM/DD/`: the one whose name ends with its id.
+fn rollout_file(sessions: &Path, thread_id: &str) -> Option<PathBuf> {
+    let suffix = format!("-{thread_id}.jsonl");
+    let mut pending = vec![sessions.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(&suffix)) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// The timestamp of the file's last message (a `response_item` of type `message`, the user's or
+/// the agent's), as Codex wrote it (RFC 3339).
+fn last_message_at(file: &Path) -> Option<String> {
+    let reader = BufReader::new(fs::File::open(file).ok()?);
+    let mut last: Option<String> = None;
+    for line in reader.lines().map_while(Result::ok) {
+        if !line.contains("\"response_item\"") {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
+        let is_message = row.get("type").and_then(Value::as_str) == Some("response_item")
+            && row.pointer("/payload/type").and_then(Value::as_str) == Some("message");
+        if is_message {
+            if let Some(at) = row.get("timestamp").and_then(Value::as_str) {
+                last = Some(at.to_owned());
+            }
+        }
+    }
+    last
+}
+
+#[cfg(test)]
+mod rollout_tests {
+    use super::*;
+
+    #[test]
+    fn the_last_message_wins_over_later_settings_lines() {
+        let root = std::env::temp_dir().join(format!("powerpacks-rollout-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let day = root.join("2026").join("10").join("16");
+        fs::create_dir_all(&day).expect("day");
+        let file = day.join("rollout-2026-10-16T02-02-52-abc123.jsonl");
+        fs::write(
+            &file,
+            concat!(
+                "{\"timestamp\":\"2026-10-16T09:02:52Z\",\"type\":\"session_meta\",\"payload\":{}}\n",
+                "{\"timestamp\":\"2026-10-16T09:05:25Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\"}}\n",
+                "{\"timestamp\":\"2026-10-17T07:34:08Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\"}}\n",
+            ),
+        )
+        .expect("write");
+        let found = rollout_file(&root, "abc123").expect("file");
+        assert_eq!(found, file);
+        assert_eq!(last_message_at(&found).as_deref(), Some("2026-10-16T09:05:25Z"));
+        assert!(rollout_file(&root, "nope").is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 }
