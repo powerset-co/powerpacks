@@ -35,7 +35,7 @@ const SEARCH: PreparedSearch = {
     { key: "seniority_bands", value: ["vice-president", "director"] },
     { key: "years_experience_min", value: 5 },
     { key: "bm25_queries", value: ["vp finance"] },
-    { key: "role_ids", value: ["vp_finance"] },
+    { key: "role_ids", value: ["finance_lead"] },
   ],
   traits: [
     { value: "VP of Finance", temporal: "current", meaning: "role" },
@@ -75,10 +75,10 @@ it("shows the query, the traits and the filled filters read-only on a card that 
   expect(screen.getByRole("heading", { name: "VP of finance in New York" })).toBeTruthy()
   expect(screen.getByText("VP of Finance").textContent).toContain("(current)")
   expect(screen.getByText("New York Metropolitan Area").textContent).toContain("metro")
-  expect(screen.getByText("vice-president")).toBeTruthy()
+  expect(screen.getByText("Vice-President")).toBeTruthy()
   expect(screen.getByText("5 – any")).toBeTruthy()
-  expect(screen.getByText("vp finance")).toBeTruthy()
-  expect(screen.getByText("Vp finance")).toBeTruthy()
+  expect(screen.getByText("Vp Finance")).toBeTruthy()
+  expect(screen.getByText("Finance Lead")).toBeTruthy()
   expect(screen.queryByText("Companies")).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
   expect(screen.queryByRole("button")).toBeNull()
@@ -105,7 +105,7 @@ it("sends a changed query and the traits as a new search, without the filters ed
     target: { value: "Washington, DC" },
   })
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
-  pick("Add Seniority", "c-suite")
+  pick("Add Seniority", "C-Suite")
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years max" }), { target: { value: "12" } })
   const keyword = screen.getByRole("textbox", { name: "Add Keywords" })
   fireEvent.change(keyword, { target: { value: "head of finance" } })
@@ -298,7 +298,7 @@ it("keeps showing what it sent once the card no longer asks", () => {
   execute()
   rerender(<SearchCard search={SEARCH} actions={false} />)
   expect(screen.getByRole("heading", { name: "CFOs in NYC" })).toBeTruthy()
-  expect(screen.queryByText("director")).toBeNull()
+  expect(screen.queryByText("Director")).toBeNull()
   expect(screen.getByText("CFO").textContent).toContain("(current)")
   expect(screen.queryByRole("button")).toBeNull()
 })
@@ -357,7 +357,7 @@ it("resets every edit to the prepared search", () => {
   expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Query" }).value).toBe(
     "VP of finance in New York",
   )
-  expect(screen.getByText("director")).toBeTruthy()
+  expect(screen.getByText("Director")).toBeTruthy()
   expect(screen.getByRole("textbox", { name: "Trait 1" })).toBeTruthy()
   execute()
   expect(store.send).toHaveBeenCalledWith("execute")

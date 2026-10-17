@@ -60,11 +60,11 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
       <div className="drawer-top">
         <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
         <div className="who">
-          <h2>{row.name}</h2>
-          <div className="sub review-role">
+          <div className="review-name">
+            <h2>{row.name}</h2>
             <LinkedInLink row={row} />
-            {role || "Current role unknown"}
           </div>
+          <div className="sub review-role">{role || "Current role unknown"}</div>
           {row.location ? <div className="sub">{row.location}</div> : null}
         </div>
         <span className="review-tools">
@@ -81,7 +81,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
         </span>
       </div>
       <div className="review-scores">
-        <ScoreCell result={result} ranked={ranked} />
+        {ranked ? <ScoreCell result={result} ranked={ranked} /> : null}
         <JudgeBadges candidate={candidate} shown={labels} />
       </div>
       <Evidence result={result} ranked={ranked} />

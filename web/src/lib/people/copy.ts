@@ -66,6 +66,16 @@ export function humanize(value: string | number | null | undefined): string {
     .trim()
 }
 
+/** Title case, brand names kept: "vice-president" -> "Vice-President", "vp finance" -> "Vp Finance". */
+export function titleCase(value: string | number | null | undefined): string {
+  const cap = (word: string) => BRANDS[word.toLowerCase()] ?? word.charAt(0).toUpperCase() + word.slice(1)
+  return humanize(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.split("-").map(cap).join("-"))
+    .join(" ")
+}
+
 /** Sentence case, brand names kept: "close_friend" -> "Close friend", "imessage" -> "iMessage". */
 export function sentence(value: string | number | null | undefined): string {
   const words = humanize(value).split(" ").filter(Boolean)

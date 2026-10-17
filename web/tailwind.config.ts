@@ -6,6 +6,8 @@ export default {
   prefix: "",
   theme: {
     extend: {
+      // A bare `border-b` draws the app's line, not Tailwind's light grey.
+      borderColor: { DEFAULT: "var(--line)" },
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",

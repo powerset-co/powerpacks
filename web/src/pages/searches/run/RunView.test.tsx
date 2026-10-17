@@ -157,7 +157,7 @@ describe("RunView", () => {
     expect(filters.getByText("Traits")).toBeTruthy()
     expect(filters.getByText("Technical recruiter").textContent).toBe("Technical recruiter (current)")
     expect(filters.getByText("Seniority")).toBeTruthy()
-    expect(filters.getByText("mid")).toBeTruthy()
+    expect(filters.getByText("Mid")).toBeTruthy()
     expect(filters.getByText("Keywords")).toBeTruthy()
     expect(filters.getByText("Location")).toBeTruthy()
     expect(filters.getByText("Austin Metropolitan Area").textContent).toBe("Austin Metropolitan Area · metro")

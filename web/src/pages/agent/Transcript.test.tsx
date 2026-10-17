@@ -132,8 +132,8 @@ it("shows a prepared search as a card in its command's place, its query, traits 
   expect(within(card).getByRole<HTMLInputElement>("textbox", { name: "Location 1" }).value).toBe(
     "New York Metropolitan Area",
   )
-  expect(within(card).getByText("vice-president")).toBeTruthy()
-  expect(within(card).getByText("vp finance")).toBeTruthy()
+  expect(within(card).getByText("Vice-President")).toBeTruthy()
+  expect(within(card).getByRole<HTMLInputElement>("textbox", { name: "Keywords 1" }).value).toBe("vp finance")
   // The traits carry currentness, so the current-only toggle is not offered beside them.
   expect(within(card).queryByRole("checkbox", { name: "Current role only" })).toBeNull()
   // No count on the card: the pool estimate stays in the prepare output only.

@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest"
 
-import { eventDate, label, sentence } from "./copy"
+import { eventDate, label, sentence, titleCase } from "./copy"
 
 describe("copy", () => {
   it("keeps brand casing", () => {
     expect(sentence("imessage")).toBe("iMessage")
     expect(sentence("close_friend")).toBe("Close friend")
     expect(sentence(163348)).toBe("163348")
+    expect(titleCase("vice-president")).toBe("Vice-President")
+    expect(titleCase("software_engineer")).toBe("Software Engineer")
+    expect(titleCase("imessage group")).toBe("iMessage Group")
+    expect(titleCase(undefined)).toBe("")
     expect(sentence(undefined)).toBe("")
     expect(sentence("")).toBe("")
   })

@@ -206,18 +206,14 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
         ranked = sorted(dated, key=_position_sort_key, reverse=True)
         top_key = _position_sort_key(ranked[0])
         positions = [p for p in ranked if _position_sort_key(p) == top_key]
-    titles = []
-    companies = []
+    # The first of them is the one shown: one title, one company, never a "; "-joined list.
     for position in positions:
         if not isinstance(position, dict):
             continue
         title = position.get("title") or position.get("position_title")
         company = position.get("company") or position.get("company_name")
-        if title:
-            titles.append(str(title))
-        if company:
-            companies.append(str(company))
-    return "; ".join(titles), "; ".join(companies)
+        return str(title or ""), str(company or "")
+    return "", ""
 
 
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
