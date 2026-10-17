@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useRef, useState, type ReactNode, type SVGProps } from "react"
 import { useNavigate } from "react-router-dom"
 
-import { fetchAccount } from "@/lib/api/account"
+import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
@@ -32,7 +32,6 @@ import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
 
-export const ACCOUNT_KEY = ["account"]
 const UPDATE_KEY = ["update"]
 // While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000

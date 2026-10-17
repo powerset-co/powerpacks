@@ -5,7 +5,7 @@ import { isDesktop } from "@/lib/desktop"
 import { useFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 
-import { fetchAccount } from "@/lib/api/account"
+import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
@@ -25,7 +25,7 @@ import {
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
 import { PowersetMark } from "./PowersetMark"
-import { ACCOUNT_KEY, SidebarFooter } from "./SidebarFooter"
+import { SidebarFooter } from "./SidebarFooter"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
