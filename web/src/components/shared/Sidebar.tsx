@@ -3,6 +3,9 @@ import { NavLink } from "react-router-dom"
 
 import { isDesktop } from "@/lib/desktop"
 import { useFeatures } from "@/lib/features"
+import { useQuery } from "@tanstack/react-query"
+
+import { fetchAccount } from "@/lib/api/account"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
@@ -18,10 +21,11 @@ import {
   SettingsIcon,
   SetupIcon,
   TasksIcon,
+  TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
 import { PowersetMark } from "./PowersetMark"
-import { SidebarFooter } from "./SidebarFooter"
+import { ACCOUNT_KEY, SidebarFooter } from "./SidebarFooter"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
@@ -33,6 +37,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   searches: SearchesIcon,
   people: PeopleIcon,
   sets: HiveIcon,
+  team: TeamIcon,
   tasks: TasksIcon,
   accounts: AccountsIcon,
   setup: SetupIcon,
@@ -56,6 +61,9 @@ function useMedia(query: string): boolean {
  *  the choice is remembered on this machine. */
 export function Sidebar() {
   const features = useFeatures()
+  // The Team page is the Powerset team's: shown to a signed-in @powerset.co account.
+  const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
+  const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
   const done = useSetupDone()
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
@@ -110,7 +118,10 @@ export function Sidebar() {
       </div>
       <ul className="m-0 flex shrink-0 list-none flex-col gap-0.5 p-2">
         {PAGES.filter(
-          (page) => (page.key !== "sets" || features.sets) && (page.key !== "setup" || !done),
+          (page) =>
+            (page.key !== "sets" || features.sets) &&
+            (page.key !== "team" || onTeam) &&
+            (page.key !== "setup" || !done),
         ).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} />

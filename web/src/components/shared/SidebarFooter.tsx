@@ -32,7 +32,7 @@ import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
 
-const ACCOUNT_KEY = ["account"]
+export const ACCOUNT_KEY = ["account"]
 const UPDATE_KEY = ["update"]
 // While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000
