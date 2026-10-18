@@ -1,5 +1,34 @@
 # Changelog
 
+## [3.29.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.28.1...powerpacks-v3.29.0) (2026-10-18)
+
+
+### Features
+
+* **desktop:** the dmg opens as drag-to-Applications ([#858](https://github.com/powerset-co/powerpacks/issues/858)) ([64398e6](https://github.com/powerset-co/powerpacks/commit/64398e60a28aaf1adfefdca3650748e117dddd4e))
+* **people:** delete people from the local store (Delete, D then Enter) ([#850](https://github.com/powerset-co/powerpacks/issues/850)) ([5342440](https://github.com/powerset-co/powerpacks/commit/5342440cd996b1d079c5fe3d6d3078e84246c484))
+* **team:** remote assist, a teammate's agent fixes their install from your Team page ([#861](https://github.com/powerset-co/powerpacks/issues/861)) ([56bde25](https://github.com/powerset-co/powerpacks/commit/56bde25ee9fcf9577800a3dbf925d0cf11ea1c44))
+
+
+### Bug Fixes
+
+* **desktop:** a light dmg background, so Finder's black labels read ([#860](https://github.com/powerset-co/powerpacks/issues/860)) ([a2e4edd](https://github.com/powerset-co/powerpacks/commit/a2e4edd5f9a1887af540a75515e46d0f42b5d79b))
+* **desktop:** chats sort by their last message, not by a view ([#859](https://github.com/powerset-co/powerpacks/issues/859)) ([8bf8cb6](https://github.com/powerset-co/powerpacks/commit/8bf8cb615ec17c184a55ec7ea4d9e092e6f37139))
+* **desktop:** the app's version under the account row ([#852](https://github.com/powerset-co/powerpacks/issues/852)) ([e98cf05](https://github.com/powerset-co/powerpacks/commit/e98cf05589a723fcd08d4eb43fc650f44f3f4f04))
+* **desktop:** the version sits at the foot of the account menu ([#853](https://github.com/powerset-co/powerpacks/issues/853)) ([ab6a93a](https://github.com/powerset-co/powerpacks/commit/ab6a93a872975dd1d61d06fdbf27e2ca3b636466))
+* **people:** the contact popover names each kind with its source pill and count ([#848](https://github.com/powerset-co/powerpacks/issues/848)) ([edf9a8a](https://github.com/powerset-co/powerpacks/commit/edf9a8af3f71ce4728ba9be936ee1960b606073e))
+* **people:** the drawer keeps one Keep/Skip, labeled actions, facts first ([#854](https://github.com/powerset-co/powerpacks/issues/854)) ([d14ebef](https://github.com/powerset-co/powerpacks/commit/d14ebef24c044adefd38eae4bcdb21dbb763eb5c))
+* **search:** consistent chips, one title, LinkedIn beside the name, no grey lines ([#855](https://github.com/powerset-co/powerpacks/issues/855)) ([78b4a76](https://github.com/powerset-co/powerpacks/commit/78b4a7630dc004b61ba913225b46c8dc36045c8d))
+* **search:** the whole trait chip cycles current, all and past ([#851](https://github.com/powerset-co/powerpacks/issues/851)) ([17d8155](https://github.com/powerset-co/powerpacks/commit/17d81553b7e83a78868aa498742402f2d7bc9d4a))
+* **web:** every generic catch in the page server logs its traceback ([#862](https://github.com/powerset-co/powerpacks/issues/862)) ([97e3508](https://github.com/powerset-co/powerpacks/commit/97e3508880667a260551f5844c699fb885235344))
+* **web:** five type sizes, status only while it changes, no zero-count options ([#857](https://github.com/powerset-co/powerpacks/issues/857)) ([a91ffd8](https://github.com/powerset-co/powerpacks/commit/a91ffd8133a646783b3eff938eadbed115b08844))
+
+
+### Documentation
+
+* **design:** five type sizes, casing, one home per action, current People drawer ([#856](https://github.com/powerset-co/powerpacks/issues/856)) ([61195df](https://github.com/powerset-co/powerpacks/commit/61195df477b4a80a26e06fbdee55e6762891f96e))
+* **remote-assist:** paid steps run when the request asks, the way the app runs them ([#863](https://github.com/powerset-co/powerpacks/issues/863)) ([ee8e51d](https://github.com/powerset-co/powerpacks/commit/ee8e51d8008f793519124fe5cfba86b7cbc6e39c))
+
 ## [3.28.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.28.0...powerpacks-v3.28.1) (2026-10-16)
 
 
