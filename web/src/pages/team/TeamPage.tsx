@@ -40,6 +40,7 @@ export function TeamPage() {
   const chosenId = params.get("with") ?? ""
   const team = useQuery({ queryKey: TEAM_KEY, queryFn: fetchTeam, refetchInterval: TEAM_POLL_MS })
   const members = team.data?.members ?? []
+  const myEmail = team.data?.me.email.toLowerCase() ?? ""
   const chosen = members.find((member) => member.operator_id === chosenId) ?? null
   const choose = (id: string) => {
     const next = new URLSearchParams(params)
@@ -64,6 +65,7 @@ export function TeamPage() {
             <li key={member.operator_id}>
               <MemberRow
                 member={member}
+                you={member.email.toLowerCase() === myEmail}
                 chosen={member.operator_id === chosenId}
                 onPick={() => choose(member.operator_id)}
               />
@@ -86,7 +88,17 @@ function awake(member: Teammate, now = Date.now()): boolean {
   return member.last_seen_at !== "" && now - new Date(member.last_seen_at).getTime() < AWAKE_MS
 }
 
-function MemberRow({ member, chosen, onPick }: { member: Teammate; chosen: boolean; onPick: () => void }) {
+function MemberRow({
+  member,
+  you,
+  chosen,
+  onPick,
+}: {
+  member: Teammate
+  you: boolean
+  chosen: boolean
+  onPick: () => void
+}) {
   const up = awake(member)
   return (
     <button
@@ -109,9 +121,12 @@ function MemberRow({ member, chosen, onPick }: { member: Teammate; chosen: boole
         />
       </span>
       <span className="min-w-0 flex-1 leading-[1.25]">
-        <span className="block truncate text-[13px] font-semibold">{member.name || member.email}</span>
+        <span className="block truncate text-[13px] font-semibold">
+          {member.name || member.email}
+          {you ? <span className="ml-1.5 text-[11px] font-normal text-faint">you</span> : null}
+        </span>
         <span className="block truncate text-[11px] text-muted-foreground">
-          {member.last_seen_at ? SETS.seen(member.last_seen_at) : SETS.neverSeen}
+          {member.email} · {member.last_seen_at ? SETS.seen(member.last_seen_at) : SETS.neverSeen}
         </span>
       </span>
     </button>

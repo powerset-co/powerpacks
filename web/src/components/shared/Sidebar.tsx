@@ -120,7 +120,7 @@ export function Sidebar() {
         {PAGES.filter(
           (page) =>
             (page.key !== "sets" || features.sets) &&
-            (page.key !== "team" || onTeam) &&
+            (page.key !== "team" || (onTeam && features.team)) &&
             (page.key !== "setup" || !done),
         ).map((page) => (
           <li key={page.key}>
