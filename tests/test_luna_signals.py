@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+import weakref
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -20,6 +21,7 @@ from packs.ingestion.primitives.deep_context_v2.collect.bundle import (
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import render_batch
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
+from packs.ingestion.primitives.deep_context_v2.worth import worth as worth_module
 from packs.ingestion.primitives.deep_context_v2.worth.worth import (
     DEFAULT_LIMIT, LABELS_TOKENS_PER_QUESTION, Worth,
 )
@@ -227,7 +229,7 @@ class WorthRunTests(StoreTests):
             queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle(candidate_id, entries).to_payload()),
                                   "test", "2026-10-15")
         node = Worth(self.conn, Path(self.tmp.name), limit=DEFAULT_LIMIT)
-        request = node.families()[0].request
+        request = node._request(node.families()[0])
         state = json.loads(request["input"])
         self.assertNotIn("facts", state)
         self.assertEqual(state["profile"]["name"], "Jordan Bravo")
@@ -255,13 +257,156 @@ class WorthRunTests(StoreTests):
                                        text=f"Day {day:02} " + "x" * 8993) for day in days]
             queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle(candidate_id, entries).to_payload()),
                                   "test", "2026-10-15")
-        request = Worth(self.conn, Path(self.tmp.name), limit=DEFAULT_LIMIT).families()[0].request
+        node = Worth(self.conn, Path(self.tmp.name), limit=DEFAULT_LIMIT)
+        request = node._request(node.families()[0])
         state = json.loads(request["input"])
         lines = [line for line in state["messages"].splitlines() if line.startswith("[")]
         self.assertEqual(len(lines), 20)
         self.assertIn("Day 22 ", lines[0])
         self.assertIn("Day 03 ", lines[-1])
         self.assertEqual(state["channels"]["from_me"], 22)
+
+
+class BoundedWorthTests(StoreTests):
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = Path(self.tmp.name)
+        queries.upsert_owner(self.conn, '{"name":"Test Owner"}', "test", "2026-10-07")
+        for number in range(1, 6):
+            candidate_id = f"c{number}"
+            queries.upsert_candidates(self.conn, [(candidate_id, f"Jordan Example {number}", 0, "{}", "2026-10-07")])
+            self._parent(f"p:{number}", candidate_id)
+            self._facts(candidate_id, f"Jordan Example {number}")
+            self.conn.execute("INSERT INTO candidate_sources VALUES (?, 'gmail_msgvault')", (candidate_id,))
+            messages = [MessageEntry.of(MessageChannel.GMAIL, "2026-10-01", from_me=True,
+                                        text=f"Message {number}: " + "x" * 20_000)]
+            queries.upsert_bundle(self.conn, candidate_id, json.dumps(bundle(candidate_id, messages).to_payload()),
+                                  "test", "2026-10-07")
+        self.conn.commit()
+
+    def _track_requests(self):
+        class Request(dict):
+            pass
+
+        live = weakref.WeakValueDictionary()
+        counts = {"built": 0, "peak": 0}
+        build = luna.build_request
+
+        def tracked(*args, **kwargs):
+            request = Request(build(*args, **kwargs))
+            counts["built"] += 1
+            live[counts["built"]] = request
+            counts["peak"] = max(counts["peak"], len(live))
+            return request
+
+        return mock.patch.object(luna, "build_request", new=tracked), live, counts
+
+    def test_families_and_selected_estimate_do_not_retain_raw_requests(self) -> None:
+        patch, live, counts = self._track_requests()
+        node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT, parent_ids=("p:3",))
+        with patch, mock.patch.object(decisions, "AsyncOpenAI", side_effect=AssertionError("No API calls")):
+            self.assertEqual(len(node.families()), 5)
+            self.assertEqual(counts["built"], 0)
+            self.assertEqual(node.estimate()["requests"], 1)
+        self.assertEqual(counts, {"built": 1, "peak": 1})
+        self.assertEqual(len(live), 0)
+
+        patch, live, counts = self._track_requests()
+        with patch:
+            self.assertEqual(Worth(self.conn, self.root, limit=DEFAULT_LIMIT).estimate()["requests"], 5)
+        self.assertEqual(counts, {"built": 5, "peak": 1})
+        self.assertEqual(len(live), 0)
+
+    def test_execute_bounds_requests_and_keeps_contents_results_and_progress(self) -> None:
+        baseline = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        expected = {}
+        for family in baseline.families():
+            request = baseline._request(family)
+            expected[decisions.request_digest(luna.REQUEST_VERSION, request)] = request
+        self.assertEqual(list(expected), [
+            "130bc3ae0cdd580ec7e8ca8ce2bd0209357a3ea8b0259517adb55c65df163f9b",
+            "a1637f240a6b0cd25f132cc6be2dba6db6189e9a305688950a97cd0da7525134",
+            "0550f0a1b69764cbff921d6aad9051c726f9a2620d3e4cf0774e793050f774e3",
+            "493bffe9454f2faf34e2e58d98ceffbca714eb67393732a6abec255be5fd220f",
+            "71630ae86b0a2c4bb5cbcb8bb8e124b878610f1269703be0e6c1d85790f18992",
+        ])
+        sent = []
+        progress = []
+        node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        node.on_progress = lambda phase, done, total: progress.append((done, total))
+
+        async def decide(requests, cache, *, cache_only, stage, on_progress, refused):
+            self.assertFalse(cache_only)
+            self.assertEqual(stage, "worth_labels")
+            self.assertLessEqual(len(requests), 2)
+            for digest, request in requests.items():
+                self.assertEqual(request, expected[digest])
+                sent.append(digest)
+            on_progress(0, len(requests))
+            on_progress(len(requests), len(requests))
+            return {digest: answers_for(request) for digest, request in requests.items()}
+
+        patch, live, counts = self._track_requests()
+        with patch, mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2), \
+                mock.patch.object(worth_module, "decide_all", new=decide):
+            result = node.execute()
+        self.assertEqual(result, {"families": 5, "pre_matched_yes": 0, "refused": 0, "requests": 5, "worth_rows": 5})
+        self.assertEqual(sent, list(expected))
+        self.assertEqual(counts["peak"], 2)
+        self.assertEqual(len(live), 0)
+        self.assertEqual({total for done, total in progress}, {5})
+        self.assertEqual(progress[-1], (5, 5))
+        rows = self.conn.execute("SELECT candidate_id, worth, labels_json FROM worth ORDER BY candidate_id").fetchall()
+        for row, request in zip(rows, expected.values()):
+            labels = {**luna.labels(answers_for(request)), "version": luna.REQUEST_VERSION}
+            self.assertEqual((row["worth"], json.loads(row["labels_json"])), (labels["worth"], labels))
+
+    def test_duplicate_refused_request_is_only_asked_once_across_batches(self) -> None:
+        node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        request = node._request(node.families()[0])
+        asked = []
+
+        async def refuse(requests, *args, **kwargs):
+            asked.extend(requests)
+            return {digest: [{"type": "refusal", "name": "relationship_kind"}] for digest in requests}
+
+        with mock.patch.object(luna, "build_request", return_value=request), \
+                mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2), \
+                mock.patch.object(worth_module, "decide_all", new=refuse):
+            result = node.execute()
+        self.assertEqual(len(asked), 1)
+        self.assertEqual((result["requests"], result["refused"], result["worth_rows"]), (1, 5, 0))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0], 0)
+
+    def test_cache_only_missing_later_batch_stops_before_any_call_or_worth_write(self) -> None:
+        node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        node.cache_dir.mkdir(parents=True)
+        for family in node.families()[:2]:
+            request = node._request(family)
+            digest = decisions.request_digest(luna.REQUEST_VERSION, request)
+            decisions.cache_path(node.cache_dir, digest).write_text(json.dumps({"answers": answers_for(request)}))
+        with mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2), \
+                mock.patch.object(worth_module, "decide_all", side_effect=AssertionError("No requests")):
+            with self.assertRaisesRegex(ValueError, "3 answers are not saved yet"):
+                node.execute(cache_only=True)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0], 0)
+
+    def test_later_batch_failure_keeps_worth_unchanged(self) -> None:
+        node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        calls = []
+
+        async def decide(requests, *args, **kwargs):
+            calls.append(len(requests))
+            if len(calls) == 2:
+                raise RuntimeError("second batch failed")
+            return {digest: answers_for(request) for digest, request in requests.items()}
+
+        with mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2), \
+                mock.patch.object(worth_module, "decide_all", new=decide):
+            with self.assertRaisesRegex(RuntimeError, "second batch failed"):
+                node.run()
+        self.assertEqual(calls, [2, 2])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0], 0)
 
 
 class MergeTests(StoreTests):
