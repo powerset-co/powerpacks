@@ -3,7 +3,9 @@ import { useNavigate } from "react-router-dom"
 import { Page } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
 import { isDesktop } from "@/lib/desktop"
+import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
+import { useQuery } from "@tanstack/react-query"
 import { HOME } from "@/lib/nav"
 import { Connect } from "@/pages/install/Connect"
 
@@ -14,6 +16,8 @@ export function SettingsPage() {
   const navigate = useNavigate()
   const features = useFeatureSettings()
   const update = useUpdateFeatures()
+  const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
+  const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
   return (
     <Page title="Settings">
       {isDesktop() ? (
@@ -58,6 +62,30 @@ export function SettingsPage() {
           </p>
         ) : null}
       </section>
+      {onTeam ? (
+        <section className="flex flex-col gap-3" aria-labelledby="team-page">
+          <div className="flex flex-col gap-1">
+            <h2 id="team-page" className="m-0 text-[15px] font-semibold">
+              Team page
+            </h2>
+            <p className="m-0 text-sm text-muted-foreground">
+              Work on a teammate's install from this machine through their agent. Shows Team in the side nav.
+            </p>
+          </div>
+          <label className="flex w-fit cursor-pointer items-center gap-3 text-[13px]">
+            <input
+              type="checkbox"
+              checked={features.data?.team ?? false}
+              disabled={!features.data || update.isPending}
+              onChange={() => {
+                if (features.data) update.mutate({ ...features.data, team: !features.data.team })
+              }}
+              className="accent-[var(--primary)]"
+            />
+            Show the Team page
+          </label>
+        </section>
+      ) : null}
     </Page>
   )
 }

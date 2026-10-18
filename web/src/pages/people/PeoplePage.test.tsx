@@ -91,7 +91,9 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   if (archive) return Promise.resolve(archive)
   if (url.endsWith("/worth")) return Promise.resolve(worthResponse(init))
   if (url.endsWith("/api/features"))
-    return Promise.resolve(respond({ sets: false, auto_reply: false, share: true, support: false }))
+    return Promise.resolve(
+      respond({ sets: false, auto_reply: false, share: true, support: false, team: false }),
+    )
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
@@ -273,7 +275,9 @@ describe("PeoplePage", () => {
       "fetch",
       vi.fn((url: string, init?: RequestInit) =>
         url.endsWith("/api/features")
-          ? Promise.resolve(respond({ sets: false, auto_reply: false, share: false, support: false }))
+          ? Promise.resolve(
+              respond({ sets: false, auto_reply: false, share: false, support: false, team: false }),
+            )
           : serve(url, init),
       ),
     )

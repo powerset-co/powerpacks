@@ -12,7 +12,7 @@ afterEach(() => {
 
 const NOW = Date.now()
 const TEAM = {
-  me: { email: "me@powerset.co" },
+  me: { email: "casey@powerset.co" },
   members: [
     {
       operator_id: "op-1",
@@ -73,7 +73,9 @@ it("lists teammates with their agents' presence and opens a thread on pick", asy
   const list = await screen.findByRole("list", { name: "Teammates" })
   expect(await within(list).findByText("Casey Bravo")).toBeTruthy()
   expect(within(list).getByLabelText("Agent up")).toBeTruthy()
-  expect(within(list).getByText("quinn@powerset.co")).toBeTruthy()
+  expect(within(list).getByText("you")).toBeTruthy()
+  expect(within(list).getAllByText(/quinn@powerset.co/).length).toBeGreaterThan(0)
+  expect(within(list).getByText(/casey@powerset.co/)).toBeTruthy()
   expect(within(list).getByLabelText("Away")).toBeTruthy()
   expect(screen.getByText("Pick a teammate.")).toBeTruthy()
   fireEvent.click(within(list).getByRole("button", { name: /Casey Bravo/ }))

@@ -31,7 +31,13 @@ function mount() {
 }
 
 /** /api/features: the switches as saved, and a POST that saves what it is sent. */
-function serveFeatures(saved: { sets: boolean; auto_reply: boolean; share: boolean; support: boolean }) {
+function serveFeatures(saved: {
+  sets: boolean
+  auto_reply: boolean
+  share: boolean
+  support: boolean
+  team: boolean
+}) {
   return vi.fn((_url: string, init?: RequestInit) => {
     if (init?.method === "POST")
       Object.assign(saved, JSON.parse(typeof init.body === "string" ? init.body : "{}"))
@@ -47,7 +53,7 @@ afterEach(() => {
 
 it("shows the remote assist switch as saved and flips it", async () => {
   vi.mocked(isDesktop).mockReturnValue(true)
-  const saved = { sets: true, auto_reply: false, share: false, support: true }
+  const saved = { sets: true, auto_reply: false, share: false, support: true, team: false }
   vi.stubGlobal("fetch", serveFeatures(saved))
   mount()
   const box = await screen.findByRole<HTMLInputElement>("checkbox", {
@@ -60,7 +66,10 @@ it("shows the remote assist switch as saved and flips it", async () => {
 })
 
 it("offers Remote assist in a browser, and no Repair setup", async () => {
-  vi.stubGlobal("fetch", serveFeatures({ sets: false, auto_reply: false, share: false, support: false }))
+  vi.stubGlobal(
+    "fetch",
+    serveFeatures({ sets: false, auto_reply: false, share: false, support: false, team: false }),
+  )
   mount()
   expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy()
   expect(

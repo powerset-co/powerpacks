@@ -15,12 +15,14 @@ class FeatureFlags:
     auto_reply: bool = False
     share: bool = False
     support: bool = False
+    # The Team page (remote assist from this machine); off until the owner turns it on in Settings.
+    team: bool = False
 
     @classmethod
     def parse(cls, payload: object, *, support: bool = False) -> "FeatureFlags":
-        if (not isinstance(payload, dict) or not {"sets", "auto_reply"} <= set(payload) <= {"sets", "auto_reply", "share", "support"}
+        if (not isinstance(payload, dict) or not {"sets", "auto_reply"} <= set(payload) <= {"sets", "auto_reply", "share", "support", "team"}
                 or any(type(value) is not bool for value in payload.values())):
-            raise ValueError("sets, auto_reply, share and support must be booleans")
+            raise ValueError("sets, auto_reply, share, support and team must be booleans")
         return cls(**{**payload, "support": payload.get("support", support)})
 
 
