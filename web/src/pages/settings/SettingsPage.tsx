@@ -41,7 +41,8 @@ export function SettingsPage() {
           <p className="m-0 text-sm text-muted-foreground">
             With this on, someone on the Powerset team can ask your agent to look into a problem with this
             install: it reads your logs, runs commands in your Powerpacks checkout, fixes what it can, and can
-            restart the app. Nothing of yours leaves this computer; they get its report.
+            update or restart the app. They get its report, which may include how a person they name is
+            labeled and why; nothing else of yours leaves this computer.
           </p>
         </div>
         <label className="flex w-fit cursor-pointer items-center gap-3 text-[13px]">

@@ -76,7 +76,8 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         args = record["args"]
         assert args[:-2] == ["-c", "cli_auth_credentials_store=file", "-c",
                             "sandbox_workspace_write.network_access=true", "exec", "--skip-git-repo-check",
-                            "--ephemeral", "--sandbox", "workspace-write", "--output-last-message"]
+                            "--ephemeral", "--sandbox", "workspace-write",
+                            "--add-dir", str((root / ".powerpacks").resolve()), "--output-last-message"]
         assert record["cwd"] == str(root)
         assert record["home"] == str(root / support.CODEX_HOME)
         assert args[-2] == str(root / support.REPORTS / f"{current['id']}.md")
@@ -140,6 +141,22 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         run.assert_not_called()
         assert send.call_args.args[3]["text"] == "Setup repaired and verified."
         assert "answered_at" in saved(self.root, message)
+
+    def test_update_request_is_handed_over_after_the_report_is_sent(self):
+        root = self.root
+        request(root)
+        staged = root / ".powerpacks/support/update-requested"
+        update = root / ".powerpacks/desktop/update-requested"
+
+        def run(message, repo_root):
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text("")
+            return "Update requested"
+
+        with patch.object(support, "_run", side_effect=run), patch.object(agent_inbox, "send"):
+            support.answer_pending(repo_root=root, env_file=root / ".env")
+        self.assertFalse(staged.exists())
+        self.assertTrue(update.exists())
 
     def test_restart_waits_until_result_sent_and_request_answered(self):
         root = self.root

@@ -19,7 +19,12 @@ Work only in this checkout and its `.powerpacks/` folder.
   Never delete data.
 - Never send local data out: no uploads, external messages, or pasted logs, store
   contents, contact details, or credentials. Your final report is relayed to the
-  requesting teammate; keep it free of private data.
+  requesting teammate; keep it free of private data, with one exception: when the
+  teammate names a person (by name, email or id), the report may include that
+  person's labels, worth and the evidence behind them, so labeling can be debugged.
+- To update the app to the latest release and relaunch, write
+  `.powerpacks/support/update-requested`; the app installs the signed release once
+  your report is sent. Say in your report that an update was requested.
 - To restart the app, write `.powerpacks/support/restart-requested`. The support
   runner moves it to `.powerpacks/desktop/restart-requested` after sending your
   report and marking the request answered; the app then relaunches itself.
