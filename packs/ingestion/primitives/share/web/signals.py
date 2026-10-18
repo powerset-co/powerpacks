@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import sqlite3
 import threading
@@ -142,6 +143,7 @@ class PeopleSignals:
         try:
             manifest = node.run()
         except Exception as error:
+            logging.getLogger(__name__).exception("Signals refresh failed")
             with self._lock:
                 self._status = replace(self._status, status="failed", message=None, error=str(error))
         else:

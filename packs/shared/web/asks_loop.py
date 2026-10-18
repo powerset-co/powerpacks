@@ -131,7 +131,7 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
                 STATUS["state"] = "offline"
                 delay = backoff
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-                _LOG.warning("Inbox: %s; retrying in %ss", type(exc).__name__, delay)
+                _LOG.warning("Inbox: %s; retrying in %ss", type(exc).__name__, delay, exc_info=exc)
         else:
             STATUS["state"] = "connected"
             backoff = 1
@@ -219,7 +219,7 @@ async def _presence(*, repo_root: Path, env_file: Path, device_id: str) -> None:
                 continue
             if time.monotonic() - started > MAX_BACKOFF_SECONDS:
                 backoff = 1
-            _LOG.warning("Ask loop: %s; retrying in %ss", type(exc).__name__, backoff)
+            _LOG.warning("Ask loop: %s; retrying in %ss", type(exc).__name__, backoff, exc_info=exc)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
 

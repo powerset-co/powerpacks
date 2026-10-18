@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import signal
@@ -304,6 +305,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 try:
                     self._json(search_scope.read(root))
                 except Exception as error:
+                    logging.getLogger(__name__).exception("Reading search scope failed")
                     self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
                 return
             if parsed.path == "/api/status":
@@ -360,6 +362,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 except ValueError as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
                 except Exception as error:
+                    logging.getLogger(__name__).exception("Saving search scope failed")
                     self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
                 return
             if app.post(self, parsed):
@@ -490,6 +493,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.open:
             webbrowser.open(url)
         return 0
+    threading.excepthook = lambda args: logging.getLogger(__name__).error(
+        "Background thread failed", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
     with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
