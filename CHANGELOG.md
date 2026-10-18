@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.30.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.29.0...powerpacks-v3.30.0) (2026-10-18)
+
+
+### Features
+
+* **team:** the Team page is behind a Settings switch, off by default; rows show the email and tag you ([#864](https://github.com/powerset-co/powerpacks/issues/864)) ([06ba633](https://github.com/powerset-co/powerpacks/commit/06ba633e34ad76f753ac1cfa3599d94769c5a4d1))
+
+
+### Bug Fixes
+
+* bound raw-message signal refresh batches ([#865](https://github.com/powerset-co/powerpacks/issues/865)) ([f37897e](https://github.com/powerset-co/powerpacks/commit/f37897e49fae49c4cacd84f6ea1d91aabc284589))
+
 ## [3.29.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.28.1...powerpacks-v3.29.0) (2026-10-18)
 
 
