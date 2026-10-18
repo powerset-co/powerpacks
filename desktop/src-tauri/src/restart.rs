@@ -1,4 +1,6 @@
-//! Consume the support runner's restart request while the app is running.
+//! Consume the support runner's requests while the app is running: an update request installs the
+//! latest signed release and relaunches into it (the Install update button's path); a restart
+//! request relaunches.
 use std::{fs, io, path::Path, sync::Arc, time::Duration};
 
 use tauri::{AppHandle, Manager};
@@ -6,6 +8,7 @@ use tauri::{AppHandle, Manager};
 use crate::boot::Boot;
 
 const FILE: &str = ".powerpacks/desktop/restart-requested";
+const UPDATE_FILE: &str = ".powerpacks/desktop/update-requested";
 const POLL: Duration = Duration::from_secs(2);
 
 fn consume(root: &Path, relaunch: impl FnOnce()) -> io::Result<()> {
@@ -24,6 +27,12 @@ pub fn launch(app: AppHandle) {
             let Some(root) = app.state::<Arc<Boot>>().root() else {
                 continue;
             };
+            if fs::remove_file(root.join(UPDATE_FILE)).is_ok() {
+                match crate::update::install(&app).await {
+                    Ok(()) => app.request_restart(),
+                    Err(error) => eprintln!("Support update: {error}"),
+                }
+            }
             if let Err(error) = consume(&root, || app.request_restart()) {
                 eprintln!("Support restart: {error}");
             }

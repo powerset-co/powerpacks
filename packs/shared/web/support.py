@@ -59,6 +59,8 @@ def _run(message: dict, repo_root: Path) -> str:
                 [binary, "-c", "cli_auth_credentials_store=file",
                  "-c", "sandbox_workspace_write.network_access=true",
                  "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write",
+                 # .powerpacks is often a link to a folder outside the checkout: name its real path.
+                 "--add-dir", str((repo_root / ".powerpacks").resolve()),
                  "--output-last-message", str(report), prompt],
                 cwd=repo_root, env={**os.environ, "CODEX_HOME": str(home)},
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, timeout=RUN_TIMEOUT_SECONDS,
@@ -95,9 +97,15 @@ def answer_pending(*, repo_root: Path, env_file: Path) -> None:
             _LOG.warning("Support request %s: %s", message["id"], type(error).__name__)
             return
         write_json(path, {**message, "answered_at": now_iso()})
-        staged = repo_root / ".powerpacks/support/restart-requested"
-        if staged.exists():
-            restart = repo_root / ".powerpacks/desktop/restart-requested"
-            restart.parent.mkdir(parents=True, exist_ok=True)
-            staged.replace(restart)
+        # An update or restart is handed to the app only now, after the result is sent; the app is
+        # about to relaunch, so the next request waits for the new process.
+        handed = False
+        for name in ("update-requested", "restart-requested"):
+            staged = repo_root / ".powerpacks/support" / name
+            if staged.exists():
+                target = repo_root / ".powerpacks/desktop" / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                staged.replace(target)
+                handed = True
+        if handed:
             return
