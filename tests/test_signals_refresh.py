@@ -14,6 +14,7 @@ from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, Person
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.enrich import settle
+from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.ingestion.primitives.share.web.signals import PeopleSignals, RefreshSignals
@@ -58,7 +59,8 @@ class SignalsRefreshTests(StoreTests):
         self._parent("p:b", "c2")
         self._facts("c1", "Jordan Bravo")
         self._facts("c2", "Casey Delta")
-        self.families = Worth(self.conn, self.root, limit=DEFAULT_LIMIT).families()
+        self.worth = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
+        self.families = self.worth.families()
         for family in self.families:
             self._judged(family.members[0], family.fingerprint)
         self.conn.commit()
@@ -74,8 +76,9 @@ class SignalsRefreshTests(StoreTests):
         """The family's request answered on disk."""
         cache = self.root / DECISIONS_CACHE_DIR
         cache.mkdir(parents=True, exist_ok=True)
-        first = answers_for(family.request)
-        path = decisions.cache_path(cache, family.digest)
+        request = self.worth._request(family)
+        first = answers_for(request)
+        path = decisions.cache_path(cache, decisions.request_digest(luna.REQUEST_VERSION, request))
         path.write_text(json.dumps({"answers": first, "usage": None}))
         return path
 
@@ -113,9 +116,12 @@ class SignalsRefreshTests(StoreTests):
         self.conn.commit()
         path = self._cache(self.families[1])
         refusal = [{"type": "refusal", "name": "relationship_kind"}]
-        answers = {self.families[0].digest: refusal, self.families[1].digest: json.loads(path.read_text())["answers"]}
+        digest = decisions.request_digest(luna.REQUEST_VERSION, self.worth._request(self.families[0]))
+        answers = {digest: refusal, path.stem: json.loads(path.read_text())["answers"]}
+        node = RefreshSignals(self.conn, self.root, ("p:a", "p:b"))
+        node.cache_only = False
         with mock.patch("packs.ingestion.primitives.deep_context_v2.worth.worth.decide_all", return_value=answers):
-            manifest = RefreshSignals(self.conn, self.root, ("p:a", "p:b")).run()
+            manifest = node.run()
         self.assertEqual((manifest.status, manifest.counts["refused"]), ("completed", 1))
         flags = dict(self.conn.execute("SELECT candidate_id, flag FROM person_labels").fetchall())
         self.assertEqual(flags, {"c1": "", "c2": "family"})

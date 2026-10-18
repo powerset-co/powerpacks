@@ -75,7 +75,8 @@ class RefreshSignals(Node):
         cached = int(estimate["cached"])
         requests = int(estimate["requests"])
         cost = float(estimate["estimated_cost_usd"])
-        digest = hashlib.sha256(json.dumps([(family.key, family.members, family.digest) for family in families]).encode())
+        digest = hashlib.sha256(json.dumps([(family.key, family.members, self.worth.request_digests[family.key])
+                                           for family in families]).encode())
         digest.update(json.dumps((cached, requests, estimate["input_tokens"])).encode())
         new: int = requests - cached
         return SignalsPlan(len(families), cached, new, cost, math.ceil(new / REQUESTS_PER_SECOND), digest.hexdigest())

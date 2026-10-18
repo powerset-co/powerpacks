@@ -41,6 +41,7 @@ LABELS_PHASE = "Reading signals"
 PRE_MATCHED_REASON = "Already in the network: the name matches one LinkedIn connection."
 NOTABLE_REASON_PREFIX = "Notable position: "
 DEFAULT_LIMIT = 100_000  # more families than any store has; --limit N judges the first N
+REQUEST_BATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,8 @@ class Family:
     members: tuple[str, ...]
     fingerprint: str
     match: Connection | None         # None = the pre-match did not tie the family to exactly one connection
-    request: dict[str, Any]          # request 1: every family is labelled, pre-matched or not
-    digest: str                      # its cache key
+    facts: tuple[MemberFacts, ...]
+    channels: ChannelSummary
 
 
 @dataclass(frozen=True)
@@ -74,9 +75,10 @@ class Worth(Node):
         self.parent_ids = parent_ids
         self.cache_dir = data_root / DECISIONS_CACHE_DIR
         self._families: list[Family] | None = None  # built once; estimate and execute both read it
+        self.request_digests: dict[str, str] = {}
 
     def families(self) -> list[Family]:
-        """Every family with its evidence fingerprint, its pre-match, and its request 1."""
+        """Every family's facts, counts and pre-match, without raw message requests."""
         if self._families is None:
             self._families = self._build_families()
         return self._families
@@ -94,7 +96,7 @@ class Worth(Node):
             counts.setdefault(count.candidate_id, []).append(count)
         groups: dict[str, int] = bundles.groups
         connections: list[Connection] = queries.all_connections(self.conn)
-        owner: OwnerProfile = read_owner(self.conn)
+        self._owner: OwnerProfile = read_owner(self.conn)
 
         families: list[Family] = []
         for key, members in by_family.items():
@@ -106,21 +108,21 @@ class Worth(Node):
             # The message counts: the members' bundles added together, counts only.
             summary: ChannelSummary = evidence.channel_summary(members, sources, counts, groups)
             fingerprint: str = evidence.version_key()
-            # Every family gets Luna's labels, a pre-matched one included: its worth is yes by the match, its
-            # labels come from the same request as everyone else's.
-            member_bundles: list[CollectionBundle] = []
-            for member in members:
-                row = self.conn.execute("SELECT payload_json FROM bundles WHERE candidate_id = ?",
-                                        (member.candidate_id,)).fetchone()
-                member_bundles.append(CollectionBundle.from_payload(json.loads(row["payload_json"])))
-            request: dict[str, Any] = luna.build_request(evidence.family_facts(members), member_bundles, summary, owner,
-                                                         evidence.reference_date(members))
-            digest: str = request_digest(luna.REQUEST_VERSION, request)
             member_ids: list[str] = []
             for member in members:
                 member_ids.append(member.candidate_id)
-            families.append(Family(key, tuple(member_ids), fingerprint, match, request, digest))
+            families.append(Family(key, tuple(member_ids), fingerprint, match, tuple(members), summary))
         return families
+
+    def _request(self, family: Family) -> dict[str, Any]:
+        """Build one family's exact request from its saved raw messages."""
+        member_bundles: list[CollectionBundle] = []
+        for candidate_id in family.members:
+            row = self.conn.execute("SELECT payload_json FROM bundles WHERE candidate_id = ?", (candidate_id,)).fetchone()
+            member_bundles.append(CollectionBundle.from_payload(json.loads(row["payload_json"])))
+        members = list(family.facts)
+        return luna.build_request(evidence.family_facts(members), member_bundles, family.channels, self._owner,
+                                  evidence.reference_date(members))
 
     def pending(self, families: list[Family]) -> list[Family]:
         """The first `limit` families to ask: the selected ones (`parent_ids`), or every family."""
@@ -143,14 +145,18 @@ class Worth(Node):
         cached: int = 0
         tokens: int = 0
         for family in pending:
+            request = self._request(family)
+            digest = request_digest(luna.REQUEST_VERSION, request)
+            self.request_digests[family.key] = digest
             if family.match is not None:
                 pre_matched += 1
                 if luna.NOTABLE_POSITION_RE.search(family.match.position):
                     notable += 1
-            if saved_answers(self.cache_dir, family.digest, luna.refused) is not None:
+            if saved_answers(self.cache_dir, digest, luna.refused) is not None:
                 cached += 1
             else:
-                tokens += input_tokens(family.request) + LABELS_TOKENS_PER_QUESTION * len(family.request["questions"])
+                tokens += input_tokens(request) + LABELS_TOKENS_PER_QUESTION * len(request["questions"])
+            del request
         return {
             "families": len(families), "members": members,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,
@@ -162,18 +168,41 @@ class Worth(Node):
     def execute(self, *, cache_only: bool = False) -> dict[str, int]:
         """Ask Luna once per family to ask and write one worth row per member."""
         todo: list[Family] = self.pending(self.families())
-        requests: dict[str, dict[str, Any]] = {}  # digest -> request
         for family in todo:
-            requests[family.digest] = family.request
-        answers = asyncio.run(decide_all(requests, self.cache_dir, cache_only=cache_only, stage="worth_labels",
-                                         on_progress=lambda done, total: self.progress(LABELS_PHASE, done, total),
-                                         refused=luna.refused))
+            if family.key not in self.request_digests:
+                request = self._request(family)
+                self.request_digests[family.key] = request_digest(luna.REQUEST_VERSION, request)
+                del request
+        digests = {self.request_digests[family.key] for family in todo}
+        missing = sum(saved_answers(self.cache_dir, digest, luna.refused) is None for digest in digests)
+        if cache_only and missing:
+            raise ValueError(f"{missing} answers are not saved yet. Check the cost again.")
+        labels_by_digest: dict[str, Labels | None] = {}
+        completed = 0
+        for start in range(0, len(todo), REQUEST_BATCH_SIZE):
+            requests: dict[str, dict[str, Any]] = {}
+            for family in todo[start:start + REQUEST_BATCH_SIZE]:
+                digest = self.request_digests[family.key]
+                if digest not in labels_by_digest and digest not in requests:
+                    requests[digest] = self._request(family)
+            if not requests:
+                continue
+            batch_missing = sum(saved_answers(self.cache_dir, digest, luna.refused) is None for digest in requests)
+            answers = asyncio.run(decide_all(requests, self.cache_dir, cache_only=cache_only, stage="worth_labels",
+                                             on_progress=lambda done, total: self.progress(LABELS_PHASE, completed + done, missing),
+                                             refused=luna.refused))
+            for digest, answer in answers.items():
+                labels_by_digest[digest] = None if luna.refused(answer) else {
+                    **luna.labels(answer), "version": luna.REQUEST_VERSION}
+            completed += batch_missing
+            requests.clear()
+            del answers
         verdicts: dict[str, Verdict] = {}  # family key -> its verdict
         pre_matched: int = 0
         for family in todo:
-            if luna.refused(answers[family.digest]):
+            labels = labels_by_digest[self.request_digests[family.key]]
+            if labels is None:
                 continue
-            labels: Labels = {**luna.labels(answers[family.digest]), "version": luna.REQUEST_VERSION}
             labels_json: str = json.dumps(labels, sort_keys=True)
             if family.match is not None:
                 # Already in the network, so yes; the labels are Luna's all the same.
@@ -196,7 +225,7 @@ class Worth(Node):
                              verdict.labels_json, family.fingerprint, now))
         queries.append_worth(self.conn, rows)
         return {"families": len(todo), "pre_matched_yes": pre_matched, "refused": len(todo) - len(verdicts),
-                "requests": len(requests), "worth_rows": len(rows)}
+                "requests": len(digests), "worth_rows": len(rows)}
 
 
 def main(argv: list[str] | None = None) -> int:
