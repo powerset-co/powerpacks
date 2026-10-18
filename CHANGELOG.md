@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.31.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.30.0...powerpacks-v3.31.0) (2026-10-18)
+
+
+### Features
+
+* **remote-assist:** update to the latest release on request, write the real data folder, explain one named person ([#869](https://github.com/powerset-co/powerpacks/issues/869)) ([1732ce0](https://github.com/powerset-co/powerpacks/commit/1732ce00a6e491490ba453b1017de0b6686dd37d))
+* **team:** the thread says their agent is working while a request has no answer ([#867](https://github.com/powerset-co/powerpacks/issues/867)) ([8f7cadc](https://github.com/powerset-co/powerpacks/commit/8f7cadcf5498e37ec19eabeee7cdb69b9840695b))
+
 ## [3.30.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.29.0...powerpacks-v3.30.0) (2026-10-18)
 
 
