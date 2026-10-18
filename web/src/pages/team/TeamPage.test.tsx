@@ -85,6 +85,7 @@ it("lists teammates with their agents' presence and opens a thread on pick", asy
   fireEvent.change(within(thread).getByRole("textbox"), { target: { value: "Restart and check again" } })
   fireEvent.keyDown(within(thread).getByRole("textbox"), { key: "Enter" })
   await waitFor(() => expect(within(thread).getByText("Restart and check again")).toBeTruthy())
+  expect(within(thread).getByRole("status").textContent).toContain("Casey Bravo's agent is working on it")
   expect(sent).toEqual([{ operator_id: "op-1", text: "Restart and check again" }])
   expect(within(thread).getByRole<HTMLTextAreaElement>("textbox").value).toBe("")
 })

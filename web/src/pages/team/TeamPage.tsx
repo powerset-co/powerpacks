@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { initials, Page } from "@/components/shared"
+import { initials, Page, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { askAgent, fetchTeam, fetchThread, type SupportMessage, type Teammate } from "@/lib/api/team"
@@ -30,6 +30,7 @@ const TEAM = {
   empty: "No requests yet.",
   you: "You",
   agent: (name: string) => `${name}'s agent`,
+  working: (name: string) => `${name}'s agent is working on it…`,
   awake: "Agent up",
   away: "Away",
 }
@@ -182,6 +183,12 @@ function Thread({ member }: { member: Teammate }) {
             who={message.direction === "out" ? TEAM.you : TEAM.agent(name)}
           />
         ))}
+        {thread.data?.length && thread.data[thread.data.length - 1]?.direction === "out" ? (
+          <li className="flex items-center gap-2 text-[12px] text-muted-foreground" role="status">
+            <Spinner />
+            {TEAM.working(name)}
+          </li>
+        ) : null}
         <div ref={end} />
       </ol>
       <form onSubmit={submit} className="flex items-end gap-2 border-t border-line p-3">
