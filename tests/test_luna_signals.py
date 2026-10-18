@@ -347,7 +347,7 @@ class BoundedWorthTests(StoreTests):
             return {digest: answers_for(request) for digest, request in requests.items()}
 
         patch, live, counts = self._track_requests()
-        with patch, mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2, create=True), \
+        with patch, mock.patch.object(worth_module, "REQUEST_BATCH_SIZE", 2), \
                 mock.patch.object(worth_module, "decide_all", new=decide):
             result = node.execute()
         self.assertEqual(result, {"families": 5, "pre_matched_yes": 0, "refused": 0, "requests": 5, "worth_rows": 5})
