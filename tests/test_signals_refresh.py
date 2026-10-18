@@ -158,7 +158,10 @@ class SignalsRefreshTests(StoreTests):
             node = thread.call_args.kwargs["args"][0]
         path.rename(path.with_suffix(".bkup"))
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic"}), NO_CALLS:
-            self.signals._run(node)
+            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR") as logs:
+                self.signals._run(node)
+        self.assertIn("Traceback (most recent call last):", logs.output[0])
+        self.assertIn(self.signals.status()["error"], logs.output[0])
         self.assertEqual(self.signals.status()["status"], "failed")
         self.assertEqual(self._snapshot(), before)
 

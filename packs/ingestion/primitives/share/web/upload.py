@@ -12,6 +12,7 @@ Changelog:
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -134,6 +135,7 @@ class ShareUpload:
                     except BaseException as exc:
                         if isinstance(exc, KeyboardInterrupt):
                             raise
+                        logging.getLogger(__name__).exception("Upload share check failed")
                         log_error(self.out_dir, Stage.PLANNING, exc)
                         raise ValueError(CHECK_FAILED) from exc
                     if previous.share_digest != current_digest:
@@ -155,6 +157,7 @@ class ShareUpload:
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt):
                 raise
+            logging.getLogger(__name__).exception("Share upload failed")
             saved = self._saved()
             if saved.status != "failed":
                 log_error(self.out_dir, saved.stage or Stage.PLANNING, exc)
