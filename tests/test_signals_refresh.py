@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich import settle
 from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.person_labels import PersonLabels
-from packs.ingestion.primitives.share.web.signals import PeopleSignals, RefreshSignals
+from packs.ingestion.primitives.share.web.signals import PeopleSignals, RefreshSignals, SignalsPlan
 from packs.ingestion.primitives.share.web.server import share_routes
 
 NO_CALLS = mock.patch.object(decisions, "AsyncOpenAI", side_effect=AssertionError("no paid calls"))
@@ -86,6 +87,18 @@ class SignalsRefreshTests(StoreTests):
         return [tuple(row) for table in ("worth", "person_labels", "person_tags")
                 for row in self.conn.execute(f"SELECT * FROM {table}")]
 
+    def _finished(self):
+        self.assertIsNotNone(self.signals._thread)
+        self.signals._thread.join(5)
+        self.assertFalse(self.signals._thread.is_alive())
+        return self.signals.status()
+
+    def _check(self, parent_ids):
+        self.signals.check(parent_ids)
+        status = self._finished()
+        self.assertEqual(status["status"], "idle", status)
+        return SignalsPlan(**status["plan"])
+
     def test_refresh_rejudges_only_selected_families_without_removing_old_rows(self) -> None:
         self.assertEqual(Worth(self.conn, self.root, limit=DEFAULT_LIMIT).estimate()["pending"], 2)
         refresh = Worth(self.conn, self.root, limit=DEFAULT_LIMIT, parent_ids=("p:a",))
@@ -97,12 +110,84 @@ class SignalsRefreshTests(StoreTests):
                 refresh.run()
         self.assertEqual(self._snapshot(), before)
 
+    def test_check_returns_while_reading_families_and_publishes_progress_without_calls(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        request = Worth._request
+
+        def slow_request(worth, family):
+            if family.key == "p:b":
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError("test did not release the family read")
+            return request(worth, family)
+
+        before = self._snapshot()
+        with NO_CALLS, mock.patch.object(Worth, "_request", slow_request):
+            worker = threading.Thread(target=self.signals.check, args=((),))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                worker.join(0.1)
+                self.assertFalse(worker.is_alive(), "check blocked the request thread")
+                status = self.signals.status()
+                self.assertEqual((status["status"], status["message"], status["done"], status["total"]),
+                                 ("running", "Reading families", 1, 2))
+                self.assertIsNone(status["plan"])
+                with self.assertRaisesRegex(ValueError, "already"):
+                    self.signals.start((), None)
+            finally:
+                release.set()
+                worker.join(5)
+                if self.signals._thread is not None:
+                    self.signals._thread.join(5)
+        status = self.signals.status()
+        self.assertEqual(status["status"], "idle", status)
+        self.assertEqual(status["plan"]["people"], 2)
+        self.assertEqual(self._snapshot(), before)
+
+    def test_refresh_returns_before_planning_finishes(self) -> None:
+        self._cache(self.families[0])
+        entered = threading.Event()
+        release = threading.Event()
+        plan = RefreshSignals.plan
+
+        def slow_plan(node):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release planning")
+            return plan(node)
+
+        with NO_CALLS, mock.patch.object(RefreshSignals, "plan", slow_plan):
+            caller = threading.Thread(target=self.signals.start, args=(("p:a",), None))
+            caller.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                caller.join(0.1)
+                self.assertFalse(caller.is_alive(), "refresh blocked the request thread")
+                self.assertEqual(self.signals.status()["status"], "running")
+            finally:
+                release.set()
+                caller.join(5)
+                status = self._finished()
+        self.assertEqual(status["status"], "completed", status)
+
+    def test_check_failure_is_reported_without_changing_signals_or_calling_providers(self) -> None:
+        before = self._snapshot()
+        with NO_CALLS, mock.patch.object(Worth, "_request", side_effect=RuntimeError("saved bundle unreadable")):
+            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR") as logs:
+                self.assertEqual(self.signals.check(())["status"], "running")
+                status = self._finished()
+        self.assertEqual((status["status"], status["error"]), ("failed", "saved bundle unreadable"))
+        self.assertIn("Traceback (most recent call last):", logs.output[0])
+        self.assertEqual(self._snapshot(), before)
+
     def test_a_refresh_asks_everyone_or_the_selection(self) -> None:
         # Every family is asked every time; only the unsaved answers cost anything.
         self._cache(self.families[1])
-        plan = self.signals.check(())
+        plan = self._check(())
         self.assertEqual((plan.people, plan.cached, plan.new_requests), (2, 1, 1))
-        self.assertEqual(self.signals.check(("p:a",)).people, 1)
+        self.assertEqual(self._check(("p:a",)).people, 1)
 
     def test_a_family_luna_refuses_keeps_its_old_signals_and_labels_still_run(self) -> None:
         # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
@@ -135,37 +220,49 @@ class SignalsRefreshTests(StoreTests):
                          ("no", settle.REASON))
 
     def test_paid_refresh_without_confirmation_never_starts(self) -> None:
-        plan = self.signals.check(("p:a",))
+        plan = self._check(("p:a",))
         self.assertEqual((plan.people, plan.cached, plan.new_requests), (1, 0, 1))
         self.assertGreater(plan.estimated_cost_usd, 0)
         self.assertEqual(plan.estimated_seconds, 1)
         with mock.patch("packs.ingestion.primitives.deep_context_v2.worth.worth.decide_all") as calls:
-            with self.assertRaisesRegex(ValueError, "confirm"):
+            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR"):
                 self.signals.start(("p:a",), None)
+                status = self._finished()
         calls.assert_not_called()
-        self.assertIsNone(self.signals._thread)
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("confirm", status["error"])
 
     def test_confirmation_rejects_changed_evidence_and_cache_coverage(self) -> None:
-        plan = self.signals.check(("p:a",))
+        plan = self._check(("p:a",))
         self._cache(self.families[0])
-        with self.assertRaisesRegex(ValueError, "changed"):
+        with NO_CALLS, self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR"):
             self.signals.start(("p:a",), plan.checked)
-        plan = self.signals.check(("p:a",))
+            status = self._finished()
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("changed", status["error"])
+        plan = self._check(("p:a",))
         queries.upsert_owner(self.conn, '{"name":"Changed Owner"}', "changed", "2026-10-08")
         self.conn.commit()
-        with self.assertRaisesRegex(ValueError, "changed"):
+        with NO_CALLS, self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR"):
             self.signals.start(("p:a",), plan.checked)
+            status = self._finished()
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("changed", status["error"])
 
     def test_cache_disappearing_after_free_start_cannot_enable_paid_calls(self) -> None:
         path = self._cache(self.families[0])
         before = self._snapshot()
-        with mock.patch("packs.ingestion.primitives.share.web.signals.threading.Thread") as thread:
-            self.signals.start(("p:a",), None)
-            node = thread.call_args.kwargs["args"][0]
-        path.rename(path.with_suffix(".bkup"))
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic"}), NO_CALLS:
-            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR") as logs:
-                self.signals._run(node)
+        run = RefreshSignals.run
+
+        def remove_answer(node):
+            path.rename(path.with_suffix(".bkup"))
+            return run(node)
+
+        with mock.patch.object(RefreshSignals, "run", remove_answer):
+            with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic"}), NO_CALLS:
+                with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR") as logs:
+                    self.signals.start(("p:a",), None)
+                    self._finished()
         self.assertIn("Traceback (most recent call last):", logs.output[0])
         self.assertIn(self.signals.status()["error"], logs.output[0])
         self.assertEqual(self.signals.status()["status"], "failed")
@@ -193,14 +290,18 @@ class SignalsRefreshTests(StoreTests):
 
     def test_cache_disappearing_after_paid_confirmation_does_not_expand_paid_work(self) -> None:
         path = self._cache(self.families[0])
-        plan = self.signals.check(("p:a", "p:b"))
+        plan = self._check(("p:a", "p:b"))
         self.assertEqual((plan.cached, plan.new_requests), (1, 1))
-        with mock.patch("packs.ingestion.primitives.share.web.signals.threading.Thread") as thread:
-            self.signals.start(("p:a", "p:b"), plan.checked)
-            node = thread.call_args.kwargs["args"][0]
-        path.rename(path.with_suffix(".bkup"))
-        with NO_CALLS:
-            self.signals._run(node)
+        run = RefreshSignals.run
+
+        def remove_answer(node):
+            path.rename(path.with_suffix(".bkup"))
+            return run(node)
+
+        with mock.patch.object(RefreshSignals, "run", remove_answer), NO_CALLS:
+            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR"):
+                self.signals.start(("p:a", "p:b"), plan.checked)
+                self._finished()
         self.assertEqual(self.signals.status()["status"], "failed")
 
     def test_cache_only_client_cannot_call_provider_with_a_key_present(self) -> None:
@@ -226,18 +327,26 @@ class SignalsRefreshTests(StoreTests):
             self.assertEqual(json.loads(handler.wfile.getvalue())["status"], "idle")
             handler = Handler(body=json.dumps({"people": ["p:a"]}).encode())
             self.assertTrue(routes.post(handler, urllib.parse.urlparse("/api/people/signals/check")))
-            plan = json.loads(handler.wfile.getvalue())
+            self.assertEqual(json.loads(handler.wfile.getvalue())["status"], "running")
+            routes.signals._thread.join(5)
+            plan = routes.signals.status()["plan"]
             self.assertEqual((plan["people"], plan["new_requests"]), (1, 1))
             handler = Handler(body=json.dumps({"people": ["p:a"]}).encode())
-            self.assertTrue(routes.post(handler, urllib.parse.urlparse("/api/people/signals")))
-            self.assertEqual(handler.response_status, 409)
-            self.assertIn("confirm", json.loads(handler.wfile.getvalue())["error"])
+            with self.assertLogs("packs.ingestion.primitives.share.web.signals", level="ERROR"):
+                self.assertTrue(routes.post(handler, urllib.parse.urlparse("/api/people/signals")))
+                self.assertEqual(handler.response_status, 200)
+                self.assertEqual(json.loads(handler.wfile.getvalue())["status"], "running")
+                routes.signals._thread.join(5)
+            self.assertEqual(routes.signals.status()["status"], "failed")
+            self.assertIn("confirm", routes.signals.status()["error"])
 
     def test_routes_refresh_everyone_with_no_one_selected(self) -> None:
         routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
         handler = Handler(body=json.dumps({"people": []}).encode())
         routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
-        self.assertEqual(json.loads(handler.wfile.getvalue())["people"], 2)
+        self.assertEqual(json.loads(handler.wfile.getvalue())["status"], "running")
+        routes.signals._thread.join(5)
+        self.assertEqual(routes.signals.status()["plan"]["people"], 2)
 
     def test_routes_reject_unknown_selection_and_other_origins(self) -> None:
         routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")

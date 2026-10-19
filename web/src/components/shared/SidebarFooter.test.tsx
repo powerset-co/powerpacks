@@ -175,8 +175,7 @@ it("installs the update with a progress bar, then restarts into it", async () =>
   expect(bar.getAttribute("aria-valuenow")).toBe("100")
 
   app.done()
-  // The stored check names 3.27.0 as current; the relaunched app must ask the feed again.
-  expect(localStorage.getItem("update.checked")).not.toBeNull()
+  expect(localStorage.getItem("update.checked")).toBeNull()
   fireEvent.click(await screen.findByRole("button", { name: "Restart now" }))
   expect(invoked("update_restart")).toBe(1)
   expect(localStorage.getItem("update.checked")).toBeNull()
@@ -242,4 +241,20 @@ it("installs from the rail's icon, its tip following along, and restarts on the 
   fireEvent.click(icon)
   expect(invoked("update_restart")).toBe(1)
   expect(localStorage.getItem("update.checked")).toBeNull()
+})
+
+it("ignores an old saved check and checks the installed version on launch", async () => {
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  localStorage.setItem(
+    "update.checked",
+    JSON.stringify({ at: Date.now(), update: { current: "3.26.0", latest: "3.27.0", available: true } }),
+  )
+  localStorage.setItem("update.dismissed", JSON.stringify("3.26.0"))
+  mount()
+  await waitFor(() => expect(invoked("update_check")).toBe(1))
+  expect(screen.queryByText("Update available")).toBeNull()
+  expect(localStorage.getItem("update.dismissed")).toBe(JSON.stringify("3.26.0"))
+  cleanup()
+  mount()
+  await waitFor(() => expect(invoked("update_check")).toBe(2))
 })

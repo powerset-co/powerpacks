@@ -12,9 +12,12 @@ Work only in this checkout and its `.powerpacks/` folder.
   Run paid steps (Refresh signals, worth, enrich, any Luna or OpenAI call) only
   when the request asks for them. Use the app's local page server at
   http://127.0.0.1:8765 to reproduce what the teammate saw.
-  For signals, POST /api/people/signals/check and read the plan. Then POST
-  /api/people/signals with the plan's checked value. Poll GET /api/people/signals
-  until completed or failed. Include the plan's cost and outcome in the report.
+  For signals, POST /api/people/signals/check, then poll GET /api/people/signals
+  until idle with a plan or failed. Checking reads saved families and cache coverage;
+  it never calls a provider. Then POST /api/people/signals with the plan's checked
+  value and poll until completed or failed. Both requests return running promptly;
+  polling reports Reading families progress. Include the plan's cost and outcome
+  in the report.
   Never overwrite paid artifacts (saved Luna answers, facts, dossiers).
   Never delete data.
 - Never send local data out: no uploads, external messages, or pasted logs, store

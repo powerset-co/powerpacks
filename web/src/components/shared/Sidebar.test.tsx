@@ -12,7 +12,6 @@ vi.mock("@/lib/api/account", () => ({ ...auth, ACCOUNT_KEY: ["account"] }))
 vi.mock("@/lib/api/feedback", () => ({ signIn: auth.signIn, sendAppFeedback: auth.sendAppFeedback }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true }))
 vi.mock("@/lib/api/update", () => ({
-  lastCheck: () => null,
   dismissedVersion: () => null,
   checkUpdate: () => Promise.resolve(null),
   UPDATE_INTERVAL_MS: 60_000,

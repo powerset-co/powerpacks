@@ -19,13 +19,7 @@ export interface UpdateProgress {
 }
 
 export const UPDATE_INTERVAL_MS = 12 * 60 * 60 * 1000
-const CHECKED_KEY = "update.checked"
 const DISMISSED_KEY = "update.dismissed"
-
-export interface Checked {
-  at: number
-  update: Update
-}
 
 function isUpdate(raw: unknown): raw is Update {
   return (
@@ -47,7 +41,6 @@ function isProgress(raw: unknown): raw is UpdateProgress {
 export async function checkUpdate(): Promise<Update> {
   const update = await invoke("update_check")
   if (!isUpdate(update)) throw new Error("The update check answered oddly.")
-  writeStored("local", CHECKED_KEY, { at: Date.now(), update })
   return update
 }
 
@@ -56,10 +49,8 @@ export async function installUpdate(): Promise<void> {
   await invoke("update_install")
 }
 
-/** Restarts into the installed version. The stored check still names the old version as current,
- *  so it goes first: the relaunched app asks the feed again. */
+/** Restarts into the installed version. */
 export async function restartApp(): Promise<void> {
-  localStorage.removeItem(CHECKED_KEY)
   await invoke("update_restart")
 }
 
@@ -68,15 +59,6 @@ export function onUpdateProgress(handler: (progress: UpdateProgress) => void): (
   return listen("update:progress", (payload) => {
     if (isProgress(payload)) handler(payload)
   })
-}
-
-/** The last check on this machine, so a relaunch within the interval asks nothing. */
-export function lastCheck(): Checked | null {
-  return readStored("local", CHECKED_KEY, (raw) =>
-    isRecord(raw) && typeof raw.at === "number" && isUpdate(raw.update)
-      ? { at: raw.at, update: raw.update }
-      : null,
-  )
 }
 
 /** The version the user dismissed; the pane stays away until a newer one. */

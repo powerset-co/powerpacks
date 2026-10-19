@@ -3,6 +3,8 @@ account and feedback routes, which answer beside them before the network store e
 
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stderr
 import base64
 import json
 import tempfile
@@ -19,7 +21,7 @@ from unittest.mock import patch
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.shared.web import account, feedback
 from packs.shared.web.app import AppRoutes
-from packs.shared.web.server import persistent_handler
+from packs.shared.web.server import mounted_handler, persistent_handler
 
 FELL_THROUGH = 418
 
@@ -95,6 +97,14 @@ class AccountRoutesTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def test_request_logs_include_timestamp(self) -> None:
+        output = io.StringIO()
+        handler = object.__new__(mounted_handler(self.root))
+        handler.client_address = ("127.0.0.1", 12345)
+        with redirect_stderr(output):
+            handler.log_message('%s', '"GET /api/account HTTP/1.1" 200 -')
+        self.assertRegex(output.getvalue(), r'127\.0\.0\.1 - - \[\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2}\] "GET /api/account HTTP/1\.1"')
 
     def _json(self, path: str, method: str = "GET") -> tuple[int, dict]:
         request = urllib.request.Request(self.base + path, method=method, data=b"" if method == "POST" else None)

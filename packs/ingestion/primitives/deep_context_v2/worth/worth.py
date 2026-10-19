@@ -144,7 +144,8 @@ class Worth(Node):
         notable: int = 0
         cached: int = 0
         tokens: int = 0
-        for family in pending:
+        self.progress("Reading families", 0, len(pending))
+        for done, family in enumerate(pending, 1):
             request = self._request(family)
             digest = request_digest(luna.REQUEST_VERSION, request)
             self.request_digests[family.key] = digest
@@ -157,6 +158,7 @@ class Worth(Node):
             else:
                 tokens += input_tokens(request) + LABELS_TOKENS_PER_QUESTION * len(request["questions"])
             del request
+            self.progress("Reading families", done, len(pending))
         return {
             "families": len(families), "members": members,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,

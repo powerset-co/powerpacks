@@ -15,6 +15,7 @@ import logging
 import math
 import sqlite3
 import threading
+from contextlib import closing
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -48,7 +49,7 @@ class SignalsStatus:
     message: str | None = None
     plan: SignalsPlan | None = None
     error: str | None = None
-    # Requests answered in the current phase, of `total`.
+    # Families read or requests answered in the current phase, of `total`.
     done: int = 0
     total: int = 0
     # Families Luna declined to answer: they keep their old signals and are asked next time.
@@ -65,6 +66,7 @@ class RefreshSignals(Node):
         super().__init__(conn, data_root)
         self.worth = Worth(conn, data_root, limit=DEFAULT_LIMIT, parent_ids=parent_ids)
         self.parent_ids = parent_ids
+        self.worth.on_progress = self.progress
         self.checked: str | None = None
 
     def plan(self) -> SignalsPlan:
@@ -85,7 +87,6 @@ class RefreshSignals(Node):
         plan = self.plan()
         if self.checked is not None and self.checked != plan.checked:
             raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
-        self.worth.on_progress = self.progress
         counts = self.worth.execute(cache_only=self.cache_only)
         counts["settle_worth_rows"] = settle(self.conn, self.data_root, now_iso())
         self.progress("Updating People", 0, 0)
@@ -103,12 +104,14 @@ class PeopleSignals:
         self._thread: threading.Thread | None = None
         self._status = SignalsStatus()
 
-    def check(self, parent_ids: tuple[str, ...]) -> SignalsPlan:
-        conn = open_store(self.db_path)
-        try:
-            return RefreshSignals(conn, self.data_root, parent_ids).plan()
-        finally:
-            conn.close()
+    def check(self, parent_ids: tuple[str, ...]) -> dict[str, Any]:
+        with self._lock:
+            if self._status.status == "running":
+                raise ValueError("Signals are already refreshing. Wait for them to finish.")
+            self._status = SignalsStatus("running", "Reading families")
+            self._thread = threading.Thread(target=self._run, args=(parent_ids, "check", None), daemon=True)
+            self._thread.start()
+            return asdict(self._status)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -116,40 +119,39 @@ class PeopleSignals:
 
     def start(self, parent_ids: tuple[str, ...], checked: str | None) -> dict[str, Any]:
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self._status.status == "running":
                 raise ValueError("Signals are already refreshing. Wait for them to finish.")
-            conn = open_store(self.db_path, shared=True)
-            node = RefreshSignals(conn, self.data_root, parent_ids)
-            try:
+            self._status = SignalsStatus("running", "Reading families")
+            self._thread = threading.Thread(target=self._run, args=(parent_ids, "refresh", checked), daemon=True)
+            self._thread.start()
+            return asdict(self._status)
+
+    def _run(self, parent_ids: tuple[str, ...], method: Literal["check", "refresh"], checked: str | None) -> None:
+        def progress(message: str, done: int, total: int) -> None:
+            with self._lock:
+                self._status = replace(self._status, message=message, done=done, total=total)
+        try:
+            with closing(open_store(self.db_path)) as conn:
+                node = RefreshSignals(conn, self.data_root, parent_ids)
+                node.on_progress = progress
                 plan = node.plan()
+                with self._lock:
+                    self._status = replace(self._status, plan=plan)
+                    if method == "check":
+                        self._status = replace(self._status, status="idle", message=None)
+                        return
                 if checked is not None and checked != plan.checked:
                     raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
                 if plan.new_requests and checked is None:
                     raise ValueError("Check and confirm the estimated cost before refreshing signals.")
-            except Exception:
-                conn.close()
-                raise
-            self._status = SignalsStatus("running", "Reading signals", plan)
-            node.cache_only = plan.new_requests == 0
-            node.checked = plan.checked
-            self._thread = threading.Thread(target=self._run, args=(node,), daemon=True)
-            self._thread.start()
-        return self.status()
-
-    def _run(self, node: RefreshSignals) -> None:
-        def progress(message: str, done: int, total: int) -> None:
-            with self._lock:
-                self._status = replace(self._status, message=message, done=done, total=total)
-        node.on_progress = progress
-        try:
-            manifest = node.run()
+                node.cache_only = plan.new_requests == 0
+                node.checked = plan.checked
+                manifest = node.run()
         except Exception as error:
-            logging.getLogger(__name__).exception("Signals refresh failed")
+            logging.getLogger(__name__).exception("Signals %s failed", method)
             with self._lock:
                 self._status = replace(self._status, status="failed", message=None, error=str(error))
         else:
             with self._lock:
                 self._status = replace(self._status, status="completed", message=None,
                                        refused=manifest.counts["refused"])
-        finally:
-            node.conn.close()

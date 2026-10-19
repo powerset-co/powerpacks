@@ -309,7 +309,7 @@ class ShareRoutes:
                 raise ValueError("Some selected people no longer exist. Reload People and try again.")
             ids = tuple(sorted(set(people)))
             if check:
-                payload = asdict(self.signals.check(ids))
+                payload = self.signals.check(ids)
             else:
                 checked = form.get("checked")
                 payload = self.signals.start(ids, checked if isinstance(checked, str) else None)
