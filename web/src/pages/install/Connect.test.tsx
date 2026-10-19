@@ -393,7 +393,7 @@ it("tells you to turn on Full Disk Access, Working until you come back", async (
   ).toBeNull()
 })
 
-it("expands account details in settings without setup navigation", async () => {
+it("expands account details in settings without setup navigation", () => {
   mount({
     details: {
       gmail: <p>Mailbox stats</p>,
@@ -402,7 +402,7 @@ it("expands account details in settings without setup navigation", async () => {
       whatsapp: <p>WhatsApp stats</p>,
     },
   })
-  const gmail = screen.getByText("Gmail").closest("details")!
+  const gmail = must(screen.getByText("Gmail").closest("details"), "Gmail details")
   expect(gmail.open).toBe(false)
   fireEvent.click(screen.getByText("Gmail"))
   expect(gmail.open).toBe(true)

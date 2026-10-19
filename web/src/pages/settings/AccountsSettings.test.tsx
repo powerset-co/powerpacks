@@ -49,7 +49,8 @@ it("shows loading placeholders, then expandable account data", async () => {
   expect(screen.getByLabelText("Loading accounts")).toBeTruthy()
   resolve(PAYLOAD)
   const title = await screen.findByText("Gmail")
-  const details = title.closest("details")!
+  const details = title.closest("details")
+  if (!details) throw new Error("Expected expandable account row")
   expect(details.open).toBe(false)
   fireEvent.click(title)
   expect(details.open).toBe(true)
