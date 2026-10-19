@@ -3,7 +3,7 @@
 import { isDesktop } from "@/lib/desktop"
 
 export type PageKey =
-  "home" | "agent" | "searches" | "people" | "sets" | "team" | "accounts" | "tasks" | "setup" | "settings"
+  "home" | "agent" | "searches" | "people" | "sets" | "team" | "tasks" | "setup" | "settings"
 
 export interface Page {
   key: PageKey
@@ -19,7 +19,6 @@ const BROWSER_PAGES: readonly Page[] = [
   HOME,
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
-  { key: "accounts", label: "Accounts", href: "/accounts" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.
   { key: "team", label: "Team", href: "/team" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away.

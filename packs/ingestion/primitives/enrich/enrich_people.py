@@ -25,8 +25,8 @@ Consumers:
 Input: a shared people schema CSV, usually the `imports/merge_people.py` output.
 Output: enriched people schema CSV plus the two provider hand-off CSVs.
 
-LinkedIn hydration runs through the Powerset gateway when POWERSET_API_KEY is
-present. Missing keys fail clearly
+LinkedIn hydration uses POWERSET_API_KEY through the gateway, otherwise
+RAPIDAPI_LINKEDIN_KEY directly. Missing keys fail clearly
 instead of opening an approval step.
 
 Contract: ONE idempotent `run` (plus `status`, which reads the stage manifest,
@@ -229,6 +229,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     normalize_people_row,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.shared.linkedin_api import MISSING_LINKEDIN_KEY  # noqa: E402
 from packs.shared.rate_limiter import StartRateLimiter  # noqa: E402
 
 DEFAULT_PROGRESS_INTERVAL_SECONDS = float(os.environ.get("POWERPACKS_RAPIDAPI_PROGRESS_INTERVAL_SECONDS", "60"))
@@ -456,7 +457,7 @@ class EnrichLinkedInProfiles(Node):
         # missing key. One client is shared across the pool below (it is
         # stateless beyond its key/retry).
         if paid_call_count > 0 and not client.api_key:
-            raise PipelineFailed("POWERSET_API_KEY is not set")
+            raise PipelineFailed(MISSING_LINKEDIN_KEY)
 
         profile_cache_dir = cfg.profile_cache_dir
         max_workers = max(1, int(cfg.max_workers or DEFAULT_RAPIDAPI_MAX_WORKERS))
@@ -760,7 +761,7 @@ class EnrichPeople(Node):
                 ),
             })
         if paid > 0 and not RapidApiClient.resolve_key():
-            return self._build(status="failed", error="POWERSET_API_KEY is not set")
+            return self._build(status="failed", error=MISSING_LINKEDIN_KEY)
         try:
             for step_id, node in (
                 ("enrich_linkedin", EnrichLinkedInProfiles(self.cfg)),
@@ -825,6 +826,7 @@ class EnrichPeople(Node):
             "provider": "rapidapi",
             "keys_present": {
                 "POWERSET_API_KEY": bool(os.getenv("POWERSET_API_KEY", "").strip()),
+                "RAPIDAPI_LINKEDIN_KEY": bool(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip()),
             },
         })
         return 0

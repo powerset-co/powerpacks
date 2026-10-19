@@ -54,7 +54,7 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account, features, feedback, search_scope, team
+from packs.shared.web import account, features, feedback, providers, search_scope, team
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
@@ -296,6 +296,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/account":
                 self._json(account.read(root))
+                return
+            if parsed.path == "/api/settings/providers":
+                self._json(providers.read(root))
                 return
             if parsed.path == "/api/features":
                 self._json(asdict(features.read(root)))

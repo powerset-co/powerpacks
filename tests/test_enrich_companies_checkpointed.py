@@ -348,7 +348,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 }
             }
 
-            with mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-key"}), \
+            with mock.patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "test-key"}, clear=True), \
                     mock.patch.object(rapidapi_company, "fetch_company_details_batch", return_value=fake_responses) as fetched, \
                     mock.patch.object(stage, "stream_openai_company_classifiers", side_effect=fake_stream):
                 manifest = stage.run(Namespace(
@@ -369,7 +369,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                     stop_after_chunks=None,
                 ))
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(fetched.call_count, 1)
+            fetched.assert_called_once_with(["12345"])
             row = json.loads(output_path.read_text(encoding="utf-8"))
             self.assertEqual(row["headcount"], 42)
             self.assertEqual(row["founded_year"], 2019)

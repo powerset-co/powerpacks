@@ -19,7 +19,6 @@ const PAGES = [
   { label: "Chat", href: "/agent" },
   { label: "Searches", href: "/searches" },
   { label: "People", href: "/people" },
-  { label: "Accounts", href: "/accounts" },
   { label: "Scheduled tasks", href: "/tasks" },
   { label: "Settings", href: "/settings" },
 ] as const

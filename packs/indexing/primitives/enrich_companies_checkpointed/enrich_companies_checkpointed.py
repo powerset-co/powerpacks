@@ -42,6 +42,7 @@ from packs.indexing.lib.llm_config import (  # noqa: E402
 from packs.indexing.lib.openai_stream import StopStreaming, drain_pool  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.shared.linkedin_api import LinkedInApiConfig  # noqa: E402
 
 DEFAULT_CHECKPOINT_EVERY = 1000
 WORD_RE = re.compile(r"[a-z0-9]+")
@@ -989,8 +990,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # read the local disk cache (free) and skip misses.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi_id → response
     rapidapi_name_to_id: dict[str, str] = {}  # norm_name → rapidapi_id
-    gateway_key = os.getenv("POWERSET_API_KEY", "").strip()
-    if gateway_key:
+    if LinkedInApiConfig.resolve().api_key:
         # Collect unique rapidapi_company_ids from the input.
         # Try the input JSONL first; fall back to the people CSV ledger.
         unique_ids: dict[str, str] = {}  # rapidapi_id → company_name (all, for free cache backfill)
@@ -1023,7 +1023,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                         missing_ids.append(rid)
         if missing_ids and allow_paid:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_ids)} new company profiles from RapidAPI\n")
-            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids, api_key=gateway_key)
+            rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids)
             ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
             sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(missing_ids)} company profiles\n")
         # Free disk-cache backfill for the rest (reused companies) — never hits the network.
@@ -1053,7 +1053,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     missing_slugs.append(slug)
         if missing_slugs and allow_paid:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_slugs)} new company profiles by slug from RapidAPI\n")
-            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs, api_key=gateway_key)
+            by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs)
             ok_slug = sum(1 for v in by_slug.values() if not v.get("error"))
             sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(missing_slugs)} company profiles by slug\n")
             for slug, resp in by_slug.items():

@@ -41,6 +41,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_v2_review_routes \
   tests.test_people_sets \
   tests.test_people_worth \
+  tests.test_settings_providers \
   tests.test_luna_signals \
   tests.test_signals_refresh \
   tests.test_agent_messages \
@@ -102,6 +103,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_logbook \
   tests.test_app_routes \
   tests.test_enrich_people \
+  tests.test_linkedin_api_config \
   tests.test_icons \
   tests.test_linkedin_import \
   tests.test_local_searches_browser \

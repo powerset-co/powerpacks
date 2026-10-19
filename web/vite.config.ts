@@ -17,6 +17,7 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    assetsInlineLimit: 32_768, // Bundle provider logos; the local server serves JS and CSS.
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {

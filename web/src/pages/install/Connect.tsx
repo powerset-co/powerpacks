@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 
-import { CHANNEL_ICON, CheckIcon, PowersetMark, Spinner } from "@/components/shared"
+import { CHANNEL_ICON, PowersetMark, Spinner } from "@/components/shared"
+import { ConnectionRow as Row, type ConnectionState as State } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
@@ -18,6 +19,8 @@ import {
   type ConnectSource,
   type Preflight,
 } from "@/lib/api/install"
+import type { AccountSource } from "@/types/accounts"
+import { CodexDetails } from "@/pages/settings/CodexDetails"
 import { cn } from "@/lib/utils"
 import type { InstallStatus, InstallStep } from "@/types/install"
 
@@ -48,65 +51,6 @@ const NEEDS: Record<ConnectSource, readonly Tool[]> = {
   whatsapp: [],
 }
 const TOOL = { chromium: "browser", gcloud: "gcloud" } as const
-
-type State = "checking" | "working" | "ready" | "needed"
-
-// Every row's right side: one slot of one width, an icon beside a word.
-const SLOT = "w-28 shrink-0 self-center"
-
-/** One thing to connect: what it is for, then its slot: Connect while it is not connected,
- *  "Working" while its sign-in runs, a check once connected. */
-function Row({
-  icon,
-  title,
-  why,
-  state,
-  action,
-  children,
-}: {
-  icon: ReactNode
-  title: string
-  why: ReactNode
-  state: State
-  action?: { label: string; onClick: () => void; disabled?: boolean }
-  // What the step says while it works or stopped: its line, a code to scan, a command.
-  children?: ReactNode
-}) {
-  return (
-    <li className="flex items-start gap-3 px-4 py-3.5">
-      <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground">
-        {icon}
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[13px] font-bold">{title}</span>
-        <span className="text-xs leading-snug text-muted-foreground">{why}</span>
-        {children}
-      </div>
-      {state === "needed" && action ? (
-        <Button
-          size="sm"
-          onClick={action.onClick}
-          disabled={action.disabled}
-          aria-label={`${title}: ${action.label}`}
-          className={SLOT}
-        >
-          {action.label}
-        </Button>
-      ) : (
-        <span
-          className={cn(
-            SLOT,
-            "rise-in inline-flex items-center justify-center gap-1.5 text-xs font-semibold",
-            state === "ready" ? "text-ok" : "text-muted-foreground",
-          )}
-        >
-          {state === "ready" ? <CheckIcon className="size-3.5" /> : <Spinner />}
-          {state === "ready" ? "Connected" : state === "working" ? "Working" : "Checking"}
-        </span>
-      )}
-    </li>
-  )
-}
 
 /** The one line a row adds: what to do now, or the command a stopped sign-in needs. */
 function Line({ children, bad = false }: { children: ReactNode; bad?: boolean }) {
@@ -275,7 +219,15 @@ function Mailboxes({
  *  waits on the user. Only Powerset is needed; a source left unconnected is left out of setup.
  *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app.
  *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back. */
-export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () => void }) {
+export function Connect({
+  onBack,
+  onDone,
+  details,
+}: {
+  onBack?: () => void
+  onDone?: () => void
+  details?: Record<AccountSource, ReactNode>
+}) {
   const client = useQueryClient()
   const codex = useCodexAccount()
   const [error, setError] = useState<string | null>(null)
@@ -327,8 +279,10 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
   useEffect(() => {
     const ended = wasRunning.current && !running
     wasRunning.current = running
-    if (ended || (queued?.launched && !running))
+    if (ended || (queued?.launched && !running)) {
+      void client.invalidateQueries({ queryKey: ["accounts"] })
       void client.refetchQueries({ queryKey: SIGNED_IN }).finally(() => setQueued(null))
+    }
   }, [queued, running, client])
   const email = mailbox ?? account.data?.email ?? ""
   const linkedin = ready?.linkedin === true
@@ -384,6 +338,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
         key={name}
         icon={icon}
         title={title}
+        details={details?.[name]}
         why={why}
         state={at.state}
         action={{
@@ -414,7 +369,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <ul className="m-0 flex list-none flex-col divide-y divide-line rounded-[var(--radius-m)] border border-line-strong bg-card p-0 text-left">
+      <ul className="m-0 flex list-none flex-col divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line-strong bg-card p-0 text-left">
         <Row
           icon={<PowersetMark className="size-[18px]" />}
           title="Powerset"
@@ -439,6 +394,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
         <Row
           icon={<span className="font-mono text-[12px] font-bold">&gt;_</span>}
           title="Codex"
+          details={details ? <CodexDetails codex={codex} /> : undefined}
           why="Chat, on your ChatGPT plan."
           state={
             codex.loading
@@ -456,6 +412,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
         <Row
           icon={<MessagesIcon className="size-[18px]" />}
           title="Messages"
+          details={details?.imessage}
           why="iMessage and Contacts, with Full Disk Access."
           state={ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed"}
           action={{
@@ -478,7 +435,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
           "LinkedIn",
           <LinkedInIcon className="size-[18px]" />,
           "Your LinkedIn connections.",
-          !linkedin && !onDone && (processed || profile !== null) ? (
+          !linkedin && onBack && (processed || profile !== null) ? (
             <ProfileLink url={profile} onChange={setProfile} />
           ) : null,
         )}
@@ -507,7 +464,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
             Done
           </Button>
         </div>
-      ) : (
+      ) : onBack ? (
         <div className="flex items-center justify-between gap-3">
           <Button disabled={starting} onClick={onBack}>
             Back
@@ -535,7 +492,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
             {starting ? "Starting setup…" : "Set up"}
           </Button>
         </div>
-      )}
+      ) : null}
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
           {error}

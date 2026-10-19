@@ -1,7 +1,7 @@
 import { ChatGptSignIn } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { useCodexAccount } from "@/lib/agent/useCodexAccount"
+import type { CodexAccountState } from "@/lib/agent/useCodexAccount"
 import type { CodexStatus } from "@/types/agent"
 
 // ChatGPT's plan types as people know them: the Pro tiers are "prolite", "pro" and "promax"
@@ -23,22 +23,11 @@ function summary(status: CodexStatus | undefined): { name: string; plan: string 
 }
 
 /** The Codex account that runs Chat, signed in with ChatGPT; its plan as a badge beside it. Desktop app only. */
-export function CodexCard() {
-  const codex = useCodexAccount()
+export function CodexDetails({ codex }: { codex: CodexAccountState }) {
   const { name, plan, connected } = summary(codex.status)
   return (
-    <li
-      data-account="codex"
-      className="rounded-[var(--radius-l)] border border-line bg-card p-4 shadow-[var(--shadow-1)]"
-    >
+    <div>
       <div className="flex items-center gap-2.5">
-        <span
-          aria-hidden
-          className="grid size-6 place-items-center rounded-[var(--radius-s)] border border-line bg-surface-2 font-mono text-[11px] font-bold text-foreground"
-        >
-          &gt;_
-        </span>
-        <span className="text-sm font-semibold">Codex</span>
         {plan && !codex.loading ? <Badge variant="muted">{plan}</Badge> : null}
         <span className="min-w-0 truncate text-xs text-muted-foreground">
           {codex.loading ? "Checking Codex…" : name}
@@ -64,17 +53,11 @@ export function CodexCard() {
         </div>
       )}
       {codex.error && <p className="m-0 mt-2 text-xs text-bad">{codex.error}</p>}
-    </li>
+    </div>
   )
 }
 
-function CodexAction({
-  codex,
-  connected,
-}: {
-  codex: ReturnType<typeof useCodexAccount>
-  connected: boolean
-}) {
+function CodexAction({ codex, connected }: { codex: CodexAccountState; connected: boolean }) {
   if (codex.loading) return null
   if (!codex.status)
     return (

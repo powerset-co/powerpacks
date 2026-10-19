@@ -237,7 +237,7 @@ class LinkedInNetworkImportTests(unittest.TestCase):
         code, payload = self.invoke(["check-keys"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["provider"], "rapidapi")
-        self.assertEqual(set(payload["keys_present"].keys()), {"POWERSET_API_KEY"})
+        self.assertEqual(set(payload["keys_present"].keys()), {"POWERSET_API_KEY", "RAPIDAPI_LINKEDIN_KEY"})
         self.assertTrue(all(isinstance(v, bool) for v in payload["keys_present"].values()))
 
     def write_manifest(self, discover_dir: Path, manifest: dict) -> None:

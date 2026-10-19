@@ -1,4 +1,4 @@
-"""Fetch company details from LinkedIn through the Powerset gateway.
+"""Fetch company details through the Powerset gateway or direct RapidAPI.
 
 Results are cached to disk under a configurable directory so repeated
 pipeline runs don't re-fetch.
@@ -20,11 +20,11 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
 
+from packs.shared.linkedin_api import LinkedInApiConfig, MISSING_LINKEDIN_KEY, POWERSET_HOST
 from packs.shared.rate_limiter import StartRateLimiter
 
 
-DEFAULT_HOST = "proxy.powerset.dev"
-VENDOR_PATH = "/vendor/professional-network-data"
+DEFAULT_HOST = POWERSET_HOST
 ONE_YEAR_SECONDS = "31536000"
 DEFAULT_TIMEOUT = 30
 DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
@@ -40,10 +40,6 @@ DEFAULT_COMPANY_MAX_RPM = float(os.getenv("POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM",
 # Shared by the id- and slug-based fetches so their combined RapidAPI rate stays
 # within the limit.
 _RATE_LIMITER = StartRateLimiter(DEFAULT_COMPANY_MAX_RPM)
-
-
-def _api_key() -> str:
-    return os.getenv("POWERSET_API_KEY", "").strip()
 
 
 def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
@@ -117,21 +113,18 @@ def fetch_company_details(
     if cached is not None:
         return cached
 
-    key = api_key or _api_key()
-    if not key:
-        return {"error": "no POWERSET_API_KEY set"}
+    config = LinkedInApiConfig.resolve(api_key or None)
+    if not config.api_key:
+        return {"error": MISSING_LINKEDIN_KEY}
 
-    headers = {
-        "x-powerset-key": key,
-        "X-Freshness": ONE_YEAR_SECONDS,
-        "Content-Type": "application/json",
-    }
+    headers = {**config.headers(ONE_YEAR_SECONDS), "Content-Type": "application/json"}
+    request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
-        conn = http.client.HTTPSConnection(host, timeout=timeout)
+        conn = http.client.HTTPSConnection(request_host, timeout=timeout)
         retry_after: float | None = None
         try:
-            conn.request("GET", f"{VENDOR_PATH}/get-company-details-by-id?id={company_id}", headers=headers)
+            conn.request("GET", f"{config.path_prefix}/get-company-details-by-id?id={company_id}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:
@@ -178,8 +171,8 @@ def fetch_company_details_batch(
 
     Returns {company_id: response_dict}.
     """
-    key = api_key or _api_key()
-    if not key:
+    config = LinkedInApiConfig.resolve(api_key or None)
+    if not config.api_key:
         return {cid: {"error": "no API key"} for cid in company_ids}
 
     # Serve cache hits immediately, collect misses for network fetch.
@@ -192,7 +185,7 @@ def fetch_company_details_batch(
 
     def _fetch_one(cid: str) -> tuple[str, dict[str, Any]]:
         _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
-        return cid, fetch_company_details(cid, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
+        return cid, fetch_company_details(cid, api_key=api_key, host=host, timeout=timeout, cache_dir=cache_dir)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, cid): cid for cid in need_fetch}
@@ -240,21 +233,18 @@ def fetch_company_details_by_slug(
     if cached is not None:
         return cached
 
-    key = api_key or _api_key()
-    if not key:
-        return {"error": "no POWERSET_API_KEY set"}
+    config = LinkedInApiConfig.resolve(api_key or None)
+    if not config.api_key:
+        return {"error": MISSING_LINKEDIN_KEY}
 
-    headers = {
-        "x-powerset-key": key,
-        "X-Freshness": ONE_YEAR_SECONDS,
-        "Content-Type": "application/json",
-    }
+    headers = {**config.headers(ONE_YEAR_SECONDS), "Content-Type": "application/json"}
+    request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
-        conn = http.client.HTTPSConnection(host, timeout=timeout)
+        conn = http.client.HTTPSConnection(request_host, timeout=timeout)
         retry_after: float | None = None
         try:
-            conn.request("GET", f"{VENDOR_PATH}/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
+            conn.request("GET", f"{config.path_prefix}/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:
@@ -291,8 +281,8 @@ def fetch_company_details_batch_by_slug(
     cache_dir: str | Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Fetch multiple companies by slug concurrently; cache hits served instantly."""
-    key = api_key or _api_key()
-    if not key:
+    config = LinkedInApiConfig.resolve(api_key or None)
+    if not config.api_key:
         return {s: {"error": "no API key"} for s in slugs}
 
     unique_slugs = list(dict.fromkeys(slugs))
@@ -303,7 +293,7 @@ def fetch_company_details_batch_by_slug(
 
     def _fetch_one(s: str) -> tuple[str, dict[str, Any]]:
         _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
-        return s, fetch_company_details_by_slug(s, api_key=key, host=host, timeout=timeout, cache_dir=cache_dir)
+        return s, fetch_company_details_by_slug(s, api_key=api_key, host=host, timeout=timeout, cache_dir=cache_dir)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, s): s for s in need_fetch}

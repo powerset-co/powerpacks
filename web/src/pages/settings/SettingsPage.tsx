@@ -1,38 +1,22 @@
-import { useNavigate } from "react-router-dom"
-
 import { Page } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
-import { isDesktop } from "@/lib/desktop"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
-import { HOME } from "@/lib/nav"
-import { Connect } from "@/pages/install/Connect"
+import { AccountsSettings } from "./AccountsSettings"
+import { ProviderSettings } from "./ProviderSettings"
 
-/** What someone sets for themselves, from the account menu: Remote assist (every install), and in the
- *  desktop app Repair setup, the Connect list setup ends on, for an account that never got linked or
- *  stopped working. Sets stays a local feature in the debug menu until it ships. */
+/** Local API connections, account repair and remote-assist preferences, from the account menu. */
 export function SettingsPage() {
-  const navigate = useNavigate()
   const features = useFeatureSettings()
   const update = useUpdateFeatures()
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
-  const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
+  const onTeam =
+    account.data?.signed_in === true && (account.data.email?.toLowerCase().endsWith("@powerset.co") ?? false)
   return (
     <Page title="Settings">
-      {isDesktop() ? (
-        <section className="flex flex-col gap-3" aria-labelledby="repair-setup">
-          <div className="flex flex-col gap-1">
-            <h2 id="repair-setup" className="m-0 text-[15px] font-semibold">
-              Repair setup
-            </h2>
-            <p className="m-0 text-sm text-muted-foreground">
-              Connect anything that isn't connected: Codex, LinkedIn, Gmail or WhatsApp.
-            </p>
-          </div>
-          <Connect onDone={() => void navigate(HOME.href)} />
-        </section>
-      ) : null}
+      <AccountsSettings />
+      {onTeam ? <ProviderSettings /> : null}
       <section className="flex flex-col gap-3" aria-labelledby="remote-assist">
         <div className="flex flex-col gap-1">
           <h2 id="remote-assist" className="m-0 text-[15px] font-semibold">
