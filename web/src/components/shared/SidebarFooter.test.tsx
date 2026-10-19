@@ -138,10 +138,10 @@ it("shows who is signed in by picture, name and email", async () => {
   expect(screen.getByText("CB")).toBeTruthy()
 })
 
-it("shows the app's version at the foot of the account menu", async () => {
+it("keeps the version out of the account menu", async () => {
   mount()
   fireEvent.click(await screen.findByRole("button", { name: "Account" }))
-  await waitFor(() => expect(screen.getByTitle("Powerpacks version").textContent).toBe("Powerpacks v3.27.0"))
+  expect(screen.queryByTitle("Powerpacks version")).toBeNull()
 })
 
 it("names a login that stored no name by its email", async () => {

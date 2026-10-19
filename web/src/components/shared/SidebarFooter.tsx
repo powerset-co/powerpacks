@@ -8,18 +8,14 @@ import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
 import { useFeatures } from "@/lib/features"
 import {
-  checkUpdate,
   dismissedVersion,
   dismissVersion,
   installUpdate,
-  lastCheck,
   onUpdateProgress,
   restartApp,
-  UPDATE_INTERVAL_MS,
-  type Update,
   type UpdateProgress,
 } from "@/lib/api/update"
-import { isDesktop } from "@/lib/desktop"
+import { useUpdate } from "@/hooks/useUpdate"
 import { useDismiss } from "@/hooks/useDismiss"
 import { cn } from "@/lib/utils"
 
@@ -32,7 +28,6 @@ import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
 import { Tip } from "./Tip"
 
-const UPDATE_KEY = ["update"]
 // While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000
 
@@ -44,33 +39,6 @@ export function SidebarFooter({ rail }: { rail: boolean }) {
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
     </div>
-  )
-}
-
-function useUpdate(): Update | null {
-  const [checked] = useState(lastCheck)
-  const query = useQuery({
-    queryKey: UPDATE_KEY,
-    queryFn: checkUpdate,
-    enabled: isDesktop(),
-    initialData: checked?.update,
-    initialDataUpdatedAt: checked?.at,
-    staleTime: UPDATE_INTERVAL_MS,
-    refetchInterval: UPDATE_INTERVAL_MS,
-    refetchIntervalInBackground: true,
-    retry: false,
-  })
-  return query.data ?? null
-}
-
-/** The app's own version at the foot of the account menu, from the update check (the desktop app only). */
-function Version() {
-  const update = useUpdate()
-  if (update === null) return null
-  return (
-    <span className="block px-2 pt-1.5 pb-0.5 text-[11px] text-faint tabular-nums" title="Powerpacks version">
-      Powerpacks v{update.current}
-    </span>
   )
 }
 
@@ -289,7 +257,6 @@ function Profile({ rail }: { rail: boolean }) {
       >
         {busy ? "Signing in…" : signedIn ? "Reconnect Powerset" : "Sign in to Powerset"}
       </MenuItem>
-      <Version />
     </div>
   )
   const trigger = {
