@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, RELATIONSHIP_KIND_COLUMN_DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -55,6 +55,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 4:
         _migrate_4_to_5(conn)
         version = 5
+    if version == 5:
+        _migrate_5_to_6(conn)
+        version = 6
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -85,3 +88,12 @@ def _migrate_4_to_5(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE person_tags SET tags = ? WHERE candidate_id = ?",
                          ("|".join(tags), row["candidate_id"]))
         conn.execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'")
+
+
+def _migrate_5_to_6(conn: sqlite3.Connection) -> None:
+    """Add the human's relationship choice without changing saved labels or tags."""
+    with conn:
+        # A schema-2 store gets this column when its person_tags table is created above.
+        if "relationship_kind" not in {row["name"] for row in conn.execute("PRAGMA table_info(person_tags)")}:
+            conn.execute(f"ALTER TABLE person_tags ADD COLUMN {RELATIONSHIP_KIND_COLUMN_DDL}")
+        conn.execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'")

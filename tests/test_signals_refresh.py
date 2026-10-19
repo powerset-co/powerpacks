@@ -211,6 +211,24 @@ class SignalsRefreshTests(StoreTests):
         flags = dict(self.conn.execute("SELECT candidate_id, flag FROM person_labels").fetchall())
         self.assertEqual(flags, {"c1": "", "c2": "family"})
 
+    def test_selected_and_all_refresh_keep_human_relationship(self) -> None:
+        from packs.ingestion.primitives.share.web.model import SharePeople
+        from packs.ingestion.primitives.share.web.server import decide_relationship
+
+        people = SharePeople(self.conn, self.root)
+        decide_relationship(self.conn, people, "p:a", "colleague")
+        for family in self.families:
+            self._cache(family)
+        with NO_CALLS:
+            for selection in (("p:a",), ()):
+                self.assertEqual(RefreshSignals(self.conn, self.root, selection).run().status, "completed")
+                row = next(row for row in people.load() if row.parent_id == "p:a")
+                self.assertEqual((row.relationship_kind, row.flag), ("colleague", ""))
+                self.assertEqual(people.detail("p:a").relationship_kind_source, "human")
+                self.assertNotIn("relationship_kind", people.detail("p:a").choice_p)
+        saved = json.loads(self.conn.execute("SELECT labels_json FROM person_labels WHERE candidate_id = 'c1'").fetchone()[0])
+        self.assertEqual(saved["relationship_kind"], "family")
+
     def test_a_refresh_keeps_the_settle_rule(self) -> None:
         # Luna says p:a is worth yes; with no profile and no messages, settle still makes it no.
         self._cache(self.families[0])

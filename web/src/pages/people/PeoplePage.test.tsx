@@ -850,3 +850,28 @@ describe("PeoplePage logbook", () => {
     expect(at()?.split("?")[0]).toBe("/people")
   })
 })
+
+it("saves a human relationship from the profile and refreshes its source", async () => {
+  let changed = false
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/relationship")) {
+        if (typeof init?.body !== "string") throw new Error("Expected JSON body")
+        expect(JSON.parse(init.body)).toEqual({ parent_id: "p1", relationship_kind: "friend" })
+        changed = true
+        return Promise.resolve(respond({ parent_id: "p1", relationship_kind: "friend" }))
+      }
+      if (url.includes("/person?"))
+        return Promise.resolve(
+          respond({ ...DETAIL, relationship_kind_source: changed ? "human" : "machine" }),
+        )
+      return serve(url, init)
+    }),
+  )
+  renderPage("/people?person=p1&sections=relationship")
+  await screen.findByRole("combobox", { name: "Edit relationship" })
+  pick("Edit relationship", "Friend")
+  await screen.findByText("Your choice · kept on refresh")
+  expect(changed).toBe(true)
+})

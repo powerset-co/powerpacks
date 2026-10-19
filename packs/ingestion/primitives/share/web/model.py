@@ -120,6 +120,7 @@ class PersonDetail:
     choice_p: dict[str, float]
     worth_note: str
     relationship_to_owner: str
+    relationship_kind_source: str
     events: tuple[FactEvent, ...]
     shared_context: tuple[str, ...]
     topics: tuple[str, ...]
@@ -280,6 +281,7 @@ class SharePeople:
             choice_p={name: float(cells[f"{name}_p"]) for name in CHOICE_LABELS if f"{name}_p" in cells},
             worth_note="",
             relationship_to_owner=str(facts.get("relationship_to_owner") or ""),
+            relationship_kind_source=label.relationship_kind_source,
             events=_events(facts),
             shared_context=_shared_context(facts),
             topics=tuple(str(topic) for topic in facts.get("topics") or []),

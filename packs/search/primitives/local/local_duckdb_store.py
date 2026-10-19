@@ -564,15 +564,22 @@ class LocalDuckDBSearchStore:
         )
         return f"({where_sql}) and ({semijoin})", [*params, *profile_params]
 
-    def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False) -> list[dict[str, Any]]:
+    def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False, include_attributes: list[str] | None = None) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
         columns = self._table_columns(table)
+        projection = "*"
+        if include_attributes is not None:
+            fields = {"id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"}
+            for field in include_attributes:
+                fields.add(field)
+                fields.update(self.FIELD_ALIASES.get(field, []))
+            projection = ", ".join(self._quote_ident(field) for field in columns if field in fields)
         if logical_name == "people":
             where_sql, params = self._compile_people_where_sql(filters, columns)
-            sql = f"select _pp_role.* from {self._quote_ident(table)} as _pp_role where {where_sql}"
+            sql = f"select {projection} from {self._quote_ident(table)} as _pp_role where {where_sql}"
         else:
             where_sql, params = self._compile_filter_sql(filters, columns)
-            sql = f"select * from {self._quote_ident(table)} where {where_sql}"
+            sql = f"select {projection} from {self._quote_ident(table)} where {where_sql}"
         if order_by_id:
             sql += f" order by {self._row_id_order_sql(columns)}"
         if limit and limit > 0:
@@ -613,7 +620,7 @@ class LocalDuckDBSearchStore:
         page_size: int = 10000,
         max_results: int = 0,
     ) -> list[dict[str, Any]]:
-        rows = self._filtered_rows_sql(logical_name, filters, limit=max_results, order_by_id=True)
+        rows = self._filtered_rows_sql(logical_name, filters, limit=max_results, order_by_id=True, include_attributes=include_attributes)
         return [self._project_dict(row, include_attributes) for row in rows]
 
     def query_namespace(
@@ -1021,7 +1028,7 @@ class LocalDuckDBSearchStore:
         if people_filters is not None:
             eligible = {
                 str(row.get("base_id") or row.get("person_id"))
-                for row in self._filtered_rows("people", people_filters)
+                for row in self._filtered_rows_sql("people", people_filters, include_attributes=["base_id", "person_id"])
                 if row.get("base_id") or row.get("person_id")
             }
             if not eligible:

@@ -54,6 +54,21 @@ class AppRoutesTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
 
+    def test_role_autocomplete_returns_canonical_ids(self) -> None:
+        status, _, body = self._get("/api/autocomplete/roles?q=product")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn({"id": "product_manager", "display_value": "Product Manager"}, json.loads(body)["suggestions"])
+
+    def test_location_autocomplete_uses_signed_in_api_and_preserves_types(self) -> None:
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"suggestions":[{"id":"Example City","display_value":"Example City","type":"city"}]}'
+        handler = MagicMock()
+        with patch("packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys.bearer_token", return_value="test-token"), patch("packs.shared.web.app.urllib.request.urlopen", return_value=response) as upstream:
+            self.assertTrue(AppRoutes().get(handler, urllib.parse.urlparse("/api/autocomplete/locations?q=Example")))
+        self.assertIn("/v2/autocomplete/locations?q=Example&limit=20", upstream.call_args.args[0].full_url)
+        self.assertIn(b'"type":"city"', handler.wfile.write.call_args.args[0])
+
     def test_pages_are_the_shell_with_absolute_asset_urls(self) -> None:
         for path in ("/", "/install", "/?stage=worth", "/people", "/team", "/searches", "/searches/run?run_id=jordan-role"):
             status, headers, body = self._get(path)

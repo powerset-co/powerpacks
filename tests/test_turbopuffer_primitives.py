@@ -607,7 +607,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
             "steps": [
                 {
                     "id": "hydrate_people",
-                    "output": {"profiles": [{"person_id": "p1", "name": "Hydrated"}]},
+                    "output": {"profiles": [{"person_id": "p1", "name": "Hydrated", "vertical_sources": ["hybrid", "summary"]}]},
                 }
             ]
         }
@@ -615,6 +615,7 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
         rows = results_io.result_rows(state)
         self.assertEqual([row["person_id"] for row in rows], ["p1"])
         self.assertEqual(rows[0]["name"], "Hydrated")
+        self.assertEqual(json.loads(rows[0]["vertical_sources"]), ["hybrid", "summary"])
 
     def test_result_rows_join_rerank_score_and_reason(self) -> None:
         with tempfile.TemporaryDirectory() as td:

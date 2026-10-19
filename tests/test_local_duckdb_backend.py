@@ -9,6 +9,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1338,6 +1339,20 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         ))
         self.assertEqual([row["id"] for row in rows], ["person-engineer-0", "person-founder-0"])
         self.assertEqual([row["base_id"] for row in rows], ["person-engineer", "person-founder"])
+
+    def test_filter_only_projects_before_materializing_vectors(self) -> None:
+        store = local_backend.local_store()
+        filters = ("is_current", "Eq", True)
+        for attributes in (["base_id"], ["base_id", "vector"], ["linkedin_url"]):
+            with self.subTest(attributes=attributes):
+                expected = [store._project_dict(row, attributes) for row in
+                            store._filtered_rows_sql("people", filters, limit=2, order_by_id=True)]
+                with patch.object(store, "_normalize_row", wraps=store._normalize_row) as normalize:
+                    actual = store.filter_only_rows_for_namespace("people", filters, attributes, max_results=2)
+                self.assertEqual(actual, expected)
+                self.assertTrue(normalize.call_args_list)
+                for call in normalize.call_args_list:
+                    self.assertEqual("vector" in call.args[0], "vector" in attributes)
 
     def test_default_mode_safety(self) -> None:
         os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)

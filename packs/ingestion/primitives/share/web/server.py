@@ -1,6 +1,7 @@
 """The People page's data routes: people, worth, tags, and upload progress.
 
 POST /api/people/worth records human worth for every member of the selected families.
+POST /api/people/relationship records a human relationship choice, preserved by refresh.
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
 POST /api/people/delete {ids} deletes each family from the store for good; returns `deleted`, the count.
@@ -39,6 +40,7 @@ from packs.ingestion.primitives.deep_context_v2.db import queries_review, querie
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import TagRow
 from packs.ingestion.primitives.deep_context_v2.db.store import store_path
 from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
+from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags, share_rows
 from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
 from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
@@ -103,6 +105,21 @@ def parse_worth_request(body: bytes, known_ids: set[str]) -> tuple[tuple[str, ..
     return tuple(dict.fromkeys(ids)), worth
 
 
+def parse_relationship_request(body: bytes, known_ids: set[str]) -> tuple[str, str]:
+    """Validate the human's relationship choice at the HTTP boundary."""
+    try:
+        request = json.loads(body)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"invalid JSON body: {exc}") from exc
+    parent_id = request.get("parent_id") if isinstance(request, dict) else None
+    if not isinstance(parent_id, str) or parent_id not in known_ids:
+        raise ValueError("parent_id must be on the People page")
+    kind = request.get("relationship_kind")
+    if not isinstance(kind, str) or kind not in CHOICE_QUESTIONS["relationship_kind"][1]:
+        raise ValueError("unknown relationship_kind")
+    return parent_id, kind
+
+
 def parse_delete_request(body: bytes) -> tuple[str, ...]:
     """The parent ids to delete, validated for shape at the HTTP boundary."""
     try:
@@ -153,6 +170,20 @@ def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, 
                 queries_review.insert_worth(conn, candidate_id, worth, "human", now)
 
 
+def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id: str, kind: str) -> None:
+    """Write the human's choice to each member; machine label refreshes never touch it."""
+    _check_updates(people, {parent_id})
+    prior = TagStore(conn).load().get(parent_id)
+    now = now_iso()
+    with conn:
+        conn.executemany(
+            "INSERT INTO person_tags (candidate_id, tags, note, updated_at, relationship_kind) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (candidate_id) DO UPDATE SET "
+            "relationship_kind = excluded.relationship_kind, note = excluded.note, updated_at = excluded.updated_at",
+            [(candidate_id, join_tags(prior.tags) if prior else "", prior.note if prior else "", now, kind)
+             for candidate_id in _members(conn)[parent_id]])
+
+
 class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
@@ -196,7 +227,7 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+        if parsed.path not in {f"{API_PREFIX}relationship", f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
                                f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
                                f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
                                f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
@@ -260,8 +291,12 @@ class ShareRoutes:
         if parsed.path == f"{API_PREFIX}delete":
             self._delete(handler, body, known)
             return True
+        ids: tuple[str, ...]
         try:
-            if parsed.path == f"{API_PREFIX}worth":
+            if parsed.path == f"{API_PREFIX}relationship":
+                parent_id, kind = parse_relationship_request(body, known)
+                ids = (parent_id,)
+            elif parsed.path == f"{API_PREFIX}worth":
                 ids, worth = parse_worth_request(body, known)
             else:
                 changes = parse_tag_request(body, known)
@@ -270,7 +305,9 @@ class ShareRoutes:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return True
         try:
-            if parsed.path == f"{API_PREFIX}worth":
+            if parsed.path == f"{API_PREFIX}relationship":
+                decide_relationship(self.conn, self.people, parent_id, kind)
+            elif parsed.path == f"{API_PREFIX}worth":
                 decide_worth(self.conn, self.people, ids, worth)
             else:
                 decide_tags(self.conn, self.people, changes)

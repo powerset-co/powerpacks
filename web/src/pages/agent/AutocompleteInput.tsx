@@ -25,6 +25,8 @@ interface AutocompleteInputProps {
   className?: string
   maxDisplayed?: number
   id?: string
+  allowCustom?: boolean
+  label?: string
 }
 
 export const AutocompleteInput = ({
@@ -36,12 +38,15 @@ export const AutocompleteInput = ({
   className,
   maxDisplayed,
   id,
+  allowCustom = true,
+  label,
 }: AutocompleteInputProps) => {
   const [inputValue, setInputValue] = useState("")
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [previewSuggestions, setPreviewSuggestions] = useState<Suggestion[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [isFocused, setIsFocused] = useState(false)
   const [hasFetchedPreview, setHasFetchedPreview] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -98,27 +103,30 @@ export const AutocompleteInput = ({
         searchAbortController.current.abort()
       }
       searchAbortController.current = new AbortController()
+      const { signal } = searchAbortController.current
 
       // Show dropdown and loading state immediately
       // Keep showing previous suggestions while loading new ones
       setShowSuggestions(true)
       setIsLoading(true)
+      setError(null)
 
       try {
         const results = await onSearchRef.current(trimmed)
 
         // Only update if this search wasn't aborted
-        if (!searchAbortController.current?.signal.aborted) {
+        if (!signal.aborted) {
           setSuggestions(results)
           setShowSuggestions(true)
         }
       } catch (error) {
-        if (error instanceof Error && error.name !== "AbortError") {
+        if (!signal.aborted && error instanceof Error && error.name !== "AbortError") {
           console.error("Autocomplete error:", error)
+          setError(error.message)
           setSuggestions([])
         }
       } finally {
-        if (!searchAbortController.current?.signal.aborted) {
+        if (!signal.aborted) {
           setIsLoading(false)
         }
       }
@@ -165,7 +173,13 @@ export const AutocompleteInput = ({
       setShowSuggestions(false)
       setInputValue("")
       setSuggestions([])
-    } else if (e.key === "Enter" && inputValue.trim() && suggestions.length === 0 && !isLoading) {
+    } else if (
+      allowCustom &&
+      e.key === "Enter" &&
+      inputValue.trim() &&
+      suggestions.length === 0 &&
+      !isLoading
+    ) {
       e.preventDefault()
       const manualEntry = { id: inputValue.trim(), display_value: inputValue.trim() }
       if (!value.some((v) => v.display_value === inputValue.trim())) {
@@ -226,6 +240,7 @@ export const AutocompleteInput = ({
         <Input
           ref={inputRef}
           id={id}
+          aria-label={label}
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -247,6 +262,11 @@ export const AutocompleteInput = ({
           </div>
         )}
       </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
 
       {showDropdown && (
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-72 overflow-auto">
@@ -264,7 +284,14 @@ export const AutocompleteInput = ({
                     isSelected && "bg-accent/50",
                   )}
                 >
-                  <span>{suggestion.display_value}</span>
+                  <span>
+                    {suggestion.display_value}{" "}
+                    {suggestion.type && (
+                      <span className="ml-2 text-muted-foreground">
+                        {suggestion.type.replaceAll("_", " ")}
+                      </span>
+                    )}
+                  </span>
                   {isSelected && <Check className="h-4 w-4 text-primary" />}
                 </button>
               )

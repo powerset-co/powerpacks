@@ -1,10 +1,13 @@
 """Read and write the People labels, human tags and local sets; delete a family for good."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.queries import _batches
+from packs.ingestion.primitives.share.labels import FLAG_P
+from packs.ingestion.schemas.share_schema import FAMILY, MINOR, ROMANTIC_PARTNER
 
 # Row shapes, in column order, for the writers below.
 TagRow = tuple[str, str, str, str]                      # candidate_id, tags, note, updated_at
@@ -31,6 +34,7 @@ class Labels:
     flag: str
     labels_json: str
     updated_at: str
+    relationship_kind_source: str
 
 
 def current_tags(conn: sqlite3.Connection) -> dict[str, Tags]:
@@ -51,14 +55,35 @@ def current_tags(conn: sqlite3.Connection) -> dict[str, Tags]:
 
 
 def labels_by_parent(conn: sqlite3.Connection) -> dict[str, Labels]:
-    """The family's most recently exported labels; ties use candidate id."""
+    """The family's exported labels with the human's latest relationship choice applied."""
+    relationships: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT p.parent_id, t.relationship_kind FROM current_parent p JOIN person_tags t USING (candidate_id) "
+        "WHERE t.relationship_kind IS NOT NULL ORDER BY t.updated_at DESC, t.candidate_id"
+    ):
+        relationships.setdefault(row["parent_id"], row["relationship_kind"])
     found: dict[str, Labels] = {}
     for row in conn.execute(
-        "SELECT p.parent_id, l.* FROM current_parent p JOIN person_labels l USING (candidate_id) "
+        "SELECT p.parent_id, l.*, json_extract(l.labels_json, '$.relationship_kind') AS relationship_kind "
+        "FROM current_parent p JOIN person_labels l USING (candidate_id) "
         "ORDER BY p.parent_id, l.updated_at DESC, l.candidate_id"
     ):
-        found.setdefault(row["parent_id"], Labels(row["candidate_id"], row["public_identifier"], row["full_name"],
-                                                row["worth"], row["flag"], row["labels_json"], row["updated_at"]))
+        parent_id = row["parent_id"]
+        if parent_id in found:
+            continue
+        kind = relationships.get(parent_id)
+        flag = row["flag"]
+        labels_json = row["labels_json"]
+        if kind is not None:
+            cells = json.loads(labels_json)
+            cells["relationship_kind"] = kind
+            cells.pop("relationship_kind_p", None)
+            flag = kind if kind in (FAMILY, ROMANTIC_PARTNER) else (
+                MINOR if cells.get("is_minor", 0.0) >= FLAG_P else "")
+            labels_json = json.dumps(cells)
+        source = "human" if kind is not None else "machine" if row["relationship_kind"] else ""
+        found[parent_id] = Labels(row["candidate_id"], row["public_identifier"], row["full_name"], row["worth"],
+                                  flag, labels_json, row["updated_at"], source)
     return found
 
 
