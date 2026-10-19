@@ -13,7 +13,6 @@ import { cn } from "@/lib/utils"
 import { Chats } from "@/pages/agent/Chats"
 
 import {
-  AccountsIcon,
   ChatIcon,
   CollapseIcon,
   PeopleIcon,
@@ -39,7 +38,6 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   sets: HiveIcon,
   team: TeamIcon,
   tasks: TasksIcon,
-  accounts: AccountsIcon,
   setup: SetupIcon,
   settings: SettingsIcon,
 }

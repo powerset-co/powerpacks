@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { ChevronRight } from "lucide-react"
 
 import { CheckIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,7 @@ export function ConnectionRow({
   state,
   action,
   children,
+  details,
 }: {
   icon: ReactNode
   title: ReactNode
@@ -26,9 +28,10 @@ export function ConnectionRow({
   action?: { label: string; onClick: () => void; disabled?: boolean }
   // What the step says while it works or stopped: its line, a code to scan, a command.
   children?: ReactNode
+  details?: ReactNode
 }) {
-  return (
-    <li className="flex items-start gap-3 px-4 py-3.5">
+  const row = (
+    <>
       <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground">
         {icon}
       </span>
@@ -55,9 +58,41 @@ export function ConnectionRow({
             state === "ready" ? "text-ok" : "text-muted-foreground",
           )}
         >
-          {state === "ready" ? <CheckIcon className="size-3.5" /> : <Spinner />}
-          {state === "ready" ? "Connected" : state === "working" ? "Working" : "Checking"}
+          {state === "ready" ? <CheckIcon className="size-3.5" /> : state !== "needed" ? <Spinner /> : null}
+          {state === "ready"
+            ? "Connected"
+            : state === "working"
+              ? "Working"
+              : state === "needed"
+                ? "Not connected"
+                : "Checking"}
         </span>
+      )}
+      {details ? (
+        <ChevronRight
+          aria-hidden
+          className="size-4 shrink-0 self-center text-muted-foreground transition-transform motion-reduce:transition-none group-open:rotate-90"
+        />
+      ) : null}
+    </>
+  )
+  const spacing = "flex items-start gap-3 px-4 py-3.5"
+  return (
+    <li className={details ? undefined : spacing}>
+      {details ? (
+        <details className="group">
+          <summary
+            className={cn(
+              spacing,
+              "cursor-pointer list-none transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 motion-reduce:transition-none [&::-webkit-details-marker]:hidden",
+            )}
+          >
+            {row}
+          </summary>
+          <div className="border-t border-line px-4 py-3.5">{details}</div>
+        </details>
+      ) : (
+        row
       )}
     </li>
   )

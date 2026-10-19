@@ -82,7 +82,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount(props: { onBack?: () => void; onDone?: () => void } = { onBack: vi.fn() }) {
+function mount(props: React.ComponentProps<typeof Connect> = { onBack: vi.fn() }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
@@ -391,4 +391,21 @@ it("tells you to turn on Full Disk Access, Working until you come back", async (
   expect(
     within(messages).queryByText("Turn on Powerpacks in System Settings, then come back here."),
   ).toBeNull()
+})
+
+it("expands account details in settings without setup navigation", async () => {
+  mount({
+    details: {
+      gmail: <p>Mailbox stats</p>,
+      imessage: <p>Message stats</p>,
+      linkedin: <p>LinkedIn stats</p>,
+      whatsapp: <p>WhatsApp stats</p>,
+    },
+  })
+  const gmail = screen.getByText("Gmail").closest("details")!
+  expect(gmail.open).toBe(false)
+  fireEvent.click(screen.getByText("Gmail"))
+  expect(gmail.open).toBe(true)
+  expect(screen.getByText("Mailbox stats")).toBeTruthy()
+  for (const name of ["Done", "Back", "Set up"]) expect(screen.queryByRole("button", { name })).toBeNull()
 })

@@ -1,10 +1,9 @@
 import { Page } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
-import { isDesktop } from "@/lib/desktop"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
-import { Connect } from "@/pages/install/Connect"
+import { AccountsSettings } from "./AccountsSettings"
 import { ProviderSettings } from "./ProviderSettings"
 
 /** Local API connections, account repair and remote-assist preferences, from the account menu. */
@@ -16,19 +15,7 @@ export function SettingsPage() {
     account.data?.signed_in === true && (account.data.email?.toLowerCase().endsWith("@powerset.co") ?? false)
   return (
     <Page title="Settings">
-      {isDesktop() ? (
-        <section className="flex flex-col gap-3" aria-labelledby="repair-setup">
-          <div className="flex flex-col gap-1">
-            <h2 id="repair-setup" className="m-0 text-[15px] font-semibold">
-              Repair setup
-            </h2>
-            <p className="m-0 text-sm text-muted-foreground">
-              Connect anything that isn't connected: Codex, LinkedIn, Gmail or WhatsApp.
-            </p>
-          </div>
-          <Connect />
-        </section>
-      ) : null}
+      <AccountsSettings />
       {onTeam ? <ProviderSettings /> : null}
       <section className="flex flex-col gap-3" aria-labelledby="remote-assist">
         <div className="flex flex-col gap-1">

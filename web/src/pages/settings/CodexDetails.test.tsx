@@ -3,10 +3,8 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import type { CodexAccountState } from "@/lib/agent/useCodexAccount"
 
-import { CodexCard } from "./CodexCard"
+import { CodexDetails } from "./CodexDetails"
 
-const account = vi.hoisted(() => ({ useCodexAccount: vi.fn() }))
-vi.mock("@/lib/agent/useCodexAccount", () => account)
 afterEach(cleanup)
 
 function mount(overrides: Partial<CodexAccountState>) {
@@ -22,8 +20,7 @@ function mount(overrides: Partial<CodexAccountState>) {
     retry: vi.fn(),
     ...overrides,
   }
-  account.useCodexAccount.mockReturnValue(state)
-  render(<CodexCard />)
+  render(<CodexDetails codex={state} />)
   return state
 }
 

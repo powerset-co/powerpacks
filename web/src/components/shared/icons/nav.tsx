@@ -61,15 +61,6 @@ export function TasksIcon(props: IconProps) {
   )
 }
 
-export function AccountsIcon(props: IconProps) {
-  return (
-    <svg {...STROKED} {...props}>
-      <path d="M14.5 4.5a5 5 0 1 1-4.6 7L4 17.5V20h3v-2h2v-2h2l1.4-1.4A5 5 0 0 1 14.5 4.5z" />
-      <circle cx="16" cy="8" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
 export function CollapseIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>

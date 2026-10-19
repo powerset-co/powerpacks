@@ -8,12 +8,8 @@ import { isDesktop } from "@/lib/desktop"
 import { SettingsPage } from "./SettingsPage"
 
 vi.mock("@/lib/desktop", () => ({ isDesktop: vi.fn(() => false) }))
-vi.mock("@/pages/install/Connect", () => ({
-  Connect: ({ onDone }: { onDone?: () => void }) => onDone ? (
-    <button type="button" onClick={onDone}>
-      Done
-    </button>
-  ) : null,
+vi.mock("./AccountsSettings", () => ({
+  AccountsSettings: () => <h2>Accounts</h2>,
 }))
 
 function mount() {
@@ -82,12 +78,11 @@ it("offers Remote assist in a browser, and no Repair setup", async () => {
   expect(screen.queryByRole("heading", { name: "Repair setup" })).toBeNull()
 })
 
-it("offers Repair setup without setup navigation buttons", () => {
+it("offers Accounts without setup navigation buttons", () => {
   vi.mocked(isDesktop).mockReturnValue(true)
   mount()
-  expect(screen.getByRole("heading", { name: "Repair setup" })).toBeTruthy()
-  for (const name of ["Done", "Back", "Set up"])
-    expect(screen.queryByRole("button", { name })).toBeNull()
+  expect(screen.getByRole("heading", { name: "Accounts" })).toBeTruthy()
+  for (const name of ["Done", "Back", "Set up"]) expect(screen.queryByRole("button", { name })).toBeNull()
 })
 
 it("keeps settings and account setup usable while provider status is loading", async () => {
@@ -105,7 +100,7 @@ it("keeps settings and account setup usable while provider status is loading", a
   )
   mount()
   expect(await screen.findByLabelText("Loading API connections")).toBeTruthy()
-  expect(screen.getByRole("heading", { name: "Repair setup" })).toBeTruthy()
+  expect(screen.getByRole("heading", { name: "Accounts" })).toBeTruthy()
   await waitFor(() =>
     expect(
       screen.getByRole<HTMLInputElement>("checkbox", { name: "Let the Powerset team work on this install" })

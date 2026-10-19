@@ -7,7 +7,6 @@ import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
-import { AccountsPage } from "@/pages/accounts/AccountsPage"
 import { TeamPage } from "./pages/team/TeamPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
 import { HomePage } from "@/pages/home/HomePage"
@@ -86,7 +85,7 @@ export function App() {
                 )
               }
             />
-            <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/accounts" element={<Navigate to="/settings" replace />} />
             <Route path="/team" element={<TeamPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />
