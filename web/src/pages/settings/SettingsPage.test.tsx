@@ -39,6 +39,8 @@ function serveFeatures(saved: {
   team: boolean
 }) {
   return vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/account")
+      return Promise.resolve(new Response(JSON.stringify({ signed_in: true, email: "test@powerset.co" })))
     if (url === "/api/settings/providers")
       return Promise.resolve(new Response(JSON.stringify({ providers: [] })))
     if (init?.method === "POST")
@@ -102,7 +104,7 @@ it("keeps settings and account setup usable while provider status is loading", a
     ),
   )
   mount()
-  expect(screen.getByLabelText("Loading API connections")).toBeTruthy()
+  expect(await screen.findByLabelText("Loading API connections")).toBeTruthy()
   expect(screen.getByRole("button", { name: "Done" })).toBeTruthy()
   await waitFor(() =>
     expect(
@@ -110,4 +112,19 @@ it("keeps settings and account setup usable while provider status is loading", a
         .disabled,
     ).toBe(false),
   )
+})
+
+it("hides optional API keys for customer accounts", async () => {
+  const fetch = vi.fn((url: string) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify(url === "/api/account" ? { signed_in: true, email: "customer@example.com" } : {}),
+      ),
+    ),
+  )
+  vi.stubGlobal("fetch", fetch)
+  mount()
+  await screen.findByRole("checkbox", { name: "Let the Powerset team work on this install" })
+  expect(screen.queryByRole("heading", { name: "Optional API connections" })).toBeNull()
+  expect(fetch.mock.calls.some(([url]) => url === "/api/settings/providers")).toBe(false)
 })

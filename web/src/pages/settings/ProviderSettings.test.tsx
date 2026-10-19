@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { ProviderSettings } from "./ProviderSettings"
@@ -46,13 +46,9 @@ it("shows masked local keys and connects missing providers without asking vendor
   expect(await screen.findByText("Connected")).toBeTruthy()
   expect(screen.getByText("••••1234")).toBeTruthy()
   expect(screen.getByText("Not set")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "Parallel: Connect" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Parallel (optional): Connect" })).toBeTruthy()
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0]?.[0]).toBe("/api/settings/providers")
-  fetch.mockResolvedValueOnce(
-    new Response(JSON.stringify({ metrics: [{ label: "Last 30 days", value: "$12.34 USD" }], note: null })),
-  )
-  fireEvent.click(screen.getByRole("button", { name: "Modal" }))
-  expect(await screen.findByText("$12.34 USD")).toBeTruthy()
-  expect(fetch.mock.calls[1]?.[0]).toBe("/api/settings/providers/modal/usage")
+  expect(screen.getByText("Modal (optional)")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Modal" })).toBeNull()
 })

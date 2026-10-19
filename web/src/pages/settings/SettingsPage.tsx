@@ -16,7 +16,8 @@ export function SettingsPage() {
   const features = useFeatureSettings()
   const update = useUpdateFeatures()
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
-  const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
+  const onTeam =
+    account.data?.signed_in === true && (account.data.email?.toLowerCase().endsWith("@powerset.co") ?? false)
   return (
     <Page title="Settings">
       {isDesktop() ? (
@@ -32,7 +33,7 @@ export function SettingsPage() {
           <Connect onDone={() => void navigate(HOME.href)} />
         </section>
       ) : null}
-      <ProviderSettings />
+      {onTeam ? <ProviderSettings /> : null}
       <section className="flex flex-col gap-3" aria-labelledby="remote-assist">
         <div className="flex flex-col gap-1">
           <h2 id="remote-assist" className="m-0 text-[15px] font-semibold">
