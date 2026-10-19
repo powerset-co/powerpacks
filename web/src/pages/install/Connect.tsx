@@ -420,7 +420,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
           "LinkedIn",
           <LinkedInIcon className="size-[18px]" />,
           "Your LinkedIn connections.",
-          !linkedin && !onDone && (processed || profile !== null) ? (
+          !linkedin && onBack && (processed || profile !== null) ? (
             <ProfileLink url={profile} onChange={setProfile} />
           ) : null,
         )}
@@ -449,7 +449,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
             Done
           </Button>
         </div>
-      ) : (
+      ) : onBack ? (
         <div className="flex items-center justify-between gap-3">
           <Button disabled={starting} onClick={onBack}>
             Back
@@ -477,7 +477,7 @@ export function Connect({ onBack, onDone }: { onBack?: () => void; onDone?: () =
             {starting ? "Starting setup…" : "Set up"}
           </Button>
         </div>
-      )}
+      ) : null}
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
           {error}

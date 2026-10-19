@@ -1,18 +1,14 @@
-import { useNavigate } from "react-router-dom"
-
 import { Page } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
 import { isDesktop } from "@/lib/desktop"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
-import { HOME } from "@/lib/nav"
 import { Connect } from "@/pages/install/Connect"
 import { ProviderSettings } from "./ProviderSettings"
 
 /** Local API connections, account repair and remote-assist preferences, from the account menu. */
 export function SettingsPage() {
-  const navigate = useNavigate()
   const features = useFeatureSettings()
   const update = useUpdateFeatures()
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
@@ -30,7 +26,7 @@ export function SettingsPage() {
               Connect anything that isn't connected: Codex, LinkedIn, Gmail or WhatsApp.
             </p>
           </div>
-          <Connect onDone={() => void navigate(HOME.href)} />
+          <Connect />
         </section>
       ) : null}
       {onTeam ? <ProviderSettings /> : null}
