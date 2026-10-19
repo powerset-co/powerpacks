@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { ProviderSettings } from "./ProviderSettings"
@@ -15,8 +15,8 @@ it("shows masked local keys and connects missing providers without asking vendor
       JSON.stringify({
         providers: [
           {
-            id: "openai",
-            name: "OpenAI",
+            id: "modal",
+            name: "Modal",
             description: "Models and embeddings",
             connected: true,
             credentials: [{ name: "OPENAI_API_KEY", configured: true, masked: "••••1234" }],
@@ -46,12 +46,13 @@ it("shows masked local keys and connects missing providers without asking vendor
   expect(await screen.findByText("Connected")).toBeTruthy()
   expect(screen.getByText("••••1234")).toBeTruthy()
   expect(screen.getByText("Not set")).toBeTruthy()
-  expect(screen.getByRole("link", { name: "Usage for OpenAI" }).getAttribute("href")).toBe(
-    "https://platform.openai.com/usage",
-  )
-  expect(screen.getByRole("link", { name: "Connect Parallel" }).getAttribute("href")).toBe(
-    "https://platform.parallel.ai",
-  )
+  expect(screen.getByRole("button", { name: "Parallel: Connect" })).toBeTruthy()
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0]?.[0]).toBe("/api/settings/providers")
+  fetch.mockResolvedValueOnce(
+    new Response(JSON.stringify({ metrics: [{ label: "Last 30 days", value: "$12.34 USD" }], note: null })),
+  )
+  fireEvent.click(screen.getByRole("button", { name: "Modal" }))
+  expect(await screen.findByText("$12.34 USD")).toBeTruthy()
+  expect(fetch.mock.calls[1]?.[0]).toBe("/api/settings/providers/modal/usage")
 })

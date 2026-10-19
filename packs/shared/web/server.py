@@ -297,6 +297,16 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/account":
                 self._json(account.read(root))
                 return
+            if parsed.path.startswith("/api/settings/providers/") and parsed.path.endswith("/usage"):
+                from packs.shared.web import provider_usage
+
+                try:
+                    self._json(provider_usage.read(root, parsed.path.split("/")[-2]))
+                except KeyError:
+                    self._json({"error": "Unknown provider"}, HTTPStatus.NOT_FOUND)
+                except Exception:
+                    self._json({"error": "Couldn't read usage. Check your billing access or try again."}, HTTPStatus.BAD_GATEWAY)
+                return
             if parsed.path == "/api/settings/providers":
                 self._json(providers.read(root))
                 return

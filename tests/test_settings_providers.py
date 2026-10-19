@@ -88,3 +88,30 @@ class ProviderSettingsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ProviderUsageTests(unittest.TestCase):
+    def test_modal_report_sums_costs_and_scopes_credentials(self) -> None:
+        from packs.shared.web import provider_usage
+        from subprocess import CompletedProcess
+
+        with patch.object(provider_usage.account, "config", return_value={
+            "MODAL_TOKEN_ID": "synthetic-id", "MODAL_TOKEN_SECRET": "synthetic-secret",
+        }), patch.object(provider_usage.subprocess, "run", return_value=CompletedProcess(
+            [], 0, '[{"cost":"1.123"},{"cost":"2.456"}]', '',
+        )) as run:
+            result = provider_usage.read(Path('.'), 'modal')
+        self.assertEqual(result['metrics'], [{'label': 'Last 30 days', 'value': '$3.58 USD'}])
+        command = run.call_args.args[0]
+        from datetime import date
+        start = date.fromisoformat(command[command.index('--start') + 1])
+        end = date.fromisoformat(command[command.index('--end') + 1])
+        self.assertEqual((end - start).days, 30)
+        self.assertEqual(run.call_args.kwargs['timeout'], 30)
+        self.assertEqual(run.call_args.kwargs['env']['MODAL_TOKEN_SECRET'], 'synthetic-secret')
+
+    def test_unsupported_provider_does_not_contact_vendor(self) -> None:
+        from packs.shared.web import provider_usage
+        with patch.object(provider_usage.subprocess, 'run') as run:
+            with self.assertRaises(KeyError):
+                provider_usage.read(Path('.'), 'parallel')
+        run.assert_not_called()
