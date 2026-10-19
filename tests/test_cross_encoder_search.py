@@ -123,7 +123,9 @@ class PlainSearchPipelineTests(unittest.TestCase):
         run_dir.mkdir(parents=True)
         state_path, ledger_path = run_dir / "state.json", run_dir / "pipeline.json"
         profiles_path, db = run_dir / "profiles.jsonl", root / "local.duckdb"
-        db.touch()
+        import duckdb
+        with duckdb.connect(str(db)) as conn:
+            conn.execute("CREATE TABLE local_person_profiles(person_id VARCHAR, source_channels VARCHAR[], interaction_counts JSON, total_interactions BIGINT)")
         ids = [f"synthetic-{index}" for index in range(1434)]
         profiles = [{"person_id": pid, "name": "Jordan Bravo", "education": [], "positions": [
             {"title": "Engineer", "description": "Built storage systems"}]} for pid in [*ids, "rejected"]]
