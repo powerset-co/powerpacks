@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.32.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.31.0...powerpacks-v3.32.0) (2026-10-19)
+
+
+### Features
+
+* consolidate accounts and API connections in settings ([#870](https://github.com/powerset-co/powerpacks/issues/870)) ([2cc1b6b](https://github.com/powerset-co/powerpacks/commit/2cc1b6b52e67e14b6a6e21eb8eeace687c3b7cdc))
+
 ## [3.31.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.30.0...powerpacks-v3.31.0) (2026-10-18)
 
 
