@@ -107,10 +107,12 @@ it("sends a changed query and the traits as a new search, without the filters ed
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
   pick("Add Seniority", "C-Suite")
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years max" }), { target: { value: "12" } })
+  fireEvent.click(screen.getByRole("button", { name: "Add Keywords" }))
   const keyword = screen.getByRole("textbox", { name: "Add Keywords" })
   fireEvent.change(keyword, { target: { value: "head of finance" } })
   fireEvent.keyDown(keyword, { key: "Enter" })
   fireEvent.click(screen.getByRole("button", { name: "investment banking: past" }))
+  fireEvent.click(screen.getByRole("button", { name: "Add trait" }))
   const trait = screen.getByRole("textbox", { name: "Add trait" })
   fireEvent.change(trait, { target: { value: "CFO" } })
   execute()
@@ -194,18 +196,29 @@ it("drops the modal's edits on Cancel", () => {
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
-it("keeps a typed location with the chosen kind", () => {
+it("selects a location with its returned type", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          suggestions: [
+            { id: "Brooklyn", display_value: "Brooklyn", type: "city" },
+            { id: "New York", display_value: "New York", type: "state" },
+          ],
+        }),
+      ),
+    ),
+  )
   render(<SearchCard search={SEARCH} actions={true} />)
-  pick("Location kind", "city")
-  const add = screen.getByRole("textbox", { name: "Add Location" })
-  fireEvent.change(add, { target: { value: "Brooklyn" } })
-  fireEvent.keyDown(add, { key: "Enter" })
-  const chip = screen.getByRole("button", { name: "Remove Brooklyn" }).parentElement
-  if (!chip) throw new Error("no chip")
-  expect(within(chip).getByText("· city")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "Add Location" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Search Location" }), { target: { value: "New" } })
+  fireEvent.click(await screen.findByRole("button", { name: "Brooklyn city" }))
+  fireEvent.click(screen.getByRole("button", { name: "New York state" }))
   execute()
-  const body = sent()
-  expect(body.filters.cities).toEqual(["Brooklyn"])
+  expect(sent().filters.cities).toEqual(["Brooklyn"])
+  expect(sent().filters.states).toEqual(["New York"])
+  vi.unstubAllGlobals()
 })
 
 it("sends no traits for a search that came with none and still has none", () => {
@@ -294,6 +307,7 @@ it("keeps showing what it sent once the card no longer asks", () => {
   const { rerender } = render(<SearchCard search={SEARCH} actions={true} />)
   fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "CFOs in NYC" } })
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
+  fireEvent.click(screen.getByRole("button", { name: "Add trait" }))
   fireEvent.change(screen.getByRole("textbox", { name: "Add trait" }), { target: { value: "CFO" } })
   execute()
   rerender(<SearchCard search={SEARCH} actions={false} />)
@@ -303,16 +317,24 @@ it("keeps showing what it sent once the card no longer asks", () => {
   expect(screen.queryByRole("button")).toBeNull()
 })
 
-it("applies the kind chosen after the location was typed", () => {
+it("adds canonical role ids through the picker", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ suggestions: [{ id: "product_manager", display_value: "Product Manager" }] }),
+        ),
+      ),
+  )
   render(<SearchCard search={SEARCH} actions={true} />)
-  const add = screen.getByRole("textbox", { name: "Add Location" })
-  const kind = screen.getByRole("combobox", { name: "Location kind" })
-  fireEvent.change(add, { target: { value: "Brooklyn" } })
-  fireEvent.blur(add, { relatedTarget: kind })
-  pick("Location kind", "city")
-  // No Enter: Execute carries what sits in the add field, under the kind picked after typing.
+  fireEvent.click(screen.getByRole("button", { name: "Add Role ids" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Search Role ids" }), { target: { value: "product" } })
+  fireEvent.click(await screen.findByRole("button", { name: "Product Manager" }))
   execute()
-  expect(sent().filters).toEqual({ cities: ["Brooklyn"] })
+  expect(sent().filters.role_ids).toEqual(["finance_lead", "product_manager"])
+  vi.unstubAllGlobals()
 })
 
 it("shows a filter the table doesn't name with its value's own shape and keeps its type", () => {
@@ -372,4 +394,23 @@ it("sends a blocked card's changes without running it", () => {
   fireEvent.click(changes)
   expect(message().startsWith("Modify:\n")).toBe(true)
   expect(message()).not.toContain("then execute")
+})
+
+it("opens the full role query in a multiline editor and keeps edits", () => {
+  render(
+    <SearchCard
+      search={{
+        ...SEARCH,
+        filters: [...SEARCH.filters, { key: "semantic_query", value: "Long role description" }],
+      }}
+      actions={true}
+    />,
+  )
+  fireEvent.click(screen.getByRole("button", { name: "Edit role query" }))
+  const editor = screen.getByRole("textbox", { name: "Role query" })
+  expect(editor.tagName).toBe("TEXTAREA")
+  fireEvent.change(editor, { target: { value: "Updated role description" } })
+  fireEvent.click(screen.getByRole("button", { name: "Done" }))
+  execute()
+  expect(sent().filters.semantic_query).toBe("Updated role description")
 })

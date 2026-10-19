@@ -3,8 +3,11 @@ account and feedback routes, which answer beside them before the network store e
 
 from __future__ import annotations
 
+import io
+from contextlib import redirect_stderr
 import base64
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -19,7 +22,7 @@ from unittest.mock import patch
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.shared.web import account, feedback
 from packs.shared.web.app import AppRoutes
-from packs.shared.web.server import persistent_handler
+from packs.shared.web.server import mounted_handler, persistent_handler
 
 FELL_THROUGH = 418
 
@@ -50,6 +53,21 @@ class AppRoutesTests(unittest.TestCase):
                 return response.status, dict(response.headers), response.read()
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers), error.read()
+
+    def test_role_autocomplete_returns_canonical_ids(self) -> None:
+        status, _, body = self._get("/api/autocomplete/roles?q=product")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn({"id": "product_manager", "display_value": "Product Manager"}, json.loads(body)["suggestions"])
+
+    def test_location_autocomplete_uses_signed_in_api_and_preserves_types(self) -> None:
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"suggestions":[{"id":"Example City","display_value":"Example City","type":"city"}]}'
+        handler = MagicMock()
+        with patch("packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys.bearer_token", return_value="test-token"), patch("packs.shared.web.app.urllib.request.urlopen", return_value=response) as upstream:
+            self.assertTrue(AppRoutes().get(handler, urllib.parse.urlparse("/api/autocomplete/locations?q=Example")))
+        self.assertIn("/v2/autocomplete/locations?q=Example&limit=20", upstream.call_args.args[0].full_url)
+        self.assertIn(b'"type":"city"', handler.wfile.write.call_args.args[0])
 
     def test_pages_are_the_shell_with_absolute_asset_urls(self) -> None:
         for path in ("/", "/install", "/?stage=worth", "/people", "/team", "/searches", "/searches/run?run_id=jordan-role"):
@@ -95,6 +113,14 @@ class AccountRoutesTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def test_request_logs_include_timestamp(self) -> None:
+        output = io.StringIO()
+        handler = object.__new__(mounted_handler(self.root))
+        handler.client_address = ("127.0.0.1", 12345)
+        with redirect_stderr(output):
+            handler.log_message('%s', '"GET /api/account HTTP/1.1" 200 -')
+        self.assertRegex(output.getvalue(), r'127\.0\.0\.1 - - \[\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2}\] "GET /api/account HTTP/1\.1"')
 
     def _json(self, path: str, method: str = "GET") -> tuple[int, dict]:
         request = urllib.request.Request(self.base + path, method=method, data=b"" if method == "POST" else None)
@@ -181,7 +207,8 @@ class AccountRoutesTests(unittest.TestCase):
             "POWERPACKS_AUTH0_DOMAIN=synthetic.auth0.example\n"
             "POWERPACKS_AUTH0_CLIENT_ID=synthetic-client\n"
             "POWERPACKS_AUTH0_AUDIENCE=https://synthetic.invalid\n")
-        with patch.object(server, "ROOT", self.root), patch.object(account.auth, "main", return_value=0) as login:
+        with patch.dict(os.environ, {"POWERPACKS_CREDENTIALS_PATH": str(self.credentials)}, clear=True), \
+                patch.object(server, "ROOT", self.root), patch.object(account.auth, "main", return_value=0) as login:
             self.assertEqual(server._login(), 0)
         self.assertEqual(login.call_args.args[0], [
             "login", "--auth0-domain", "synthetic.auth0.example", "--client-id", "synthetic-client",

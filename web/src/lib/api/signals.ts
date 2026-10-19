@@ -27,14 +27,14 @@ export async function readSignals(): Promise<SignalsStatus> {
   return body<SignalsStatus>(response)
 }
 
-export async function checkSignals(people: readonly string[]): Promise<SignalsPlan> {
+export async function checkSignals(people: readonly string[]): Promise<SignalsStatus> {
   const response = await fetch("/api/people/signals/check", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ people }),
   })
   if (!response.ok) throw await failure(response, "Couldn't check the signal refresh cost.")
-  return body<SignalsPlan>(response)
+  return body<SignalsStatus>(response)
 }
 
 export async function refreshSignals(people: readonly string[], checked?: string): Promise<SignalsStatus> {

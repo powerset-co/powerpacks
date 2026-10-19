@@ -13,6 +13,15 @@ import {
 
 const API = "/api/people/"
 
+export async function writeRelationship(parent_id: string, relationship_kind: string): Promise<void> {
+  const response = await fetch(`${API}relationship`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent_id, relationship_kind }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't save relationship.")
+}
+
 type PersonCells = Omit<Person, "last" | "warmthBucket" | "search" | "logbook">
 
 /** One `Person` per columnar row, decoded by column name, with the derived fields. Throws

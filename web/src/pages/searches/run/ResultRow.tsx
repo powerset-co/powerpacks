@@ -78,11 +78,11 @@ export const ResultRow = memo(function ResultRow({
           <div className="result-person">
             <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
-              <b>{row.name}</b>
-              <span className="result-title">
+              <span className="flex items-center gap-1.5">
+                <b>{row.name}</b>
                 <LinkedInLink row={row} />
-                {row.title || "Current role unknown"}
               </span>
+              <span className="result-title">{row.title || "Current role unknown"}</span>
               <small>{company(row)}</small>
               <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
             </span>

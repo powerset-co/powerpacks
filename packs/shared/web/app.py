@@ -21,6 +21,9 @@ Changelog:
 from __future__ import annotations
 
 import urllib.parse
+import urllib.request
+import urllib.error
+import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -42,6 +45,36 @@ class AppRoutes:
     """The app and avatar routes, mountable in any stdlib handler."""
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        if parsed.path in {"/api/autocomplete/locations", "/api/autocomplete/roles"}:
+            from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
+
+            query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0][:100]
+            if parsed.path.endswith("/roles"):
+                taxonomy = json.loads((WEB_DIST.parents[1] / "packs/search/data/roles/canonical_role_taxonomy.json").read_text())
+                roles = sorted({role for department in taxonomy["departments"].values() for role in department["functions"]})
+                suggestions = [{"id": role, "display_value": role.replace("_", " ").title()}
+                               for role in roles if query.casefold() in role.replace("_", " ").casefold()][:20]
+                _send(handler, json.dumps({"suggestions": suggestions}).encode(), "application/json", cache="no-store")
+                return True
+            env_file = Path.cwd() / ".env"
+            try:
+                request = urllib.request.Request(
+                    api_base(env_file) + parsed.path.replace("/api/", "/v2/", 1)
+                    + "?" + urllib.parse.urlencode({"q": query, "limit": 20}),
+                    headers={"Authorization": f"Bearer {bearer_token(env_file)}"},
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    _send(handler, response.read(), "application/json", cache="no-store")
+            except SystemExit:
+                _send(handler, b"Sign in to Powerset to search suggestions.", "text/plain",
+                      cache="no-store", status=HTTPStatus.UNAUTHORIZED)
+            except urllib.error.HTTPError as error:
+                _send(handler, b"Could not load suggestions.", "text/plain", cache="no-store",
+                      status=HTTPStatus(error.code))
+            except OSError:
+                _send(handler, b"Could not reach Powerset.", "text/plain", cache="no-store",
+                      status=HTTPStatus.BAD_GATEWAY)
+            return True
         if parsed.path in PAGE_PATHS:
             _send(handler, APP_HTML.read_bytes(), "text/html; charset=utf-8", cache="no-store")
             return True

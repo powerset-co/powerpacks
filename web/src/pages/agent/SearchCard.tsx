@@ -2,6 +2,18 @@ import { useState } from "react"
 
 import { CHIP, CLOSE_MARK, ReadRow, Row, Select, TraitChips } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Textarea } from "@/components/ui/textarea"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Plus } from "lucide-react"
+import { AutocompleteInput, type EntityValue } from "./AutocompleteInput"
 import type { PreparedSearch, SearchTrait } from "@/lib/agent/preparedSearch"
 import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expandedFilters"
 import { ENTITY_TYPES, SECTOR_TYPES, SENIORITY_BANDS as BAND_ITEMS } from "@/lib/agent/companyFilters"
@@ -17,6 +29,7 @@ import {
   scalar,
 } from "@/lib/agent/searchFields"
 import { send } from "@/lib/agent/store"
+import { body } from "@/lib/api/http"
 import { titleCase } from "@/lib/people/copy"
 import { cn } from "@/lib/utils"
 import type { FilterValue } from "@/types/searches"
@@ -168,6 +181,7 @@ function Chips({
   kinds,
   draft,
   onDraft,
+  lookup,
 }: {
   label: string
   items: { name: string; kind?: string }[]
@@ -178,6 +192,7 @@ function Chips({
   kinds?: Record<string, string>
   draft: Draft
   onDraft: (draft: Draft) => void
+  lookup?: "locations" | "roles"
 }) {
   const typed = draft.text
   const kind = draft.kind ?? (kinds ? Object.keys(kinds)[0] : undefined)
@@ -216,45 +231,89 @@ function Chips({
           </button>
         </span>
       ))}
-      {options ? (
+      {lookup ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Add ${label}`}
+              className={cn(CHIP, "p-1.5 hover:bg-secondary")}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-80" align="start">
+            <AutocompleteInput
+              label={`Search ${label}`}
+              placeholder={
+                lookup === "locations" ? "Search cities, metros, states, countries…" : "Search roles…"
+              }
+              allowCustom={false}
+              value={[]}
+              onSearch={async (query) => {
+                const response = await fetch(`/api/autocomplete/${lookup}?q=${encodeURIComponent(query)}`)
+                if (!response.ok) throw new Error(await response.text())
+                return (await body<{ suggestions: EntityValue[] }>(response)).suggestions
+              }}
+              onChange={(selected) => {
+                const item = selected[0]
+                if (!item) return
+                const locationKey = {
+                  city: "cities",
+                  state: "states",
+                  country: "countries",
+                  metro_area: "metro_areas",
+                  macro_region: "macro_regions",
+                }[item.type ?? ""]
+                const nextKind =
+                  kinds && locationKey
+                    ? Object.hasOwn(kinds, locationKey)
+                      ? locationKey
+                      : `company_${locationKey}`
+                    : undefined
+                const name = lookup === "roles" ? item.id : item.display_value
+                if (!items.some((existing) => existing.name === name && existing.kind === nextKind))
+                  onChange([...items, { name, kind: nextKind }])
+              }}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : options ? (
         unused.length > 0 && (
           <Select
             aria-label={`Add ${label}`}
             value=""
             onChange={add}
-            placeholder="Add…"
-            className={PICKER}
+            placeholder="+"
+            className={cn(CHIP, "h-7 w-7 justify-center p-0 hover:bg-secondary [&>svg]:hidden")}
             options={unused.map((option) => ({ value: option, label: titleCase(option) }))}
           />
         )
       ) : readonly ? null : (
-        <>
-          <input
-            aria-label={`Add ${label}`}
-            placeholder="Add…"
-            value={typed}
-            onChange={(event) => onDraft({ text: event.target.value, kind })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") add(typed)
-            }}
-            // Leaving for the kind picker keeps the text, so the kind chosen next applies to it.
-            onBlur={(event) => {
-              const next = event.relatedTarget
-              if (!(next instanceof HTMLElement && next.closest("[data-kind-picker]"))) add(typed)
-            }}
-            className={ADD_FIELD}
-          />
-          {kinds && (
-            <Select
-              aria-label={`${label} kind`}
-              value={kind ?? ""}
-              onChange={(next) => onDraft({ text: typed, kind: next })}
-              className={PICKER}
-              data-kind-picker=""
-              options={Object.entries(kinds).map(([key, name]) => ({ value: key, label: name }))}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Add ${label}`}
+              className={cn(CHIP, "p-1.5 hover:bg-secondary")}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64" align="start">
+            <input
+              aria-label={`Add ${label}`}
+              placeholder={`Add ${label.toLowerCase()}…`}
+              value={typed}
+              onChange={(event) => onDraft({ text: event.target.value, kind })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") add(typed)
+              }}
+              onBlur={() => add(typed)}
+              className={ADD_FIELD}
             />
-          )}
-        </>
+          </PopoverContent>
+        </Popover>
       )}
     </>
   )
@@ -287,6 +346,7 @@ function FieldRow({
         <Row label={field.label}>
           <Chips
             label={field.label}
+            lookup={control.key === "role_ids" ? "roles" : undefined}
             items={names(values.get(control.key)).map((name) => ({ name }))}
             options={control.options}
             readonly={control.readonly}
@@ -312,6 +372,7 @@ function FieldRow({
         <Row label={field.label}>
           <Chips
             label={field.label}
+            lookup="locations"
             items={items}
             kinds={control.keys}
             draft={draft}
@@ -332,6 +393,36 @@ function FieldRow({
     }
     case "text": {
       const text = scalar(values.get(control.key))
+      if (control.key === "semantic_query")
+        return (
+          <Row label={field.label}>
+            <Dialog>
+              <DialogTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Edit role query"
+                  className={cn(FIELD, "w-full truncate text-left hover:bg-secondary")}
+                >
+                  {text || "Describe the role…"}
+                </button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl" aria-describedby={undefined}>
+                <DialogHeader>
+                  <DialogTitle>Role query</DialogTitle>
+                </DialogHeader>
+                <Textarea
+                  aria-label="Role query"
+                  value={text}
+                  onChange={(event) => onChange(withValue(values, control.key, event.target.value || null))}
+                  className="min-h-64 max-h-[60vh] resize-y"
+                />
+                <DialogClose asChild>
+                  <Button className="justify-self-end">Done</Button>
+                </DialogClose>
+              </DialogContent>
+            </Dialog>
+          </Row>
+        )
       return (
         <Row label={field.label}>
           <input
@@ -489,16 +580,25 @@ function Traits({
         <TraitChips traits={traits} />
       )}
       {editable && (
-        <input
-          aria-label="Add trait"
-          placeholder="Add trait"
-          value={typed}
-          onChange={(event) => onTyped(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") add()
-          }}
-          className={ADD_FIELD}
-        />
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" aria-label="Add trait" className={cn(CHIP, "p-1.5 hover:bg-secondary")}>
+              <Plus className="size-3.5" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64" align="start">
+            <input
+              aria-label="Add trait"
+              placeholder="Add trait"
+              value={typed}
+              onChange={(event) => onTyped(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") add()
+              }}
+              className={ADD_FIELD}
+            />
+          </PopoverContent>
+        </Popover>
       )}
     </Row>
   )

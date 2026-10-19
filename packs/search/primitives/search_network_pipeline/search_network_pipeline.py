@@ -62,7 +62,7 @@ PAYLOAD_KEYS = {
 }
 LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
-DEFAULT_TOP_K = {"powerset": 10000, "local": 1000}
+DEFAULT_TOP_K = {"powerset": 10000, "local": 5000}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
 # The local index holds no investors and knows no set: a local run drops these with a note.
 UNSUPPORTED_LOCAL_FILTERS = {"investor_names", "set_interaction_min", "set_interaction_max"}
@@ -1169,13 +1169,14 @@ def record_quick_run(result: dict[str, Any]) -> None:
                         person_attribution=quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file")))
 
 def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> dict[str, Any]:
-    """Who in the set knows each person of a run on a Powerset set, and through which channels: the
-    lookup the deep runs make (person_attribution.py), so the rows show their sources. A local run
-    has no set, so nothing."""
-    if ledger.get("mode")=="local_duckdb" or not env_file:
+    """Save the same source contract for local and Powerset search results."""
+    people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
+    if ledger.get("mode")=="local_duckdb":
+        from packs.search.primitives.deep_search.person_attribution import local_network_attribution
+        return local_network_attribution(Path(ledger["duckdb"]), people)
+    if not env_file:
         return {}
     scope=latest_step(state,"resolve_set_operators")
-    people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
     if not people or not scope.get("operator_ids"):
         return {}
     try:
@@ -1376,7 +1377,7 @@ def add_run(p):
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
     p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
     p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier")
-    p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 1000 (local)")
+    p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 5000 (local)")
     p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)")
     p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration")
     p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate")

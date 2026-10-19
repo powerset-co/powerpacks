@@ -78,12 +78,40 @@ class PersonAttributionTests(unittest.TestCase):
             self.hydrator.run()
         self.assertEqual(fetch.call_args.args[0], ['p1', 'p2', 'p3'])
 
-    def test_local_backend_never_reads_remote_attribution(self) -> None:
-        self.results["retrieval"] = {"backend": "local"}
+    def test_local_backend_uses_saved_counts_and_one_owner_without_remote_calls(self) -> None:
+        import duckdb
+        db = self.run_dir / "search-index" / "local-search.duckdb"
+        db.parent.mkdir()
+        owner = self.run_dir / "deep-context" / "owner.json"
+        owner.parent.mkdir()
+        owner.write_text(json.dumps({"name": "Jordan Bravo"}))
+        with duckdb.connect(str(db)) as conn:
+            conn.execute("CREATE TABLE local_person_profiles(person_id VARCHAR, source_channels VARCHAR[], interaction_counts JSON, total_interactions BIGINT)")
+            conn.execute("INSERT INTO local_person_profiles VALUES (?, ?, ?, ?)",
+                         ["p1", ["gmail_msgvault", "imessage", "linkedin_csv"], '{"gmail":10,"imessage":2}', 12])
+            conn.execute("INSERT INTO local_person_profiles VALUES ('p2', [], NULL, NULL)")
+        db.with_name("manifest.json").write_text(json.dumps({"operator_id": "owner-1"}))
+        self.results["retrieval"] = {"backend": "local", "db_path": str(db)}
         self.results_path.write_text(json.dumps(self.results))
         with mock.patch.object(attribution.pg, "fetch_set_operator_ids") as scope:
-            self.assertEqual(self.hydrator.run()["status"], "skipped")
+            self.assertEqual(self.hydrator.run()["status"], "hydrated")
             scope.assert_not_called()
+        saved = json.loads(self.results_path.read_text())["person_attribution"]
+        self.assertEqual(set(saved), {"p1", "p2"})
+        person = saved["p1"]
+        self.assertEqual(person["total_interactions"], 12)
+        self.assertEqual(person["sources"], [
+            {"channel": "gmail", "total_interactions": 10, "operator_count": 1},
+            {"channel": "imessage", "total_interactions": 2, "operator_count": 1},
+            {"channel": "linkedin", "total_interactions": 0, "operator_count": 1},
+        ])
+        self.assertEqual(person["operators"], [{
+            "operator_id": "owner-1", "operator_name": "Jordan Bravo", "channels": ["gmail", "imessage", "linkedin"],
+            "gmail_interactions": 10, "message_interactions": 2, "gmail_account_details": [],
+        }])
+        self.assertEqual(saved["p2"]["sources"], [])
+        self.assertEqual(saved["p2"]["operators"][0]["operator_name"], "Jordan Bravo")
+        self.assertEqual(set(attribution.local_network_attribution(db, ["p1"])), {"p1"})
 
     def test_incremental_pond_requests_only_uncached_people(self) -> None:
         self.results["person_attribution"] = {"p1": {"person_id": "p1", "sources": [],

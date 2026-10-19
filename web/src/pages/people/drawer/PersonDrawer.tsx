@@ -62,7 +62,7 @@ export function PersonDrawer(props: PersonDrawerProps) {
           </div>
           {detail.status === "loading" ? <DetailLoading /> : null}
           {detail.status === "failed" ? <DetailFailed onRetry={onRetry} /> : null}
-          {ready ? <DetailSections row={row} detail={ready} section={section} /> : null}
+          {ready ? <DetailSections row={row} detail={ready} section={section} onRefresh={onRetry} /> : null}
         </>
       ) : null}
     </Drawer>

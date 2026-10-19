@@ -12,11 +12,12 @@ interface DetailSectionsProps {
   row: Person
   detail: PersonDetail
   section: SectionState
+  onRefresh: () => void
 }
 
 // The drawer's sections in page order: the call (folded), then what we know, then how it reads.
 // A section with nothing to say is left out.
-export function DetailSections({ row, detail, section }: DetailSectionsProps) {
+export function DetailSections({ row, detail, section, onRefresh }: DetailSectionsProps) {
   return (
     <>
       <DecisionSection row={row} detail={detail} {...section("decision")} />
@@ -38,7 +39,7 @@ export function DetailSections({ row, detail, section }: DetailSectionsProps) {
           </ol>
         </DetailsSection>
       ) : null}
-      <RelationshipSection row={row} detail={detail} {...section("relationship")} />
+      <RelationshipSection row={row} detail={detail} onRefresh={onRefresh} {...section("relationship")} />
       {detail.topics.length ? (
         <DetailsSection
           sectionKey="topics"

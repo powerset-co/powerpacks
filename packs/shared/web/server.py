@@ -170,9 +170,6 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 if not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
                     routes[0].post(self, parsed)
 
-        def log_message(self, fmt: str, *args: object) -> None:
-            print(f"{self.address_string()} - {fmt % args}", file=sys.stderr)
-
     return Handler
 
 

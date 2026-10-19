@@ -1352,7 +1352,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
 
     def test_quick_run_on_a_set_records_who_knows_each_person(self):
         """A run on a Powerset set saves the set's attribution per person, the lookup the deep runs
-        make; a local run has no set and saves none."""
+        make; a local run reads its own index."""
         module = load_pipeline_module()
         known = {"p1": {"person_id": "p1", "total_interactions": 3,
                         "sources": [{"channel": "gmail", "total_interactions": 3, "operator_count": 1}],
@@ -1371,24 +1371,27 @@ class PreviewFilterKeysTests(unittest.TestCase):
                 {"id": "expand_search_request", "output": {"role_search_filters": {}}},
                 {"id": "resolve_set_operators", "output": {"set_id": "s1", "operator_ids": ["op1"]}},
             ]}))
-            for slug, mode, expected in (("founders", None, known), ("founders-local", "local_duckdb", None)):
+            for slug, mode, expected in (("founders", None, known), ("founders-local", "local_duckdb", known)):
                 run = root / ".powerpacks/search" / slug
                 run.mkdir(parents=True)
                 ledger = run / "pipeline.ledger.json"
                 ledger.write_text(json.dumps({
-                    "created_at": "2026-10-16T00:00:00Z", "steps": {}, **({"mode": mode} if mode else {}),
+                    "created_at": "2026-10-16T00:00:00Z", "steps": {}, **({"mode": mode, "duckdb": "local.duckdb"} if mode else {}),
                     "artifacts": {"jsonl": ".powerpacks/runs/artifacts/founders/rows.jsonl",
                                   "profiles_path": ".powerpacks/runs/artifacts/founders/profiles.jsonl"}}))
-                with mock.patch.object(module.pg, "fetch_network_attribution", return_value=known) as fetch:
+                with mock.patch.object(module.pg, "fetch_network_attribution", return_value=known) as fetch, \
+                        mock.patch("packs.search.primitives.deep_search.person_attribution.local_network_attribution", return_value=known) as local_fetch:
                     module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/founders.json",
                                              "status": "completed", "env_file": ".env"})
                 saved = json.loads((root / ".powerpacks/deep-search" / slug / "results.json").read_text())
                 with self.subTest(slug=slug):
                     self.assertEqual(saved.get("person_attribution"), expected)
-                    if expected:
-                        fetch.assert_called_once_with(["p1"], env_file=Path(".env"), allowed_operator_ids=["op1"])
-                    else:
+                    if mode:
                         fetch.assert_not_called()
+                        local_fetch.assert_called_once_with(Path("local.duckdb"), ["p1"])
+                    else:
+                        fetch.assert_called_once_with(["p1"], env_file=Path(".env"), allowed_operator_ids=["op1"])
+                        local_fetch.assert_not_called()
 
     def test_powerset_preview_carries_the_same_keys(self):
         module = load_pipeline_module()

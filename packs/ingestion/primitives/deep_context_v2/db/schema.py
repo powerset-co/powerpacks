@@ -20,6 +20,7 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh.
 - 2026-10-16 (schema 5): remove the derived share table and Share/Private human tags.
 - 2026-10-07 (schema 3): person_tags and person_labels, keyed by candidate id, with current_tags per parent.
 - 2026-10-07 (schema 2): candidate_linkedins carries Sol's confidence and reason, as v1's
@@ -45,7 +46,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-SCHEMA_VERSION = 5
+from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
+
+SCHEMA_VERSION = 6
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -138,6 +141,12 @@ CREATE TABLE sets (
 );
 """
 
+# NULL means the human has not chosen a relationship; the machine choice remains effective.
+RELATIONSHIP_KIND_COLUMN_DDL = (
+    "relationship_kind TEXT CHECK (relationship_kind IN "
+    f"{tuple(CHOICE_QUESTIONS['relationship_kind'][1])})"
+)
+
 # Tags and labels are keyed by member candidate; the page reads them per family.
 PEOPLE_TABLES_DDL = f"""
 -- One row per member candidate, written together for a family; the human's tags
@@ -145,6 +154,7 @@ PEOPLE_TABLES_DDL = f"""
 CREATE TABLE person_tags (
   candidate_id TEXT NOT NULL PRIMARY KEY REFERENCES candidates(candidate_id),
   tags TEXT NOT NULL,          -- '|'-joined, sorted
+  {RELATIONSHIP_KIND_COLUMN_DDL},
   note TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

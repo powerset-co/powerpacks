@@ -51,20 +51,23 @@ def share_rows(store: Path) -> tuple[PersonLabelRow, ...]:
     try:
         labels = queries_share.labels_by_parent(conn)
         rows = conn.execute(
-            "SELECT p.parent_id FROM current_parent p JOIN person_labels l USING (candidate_id) "
+            "SELECT p.parent_id, w.decided_by, MAX(l.flag != '') AS flagged "
+            "FROM current_parent p JOIN person_labels l USING (candidate_id) "
             "JOIN current_worth w USING (parent_id) "
             "WHERE w.worth = 'yes' "
             "AND NOT EXISTS (SELECT 1 FROM current_parent members JOIN candidates c USING (candidate_id) "
             "WHERE members.parent_id = p.parent_id AND c.is_owner = 1) "
             "GROUP BY p.parent_id "
-            "HAVING (MAX(l.flag != '') = 0 OR w.decided_by = 'human') "
-            "AND MAX(COALESCE(json_extract(l.labels_json, '$.is_owner'), 0)) = 0 "
+            "HAVING MAX(COALESCE(json_extract(l.labels_json, '$.is_owner'), 0)) = 0 "
             "ORDER BY p.parent_id"
         ).fetchall()
         people: list[PersonLabelRow] = []
         for row in rows:
             parent_id = row["parent_id"]
             label = labels[parent_id]
+            flagged = bool(label.flag) if label.relationship_kind_source == "human" else row["flagged"]
+            if flagged and row["decided_by"] != "human":
+                continue
             people.append(PersonLabelRow(parent_id, label.public_identifier, label.full_name, "yes", label.flag,
                                          label.labels_json, label.updated_at))
         return tuple(people)

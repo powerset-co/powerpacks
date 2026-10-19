@@ -1,3 +1,4 @@
+import { useUpdate } from "@/hooks/useUpdate"
 import { Page } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
@@ -8,6 +9,7 @@ import { ProviderSettings } from "./ProviderSettings"
 
 /** Local API connections, account repair and remote-assist preferences, from the account menu. */
 export function SettingsPage() {
+  const version = useUpdate()?.current
   const features = useFeatureSettings()
   const update = useUpdateFeatures()
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
@@ -70,6 +72,14 @@ export function SettingsPage() {
             Show the Team page
           </label>
         </section>
+      ) : null}
+      {version ? (
+        <p
+          title="Powerpacks version"
+          className="m-0 border-t border-line pt-4 text-[11px] text-faint tabular-nums"
+        >
+          Powerpacks v{version}
+        </p>
       ) : null}
     </Page>
   )

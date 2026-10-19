@@ -145,6 +145,59 @@ class PeopleWorthTests(StoreTests):
             self.assertEqual(self.post("/api/people/worth", request)[0], 400)
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0], count)
 
+    def test_human_relationship_survives_label_refresh_and_tag_edits(self) -> None:
+        from packs.ingestion.primitives.share.person_labels import PersonLabels
+
+        before = [tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")]
+        code, payload = self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "close_friend"})
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["rows"][0]["relationship_kind"], "close_friend")
+        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")], before)
+        self.assertEqual(self.people.detail("p:a").relationship_kind_source, "human")
+        self.assertNotIn("relationship_kind", self.people.detail("p:a").choice_p)
+        self.assertEqual([tuple(row) for row in self.conn.execute(
+            "SELECT candidate_id, relationship_kind FROM person_tags ORDER BY candidate_id")],
+            [("c1", "close_friend"), ("c2", "close_friend")])
+        self.post("/api/people/tags", {"people": [{"parent_id": "p:a", "tags": ["is_family"]}]})
+        PersonLabels(self.conn, self.root).run()
+        self.assertEqual(self.people.load()[0].relationship_kind, "close_friend")
+        self.assertEqual(queries_share.current_tags(self.conn)["p:a"].note, "keep note")
+
+    def test_relationship_controls_effective_flag_and_upload_labels(self) -> None:
+        from packs.ingestion.primitives.share.store import share_rows
+
+        self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
+                          "VALUES ('c1', 'yes', 'machine', 'old', 'v2', ?)", (LATER,))
+        self.conn.execute("UPDATE person_labels SET flag = 'family', labels_json = ?",
+                          (json.dumps({"relationship_kind": "family", "relationship_kind_p": 0.9, "is_family": 0.9}),))
+        self.conn.commit()
+        self.assertEqual(self.people.detail("p:a").relationship_kind_source, "machine")
+        self.assertEqual(share_rows(self.root / "store.sqlite"), ())
+        for kind, flag in (("colleague", ""), ("family", "family"), ("romantic_partner", "romantic_partner")):
+            self.assertEqual(self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": kind})[0], 200)
+            self.assertEqual(self.people.load()[0].flag, flag)
+            uploaded = share_rows(self.root / "store.sqlite")
+            self.assertEqual(len(uploaded), int(not flag))
+            if uploaded:
+                self.assertEqual(json.loads(uploaded[0].labels_json)["relationship_kind"], kind)
+        self.conn.execute("UPDATE person_labels SET labels_json = ?", (json.dumps({"is_minor": 0.9}),))
+        self.conn.commit()
+        self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "colleague"})
+        self.assertEqual(self.people.load()[0].flag, "minor")
+        self.assertEqual(share_rows(self.root / "store.sqlite"), ())
+
+    def test_relationship_keeps_the_latest_family_note(self) -> None:
+        queries_share.write_tags(self.conn, [("c2", "is_family", "latest note", LATER)])
+        self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "friend"})
+        held = queries_share.current_tags(self.conn)["p:a"]
+        self.assertEqual((set(held.tags.split("|")), held.note), ({"is_recruiter", "is_family"}, "latest note"))
+
+    def test_relationship_validation_does_not_write(self) -> None:
+        for request in ({"parent_id": "p:a", "relationship_kind": "invalid"},
+                        {"parent_id": "missing", "relationship_kind": "family"},
+                        {"parent_id": "p:a"}, [], {"parent_id": 1, "relationship_kind": "family"}):
+            self.assertEqual(self.post("/api/people/relationship", request)[0], 400)
+
     def test_unjudged_worth_and_source_are_empty(self) -> None:
         self.conn.execute("DELETE FROM worth")
         self.conn.commit()
@@ -181,10 +234,15 @@ class PeopleWorthTests(StoreTests):
                 answers.append(json.loads(response.read()))
             with urllib.request.urlopen(url + "rows", timeout=5) as response:
                 answers.append(json.loads(response.read()))
+            relationship = json.dumps({"parent_id": "p:a", "relationship_kind": "colleague"}).encode()
+            with urllib.request.urlopen(urllib.request.Request(url + "relationship", data=relationship), timeout=5) as response:
+                answers.append(json.loads(response.read()))
+            with urllib.request.urlopen(url + "person?id=p%3Aa", timeout=5) as response:
+                answers.append(json.loads(response.read()))
         client = threading.Thread(target=request)
         client.start()
-        server.handle_request()
-        server.handle_request()
+        for _ in range(4):
+            server.handle_request()
         client.join(5)
         updated = answers[0]["rows"][0]
         payload = answers[1]
@@ -192,6 +250,9 @@ class PeopleWorthTests(StoreTests):
         self.assertEqual(row, updated)
         self.assertEqual((row["worth"], row["worth_source"]), ("yes", "human"))
         self.assertNotIn("share", payload["columns"])
+        self.assertEqual(answers[2]["rows"][0]["relationship_kind"], "colleague")
+        self.assertEqual(answers[3]["relationship_kind_source"], "human")
+        self.assertNotIn("relationship_kind", answers[3]["choice_p"])
 
     def _family_rows(self, candidates: tuple[str, ...], parent_id: str) -> dict[str, int]:
         """table -> rows naming one of the candidates or the parent, for every table keyed by either."""
@@ -264,13 +325,25 @@ class PeopleWorthTests(StoreTests):
 
 
 class WorthMigrationTests(StoreTests):
+    def test_schema_five_adds_relationship_without_changing_existing_rows(self) -> None:
+        self.conn.execute("INSERT INTO person_tags (candidate_id, tags, note, updated_at) "
+                          "VALUES ('c1', 'is_family', 'keep note', ?)", (NOW,))
+        self.conn.execute("ALTER TABLE person_tags DROP COLUMN relationship_kind")
+        self.conn.execute("UPDATE meta SET value = '5' WHERE key = 'schema_version'")
+        self.conn.commit()
+        self.conn.close()
+        self.conn = open_store(Path(self.tmp.name) / "store.sqlite")
+        self.assertEqual(tuple(self.conn.execute("SELECT candidate_id, tags, note, updated_at, relationship_kind "
+                                                "FROM person_tags").fetchone()),
+                         ("c1", "is_family", "keep note", NOW, None))
+
     def test_schema_four_drops_derived_share_and_only_the_retired_tags(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.db.schema import SCHEMA_VERSION
         self.conn.execute("CREATE TABLE share (candidate_id TEXT PRIMARY KEY, share TEXT)")
         self.conn.execute("CREATE VIEW current_share AS SELECT * FROM share")
         self.conn.execute("INSERT INTO share VALUES ('c1', 'yes')")
-        self.conn.execute("INSERT INTO person_tags VALUES ('c1', 'is_family|private|share|is_recruiter', 'keep note', ?)", (NOW,))
-        self.conn.execute("INSERT INTO person_tags VALUES ('c2', 'private|share', '', ?)", (LATER,))
+        self.conn.execute("INSERT INTO person_tags (candidate_id, tags, note, updated_at) VALUES ('c1', 'is_family|private|share|is_recruiter', 'keep note', ?)", (NOW,))
+        self.conn.execute("INSERT INTO person_tags (candidate_id, tags, note, updated_at) VALUES ('c2', 'private|share', '', ?)", (LATER,))
         self.conn.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
         self.conn.commit()
         self.conn.close()

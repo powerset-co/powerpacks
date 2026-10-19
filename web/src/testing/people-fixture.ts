@@ -105,6 +105,7 @@ export const PAYLOAD: PeoplePayload = {
 
 /** One drawer detail as GET /api/people/person returns it, for the fixture's first person. */
 export const DETAIL: PersonDetail = {
+  relationship_kind_source: "machine",
   parent_id: "p1",
   linkedin_url: "",
   headline: "Engineer at Example",

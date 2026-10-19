@@ -58,7 +58,17 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
     queryKey: SIGNALS_KEY,
     queryFn: async () => {
       const before = client.getQueryData<SignalsStatus>(SIGNALS_KEY)
-      const status = await readSignals()
+      const status = await readSignals().catch((caught: unknown) => {
+        setChecking(false)
+        throw caught
+      })
+      if (checking && status.status === "failed") setChecking(false)
+      if (checking && status.status === "idle" && status.plan) {
+        setChecking(false)
+        // Cached-only refresh needs no paid confirmation.
+        if (status.plan.new_requests === 0 && status.plan.people > 0) return start(targets)
+        setPlan(status.plan)
+      }
       if (before?.status === "running" && status.status === "completed") {
         void client.invalidateQueries({ queryKey: PEOPLE_QUERY_KEY })
         onDone()
@@ -79,6 +89,7 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
       void client.invalidateQueries({ queryKey: PEOPLE_QUERY_KEY })
       onDone()
     }
+    return next
   }
   const check = async () => {
     setOpen(true)
@@ -99,12 +110,9 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
     try {
       await client.cancelQueries({ queryKey: SIGNALS_KEY })
       const next = await checkSignals(ids)
-      // Nothing to pay for starts at once; nobody to refresh starts nothing.
-      if (next.new_requests === 0 && next.people > 0) await start(ids)
-      else setPlan(next)
+      client.setQueryData(SIGNALS_KEY, next)
     } catch (error) {
       setError(errorText(error))
-    } finally {
       setChecking(false)
     }
   }
@@ -132,14 +140,14 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
             shape="pill"
             size="sm"
             title="Re-reads this person's saved facts. Asks before anything costs money."
-            disabled={checking}
+            disabled={checking && !running}
             onClick={openOrCheck}
           >
             {running ? <Spinner /> : <RefreshIcon className="size-[14px]" />}
             {TITLE}
           </Button>
         ) : (
-          <Button disabled={checking} onClick={openOrCheck}>
+          <Button disabled={checking && !running} onClick={openOrCheck}>
             {running ? "Refreshing signals…" : TITLE}{" "}
             {running ? (
               <Spinner />
@@ -161,7 +169,7 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
           </DialogDescription>
         </DialogHeader>
         <div role="status" className="text-[13px]">
-          {checking ? (
+          {checking && !running ? (
             <Spinner />
           ) : plan?.people === 0 ? (
             <p className="m-0">Signals are up to date.</p>
@@ -171,7 +179,9 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
                 <span>{status.message}</span>
                 {status.total ? (
                   <span className="tabular-nums text-muted-foreground">
-                    {countOf(status.done, status.total, "request")}
+                    {status.message === "Reading families"
+                      ? `${status.done.toLocaleString()} of ${status.total.toLocaleString()}`
+                      : countOf(status.done, status.total, "request")}
                   </span>
                 ) : null}
               </div>
