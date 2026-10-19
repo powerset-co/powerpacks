@@ -72,7 +72,6 @@ const LOGOS = {
   modal: modalLogo,
   openai: openaiLogo,
   typesafe: typesafeLogo,
-  "rapidapi-twitter": rapidapiLogo,
   "rapidapi-linkedin": rapidapiLogo,
 }
 
@@ -87,11 +86,7 @@ function ProviderRow({ provider }: { provider: Provider }) {
   return (
     <ConnectionRow
       icon={<img src={LOGOS[provider.id]} alt="" className="size-[18px] object-contain" />}
-      title={
-        provider.id === "modal" || provider.id === "rapidapi-twitter"
-          ? `${provider.name} (optional)`
-          : provider.name
-      }
+      title={provider.id === "modal" ? `${provider.name} (optional)` : provider.name}
       why={provider.description}
       state={provider.connected ? "ready" : "needed"}
       action={{ label: "Connect", onClick: visit }}

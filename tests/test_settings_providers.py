@@ -27,7 +27,7 @@ class ProviderSettingsTests(unittest.TestCase):
     def test_required_connections_precede_optional_connections(self) -> None:
         rows = list(self.rows().values())
         self.assertEqual([row["id"] for row in rows],
-                         ["parallel", "openai", "typesafe", "rapidapi-linkedin", "modal", "rapidapi-twitter"])
+                         ["parallel", "openai", "typesafe", "rapidapi-linkedin", "modal"])
         self.assertEqual(rows[2]["name"], "TypeSafe")
 
     def test_linkedin_key_is_required_only_without_powerset_key(self) -> None:
@@ -37,7 +37,7 @@ class ProviderSettingsTests(unittest.TestCase):
             self.assertTrue(row["connected"])
             self.assertEqual(row["credentials"][0]["masked"], "••••1234")
             with patch.dict(os.environ, {"POWERSET_API_KEY": "synthetic-powerset"}):
-                self.assertNotIn("rapidapi-linkedin", self.rows())
+                self.assertEqual(self.rows()["rapidapi-linkedin"]["name"], "RapidAPI · LinkedIn (optional)")
 
     def rows(self) -> dict[str, dict]:
         return {row["id"]: row for row in providers.read(self.root)["providers"]}
@@ -69,15 +69,11 @@ class ProviderSettingsTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": " "}):
             self.assertFalse(self.rows()["openai"]["connected"])
 
-    def test_modal_requires_both_and_twitter_uses_actual_alias_precedence(self) -> None:
-        with patch.dict(os.environ, {"MODAL_TOKEN_ID": "synthetic-token-id", "RAPIDAPI_KEY": "synthetic-old-1111"}):
+    def test_modal_requires_both_credentials(self) -> None:
+        with patch.dict(os.environ, {"MODAL_TOKEN_ID": "synthetic-token-id"}):
             self.assertFalse(self.rows()["modal"]["connected"])
-            self.assertEqual(self.rows()["rapidapi-twitter"]["credentials"][0]["name"], "RAPIDAPI_KEY")
-            with patch.dict(os.environ, {"MODAL_TOKEN_SECRET": "synthetic-token-secret",
-                                         "RAPIDAPI_TWITTER_KEY": "synthetic-twitter-2222"}):
+            with patch.dict(os.environ, {"MODAL_TOKEN_SECRET": "synthetic-token-secret"}):
                 self.assertTrue(self.rows()["modal"]["connected"])
-                self.assertEqual(self.rows()["rapidapi-twitter"]["credentials"][0],
-                                 {"name": "RAPIDAPI_TWITTER_KEY", "configured": True, "masked": "••••2222"})
 
     def test_short_credentials_are_never_returned_in_full_and_missing_keys_have_links(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": "tiny"}):

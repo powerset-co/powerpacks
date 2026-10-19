@@ -29,9 +29,7 @@ _PROVIDERS = (
               "https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data"),
     _Provider("modal", "Modal", "Hosted processing", (("MODAL_TOKEN_ID",), ("MODAL_TOKEN_SECRET",)),
               "https://modal.com/settings/tokens"),
-    _Provider("rapidapi-twitter", "RapidAPI · Twitter/X", "Twitter/X contact import",
-              (("RAPIDAPI_TWITTER_KEY", "RAPIDAPI_KEY"),),
-              "https://rapidapi.com/davethebeast/api/twitter241"),
+
 )
 
 
@@ -39,15 +37,15 @@ def read(root: Path) -> dict[str, object]:
     values = account.config(root)
     providers = []
     for provider in _PROVIDERS:
-        if provider.id == "rapidapi-linkedin" and values.get("POWERSET_API_KEY", "").strip():
-            continue
         credentials = []
         for names in provider.credentials:
             name = next((name for name in names if values.get(name, "").strip()), names[0])
             value = values.get(name, "").strip()
             credentials.append({"name": name, "configured": bool(value),
                                 "masked": ("••••" + value[-4:] if len(value) > 4 else "••••") if value else None})
-        providers.append({"id": provider.id, "name": provider.name, "description": provider.description,
+        covered = provider.id == "rapidapi-linkedin" and bool(values.get("POWERSET_API_KEY", "").strip())
+        providers.append({"id": provider.id, "name": provider.name + (" (optional)" if covered else ""),
+                          "description": "Covered by your Powerset connection" if covered else provider.description,
                           "connected": all(credential["configured"] for credential in credentials),
                           "credentials": credentials, "connect_url": provider.connect_url})
     return {"providers": providers}
