@@ -38,7 +38,9 @@ function serveFeatures(saved: {
   support: boolean
   team: boolean
 }) {
-  return vi.fn((_url: string, init?: RequestInit) => {
+  return vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/settings/providers")
+      return Promise.resolve(new Response(JSON.stringify({ providers: [] })))
     if (init?.method === "POST")
       Object.assign(saved, JSON.parse(typeof init.body === "string" ? init.body : "{}"))
     return Promise.resolve(new Response(JSON.stringify(saved)))
@@ -84,4 +86,28 @@ it("offers Repair setup in the desktop app: the Connect list, Done going home", 
   expect(screen.getByRole("heading", { name: "Repair setup" })).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "Done" }))
   expect(screen.getByText("People page")).toBeTruthy()
+})
+
+it("keeps settings and account setup usable while provider status is loading", async () => {
+  vi.mocked(isDesktop).mockReturnValue(true)
+  const features = serveFeatures({ sets: false, auto_reply: false, share: false, support: true, team: false })
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) =>
+      url === "/api/settings/providers"
+        ? new Promise(() => {
+            // Keep provider status pending while the rest of Settings renders.
+          })
+        : features(url),
+    ),
+  )
+  mount()
+  expect(screen.getByLabelText("Loading API connections")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Done" })).toBeTruthy()
+  await waitFor(() =>
+    expect(
+      screen.getByRole<HTMLInputElement>("checkbox", { name: "Let the Powerset team work on this install" })
+        .disabled,
+    ).toBe(false),
+  )
 })

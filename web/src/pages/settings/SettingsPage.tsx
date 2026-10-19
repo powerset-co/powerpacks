@@ -8,10 +8,9 @@ import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 import { HOME } from "@/lib/nav"
 import { Connect } from "@/pages/install/Connect"
+import { ProviderSettings } from "./ProviderSettings"
 
-/** What someone sets for themselves, from the account menu: Remote assist (every install), and in the
- *  desktop app Repair setup, the Connect list setup ends on, for an account that never got linked or
- *  stopped working. Sets stays a local feature in the debug menu until it ships. */
+/** Local API connections, account repair and remote-assist preferences, from the account menu. */
 export function SettingsPage() {
   const navigate = useNavigate()
   const features = useFeatureSettings()
@@ -33,6 +32,7 @@ export function SettingsPage() {
           <Connect onDone={() => void navigate(HOME.href)} />
         </section>
       ) : null}
+      <ProviderSettings />
       <section className="flex flex-col gap-3" aria-labelledby="remote-assist">
         <div className="flex flex-col gap-1">
           <h2 id="remote-assist" className="m-0 text-[15px] font-semibold">
