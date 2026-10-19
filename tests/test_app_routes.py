@@ -7,6 +7,7 @@ import io
 from contextlib import redirect_stderr
 import base64
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -191,7 +192,8 @@ class AccountRoutesTests(unittest.TestCase):
             "POWERPACKS_AUTH0_DOMAIN=synthetic.auth0.example\n"
             "POWERPACKS_AUTH0_CLIENT_ID=synthetic-client\n"
             "POWERPACKS_AUTH0_AUDIENCE=https://synthetic.invalid\n")
-        with patch.object(server, "ROOT", self.root), patch.object(account.auth, "main", return_value=0) as login:
+        with patch.dict(os.environ, {"POWERPACKS_CREDENTIALS_PATH": str(self.credentials)}, clear=True), \
+                patch.object(server, "ROOT", self.root), patch.object(account.auth, "main", return_value=0) as login:
             self.assertEqual(server._login(), 0)
         self.assertEqual(login.call_args.args[0], [
             "login", "--auth0-domain", "synthetic.auth0.example", "--client-id", "synthetic-client",
