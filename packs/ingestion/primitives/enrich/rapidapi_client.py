@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Powerset-gateway LinkedIn client: keys, HTTP, retry/backoff, and one profile door.
+"""LinkedIn client: keys, HTTP, retry/backoff, and one profile door.
 
 POLICY (one line): the client's single behavior is cache-first,
 fetch-on-miss-or-unusable — callers make ONE `get_profile` call and branch on
@@ -7,8 +7,8 @@ its definitive state; render/offline surfaces that must never touch the network
 read the cache files directly instead of calling the client.
 
 `RapidApiClient` is the one home for talking to professional-network-data through
-the Powerset gateway. An instance holds the API key + retry policy. Key
-resolution reads POWERSET_API_KEY from the environment, seeded from the repo
+the Powerset gateway or direct RapidAPI. An instance holds the API key + retry
+policy. POWERSET_API_KEY wins over RAPIDAPI_LINKEDIN_KEY, seeded from the repo
 `.env` at import time without overriding the shell.
 
 - `client.get_profile(public_identifier, linkedin_url, *, cache_dir=None,
@@ -26,7 +26,7 @@ resolution reads POWERSET_API_KEY from the environment, seeded from the repo
   older than this run (a cached `content`/stale `empty` is re-fetched once;
   repeat calls in the same run serve the recorded answer). A fresh fetch that
   fails transiently falls back to the recorded state rather than ERROR.
-- `RapidApiClient.resolve_key()` — the configured Powerset gateway key.
+- `RapidApiClient.resolve_key()` — the configured LinkedIn API key.
 - `RapidApiClient.http_json(...)` — one JSON-over-HTTP call; returns
   (status, payload, error-text).
 - Cache writes: a success is always cached. A failure is cached ONLY when
@@ -88,6 +88,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json  # noqa: E402
+from packs.shared.linkedin_api import LinkedInApiConfig, MISSING_LINKEDIN_KEY  # noqa: E402
 from packs.ingestion.primitives.enrich.profile_cache import (  # noqa: E402
     parse_iso,
     profile_cache_path,
@@ -131,8 +132,6 @@ class RapidApiClient:
     those immutable attributes, so one instance is safe to share across a thread
     pool."""
 
-    BASE_URL = "https://proxy.powerset.dev/vendor/professional-network-data"
-
     # cache-entry key -> definitive state answered by a FETCH this process
     # run. Once an entry has a definitive answer, repeat calls (fresh or not,
     # any instance) serve the recorded state instead of re-billing — at most
@@ -149,13 +148,14 @@ class RapidApiClient:
         retry_attempts: int | None = None,
         retry_backoff_seconds: float | None = None,
     ) -> None:
-        self.api_key = api_key if api_key is not None else self.resolve_key()
+        self.config = LinkedInApiConfig.resolve(api_key)
+        self.api_key = self.config.api_key
         self.retry_attempts = DEFAULT_RAPIDAPI_RETRY_ATTEMPTS if retry_attempts is None else retry_attempts
         self.retry_backoff_seconds = DEFAULT_RAPIDAPI_RETRY_BACKOFF_SECONDS if retry_backoff_seconds is None else retry_backoff_seconds
 
     @staticmethod
     def resolve_key() -> str:
-        return os.getenv("POWERSET_API_KEY", "").strip()
+        return LinkedInApiConfig.resolve().api_key
 
     @staticmethod
     def load_dotenv(path: Path, keys: set[str] | None = None) -> None:
@@ -254,12 +254,12 @@ class RapidApiClient:
             # Keyless installs get the recorded truth (possibly stale) — an
             # unknown pub is ERROR, never a verdict.
             if cached and profile_has_content(cached):
-                return from_record(PROFILE_CONTENT, "no Powerset API key; serving cached profile")
+                return from_record(PROFILE_CONTENT, "no LinkedIn API key; serving cached profile")
             if record_exists and not recorded_transient:
-                return from_record(PROFILE_EMPTY, "no Powerset API key; serving recorded empty state")
+                return from_record(PROFILE_EMPTY, "no LinkedIn API key; serving recorded empty state")
             return {"state": PROFILE_ERROR, "normalized_profile": {}, "data": None,
                     "from_cache": False, "fetched": False, "status_code": 0,
-                    "detail": "POWERSET_API_KEY is not set", "attempts": 0}
+                    "detail": MISSING_LINKEDIN_KEY, "attempts": 0}
 
         result = self._fetch_fresh(public_identifier, linkedin_url,
                                    cache_path=cache_path, fresh=fresh,
@@ -323,11 +323,8 @@ class RapidApiClient:
                 wait_for_attempt()
             status, data, error = self.http_json(
                 "GET",
-                f"{self.BASE_URL}/get-profile-data-by-url",
-                headers={
-                    "x-powerset-key": self.api_key,
-                    "X-Freshness": "live" if fresh else PROFILE_FRESHNESS_SECONDS,
-                },
+                f"https://{self.config.host}{self.config.path_prefix}/get-profile-data-by-url",
+                headers=self.config.headers("live" if fresh else PROFILE_FRESHNESS_SECONDS),
                 params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
                 timeout=90,
             )
@@ -448,7 +445,7 @@ def hydrate_profiles(
 
 
 def rapidapi_key() -> str:
-    """Convenience wrapper: the configured Powerset gateway key."""
+    """Convenience wrapper: the configured LinkedIn API key."""
     return RapidApiClient.resolve_key()
 
 
@@ -473,6 +470,6 @@ def rapidapi_profile(
     )
 
 
-# Seed POWERSET_API_KEY from the repo .env at import (without overriding the
+# Seed LinkedIn keys from the repo .env at import (without overriding the
 # shell), so `resolve_key()` finds keys placed only in .env.
-RapidApiClient.load_dotenv(Path(__file__).resolve().parents[4] / ".env", {"POWERSET_API_KEY"})
+RapidApiClient.load_dotenv(Path(__file__).resolve().parents[4] / ".env", {"POWERSET_API_KEY", "RAPIDAPI_LINKEDIN_KEY"})

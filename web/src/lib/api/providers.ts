@@ -1,7 +1,7 @@
 import { body, failure } from "./http"
 
 export interface Provider {
-  id: "parallel" | "modal" | "openai" | "typesafe" | "rapidapi-twitter"
+  id: "parallel" | "modal" | "openai" | "typesafe" | "rapidapi-linkedin" | "rapidapi-twitter"
   name: string
   description: string
   connected: boolean

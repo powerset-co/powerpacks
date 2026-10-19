@@ -24,6 +24,9 @@ _PROVIDERS = (
               "https://platform.openai.com/api-keys"),
     _Provider("typesafe", "TypeSafe", "Identity and search judgments", (("TYPESAFE_API_KEY",),),
               "https://console.typesafe.ai/keys"),
+    _Provider("rapidapi-linkedin", "RapidAPI · LinkedIn", "Required for LinkedIn profiles and companies without a Powerset key",
+              (("RAPIDAPI_LINKEDIN_KEY",),),
+              "https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data"),
     _Provider("modal", "Modal", "Hosted processing", (("MODAL_TOKEN_ID",), ("MODAL_TOKEN_SECRET",)),
               "https://modal.com/settings/tokens"),
     _Provider("rapidapi-twitter", "RapidAPI · Twitter/X", "Twitter/X contact import",
@@ -36,6 +39,8 @@ def read(root: Path) -> dict[str, object]:
     values = account.config(root)
     providers = []
     for provider in _PROVIDERS:
+        if provider.id == "rapidapi-linkedin" and values.get("POWERSET_API_KEY", "").strip():
+            continue
         credentials = []
         for names in provider.credentials:
             name = next((name for name in names if values.get(name, "").strip()), names[0])

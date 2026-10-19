@@ -103,6 +103,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_logbook \
   tests.test_app_routes \
   tests.test_enrich_people \
+  tests.test_linkedin_api_config \
   tests.test_icons \
   tests.test_linkedin_import \
   tests.test_local_searches_browser \

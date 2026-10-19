@@ -73,6 +73,7 @@ const LOGOS = {
   openai: openaiLogo,
   typesafe: typesafeLogo,
   "rapidapi-twitter": rapidapiLogo,
+  "rapidapi-linkedin": rapidapiLogo,
 }
 
 function ProviderRow({ provider }: { provider: Provider }) {

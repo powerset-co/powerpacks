@@ -15,6 +15,14 @@ it("shows masked local keys and connects missing providers without asking vendor
       JSON.stringify({
         providers: [
           {
+            id: "rapidapi-linkedin",
+            name: "RapidAPI · LinkedIn",
+            description: "Required for LinkedIn profiles and companies without a Powerset key",
+            connected: false,
+            credentials: [{ name: "RAPIDAPI_LINKEDIN_KEY", configured: false, masked: null }],
+            connect_url: "https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data",
+          },
+          {
             id: "modal",
             name: "Modal",
             description: "Models and embeddings",
@@ -45,7 +53,8 @@ it("shows masked local keys and connects missing providers without asking vendor
   )
   expect(await screen.findByText("Connected")).toBeTruthy()
   expect(screen.getByText("••••1234")).toBeTruthy()
-  expect(screen.getByText("Not set")).toBeTruthy()
+  expect(screen.getAllByText("Not set")).toHaveLength(2)
+  expect(screen.getByRole("button", { name: "RapidAPI · LinkedIn: Connect" })).toBeTruthy()
   expect(screen.getByRole("button", { name: "Parallel: Connect" })).toBeTruthy()
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0]?.[0]).toBe("/api/settings/providers")

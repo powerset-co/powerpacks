@@ -346,6 +346,22 @@ class EnrichPeopleTests(unittest.TestCase):
             self.assertEqual(experiences[0]["company_name"], "Acme Metadata")
             self.assertEqual(experiences[0]["company_key"], "linkedin_company:acme")
 
+    def test_direct_rapidapi_key_runs_uncached_enrichment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            people = Path(tmp) / "people.csv"
+            self.write_people(people)
+            with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "direct-key"}, clear=True), \
+                    patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, self.profile(), "")) as http:
+                code, payload = self.invoke([
+                    "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
+                    "--profile-cache-dir", str(Path(tmp) / "cache"), "--approve-spend",
+                ])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(http.call_count, 1)
+            self.assertEqual(http.call_args.kwargs["headers"]["x-rapidapi-key"], "direct-key")
+            self.assertTrue(Path(payload["artifacts"]["people_csv"]).exists())
+
     def test_powerset_api_key_is_used(self):
         with patch.dict(os.environ, {"POWERSET_API_KEY": "powerset-key"}, clear=True):
             self.assertEqual(rapidapi_client.RapidApiClient.resolve_key(), "powerset-key")
@@ -657,7 +673,7 @@ class EnrichPeopleTests(unittest.TestCase):
             code, payload = self.invoke(["check-keys"])
         self.assertEqual(code, 0)
         self.assertEqual(payload["provider"], "rapidapi")
-        self.assertEqual(set(payload["keys_present"]), {"POWERSET_API_KEY"})
+        self.assertEqual(set(payload["keys_present"]), {"POWERSET_API_KEY", "RAPIDAPI_LINKEDIN_KEY"})
         self.assertTrue(payload["keys_present"]["POWERSET_API_KEY"])
 
 
