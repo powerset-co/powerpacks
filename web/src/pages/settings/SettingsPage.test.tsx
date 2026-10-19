@@ -125,6 +125,6 @@ it("hides optional API keys for customer accounts", async () => {
   vi.stubGlobal("fetch", fetch)
   mount()
   await screen.findByRole("checkbox", { name: "Let the Powerset team work on this install" })
-  expect(screen.queryByRole("heading", { name: "Optional API connections" })).toBeNull()
+  expect(screen.queryByRole("heading", { name: "API connections" })).toBeNull()
   expect(fetch.mock.calls.some(([url]) => url === "/api/settings/providers")).toBe(false)
 })

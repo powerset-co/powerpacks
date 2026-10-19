@@ -26,10 +26,10 @@ export function ProviderSettings() {
     <section className="flex flex-col gap-3" aria-labelledby="api-connections">
       <div className="flex flex-col gap-1">
         <h2 id="api-connections" className="m-0 text-[15px] font-semibold">
-          Optional API connections
+          API connections
         </h2>
         <p className="m-0 text-sm text-muted-foreground">
-          For development. Powerset handles these connections for you.
+          Services for local processing and search. Keys are provided through Powerset.
         </p>
       </div>
       {providers.isPending ? (
@@ -86,7 +86,11 @@ function ProviderRow({ provider }: { provider: Provider }) {
   return (
     <ConnectionRow
       icon={<img src={LOGOS[provider.id]} alt="" className="size-[18px] object-contain" />}
-      title={`${provider.name} (optional)`}
+      title={
+        provider.id === "modal" || provider.id === "rapidapi-twitter"
+          ? `${provider.name} (optional)`
+          : provider.name
+      }
       why={provider.description}
       state={provider.connected ? "ready" : "needed"}
       action={{ label: "Connect", onClick: visit }}

@@ -46,7 +46,7 @@ it("shows masked local keys and connects missing providers without asking vendor
   expect(await screen.findByText("Connected")).toBeTruthy()
   expect(screen.getByText("••••1234")).toBeTruthy()
   expect(screen.getByText("Not set")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "Parallel (optional): Connect" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Parallel: Connect" })).toBeTruthy()
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0]?.[0]).toBe("/api/settings/providers")
   expect(screen.getByText("Modal (optional)")).toBeTruthy()
