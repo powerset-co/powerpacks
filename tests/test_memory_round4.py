@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from test_memory import source_db
@@ -50,3 +51,34 @@ class Round4Tests(unittest.TestCase):
         self.assertEqual(rows, {"c001": 1, "c002": 1, "c003": 1})
         self.store.refresh(self.adapter, ("zzz",))
         self.assertEqual(Directory(self.store).enumerate(Selector(Origin.SOURCE_NAME, "sof")).total, 2)
+
+
+class EmbeddingWidthTests(unittest.TestCase):
+    def test_embeddings_are_requested_at_768_and_cached_under_a_width_key(self) -> None:
+        import json
+        import httpx
+
+        seen: list[dict[str, object]] = []
+        self.seen = seen
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"embedding": [3.0, 4.0]}], "usage": {"prompt_tokens": 5}})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://example.test/")
+        with unittest.mock.patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic"}):
+            self._check(client)
+
+    def _check(self, client: object) -> None:
+        from packs.memory.cost import Usage
+        from packs.memory.provider import EMBEDDING_DIMENSIONS, OpenAIProvider
+        import httpx
+        assert isinstance(client, httpx.Client)
+        seen = self.seen
+        provider = OpenAIProvider("gpt-6-luna", "text-embedding-3-small@768", client=client, approve_spend=True)
+        self.assertEqual(EMBEDDING_DIMENSIONS, 768)
+        self.assertEqual(provider.embedding_key, "text-embedding-3-small@768")
+        self.assertEqual(provider.embed("hello"), (0.6, 0.8))
+        self.assertEqual(seen[0]["dimensions"], 768)
+        self.assertEqual(seen[0]["model"], "text-embedding-3-small")
+        self.assertIsNotNone(Usage(embedding=1000).cost("gpt-6-luna", provider.embedding_key))

@@ -11,7 +11,6 @@ from typing import TypeVar
 from pathlib import Path
 
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
-from packs.indexing.primitives.embed_records_checkpointed.embed_records_checkpointed import DEFAULT_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.memory import job
@@ -20,7 +19,7 @@ from packs.memory.discovery import Discover
 from packs.memory.generate import Generate
 from packs.memory.job import Counts, Failure, Job, Status
 from packs.memory.progress import Progress, Step
-from packs.memory.provider import OpenAIProvider, SpendReached
+from packs.memory.provider import DEFAULT_EMBEDDING_MODEL, OpenAIProvider, SpendReached
 from packs.memory.sources import V2
 from packs.memory.store import Store
 
@@ -29,7 +28,7 @@ _threads: dict[Path, threading.Thread] = {}
 
 def provider() -> OpenAIProvider:
     load_env()
-    return OpenAIProvider(DEFAULT_SYNTHESIS_MODEL, os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL),
+    return OpenAIProvider(DEFAULT_SYNTHESIS_MODEL, os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
                           approve_spend=True)
 
 

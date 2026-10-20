@@ -15,7 +15,7 @@ class Usage:
 
     def cost(self, model: str, embedding_model: str) -> float | None:
         prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model)
-        if prices is None or embedding_model != DEFAULT_MODEL:
+        if prices is None or embedding_model.split("@", 1)[0] != DEFAULT_MODEL:
             return None
         return (self.input * prices["input"] + self.output * prices["output"]
                 + self.embedding * DEFAULT_COST_PER_1K_TOKENS) / 1000

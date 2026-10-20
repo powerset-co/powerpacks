@@ -15,6 +15,11 @@ from packs.memory.models import Claim, Kind, object_dict, vector, response_json
 from packs.ingestion.primitives.common.gates import needs_approval_payload
 
 CHUNK_CHARS = 9000
+# The embedding model is named with its width, `text-embedding-3-small@768`: the name is the cache key, so
+# widths never mix, and the width goes to the provider as `dimensions`. text-embedding-3 keeps most of its
+# quality at 768 and halves every vector's storage and scan cost. A bare name asks for the model's full width.
+EMBEDDING_DIMENSIONS = 768
+DEFAULT_EMBEDDING_MODEL = f"text-embedding-3-small@{EMBEDDING_DIMENSIONS}"
 MAX_CLAIMS = 24
 MAX_OUTPUT_TOKENS = 6000
 SYSTEM = """Extract supported memory claims about the subject of this SAVED derived artifact.
@@ -81,7 +86,10 @@ class OpenAIProvider:
         self.usage = Usage()
         self.approve_spend = approve_spend
         self.model = model
+        # Empty means lexical only: no embedding model, no key, no embedding calls.
         self.embedding_key = embedding_model
+        self.embedding_model, _, width = embedding_model.partition("@")
+        self.embedding_dimensions = int(width) if width else None
         self.discovery_key = short_hash(model + discovery_provider.SYSTEM + json.dumps(discovery_provider.SCHEMA, sort_keys=True), n=64)
         self.generation_key = short_hash(model + SYSTEM + json.dumps(SCHEMA, sort_keys=True), n=64)
         self.client = client or httpx.Client(base_url=(os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1/").rstrip("/") + "/", timeout=120)
@@ -148,7 +156,8 @@ class OpenAIProvider:
         })
 
     def embed(self, content: str) -> tuple[float, ...]:
-        payload = object_dict(json.loads(self._post("embeddings", {"model": self.embedding_key, "input": content, "encoding_format": "float"})))
+        payload = object_dict(json.loads(self._post("embeddings", {"model": self.embedding_model, "input": content, "encoding_format": "float",
+                                                              **({"dimensions": self.embedding_dimensions} if self.embedding_dimensions else {})})))
         data = payload["data"]
         if not isinstance(data, list) or len(data) != 1:
             raise ValueError("invalid embedding response")
