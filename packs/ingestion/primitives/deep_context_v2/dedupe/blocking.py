@@ -1,7 +1,7 @@
 """Blocking: put candidates with similar names into buckets, so dedupe never compares every
 candidate against every other. Every two members of a bucket are a blocked pair.
 
-Bucket keys, per written name (lowercased, single-spaced):
+Bucket keys, per written or canonical name (lowercased, single-spaced):
 
     "jordan bravo" -> fnli:jordan|b, filn:j|bravo, words:bravo jordan, ends:jordan|bravo
     "j bravo"      -> fnli:j|b, filn:j|bravo
@@ -53,7 +53,7 @@ class Blocking:
 
 
 def name_keys(name: str) -> set[str]:
-    """The name bucket keys of one written name."""
+    """The bucket keys of one written or canonical name."""
     key: str = _SPACES.sub(" ", name.strip().lower())
     tokens: list[str] = _NOT_LETTERS.sub(" ", _JOINERS.sub("", key)).split()
     keys: set[str] = set()
@@ -71,13 +71,15 @@ def name_keys(name: str) -> set[str]:
     return keys
 
 
-def block(candidate_ids: list[str], names: dict[str, str], identifiers: dict[str, list[Identifier]]) -> Blocking:
-    """Bucket every given candidate by its name and email handle; pair every two members of a bucket."""
+def block(candidate_ids: list[str], names: dict[str, tuple[str, ...]], identifiers: dict[str, list[Identifier]]) -> Blocking:
+    """Bucket every candidate by both names and its email handle; pair every two members of a bucket."""
     # Fill the buckets.
     buckets: dict[str, list[str]] = {}
     bucketed: int = 0
     for candidate_id in candidate_ids:
-        keys: set[str] = name_keys(names[candidate_id])
+        keys: set[str] = set()
+        for name in names[candidate_id]:
+            keys.update(name_keys(name))
         for identifier in identifiers[candidate_id]:
             if identifier.kind == IdentifierKind.EMAIL:
                 keys.add("local:" + identifier.normalized_value.split("@", 1)[0])
