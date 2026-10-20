@@ -47,8 +47,8 @@ export function useDecisions(
   const [pending, setPending] = useState<ReadonlySet<string>>(EMPTY)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const saving = useRef(false)
-  // The people a Delete press named; Enter or the toast's button deletes them, Escape forgets them.
-  const armed = useRef<readonly string[]>([])
+  // The people a Delete press named; the bar asks, Enter deletes them, Escape forgets them.
+  const [armed, setArmed] = useState<readonly string[]>([])
 
   /** Writes the call for `ids`; true when the server took it, false when skipped or failed. */
   const apply = useCallback(
@@ -103,32 +103,30 @@ export function useDecisions(
     [byId, queryClient, onDeleted],
   )
 
-  /** Deletes what the last Delete press named, if its question is still up. */
+  /** Deletes what the last Delete press named, if the bar is still asking. */
   const confirmDelete = useCallback(() => {
-    const ids = armed.current
-    armed.current = []
-    if (ids.length) void remove(ids)
-  }, [remove])
+    setArmed([])
+    if (armed.length) void remove(armed)
+  }, [armed, remove])
 
-  /** The question before a delete: it is answered by Enter or the toast's button. */
+  /** The question before a delete: the action bar asks it, Enter or its Delete answers. */
   const askDelete = useCallback(
     (ids: readonly string[]) => {
       const rows = ids.map((id) => byId.get(id)).filter((row): row is Person => row !== undefined)
       if (saving.current || !rows.length) return
-      armed.current = rows.map((row) => row.parent_id)
-      const who = rows.length === 1 ? (rows[0]?.name ?? "") : plural(rows.length, "person")
-      setToast({
-        message: `Delete ${who} from this computer? Their messages are not touched.`,
-        action: { label: "Delete", kbd: "↵", onClick: confirmDelete },
-      })
+      setArmed(rows.map((row) => row.parent_id))
     },
-    [byId, confirmDelete],
+    [byId],
   )
 
-  const dismissToast = useCallback(() => {
-    armed.current = []
-    setToast(null)
-  }, [])
+  const cancelDelete = useCallback(() => setArmed([]), [])
+
+  // What the bar asks while a delete is armed: "Delete Ada Park?", "Delete 3 people?".
+  const question = armed.length
+    ? `Delete ${armed.length === 1 ? (byId.get(armed[0] ?? "")?.name ?? "") : plural(armed.length, "person")}?`
+    : null
+
+  const dismissToast = useCallback(() => setToast(null), [])
 
   return {
     pending,
@@ -136,7 +134,9 @@ export function useDecisions(
     apply,
     askDelete,
     confirmDelete,
-    armed: () => armed.current.length > 0,
+    cancelDelete,
+    armed: () => armed.length > 0,
+    question,
     toast,
     showToast: setToast,
     dismissToast,
