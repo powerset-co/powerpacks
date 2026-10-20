@@ -1,12 +1,12 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 
-import { SearchField } from "@/components/shared"
+import { SearchField, VirtualRows } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { memoryPeople, searchMemory } from "@/lib/api/memory"
 import { cn } from "@/lib/utils"
-import type { MemoryOrigin, MemorySelector } from "@/types/memory"
+import type { MemoryOrigin, MemoryPerson, MemorySelector } from "@/types/memory"
 
 const ORIGIN: Record<MemoryOrigin, string> = {
   source_name: "name",
@@ -15,8 +15,17 @@ const ORIGIN: Record<MemoryOrigin, string> = {
   saved_value: "saved fact",
 }
 
+// Measured: a row is a name plus evidence of any length.
+const ROW_ESTIMATE = 56
+
+// Module level: VirtualRows re-measures every row when its key callback changes identity.
+function personKey(person: MemoryPerson): string {
+  return person.parent
+}
+
 /** Search the directory: the meanings a phrase resolves to, each with its count, then everyone
- *  under the chosen one (the first until another is picked). */
+ *  under the chosen one. An exact match lists the first meaning's people until another is picked;
+ *  suggestions list nobody until one is. */
 export function MemorySearch() {
   const [text, setText] = useState("")
   const [query, setQuery] = useState("")
@@ -26,7 +35,8 @@ export function MemorySearch() {
     queryFn: ({ signal }) => searchMemory(query, signal),
     enabled: query !== "",
   })
-  const selector = chosen ?? meanings.data?.[0]?.selector ?? null
+  const first = meanings.data?.[0]
+  const selector = chosen ?? (first?.match === "exact or confirmed alias" ? first.selector : null)
   return (
     <section className="flex flex-col gap-3" aria-labelledby="memory-search">
       <h2 id="memory-search" className="m-0 text-[15px] font-semibold">
@@ -88,6 +98,11 @@ export function MemorySearch() {
           })}
         </ul>
       ) : null}
+      {!selector && meanings.data?.length ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          No exact match: pick the meaning you want to list.
+        </p>
+      ) : null}
       {selector ? <People key={`${selector.origin}:${selector.value}`} selector={selector} /> : null}
     </section>
   )
@@ -114,19 +129,31 @@ function People({ selector }: { selector: MemorySelector }) {
       <p className="m-0 text-xs text-muted-foreground tabular-nums">
         {rows.length.toLocaleString()} of {people.data.pages[0]?.total.toLocaleString()} people
       </p>
-      <ul
-        className="m-0 flex list-none flex-col divide-y divide-line border-y border-line p-0"
+      <VirtualRows
+        role="list"
         aria-label="People"
-      >
-        {rows.map((person) => (
-          <li key={person.parent} className="flex flex-col gap-0.5 py-2 text-[13px]">
+        className="max-h-[360px] overflow-y-auto border-y border-line"
+        items={rows}
+        rowHeight={ROW_ESTIMATE}
+        measure
+        getKey={personKey}
+        renderRow={(person, index) => (
+          <div
+            role="listitem"
+            className={cn(
+              "flex flex-col gap-0.5 py-2 text-[13px]",
+              index < rows.length - 1 && "border-b border-line",
+            )}
+          >
             <span className="font-medium">{person.name}</span>
             {person.evidence[0]?.quote ? (
-              <span className="line-clamp-2 text-xs text-muted-foreground">{person.evidence[0].quote}</span>
+              <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {person.evidence[0].quote}
+              </span>
             ) : null}
-          </li>
-        ))}
-      </ul>
+          </div>
+        )}
+      />
       {people.hasNextPage ? (
         <Button
           type="button"

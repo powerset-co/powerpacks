@@ -94,6 +94,12 @@ function serve(record: MemoryJob, routes: Record<string, Reply> = {}) {
   return fetch
 }
 
+// jsdom has no layout; the virtualized people list reads its viewport's and rows' offset sizes.
+function stubLayout() {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 360 })
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 800 })
+}
+
 function posted(fetch: ReturnType<typeof serve>, path: string): unknown {
   const call = fetch.mock.calls.find(([url, init]) => url === path && init?.method === "POST")
   if (typeof call?.[1]?.body !== "string") throw new Error(`no POST to ${path}`)
@@ -107,7 +113,14 @@ afterEach(() => {
 })
 
 it("before enabling shows the people, sources and estimate, and enables with the spend limit", async () => {
-  const fetch = serve(FIRST_RUN, { "POST /api/memory/enable": () => RUNNING })
+  let record = FIRST_RUN
+  const fetch = serve(FIRST_RUN, {
+    "GET /api/memory": () => record,
+    "POST /api/memory/enable": () => {
+      record = RUNNING
+      return RUNNING
+    },
+  })
   expect(await screen.findByText("1,234")).toBeTruthy()
   expect(screen.getByText(/saved facts, human tags and notes/)).toBeTruthy()
   expect(screen.getByText("about $2.34")).toBeTruthy()
@@ -128,6 +141,23 @@ it("asks for Deep Context first when there is nothing to remember", async () => 
 it("shows why an enable could not start", async () => {
   serve({ ...FIRST_RUN, status: "failed", error: "OPENAI_API_KEY is not set" })
   expect((await screen.findByRole("alert")).textContent).toBe("OPENAI_API_KEY is not set")
+})
+
+it("keeps the estimate and Enable Memory after an enable that could not start", async () => {
+  const failed = { ...IDLE, status: "failed" as const, error: "OPENAI_API_KEY is not set" }
+  let record = FIRST_RUN
+  serve(FIRST_RUN, {
+    "GET /api/memory": () => record,
+    // The server's answer to the enable carries no estimate; its GET does.
+    "POST /api/memory/enable": () => {
+      record = { ...FIRST_RUN, ...failed }
+      return failed
+    },
+  })
+  fireEvent.click(await screen.findByRole("button", { name: "Enable Memory" }))
+  expect((await screen.findByRole("alert")).textContent).toBe("OPENAI_API_KEY is not set")
+  expect(screen.getByText("about $2.34")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Enable Memory" })).toBeTruthy()
 })
 
 it("while running lists the four steps with counts, the bar and the current item", async () => {
@@ -175,6 +205,7 @@ it("Details shows coverage, failures to retry and the cost in tokens when prices
 })
 
 it("search resolves meanings, lists the first one's people and loads more", async () => {
+  stubLayout()
   const page = (after: string): MemoryPeoplePage => ({
     corpus: "v2",
     selector: { origin: "human_tag", value: "investor" },
@@ -188,7 +219,12 @@ it("search resolves meanings, lists the first one's people and loads more", asyn
   })
   const fetch = serve(ENABLED, {
     "GET /api/memory/search": () => [
-      { selector: { origin: "human_tag", value: "investor" }, count: 2, evidence: [], match: "exact" },
+      {
+        selector: { origin: "human_tag", value: "investor" },
+        count: 2,
+        evidence: [],
+        match: "exact or confirmed alias",
+      },
     ],
     "GET /api/memory/people": (url) => page(new URL(url, "http://local").searchParams.get("after") ?? ""),
   })
@@ -205,6 +241,36 @@ it("search resolves meanings, lists the first one's people and loads more", asyn
   expect(fetch.mock.calls.map(([url]) => url)).toContain(
     "/api/memory/people?origin=human_tag&value=investor&after=p1&limit=50",
   )
+})
+
+it("lists a suggestion's people only once it is picked", async () => {
+  stubLayout()
+  const fetch = serve(ENABLED, {
+    "GET /api/memory/search": () => [
+      {
+        selector: { origin: "topic", value: "climate" },
+        count: 1,
+        evidence: [],
+        match: "suggestion; confirm meaning before enumeration",
+      },
+    ],
+    "GET /api/memory/people": () => ({
+      corpus: "v2",
+      selector: { origin: "topic", value: "climate" },
+      total: 1,
+      people: [{ parent: "p1", name: "Synthetic One", members: ["m1"], evidence: [] }],
+      next_after: "",
+    }),
+  })
+  fireEvent.change(await screen.findByRole("searchbox", { name: "Search memory" }), {
+    target: { value: "carbon" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  const meaning = await screen.findByRole("button", { name: /climate topic · 1/ })
+  expect(meaning.getAttribute("aria-pressed")).toBe("false")
+  expect(fetch.mock.calls.some(([url]) => url.startsWith("/api/memory/people"))).toBe(false)
+  fireEvent.click(meaning)
+  expect(await screen.findByText("Synthetic One")).toBeTruthy()
 })
 
 it("polls every 2 s while a run works and stops once it is done", async () => {

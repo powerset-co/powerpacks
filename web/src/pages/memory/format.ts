@@ -1,5 +1,6 @@
 // The Memory page's numbers, worded once.
 
+import { must } from "@/lib/must"
 import type { MemoryJob, MemoryStep } from "@/types/memory"
 
 /** The run's stages in the order the runner takes them (packs/memory/job.py STEPS). */
@@ -11,7 +12,10 @@ export const STEPS: readonly { key: MemoryStep; label: string; unit: string }[] 
 ]
 
 export function stepLabel(key: MemoryStep): string {
-  return STEPS.find((step) => step.key === key)?.label ?? key
+  return must(
+    STEPS.find((step) => step.key === key),
+    `step ${key}`,
+  ).label
 }
 
 export function dollars(value: number): string {

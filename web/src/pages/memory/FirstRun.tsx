@@ -16,9 +16,11 @@ export function FirstRun({ record }: { record: MemoryJob }) {
   const cost = estimate?.estimated_cost_usd ?? null
   // Rounded up to the cent, so the prefilled limit covers the estimate.
   const [limit, setLimit] = useState(cost === null ? "" : (Math.ceil(cost * 100) / 100).toFixed(2))
+  // Refetched, not replaced by the answer: an enable that could not start answers without the
+  // estimate, and the page keeps the estimate, the error and Enable Memory for a retry.
   const enable = useMutation({
     mutationFn: (amount: number) => enableMemory(amount),
-    onSuccess: (next) => client.setQueryData(MEMORY_KEY, next),
+    onSuccess: () => client.invalidateQueries({ queryKey: MEMORY_KEY }),
   })
   const amount = Number(limit)
   const valid = limit.trim() !== "" && Number.isFinite(amount) && amount >= 0

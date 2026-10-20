@@ -70,7 +70,8 @@ export interface MemoryMeaning {
   selector: MemorySelector
   count: number
   evidence: MemoryCitation[]
-  match: string
+  // A suggestion is listed only once the user picks it.
+  match: "exact or confirmed alias" | "suggestion; confirm meaning before enumeration"
 }
 
 export interface MemoryPerson {

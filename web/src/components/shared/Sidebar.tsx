@@ -153,7 +153,7 @@ function Item({ page, rail }: { page: Page; rail: boolean }) {
       {!rail && page.key === "memory" ? (
         <>
           {" "}
-          <Badge variant="muted" className="h-4 px-1.5 text-[10px] font-semibold">
+          <Badge variant="muted" className="h-4 px-1.5 text-[11px] font-semibold">
             beta
           </Badge>
         </>
