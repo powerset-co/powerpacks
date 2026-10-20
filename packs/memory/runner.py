@@ -1,4 +1,4 @@
-"""A daemon thread imports, generates, discovers and indexes from one memory job."""
+"""A daemon thread imports, generates, indexes and discovers from one memory job."""
 from __future__ import annotations
 
 import math
@@ -47,6 +47,18 @@ def start(root: Path, approved_spend: float) -> Job:
             os.close(handle)
             raise ValueError("memory is already running") from None
         record = job.read(root)
+        client = provider()
+        record.error = ""
+        if not os.getenv("OPENAI_API_KEY"):
+            record.error = "OPENAI_API_KEY is not set"
+        elif client.usage.cost(client.model, client.embedding_key) is None:
+            record.error = "model pricing unavailable"
+        if record.error:
+            record.status = Status.FAILED
+            job.write(root, record)
+            client.close()
+            os.close(handle)
+            return record
         resume = record.status == Status.RUNNING
         if not resume:
             record.step = Step.IMPORT
@@ -59,9 +71,8 @@ def start(root: Path, approved_spend: float) -> Job:
         record.enabled = True
         record.approved_spend_usd = approved_spend
         record.status = Status.RUNNING
-        record.error = ""
         job.write(root, record)
-        thread = threading.Thread(target=_run, args=(root, resume, handle), daemon=True, name="memory")
+        thread = threading.Thread(target=_run, args=(root, resume, handle, client), daemon=True, name="memory")
         _threads[root] = thread
         thread.start()
         return record
@@ -100,12 +111,10 @@ def keep_updated(root: Path) -> None:
         thread.join()
 
 
-def _run(root: Path, resume: bool, handle: int) -> None:
+def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider) -> None:
     store: Store | None = None
-    client: OpenAIProvider | None = None
     try:
         record = job.read(root)
-        client = provider()
         client.approved_spend_usd = record.approved_spend_usd
         client.usage = Usage(**record.tokens)
         store = Store(job.database(root), create=True)
@@ -127,15 +136,10 @@ def _run(root: Path, resume: bool, handle: int) -> None:
                 _record(root, store.import_progress(adapter, first=first), client)
             elif step == Step.GENERATE:
                 _record(root, generate.chunks(limit=2**31 - 1, first=first), client)
-            elif step == Step.DISCOVER:
-                after = ""
-                while True:
-                    report = _record(root, Discover(store, client).progress(limit=2**31 - 1, after=after, first=first), client)
-                    if not report.has_more:
-                        break
-                    after = report.next_after
-            else:
+            elif step == Step.INDEX:
                 _record(root, generate.index(limit=2**31 - 1, first=first), client)
+            else:
+                _record(root, Discover(store, client).progress(limit=2**31 - 1, first=first), client)
         with job.LOCK:
             record = job.read(root)
             record.people_indexed = store.conn.execute("SELECT count(DISTINCT parent) FROM active_claims").fetchone()[0]
@@ -159,8 +163,7 @@ def _run(root: Path, resume: bool, handle: int) -> None:
     finally:
         if store is not None:
             store.close()
-        if client is not None:
-            client.close()
+        client.close()
         os.close(handle)
 
 

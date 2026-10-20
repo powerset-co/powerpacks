@@ -35,7 +35,6 @@ class JobProvider(OpenAIProvider):
         super().__init__("gpt-6-luna", "text-embedding-3-small", approve_spend=True)
         self.fixture = FixtureProvider()
         self.generation_key = self.fixture.generation_key
-        self.embedding_key = self.fixture.embedding_key
         self.inputs: list[str] = []
 
     def generate(self, content: str) -> str:
@@ -61,6 +60,9 @@ class MemoryJobTests(unittest.TestCase):
         self.patch = patch.object(runner, "provider", return_value=self.provider)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        environment = patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic"})
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def wait(self) -> Job:
         runner._threads[self.root].join(10)

@@ -15,13 +15,14 @@ import httpx
 
 import test_memory_job as jobs
 from test_memory import response
+from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory import job, runner
 from packs.memory.__main__ import main
 from packs.memory.cost import Usage
 from packs.memory.discovery import Discover
 from packs.memory.discovery_run import DiscoveryReport
 from packs.memory.generate import Generate, parse_response
-from packs.memory.job import Counts, Job, Status
+from packs.memory.job import Counts, Failure, Job, Status
 from packs.memory.progress import Progress, Step
 from packs.memory.sources import V2
 from packs.memory.provider import OpenAIProvider
@@ -37,6 +38,89 @@ class BackendFixTests(unittest.TestCase):
         with patch("packs.shared.web.memory._send_json") as send:
             self.assertTrue(api.get(Mock(), urlparse(path)))
             return send.call_args.args[1]
+
+    def test_index_precedes_discovery_with_embeddings_available(self):
+        order = []
+        embeddings = []
+        write = job.write
+
+        def observe(root, record):
+            write(root, record)
+            if record.status == Status.RUNNING and (not order or order[-1] != record.step):
+                order.append(record.step)
+            if record.status == Status.RUNNING and record.step == Step.DISCOVER:
+                with closing(Store(job.database(root))) as store:
+                    embeddings.append(store.conn.execute("SELECT count(*) FROM embeddings").fetchone()[0])
+
+        with patch.object(job, "write", side_effect=observe):
+            runner.start(self.root, 1)
+            completed = self.wait()
+        self.assertEqual(completed.status, Status.DONE)
+        expected = [Step.IMPORT, Step.GENERATE, Step.INDEX, Step.DISCOVER]
+        self.assertEqual(order, expected)
+        self.assertEqual(list(job.STEPS), expected)
+        self.assertEqual(list(Step), [Step.IDLE, *expected, Step.DONE])
+        self.assertTrue(embeddings)
+        self.assertGreater(min(embeddings), 0)
+
+    def test_preconditions_fail_before_start_and_api_returns_error(self):
+        for action in ("enable", "update"):
+            for key, model, embedding, error in (
+                ("", "gpt-6-luna", "text-embedding-3-small", "OPENAI_API_KEY is not set"),
+                ("synthetic", "unknown", "text-embedding-3-small", "model pricing unavailable"),
+                ("synthetic", "gpt-6-luna", "unknown", "model pricing unavailable"),
+            ):
+                with self.subTest(action=action, key=bool(key), model=model, embedding=embedding):
+                    job.write(self.root, Job(enabled=action == "update"))
+                    handler = Mock()
+                    body = json.dumps({"approved_spend_usd": 1}).encode()
+                    handler.headers = {"Content-Length": str(len(body))}
+                    handler.rfile = io.BytesIO(body)
+                    with ExitStack() as patches:
+                        patches.enter_context(patch.dict(os.environ, {"OPENAI_API_KEY": key}))
+                        patches.enter_context(patch.object(self.provider, "model", model))
+                        patches.enter_context(patch.object(self.provider, "embedding_key", embedding))
+                        thread = patches.enter_context(patch.object(runner.threading, "Thread"))
+                        imported = patches.enter_context(patch.object(Store, "import_progress"))
+                        send = patches.enter_context(patch("packs.shared.web.memory._send_json"))
+                        MemoryApi(self.root).post(handler, urlparse("/api/memory/" + action))
+                    thread.assert_not_called()
+                    imported.assert_not_called()
+                    record = job.read(self.root)
+                    self.assertEqual((record.status, record.error, record.failures), (Status.FAILED, error, []))
+                    self.assertEqual(send.call_args.args[1]["error"], error)
+
+    def test_discovery_retries_failures_across_pages_before_other_batches(self):
+        with closing(sqlite3.connect(V2(self.root / ".powerpacks").database)) as source:
+            with source:
+                source.execute("UPDATE candidates SET display_name=?",
+                               (" ".join(f"Group{number:03d}" for number in range(35)),))
+        self.get(MemoryApi(self.root))
+        with closing(Store(job.database(self.root))) as store:
+            discover = Discover(store, self.provider)
+            list(discover.groups())
+            groups = list(discover.groups(after=discover.next_after))
+            failed_keys = tuple(group.key + ":" + short_hash(json.dumps(
+                [person.parent for person in Discover(store, self.provider)._parents(group)]), n=64) for group in groups)
+        self.assertEqual(len(failed_keys), 2)
+        job.write(self.root, Job(enabled=True, failures=[Failure(Step.DISCOVER, key, "synthetic", "now")
+                                                       for key in failed_keys]))
+        seen = []
+        write = job.write
+
+        def observe(root, record):
+            write(root, record)
+            if record.step == Step.DISCOVER and record.current_item:
+                seen.append(record.current_item)
+
+        with patch.object(job, "write", side_effect=observe):
+            runner.update(self.root, 1)
+            completed = self.wait()
+        self.assertEqual(completed.status, Status.DONE)
+        self.assertEqual(completed.failures, [])
+        self.assertEqual(seen[:2], list(failed_keys))
+        self.assertEqual(seen[2:], sorted(seen[2:], key=lambda key: key.rsplit(":", 1)[0]))
+        self.assertEqual((len(seen), len(set(seen))), (102, 102))
 
     def test_status_projects_once_into_real_database_and_caches_estimate(self):
         api = MemoryApi(self.root)
@@ -70,7 +154,7 @@ class BackendFixTests(unittest.TestCase):
         record.tokens = asdict(Usage(123, 456, 789))
         record.spent_usd = 0.5
         job.write(self.root, record)
-        with patch.object(runner, "_run", side_effect=lambda root, resume, handle: os.close(handle)):
+        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client: os.close(handle)):
             started = runner.update(self.root, 2)
             self.wait()
         self.assertEqual(started.tokens, asdict(Usage()))
@@ -80,7 +164,7 @@ class BackendFixTests(unittest.TestCase):
         record.tokens = asdict(Usage(123, 456, 789))
         record.spent_usd = 0.5
         job.write(self.root, record)
-        with patch.object(runner, "_run", side_effect=lambda root, resume, handle: os.close(handle)):
+        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client: os.close(handle)):
             resumed = runner.start(self.root, 2)
             self.wait()
         self.assertEqual(resumed.tokens, record.tokens)
@@ -217,7 +301,7 @@ class BackendFixTests(unittest.TestCase):
             indexed = stack.enter_context(patch.object(Generate, "index", return_value=events(Step.INDEX)))
             runner.start(self.root, 1)
             completed = self.wait()
-        for operation in (imported, generated, discovered, indexed):
+        for operation in (imported, generated, indexed, discovered):
             operation.assert_called_once()
         self.assertEqual((completed.status, completed.step), (Status.DONE, Step.DONE))
         self.assertEqual([failure.step for failure in completed.failures], list(job.STEPS))

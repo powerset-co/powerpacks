@@ -11,7 +11,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.memory.progress import Step
 
 LOCK = threading.RLock()
-STEPS = (Step.IMPORT, Step.GENERATE, Step.DISCOVER, Step.INDEX)
+STEPS = (Step.IMPORT, Step.GENERATE, Step.INDEX, Step.DISCOVER)
 
 
 class Status(StrEnum):

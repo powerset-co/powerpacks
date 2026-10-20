@@ -11,8 +11,8 @@ class Step(StrEnum):
     IDLE = "idle"
     IMPORT = "import"
     GENERATE = "generate"
-    DISCOVER = "discover"
     INDEX = "index"
+    DISCOVER = "discover"
     DONE = "done"
 
 

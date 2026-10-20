@@ -91,7 +91,12 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
         group, parents = batch
         return group.key + ':' + short_hash(json.dumps([person.parent for person in parents]), n=64)
     def items() -> Iterator[tuple[Group, list[Person]]]:
-        return batches(discover, min_people=min_people, phrase=phrase, after=after)
+        cursor = after
+        while True:
+            yield from batches(discover, min_people=min_people, phrase=phrase, after=cursor)
+            if not discover.next_after:
+                return
+            cursor = discover.next_after
     total = sum(1 for _ in items())
     for done, (group, parents) in enumerate(retry_first(items, batch_key, first), 1):
         if group.key != last_group:
