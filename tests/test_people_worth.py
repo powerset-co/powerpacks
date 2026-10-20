@@ -358,6 +358,31 @@ class DeletedMembersStayTests(StoreTests):
 
         self.assertEqual(current_parents(self.conn), {"c1": "p:gone", "c2": "p:gone"})
 
+    def test_dedupe_and_research_leave_a_deleted_family_out(self) -> None:
+        from packs.ingestion.primitives.deep_context_v2.db import queries_share
+        from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import facts_fingerprints
+        from packs.ingestion.primitives.deep_context_v2.db.schema import VIEW_TABLES
+        from packs.ingestion.primitives.deep_context_v2.enrich.family import load_families
+        from packs.ingestion.primitives.deep_context_v2.enrich.research import ResearchStep
+        self._parent("p:gone", "c1")
+        self._parent("p:live", "c2")
+        self._facts("c1", "Jordan Bravo")
+        self._facts("c2", "Casey Delta")
+        self.conn.executemany("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
+                              "VALUES (?, 'yes', 'machine', 'close', 'v1', ?)", [("c1", NOW), ("c2", NOW)])
+        queries_share.delete_parents(self.conn, ("p:gone",), NOW)
+
+        self.assertEqual(set(facts_fingerprints(self.conn)), {"c2"})
+        research = ResearchStep(self.conn, Path(self.tmp.name), limit=None)
+        # What Node.run enforces: only declared tables, a declared view read through its tables.
+        research._implied_reads = {table for view in research.reads for table in VIEW_TABLES.get(view, ())}
+        self.conn.set_authorizer(research._authorizer)
+        try:
+            families = load_families(self.conn)
+        finally:
+            self.conn.set_authorizer(None)
+        self.assertEqual([family.parent_id for family in families], ["p:live"])
+
 
 class WorthMigrationTests(StoreTests):
     def test_schema_five_adds_relationship_without_changing_existing_rows(self) -> None:

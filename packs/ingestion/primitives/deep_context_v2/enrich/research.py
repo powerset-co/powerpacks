@@ -128,7 +128,7 @@ class ResearchStep(Node):
 
     name = "enrich-research"
     reads = ("current_parent", "current_worth", "candidates", "candidate_identifiers", "facts", "bundles",
-             "connections", "current_linkedins", "research")
+             "connections", "current_linkedins", "research", "deleted_parents")
     writes = ("research",)
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int | None) -> None:
