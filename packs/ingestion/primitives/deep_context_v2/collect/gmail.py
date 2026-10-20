@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import EmailHeaders
 from packs.ingestion.primitives.deep_context_v2.text_similarity import jaccard, shingles
 
 SNIPPET_CHARS = 200
@@ -23,6 +24,7 @@ HEAD_CHARS = 300
 TAIL_CHARS = 300
 # Three fetched rows per kept message leaves room for per-thread ranking and dedup.
 CANDIDATE_ROWS_PER_OUTPUT = 3
+MAX_MESSAGE_RECIPIENTS = 200
 NEARDUP_THRESHOLD = 0.6
 QUOTE_CUT = re.compile(
     r"(?im)^\s*(on .{0,120}wrote:|-+\s*original message\s*-+|-+\s*forwarded message\s*-+|"
@@ -62,13 +64,15 @@ SIGNAL_FEATURES = (
 PARTICIPANT_IDS_SQL = "SELECT id FROM participants WHERE LOWER(email_address) = ?"
 _RECENT_SELECT = """
 SELECT COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-       m.conversation_id, LOWER(sp.email_address) AS sender_email,
+       m.id AS message_id, m.conversation_id, c.source_conversation_id AS thread_id,
+       LOWER(sp.email_address) AS sender_email, sp.display_name AS sender_name,
        m.subject, m.snippet, mb.body_text
 """
 _RECENT_SQL = _RECENT_SELECT + """
 FROM messages m
 LEFT JOIN participants sp ON sp.id = m.sender_id
 LEFT JOIN message_bodies mb ON mb.message_id = m.id
+LEFT JOIN conversations c ON c.id = m.conversation_id
 WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
@@ -85,7 +89,9 @@ ORDER BY at DESC,
          LOWER(COALESCE(sp.email_address, '')) DESC,
          COALESCE(m.subject, '') DESC,
          COALESCE(m.snippet, '') DESC,
-         COALESCE(mb.body_text, '') DESC
+         COALESCE(mb.body_text, '') DESC,
+         COALESCE(c.source_conversation_id, '') DESC,
+         COALESCE(m.source_message_id, '') DESC
 LIMIT ?
 """
 
@@ -97,6 +103,7 @@ class EmailMessage:
     from_role: str  # "contact" | "me"
     subject: str
     snippet: str  # the cleaned body; Gmail's preview line only when there is no body
+    email_headers: EmailHeaders
 
 
 @dataclass(frozen=True)
@@ -264,14 +271,15 @@ def signal_score(text: str) -> int:
     return score + min(len(text) // 200, 3)
 
 
-def _ranked_order_key(ranked: EmailRankedMessage) -> tuple[int, int, str, str, str, str]:
+def _ranked_order_key(ranked: EmailRankedMessage) -> tuple[int, int, str, str, str, str, str]:
     """Signal, role, time, then content to break ties."""
     message = ranked.message
     signal, role, at = ranked.rank
-    return (signal, role, at, message.sender, message.subject, message.snippet)
+    return (signal, role, at, message.sender, message.subject, message.snippet, message.email_headers.render())
 
 
-def select_emails(rows: list[sqlite3.Row], email: str, per_person: int, accounts: set[str]) -> list[EmailMessage]:
+def select_emails(rows: list[sqlite3.Row], email: str, per_person: int, accounts: set[str],
+                  headers: dict[int, EmailHeaders]) -> list[EmailMessage]:
     """The candidate's and the owner's own mail, thread leaders first, then the rest, near-duplicates dropped."""
     by_thread: dict[tuple[str, object], list[EmailRankedMessage]] = {}
     for index, row in enumerate(rows):
@@ -289,7 +297,8 @@ def select_emails(rows: list[sqlite3.Row], email: str, per_person: int, accounts
         if not text:
             continue
         at = str(row["at"] or "").strip()
-        message = EmailMessage(at=at, sender=sender, from_role=from_role, subject=clean_text(row["subject"]), snippet=text)
+        message = EmailMessage(at=at, sender=sender, from_role=from_role, subject=clean_text(row["subject"]),
+                               snippet=text, email_headers=headers[row["message_id"]])
         if from_role == "contact":
             role_rank = 1
         else:
@@ -310,23 +319,63 @@ def select_emails(rows: list[sqlite3.Row], email: str, per_person: int, accounts
     leaders.sort(key=_ranked_order_key, reverse=True)
     rest.sort(key=_ranked_order_key, reverse=True)
     kept: list[EmailMessage] = []
-    kept_shingles: list[frozenset[str]] = []
+    kept_shingles: list[tuple[EmailHeaders, frozenset[str]]] = []
     for ranked in leaders + rest:
         if len(kept) >= per_person:
             break
         message_shingles = shingles(ranked.message.snippet)
         duplicate = False
-        for prior in kept_shingles:
-            if jaccard(message_shingles, prior) >= NEARDUP_THRESHOLD:
+        for prior_headers, prior in kept_shingles:
+            if ranked.message.email_headers == prior_headers and jaccard(message_shingles, prior) >= NEARDUP_THRESHOLD:
                 duplicate = True
                 break
         if duplicate:
             continue
         kept.append(ranked.message)
-        kept_shingles.append(message_shingles)
+        kept_shingles.append((ranked.message.email_headers, message_shingles))
     return kept
 
 
 def recent_emails_for(con: sqlite3.Connection, email: str, per_person: int, accounts: set[str]) -> list[EmailMessage]:
     rows = fetch_recent_rows(con, email, per_person * CANDIDATE_ROWS_PER_OUTPUT)
-    return select_emails(rows, email, per_person, accounts)
+    selected = [row for row in rows if row["sender_email"] == email or row["sender_email"] in accounts]
+    recipients: dict[int, dict[str, set[str]]] = {row["message_id"]: {"to": set(), "cc": set(), "bcc": set()}
+                                               for row in selected}
+    # Only bounded candidate rows, in portable SQLite parameter batches; never the archive's full roster.
+    message_ids = list(recipients)
+    omitted: set[int] = set()
+    own_addresses = sorted(accounts | {email})
+    own_slots = ",".join("?" for _ in own_addresses)
+    for start in range(0, len(message_ids), 500):
+        ids = message_ids[start:start + 500]
+        slots = ",".join("?" for _ in ids)
+        for row in con.execute(
+            f"""SELECT * FROM (
+                SELECT mr.message_id, LOWER(mr.recipient_type) AS role, LOWER(p.email_address) AS email,
+                       COALESCE(NULLIF(mr.display_name, ''), p.display_name) AS name,
+                       ROW_NUMBER() OVER (PARTITION BY mr.message_id ORDER BY
+                           CASE WHEN LOWER(p.email_address) IN ({own_slots}) THEN 0 ELSE 1 END,
+                           LOWER(mr.recipient_type), LOWER(p.email_address),
+                           COALESCE(NULLIF(mr.display_name, ''), p.display_name, '')) AS position
+                FROM message_recipients mr JOIN participants p ON p.id = mr.participant_id
+                WHERE mr.message_id IN ({slots}) AND LOWER(mr.recipient_type) IN ('to', 'cc', 'bcc')
+                ) WHERE position <= ?""", [*own_addresses, *ids, MAX_MESSAGE_RECIPIENTS + 1]
+        ):
+            if row["position"] > MAX_MESSAGE_RECIPIENTS:
+                omitted.add(row["message_id"])
+                continue
+            address = clean_text(row["email"])
+            name = clean_text(row["name"])
+            if address:
+                recipients[row["message_id"]][row["role"]].add(f"{name} <{address}>" if name else address)
+    headers = {}
+    for row in selected:
+        sender = clean_text(row["sender_email"])
+        name = clean_text(row["sender_name"])
+        roles = recipients[row["message_id"]]
+        headers[row["message_id"]] = EmailHeaders(
+            f"{name} <{sender}>" if name else sender,
+            tuple(sorted(roles["to"])), tuple(sorted(roles["cc"])), tuple(sorted(roles["bcc"])),
+            clean_text(row["thread_id"]), tuple(sorted(accounts)), row["message_id"] in omitted,
+        )
+    return select_emails(selected, email, per_person, accounts, headers)

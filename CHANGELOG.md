@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.33.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.32.0...powerpacks-v3.33.0) (2026-10-20)
+
+
+### Features
+
+* **people:** the action bar asks before a delete, not a toast ([#875](https://github.com/powerset-co/powerpacks/issues/875)) ([31895bd](https://github.com/powerset-co/powerpacks/commit/31895bd067dff5d1e3238fa44284c36096db5367))
+
+
+### Bug Fixes
+
+* compare canonical names during deduplication ([#879](https://github.com/powerset-co/powerpacks/issues/879)) ([80de96f](https://github.com/powerset-co/powerpacks/commit/80de96f0ea8b94b892de56d7c928232f05a2bd26))
+* credit owned LinkedIn URLs in identity judgments ([#880](https://github.com/powerset-co/powerpacks/issues/880)) ([3bb6c93](https://github.com/powerset-co/powerpacks/commit/3bb6c93cb563087850c61a1abc14aae5896fe4d2))
+* improve search editing, local results and signal progress ([#872](https://github.com/powerset-co/powerpacks/issues/872)) ([97d5e6f](https://github.com/powerset-co/powerpacks/commit/97d5e6fa6dfd407faf9dc2f5d522c51bf26c3d02))
+* **people:** delete hides the family instead of removing its rows ([#874](https://github.com/powerset-co/powerpacks/issues/874)) ([c46c862](https://github.com/powerset-co/powerpacks/commit/c46c8625edd1c5893d70121122feefa238525f72))
+* preserve Gmail recipient attribution ([#878](https://github.com/powerset-co/powerpacks/issues/878)) ([34927ba](https://github.com/powerset-co/powerpacks/commit/34927baf29abd704a1993cd7167f86502e09ece7))
+* preserve support session history for child agents ([#881](https://github.com/powerset-co/powerpacks/issues/881)) ([bd0d366](https://github.com/powerset-co/powerpacks/commit/bd0d366535e4c3b6475f03b052edd12b4e380275))
+
 ## [3.32.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.31.0...powerpacks-v3.32.0) (2026-10-19)
 
 
