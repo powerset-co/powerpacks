@@ -183,6 +183,8 @@ def main() -> int:
     parser.add_argument("command", choices=["run"])
     parser.parse_args()
     run = refresh()
+    from packs.memory.runner import keep_updated
+    keep_updated(Path.cwd())
     emit(asdict(run))
     return 1 if run.status == "failed" else 0
 

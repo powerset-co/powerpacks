@@ -56,7 +56,7 @@ DAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 CODEX_TIMEOUT_SECONDS = 30
 
 TASK_ID = "refresh-message-sources"
-TASK_NAME = "Refresh message sources"
+TASK_NAME = "Refresh message sources and memory"
 REFRESH_COMMAND = "uv run --project . python packs/ingestion/primitives/refresh/refresh_sources.py run"
 ATTENTION = "NEEDS ATTENTION"
 PROMPT = (

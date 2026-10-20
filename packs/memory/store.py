@@ -8,13 +8,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import re
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import replace
 from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import now_iso, short_hash
 from packs.ingestion.primitives.common.contact_fields import identifier_phones
 from packs.memory.models import Claim, Identity, IdentityMatch, ImportReport, OpenedClaim, Source, SourceRevision, normalized, date_bound, document
+from packs.memory.progress import Progress, consume
 from packs.memory.projection import project, facts, fact_claims
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import collapse
 from packs.memory.sources import V2, identity_key
@@ -124,46 +125,11 @@ class Store:
         self.conn.close()
 
     def import_source(self, adapter: V2) -> ImportReport:
-        namespace = adapter.namespace
-        other = self.conn.execute("SELECT 1 FROM identities WHERE namespace<>? LIMIT 1", (namespace,)).fetchone()
-        if other:
-            raise ValueError("one source corpus per derived database; use a separate database")
-        report = ImportReport()
-        self.conn.execute("DELETE FROM context")
-        self.conn.execute("INSERT INTO context VALUES(?)", (adapter.owner_context(),))
-        self.conn.executescript("DROP TABLE IF EXISTS temp.seen_identities; DROP TABLE IF EXISTS temp.seen_sources; "
-                               "CREATE TEMP TABLE seen_identities(member TEXT PRIMARY KEY); "
-                               "CREATE TEMP TABLE seen_sources(key TEXT PRIMARY KEY);")
-        try:
-            for identity in adapter.identities():
-                self._identity(namespace, identity)
-                self.conn.execute("INSERT INTO seen_identities VALUES(?)", (identity.member,))
-                report.members += 1
-                if report.members % 250 == 0:
-                    self.conn.commit()
-            self.conn.commit()
-            for source in adapter.sources():
-                report.sources += 1
-                changed, error = self._import_source(namespace, source)
-                report.failed_reads += error
-                report.changed += changed
-                self.conn.execute("INSERT INTO seen_sources VALUES(?)", (source.key,))
-                if report.sources % 100 == 0:
-                    self.conn.commit()
-            # Only a complete enumeration is evidence that a prior source/member disappeared.
-            self.conn.execute("UPDATE identities SET present=0 WHERE namespace=? AND member NOT IN (SELECT member FROM seen_identities)", (namespace,))
-            self.conn.execute("UPDATE sources SET present=0 WHERE namespace=? AND key NOT IN (SELECT key FROM seen_sources)", (namespace,))
-            self.conn.execute("UPDATE claims SET active=0 WHERE human=0 AND source_id IN (SELECT id FROM sources WHERE present=0)")
-            self.conn.commit()
-            self._families()
-            report.parents = self.conn.execute("SELECT count(DISTINCT parent) FROM identities WHERE present=1").fetchone()[0]
-            without = self.conn.execute("SELECT count(*) FROM (SELECT DISTINCT parent FROM identities WHERE present=1 "
-                                        "EXCEPT SELECT parent FROM active_claims)").fetchone()[0]
-            report.unavailable.append(f"{without} canonical identities have no searchable facts")
-        except BaseException:
-            self.conn.rollback()
-            raise
-        return report
+        return consume(self.import_progress(adapter))
+
+    def import_progress(self, adapter: V2, *, first: tuple[str, ...] = ()) -> Generator[Progress, None, ImportReport]:
+        from packs.memory.import_stage import import_progress
+        return import_progress(self, adapter, first=first)
 
     def refresh(self, adapter: V2, members: tuple[str, ...]) -> None:
         """Re-read just these members after an action; a member no longer in the source is marked absent.
@@ -187,15 +153,15 @@ class Store:
             self.conn.rollback()
             raise
 
-    def _import_source(self, namespace: str, source: Source) -> tuple[bool, bool]:
-        """Project and store one saved artifact; returns (changed, failed read)."""
+    def _import_source(self, namespace: str, source: Source) -> tuple[bool, str]:
+        """Project and store one saved artifact; returns (changed, read error)."""
         projected: tuple[Claim, ...] = ()
         if not source.error:
             try:
                 projected = project(source.key, source.content)
             except (ValueError, KeyError, TypeError, AttributeError):
                 source = replace(source, error="invalid saved structured artifact")
-        return self._source(namespace, source, projected), bool(source.error)
+        return self._source(namespace, source, projected), source.error
 
     def _families(self) -> None:
         # Reuse synthesis collapse semantics per family, independently of source hashes/merges.

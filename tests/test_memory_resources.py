@@ -72,10 +72,10 @@ class ResourceTests(unittest.TestCase):
             store = Store(base / "memory.sqlite")
             self.addCleanup(store.close)
             self.assertEqual(store.conn.execute('SELECT count(*) FROM identities').fetchone()[0], count)
-            self.assertEqual(store.conn.execute('SELECT count(*) FROM sources').fetchone()[0], 200)
+            self.assertEqual(store.conn.execute('SELECT count(*) FROM sources').fetchone()[0], 250)
             imported = store.import_source(adapter)
             self.assertEqual((imported.members, imported.parents, imported.sources, imported.changed),
-                             (count, count, count * 2 + 1, count * 2 + 1 - 200))
+                             (count, count, count * 2 + 1, count * 2 + 1 - 250))
             self.assertEqual(store.lookup('Synthetic Pending'), [])
             directory = Directory(store)
             started = time.perf_counter()

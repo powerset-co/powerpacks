@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from collections.abc import Generator
 
 import tiktoken
 
 from packs.ingestion.primitives.common.jsonio import short_hash
-from packs.memory.models import Claim, Provider, cached_vector, document, packed
-from packs.memory.provider import CHUNK_CHARS, MAX_CLAIMS, MAX_OUTPUT_TOKENS, SYSTEM, parse_response
+from packs.memory.models import Claim, Provider, SourceRevision, cached_vector, document, packed
+from packs.memory.provider import CHUNK_CHARS, MAX_CLAIMS, MAX_OUTPUT_TOKENS, SYSTEM, NeedsApproval, parse_response
 from packs.memory.store import Store
+from packs.memory.progress import Progress, Step, consume, retry_first
 
 
 def embedded(store: Store, provider: Provider, text: str) -> tuple[float, ...]:
@@ -38,66 +40,107 @@ class Generate:
         self.provider = provider
 
     def run(self, *, limit: int) -> GenerationReport:
-        if limit < 1:
-            raise ValueError("limit must be positive")
+        return consume(self.progress(limit=limit))
+
+    def progress(self, *, limit: int, first: tuple[str, ...] = ()) -> Generator[Progress, None, GenerationReport]:
         report = GenerationReport()
-        for source in self.store.sources():
-            for position, offset in enumerate(range(0, len(source.content), CHUNK_CHARS)):
-                text = source.content[offset:offset + CHUNK_CHARS]
-                fingerprint = short_hash(self.provider.generation_key + text, n=64)
-                old = self.store.conn.execute(
-                    "SELECT response FROM chunks WHERE source_id=? AND fingerprint=? ORDER BY id LIMIT 1",
-                    (source.id, fingerprint)).fetchone()
-                if old is None:
-                    if report.generation_calls + report.embedding_calls >= limit:
-                        return report
-                    response = self.provider.generate(text)
-                    report.generation_calls += 1
-                else:
-                    response = old[0]
-                    report.reused_chunks += 1
-                # Save the paid response before parsing: malformed/incomplete output is never re-bought.
-                with self.store.conn:
-                    self.store.conn.execute(
-                        "INSERT OR IGNORE INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,?,?,?,'')",
-                        (source.id, source.hash, position, fingerprint, response))
-                claims, errors = parse_response(response, text)
-                report.exclusions += len(errors)
-                with self.store.conn:
-                    chunk_id = self.store.conn.execute(
-                        "SELECT id FROM chunks WHERE source_id=? AND source_hash=? AND position=? AND fingerprint=?",
-                        (source.id, source.hash, position, fingerprint)).fetchone()[0]
-                    self.store.conn.execute("UPDATE chunks SET error=? WHERE id=?", ("; ".join(errors), chunk_id))
-                    self.store.conn.execute(
-                        "UPDATE claims SET active=0 WHERE human=0 AND chunk_id IN "
-                        "(SELECT id FROM chunks WHERE source_id=? AND position=? AND id<>?)",
-                        (source.id, position, chunk_id))
-                    for claim in claims:
-                        # The saved relationship_to_owner field already owns this evidence.
-                        projected = self.store.conn.execute(
-                            "SELECT 1 FROM claims WHERE source_id=? AND chunk_id IS NULL AND kind='relationship' "
-                            "AND json_extract(payload,'$.quote')=?",
-                            (source.id, claim.quote)).fetchone() if claim.kind == "relationship" else None
-                        if projected:
-                            continue
-                        self.store.add_claim(source.id, source.hash, chunk_id, claim, human=False)
-                        report.claims += 1
-                self._embeddings(report, limit, source_id=source.id)
-        self._embeddings(report, limit)
+        for event in self.chunks(limit=limit, first=first, report=report):
+            yield event
+            if not event.error:
+                yield from self.index(limit=limit, report=report, source_id=int(event.key.split(":")[0]))
+        yield from self.index(limit=limit, report=report)
         return report
 
-    def _embeddings(self, report: GenerationReport, limit: int, *, source_id: int | None = None) -> None:
+    def chunks(self, *, limit: int, first: tuple[str, ...] = (), report: GenerationReport | None = None) -> Generator[Progress, None, GenerationReport]:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        report = report if report is not None else GenerationReport()
+        total = sum((len(source.content) + CHUNK_CHARS - 1) // CHUNK_CHARS for source in self.store.sources())
+        done = 0
+        first_sources = tuple(key.split(":")[0] for key in first)
+        for source in retry_first(self.store.sources, lambda source: str(source.id), first_sources):
+            positions = list(enumerate(range(0, len(source.content), CHUNK_CHARS)))
+            positions.sort(key=lambda item: f"{source.id}:{item[0]}" not in first)
+            for position, offset in positions:
+                key = f"{source.id}:{position}"
+                done += 1
+                try:
+                    if not self._chunk(source, position, offset, report, limit):
+                        return report
+                    yield Progress(Step.GENERATE, done, total, key)
+                except NeedsApproval:
+                    raise
+                except Exception as exc:
+                    yield Progress(Step.GENERATE, done, total, key, str(exc))
+        return report
+
+    def _chunk(self, source: SourceRevision, position: int, offset: int, report: GenerationReport, limit: int) -> bool:
+        text = source.content[offset:offset + CHUNK_CHARS]
+        fingerprint = short_hash(self.provider.generation_key + text, n=64)
+        old = self.store.conn.execute(
+            "SELECT response FROM chunks WHERE source_id=? AND fingerprint=? ORDER BY id LIMIT 1",
+            (source.id, fingerprint)).fetchone()
+        if old is None:
+            if report.generation_calls + report.embedding_calls >= limit:
+                return False
+            response = self.provider.generate(text)
+            report.generation_calls += 1
+        else:
+            response = old[0]
+            report.reused_chunks += 1
+        # Save the paid response before parsing: malformed/incomplete output is never re-bought.
+        with self.store.conn:
+            self.store.conn.execute(
+                "INSERT OR IGNORE INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,?,?,?,'')",
+                (source.id, source.hash, position, fingerprint, response))
+        claims, errors = parse_response(response, text)
+        report.exclusions += len(errors)
+        with self.store.conn:
+            chunk_id = self.store.conn.execute(
+                "SELECT id FROM chunks WHERE source_id=? AND source_hash=? AND position=? AND fingerprint=?",
+                (source.id, source.hash, position, fingerprint)).fetchone()[0]
+            self.store.conn.execute("UPDATE chunks SET error=? WHERE id=?", ("; ".join(errors), chunk_id))
+            self.store.conn.execute(
+                "UPDATE claims SET active=0 WHERE human=0 AND chunk_id IN "
+                "(SELECT id FROM chunks WHERE source_id=? AND position=? AND id<>?)",
+                (source.id, position, chunk_id))
+            for claim in claims:
+                # The saved relationship_to_owner field already owns this evidence.
+                projected = self.store.conn.execute(
+                    "SELECT 1 FROM claims WHERE source_id=? AND chunk_id IS NULL AND kind='relationship' "
+                    "AND json_extract(payload,'$.quote')=?",
+                    (source.id, claim.quote)).fetchone() if claim.kind == "relationship" else None
+                if projected:
+                    continue
+                self.store.add_claim(source.id, source.hash, chunk_id, claim, human=False)
+                report.claims += 1
+        return True
+
+    def index(self, *, limit: int, report: GenerationReport | None = None, first: tuple[str, ...] = (), source_id: int | None = None) -> Generator[Progress, None, GenerationReport]:
+        report = report if report is not None else GenerationReport()
         where = " WHERE source_id=?" if source_id is not None else ""
         params = (source_id,) if source_id is not None else ()
-        for row in self.store.conn.execute("SELECT DISTINCT payload FROM active_claims" + where, params):
-            if report.generation_calls + report.embedding_calls >= limit:
-                return
+        total = self.store.conn.execute("SELECT count(DISTINCT payload) FROM active_claims" + where, params).fetchone()[0]
+        rows = self.store.conn.execute(
+            "SELECT DISTINCT payload,document_hash FROM active_claims" + where
+            + " ORDER BY document_hash IN (SELECT value FROM json_each(?)) DESC", (*params, json.dumps(first)))
+        for done, row in enumerate(rows, 1):
             text = document(Claim.parse(json.loads(row[0])))
-            exists = self.store.conn.execute("SELECT 1 FROM embeddings WHERE model=? AND hash=?",
-                                             (self.provider.embedding_key, short_hash(text, n=64))).fetchone()
-            if exists is None:
-                embedded(self.store, self.provider, text)
-                report.embedding_calls += 1
+            key = row["document_hash"]
+            try:
+                exists = self.store.conn.execute("SELECT 1 FROM embeddings WHERE model=? AND hash=?",
+                                                 (self.provider.embedding_key, key)).fetchone()
+                if exists is None:
+                    if report.generation_calls + report.embedding_calls >= limit:
+                        return report
+                    embedded(self.store, self.provider, text)
+                    report.embedding_calls += 1
+                yield Progress(Step.INDEX, done, total, key)
+            except NeedsApproval:
+                raise
+            except Exception as exc:
+                yield Progress(Step.INDEX, done, total, key, str(exc))
+        return report
 
     def estimate(self, *, limit: int) -> dict[str, object]:
         encoder = tiktoken.get_encoding("o200k_base")

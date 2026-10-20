@@ -130,10 +130,10 @@ class RoundTwoTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.store.import_source(adapter)
         changed = self.store.conn.execute('SELECT count(*) FROM sources s JOIN revisions r ON s.id=r.source_id AND s.hash=r.hash WHERE r.content LIKE ? AND s.present=1', ('% ',)).fetchone()[0]
-        self.assertEqual(changed, 100)
+        self.assertEqual(changed, 150)
         self.assertEqual(self.store.conn.execute('SELECT sum(present) FROM sources').fetchone()[0], 520)
         resumed = self.store.import_source(adapter)
-        self.assertEqual(resumed.changed, 100)
+        self.assertEqual(resumed.changed, 150)
         self.assertEqual(self.store.conn.execute('SELECT count(*) FROM sources').fetchone()[0], 520)
         with patch.object(V2, 'sources', interrupted):
             with self.assertRaises(RuntimeError):

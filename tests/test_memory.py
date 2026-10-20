@@ -158,14 +158,14 @@ class MemoryTests(unittest.TestCase):
 
     def test_generation_and_embedding_interrupt_restart(self) -> None:
         self.provider.fail_generation = 2
-        with self.assertRaisesRegex(ValueError, "interruption"):
-            self.generate()
+        events = list(Generate(self.store, self.provider).progress(limit=100))
+        self.assertEqual([event.error for event in events if event.error], ["synthetic interruption"])
         first_chunk = self.store.conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        self.assertEqual(first_chunk, 1)
+        self.assertEqual(first_chunk, 4)
         self.provider.fail_generation = 0
         report = Generate(self.store, self.provider).run(limit=100)
-        self.assertEqual(report.generation_calls, 4)
-        self.assertEqual(report.reused_chunks, 1)
+        self.assertEqual(report.generation_calls, 1)
+        self.assertEqual(report.reused_chunks, 4)
         self.assertEqual(Generate(self.store, self.provider).run(limit=100).embedding_calls, 0)
 
     def test_generation_model_change_keeps_claims_on_resume(self) -> None:
@@ -178,13 +178,13 @@ class MemoryTests(unittest.TestCase):
 
     def test_embedding_failure_keeps_generation_checkpoint(self) -> None:
         self.provider.fail_embedding = 2
-        with self.assertRaisesRegex(ValueError, "embedding interruption"):
-            self.generate()
+        events = list(Generate(self.store, self.provider).progress(limit=100))
+        self.assertTrue(any(event.error == "synthetic embedding interruption" for event in events))
         self.provider.fail_embedding = 0
         report = Generate(self.store, self.provider).run(limit=100)
-        self.assertEqual(report.generation_calls, 4)
+        self.assertEqual(report.generation_calls, 0)
         self.assertEqual(self.provider.generations, 5)
-        self.assertEqual(report.embedding_calls, 10)
+        self.assertEqual(report.embedding_calls, 0)
 
     def test_hybrid_filters_aliases_context_and_stories(self) -> None:
         self.generate()

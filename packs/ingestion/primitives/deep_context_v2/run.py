@@ -250,6 +250,8 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
         print(f"review: {pending} people to check at {url}; finish after the review updates the index", flush=True)
     else:
         print(f"review: nothing to check ({url}); run finish", flush=True)
+    from packs.memory.runner import keep_updated
+    keep_updated(data_root.parent)
     return 0
 
 
@@ -267,6 +269,9 @@ def finish(data_root: Path, operator_id: str) -> int:
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
     if code != 0:
         print("index: the Modal build did not complete; run finish again", flush=True)
+    if code == 0:
+        from packs.memory.runner import keep_updated
+        keep_updated(data_root.parent)
     return code
 
 

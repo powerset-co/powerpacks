@@ -100,6 +100,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.search.primitives.deep_search.results_web.api import search_api
     from packs.search.primitives.deep_search.results_web.server import search_routes
     from packs.shared.web import asks_loop
+    from packs.shared.web.memory import MemoryApi
     from packs.shared.web.collaboration import Collaboration, CollaborationRoutes
 
     load_env()
@@ -128,6 +129,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
     tasks = TasksApi()
+    memory = MemoryApi(root)
 
     class Handler(BaseHTTPRequestHandler):
         def _relay(self) -> None:
@@ -146,7 +148,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     network_routes()
                 self._relay()
                 return
-            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed):
+            if app.get(self, parsed) or accounts.get(self, parsed) or tasks.get(self, parsed) or memory.get(self, parsed):
                 return
             if searches_json.get(self, parsed) or searches.get(self, parsed):
                 return
@@ -163,7 +165,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 asks_loop.WAKE.set()
                 self._relay()
                 return
-            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
+            if app.post(self, parsed) or accounts.post(self, parsed) or tasks.post(self, parsed) or memory.post(self, parsed) or searches_json.post(self, parsed) or searches.post(self, parsed):
                 return
             with store_lock:
                 routes = network_routes()

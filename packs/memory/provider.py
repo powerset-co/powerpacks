@@ -5,6 +5,9 @@ import json
 import os
 
 import httpx
+import tiktoken
+
+from packs.memory.cost import Usage
 
 from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory import discovery_provider
@@ -69,13 +72,15 @@ def parse_response(raw: str, content: str) -> tuple[tuple[Claim, ...], tuple[str
 
 class OpenAIProvider:
     def __init__(self, model: str, embedding_model: str, *, client: httpx.Client | None = None,
-                 approve_spend: bool = False) -> None:
+                 approve_spend: bool = False, approved_spend_usd: float | None = None) -> None:
+        self.approved_spend_usd = approved_spend_usd
+        self.usage = Usage()
         self.approve_spend = approve_spend
         self.model = model
         self.embedding_key = embedding_model
         self.discovery_key = short_hash(model + discovery_provider.SYSTEM + json.dumps(discovery_provider.SCHEMA, sort_keys=True), n=64)
         self.generation_key = short_hash(model + SYSTEM + json.dumps(SCHEMA, sort_keys=True), n=64)
-        self.client = client or httpx.Client(base_url="https://api.openai.com/v1/", timeout=120)
+        self.client = client or httpx.Client(base_url=(os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1/").rstrip("/") + "/", timeout=120)
 
     def close(self) -> None:
         self.client.close()
@@ -83,6 +88,18 @@ class OpenAIProvider:
     def _post(self, endpoint: str, body: dict[str, object]) -> str:
         if not self.approve_spend:
             raise NeedsApproval(endpoint)
+        if self.approved_spend_usd is not None:
+            encoder = tiktoken.get_encoding("o200k_base")
+            tokens = len(encoder.encode(json.dumps(body))) + 1024
+            cap = Usage(self.usage.input, self.usage.output, self.usage.embedding)
+            if endpoint == "embeddings":
+                cap.embedding += tokens
+            else:
+                cap.input += tokens
+                cap.output += int(str(body["max_output_tokens"]))
+            cost = cap.cost(self.model, self.embedding_key)
+            if cost is None or cost > self.approved_spend_usd:
+                raise ValueError("approved spend limit reached or model pricing unavailable")
         try:
             response = self.client.post(endpoint, json=body, headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})
         except httpx.HTTPError:
@@ -90,6 +107,12 @@ class OpenAIProvider:
         # Do not expose provider response bodies (they may echo input).
         if response.status_code != 200:
             raise ValueError(f"provider {endpoint}: HTTP {response.status_code}")
+        usage = object_dict(object_dict(response.json()).get("usage", {}))
+        if endpoint == "embeddings":
+            self.usage.embedding += int(str(usage.get("prompt_tokens", 0)))
+        else:
+            self.usage.input += int(str(usage.get("input_tokens", 0)))
+            self.usage.output += int(str(usage.get("output_tokens", 0)))
         return response.text
 
     def generate(self, content: str) -> str:

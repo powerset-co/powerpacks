@@ -276,8 +276,8 @@ class DiscoveryTests(unittest.TestCase):
         fields = {person['member']: {'location': 'The person visited San Francisco.'} for person in people}
         store = self.imported(people, fields)
         self.provider.fail_call = 2
-        with self.assertRaisesRegex(ValueError, 'interruption'):
-            Discover(store, self.provider).run(limit=5, phrase='sf')
+        events = list(Discover(store, self.provider).progress(limit=5, phrase='sf'))
+        self.assertTrue(any('interruption' in event.error for event in events))
         self.assertEqual(store.conn.execute('SELECT count(*) FROM chunks WHERE position=-1').fetchone()[0], 1)
         self.provider.fail_call = 0
         self.assertEqual(Discover(store, self.provider).run(limit=5, phrase='sf').calls, 1)

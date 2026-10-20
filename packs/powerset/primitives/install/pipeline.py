@@ -238,6 +238,8 @@ class ProcessingOnboarding:
                     self._write("discover.done")
                     self._enrich(enrich)
                 self._index()
+                from packs.memory.runner import keep_updated
+                keep_updated(self.root)
             except _Stopped:
                 pass
             except (Exception, SystemExit) as error:

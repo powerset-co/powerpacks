@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.common.jsonio import short_hash
-from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS, OUTPUT_TOKENS, PEOPLE, SYSTEM, Tag, Outcome
+from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS, Tag, Outcome
 from packs.memory.models import Claim, Kind, IdentityMatch, cached_vector, document, normalized
 from packs.memory.store import Store
+from packs.memory.progress import Progress, consume
 
 _ORIGINAL = "c.chunk_id IS NULL AND c.human=0"
 _VALUE = "normalized(CASE WHEN c.object<>'' THEN c.object ELSE c.text END)"
@@ -272,105 +273,16 @@ class Discover:
         return content, fingerprint, evidence
 
     def preview(self, *, min_people: int = 3, phrase: str = '', after: str = '', limit: int = 100) -> Preview:
-        if limit < 1:
-            raise ValueError('limit must be positive')
-        groups: list[Group] = []
-        insights: list[Insight] = []
-        total = 0
-        pending = 0
-        max_chars = 0
-        previous_group = last_group = after
-        for group, parents in self._batches(min_people=min_people, phrase=phrase, after=after):
-            if group.key != last_group:
-                previous_group, last_group = last_group, group.key
-            content, fingerprint, _ = self._batch(group, parents)
-            max_chars = max(max_chars, len(content))
-            total += 1
-            saved = self.store.conn.execute('SELECT response,error FROM chunks WHERE fingerprint=? AND position=-1', (fingerprint,)).fetchone()
-            pending += saved is None
-            if saved is not None and not saved['error'] and len(insights) < 4:
-                try:
-                    insights.append(self._insight(group, parents, Decision.parse(saved[0])))
-                except (ValueError, KeyError, TypeError):
-                    pass
-            if len(groups) < 100:
-                groups.append(group)
-            if pending == limit:
-                return Preview(tuple(groups), total, pending, max_chars, INPUT_CHARS, OUTPUT_TOKENS,
-                               len(SYSTEM), min(limit, pending), previous_group, True, tuple(insights))
-        return Preview(tuple(groups), total, pending, max_chars, INPUT_CHARS, OUTPUT_TOKENS,
-                       len(SYSTEM), min(limit, pending), self.next_after, bool(self.next_after), tuple(insights))
-
-    def _batches(self, *, min_people: int, phrase: str, after: str) -> Iterator[tuple[Group, list[Person]]]:
-        for group in self.groups(min_people=min_people, phrase=phrase, after=after):
-            parents: list[Person] = []
-            size = 0
-            for parent in self._parents(group):
-                added = sum(len(item.quote) + len(parent.parent) + 120 for item in self._evidence(parent, group.phrase))
-                if parents and (len(parents) == PEOPLE or size + added > INPUT_CHARS - 8000):
-                    yield group, parents
-                    parents, size = [], 0
-                parents.append(parent)
-                size += added
-            if parents:
-                yield group, parents
+        from packs.memory.discovery_run import preview
+        return preview(self, min_people=min_people, phrase=phrase, after=after, limit=limit)
 
     def run(self, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '') -> DiscoveryReport:
-        if limit < 1:
-            raise ValueError('limit must be positive')
-        conn, report = self.store.conn, DiscoveryReport()
-        conn.executescript('DROP TABLE IF EXISTS temp.discovery_seen; CREATE TEMP TABLE discovery_seen(key TEXT PRIMARY KEY);')
-        previous_group = last_group = after
-        for group, parents in self._batches(min_people=min_people, phrase=phrase, after=after):
-            if group.key != last_group:
-                previous_group, last_group = last_group, group.key
-            key = group.key + ':' + short_hash(json.dumps([person.parent for person in parents]), n=64)
-            conn.execute('INSERT INTO discovery_seen VALUES(?)', (key,))
-            content, fingerprint, evidence = self._batch(group, parents)
-            report.max_input_chars = max(report.max_input_chars, len(content))
-            old = conn.execute('SELECT d.chunk_id,c.fingerprint FROM discovery d JOIN chunks c ON c.id=d.chunk_id WHERE d.key=?', (key,)).fetchone()
-            if old is not None and old['fingerprint'] != fingerprint:
-                with conn:
-                    conn.execute('UPDATE claims SET active=0 WHERE chunk_id=? AND human=0', (old['chunk_id'],))
-            saved = conn.execute('SELECT id,response FROM chunks WHERE fingerprint=? AND position=-1 ORDER BY id LIMIT 1', (fingerprint,)).fetchone()
-            if saved is None:
-                if report.calls == limit:
-                    report.next_after, report.has_more = previous_group, True
-                    return report
-                response = self.provider.discover(content)
-                report.calls += 1
-                source = evidence[0]
-                with conn:
-                    conn.execute('INSERT INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,-1,?,?,\'\')',
-                                          (source.source_id, source.source_hash, fingerprint, response))
-                chunk_id = int(conn.execute('SELECT last_insert_rowid()').fetchone()[0])
-            else:
-                chunk_id, response = saved['id'], saved['response']
-                report.reused += 1
-            report.batches += 1
-            with conn:
-                conn.execute('INSERT INTO discovery VALUES(?,?) ON CONFLICT(key) DO UPDATE SET chunk_id=excluded.chunk_id', (key, chunk_id))
-                try:
-                    decision = Decision.parse(response)
-                    report.abstentions += decision.decision != 'supported'
-                    report.tags += self._apply(decision, evidence, chunk_id)
-                    if len(report.insights) < 4:
-                        report.insights += (self._insight(group, parents, decision),)
-                    conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
-                except (ValueError, KeyError, TypeError):
-                    report.exclusions += 1
-                    conn.execute("UPDATE chunks SET error='invalid or unsupported discovery; saved response retained' WHERE id=?", (chunk_id,))
-        with conn:
-            for row in conn.execute('SELECT key,chunk_id FROM discovery WHERE key NOT IN (SELECT key FROM discovery_seen)'):
-                group_key = row['key'].rsplit(':', 1)[0]
-                if group_key <= after or (self.next_after and group_key > self.next_after):
-                    continue
-                if not phrase or group_key in ('name:' + normalized(phrase), 'saved:' + normalized(phrase)):
-                    conn.execute('UPDATE claims SET active=0 WHERE chunk_id=? AND human=0', (row['chunk_id'],))
-                    conn.execute('DELETE FROM discovery WHERE key=?', (row['key'],))
-        report.next_after, report.has_more = self.next_after, bool(self.next_after)
-        report.groups = conn.execute('SELECT count(*) FROM discovery_seen').fetchone()[0]
-        return report
+        return consume(self.progress(limit=limit, min_people=min_people, phrase=phrase, after=after))
+
+    def progress(self, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '',
+                 first: tuple[str, ...] = ()) -> Generator[Progress, None, DiscoveryReport]:
+        from packs.memory.discovery_run import progress
+        return progress(self, limit=limit, min_people=min_people, phrase=phrase, after=after, first=first)
 
     def _insight(self, group: Group, parents: list[Person], decision: Decision) -> Insight:
         members = tuple(IdentityMatch(person.parent, self.store.conn.execute(
