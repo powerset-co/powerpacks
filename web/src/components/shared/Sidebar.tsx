@@ -10,11 +10,13 @@ import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
 import { Chats } from "@/pages/agent/Chats"
 
 import {
   ChatIcon,
   CollapseIcon,
+  MemoryIcon,
   PeopleIcon,
   SearchesIcon,
   SettingsIcon,
@@ -35,6 +37,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
+  memory: MemoryIcon,
   sets: HiveIcon,
   team: TeamIcon,
   tasks: TasksIcon,
@@ -147,6 +150,14 @@ function Item({ page, rail }: { page: Page; rail: boolean }) {
     >
       <Icon className="size-[18px] shrink-0" />
       {!rail && <span className="truncate">{page.label}</span>}
+      {!rail && page.key === "memory" ? (
+        <>
+          {" "}
+          <Badge variant="muted" className="h-4 px-1.5 text-[10px] font-semibold">
+            beta
+          </Badge>
+        </>
+      ) : null}
     </NavLink>
   )
 }

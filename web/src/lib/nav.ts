@@ -3,7 +3,7 @@
 import { isDesktop } from "@/lib/desktop"
 
 export type PageKey =
-  "home" | "agent" | "searches" | "people" | "sets" | "team" | "tasks" | "setup" | "settings"
+  "home" | "agent" | "searches" | "people" | "memory" | "sets" | "team" | "tasks" | "setup" | "settings"
 
 export interface Page {
   key: PageKey
@@ -17,6 +17,8 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
+  // Beta: Sidebar badges it.
+  { key: "memory", label: "Memory", href: "/memory" },
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.

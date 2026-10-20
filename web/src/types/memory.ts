@@ -1,0 +1,90 @@
+// packs/memory/job.py Job, and what packs/shared/web/memory.py adds to it before Memory is enabled;
+// packs/memory/directory.py Meaning and Page for the search box.
+
+export type MemoryStep = "import" | "generate" | "index" | "discover"
+
+export interface StepCounts {
+  done: number
+  total: number
+}
+
+export interface MemoryFailure {
+  step: MemoryStep
+  key: string
+  error: string
+  at: string
+}
+
+export interface MemoryEstimate {
+  pending_chunks: number
+  generation_input_tokens: number
+  generation_output_token_cap: number
+  embedding_input_tokens: number
+  // null while the models' prices are unknown: the page shows the tokens instead.
+  estimated_cost_usd: number | null
+}
+
+export interface MemoryInventory {
+  counts: Partial<Record<"parents" | "facts" | "person_tags" | "current_profile", number>>
+}
+
+export interface MemoryJob {
+  enabled: boolean
+  keep_updated: boolean
+  step: "idle" | MemoryStep | "done"
+  status: "idle" | "running" | "done" | "failed"
+  steps: Record<MemoryStep, StepCounts>
+  current_item: string
+  people_indexed: number
+  started_at: string
+  updated_at: string
+  approved_spend_usd: number
+  // null when the models' prices are unknown: the tokens are the cost then.
+  spent_usd: number | null
+  tokens: { input: number; output: number; embedding: number }
+  failures: MemoryFailure[]
+  error: string
+  // Why a finished run stopped short, e.g. "approved spend reached".
+  stopped: string
+  // Only before Memory is enabled; estimate is null with no Deep Context store yet.
+  inventory?: MemoryInventory
+  sources?: string[]
+  estimate?: MemoryEstimate | null
+}
+
+export type MemoryOrigin = "source_name" | "human_tag" | "topic" | "saved_value"
+
+export interface MemorySelector {
+  origin: MemoryOrigin
+  value: string
+}
+
+export interface MemoryCitation {
+  source: string
+  source_hash: string
+  quote: string
+  level: string
+}
+
+export interface MemoryMeaning {
+  selector: MemorySelector
+  count: number
+  evidence: MemoryCitation[]
+  match: string
+}
+
+export interface MemoryPerson {
+  parent: string
+  name: string
+  members: string[]
+  evidence: MemoryCitation[]
+}
+
+export interface MemoryPeoplePage {
+  corpus: string
+  people: MemoryPerson[]
+  selector: MemorySelector
+  total: number
+  // "" on the last page.
+  next_after: string
+}
