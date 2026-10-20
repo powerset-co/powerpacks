@@ -11,7 +11,7 @@ In order:
    fetch failed is not judged this run.
 4. Confirm email pre-matches, then use Sol to judge each LinkedIn or research identity (judge.py). A confirmed LinkedIn moves every member onto
    li:<member id>; a member already wrong on it splits onto a fresh p: id.
-5. Settle: a family with no real profile and under 25 messages is worth no (settle.py).
+5. Settle: an own LinkedIn connection is worth yes unless a human decided otherwise (settle.py).
 
 Created: 2026-10-07
 """
@@ -112,7 +112,7 @@ class Enrich(Node):
                                                    on_progress=self.progress)).items():
             counts[key] = value
         # Step 5: settle, on the families as the judge left them.
-        counts["settle_worth_rows"] = settle.settle(self.conn, self.data_root, now)
+        counts["settle_worth_rows"] = settle.settle(self.conn, now)
         return counts
 
     def estimate(self) -> dict[str, object]:
