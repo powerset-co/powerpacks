@@ -25,7 +25,7 @@ interface ShortcutTargets {
   askDelete: (targets: readonly string[]) => void
   confirmDelete: () => void
   armed: () => boolean
-  dismissToast: () => void
+  cancelDelete: () => void
   // The selection, else the open person (PeopleWorkspace).
   targets: readonly string[]
 }
@@ -45,7 +45,7 @@ export function usePeopleShortcuts({
   askDelete,
   confirmDelete,
   armed,
-  dismissToast,
+  cancelDelete,
   targets,
 }: ShortcutTargets) {
   const focused = matching[focus]
@@ -85,7 +85,7 @@ export function usePeopleShortcuts({
       if (focused) drawer.toggle(focused.parent_id)
     },
     escape: () => {
-      if (armed()) dismissToast()
+      if (armed()) cancelDelete()
       else if (drawer.openId) drawer.close()
       else if (selection.selected.size) selection.clear()
     },

@@ -18,7 +18,11 @@ interface BulkBarProps {
   logbook: LogbookAction | null
   onLogbook: () => void
   onAction: (action: WorthAction) => void
+  // The delete question while one is armed ("Delete 3 people?"): the bar asks it in place.
+  question: string | null
   onDelete: () => void
+  onConfirmDelete: () => void
+  onCancelDelete: () => void
   onClear: () => void
 }
 
@@ -30,10 +34,34 @@ export function BulkBar({
   building,
   logbook,
   onAction,
+  question,
   onDelete,
+  onConfirmDelete,
+  onCancelDelete,
   onLogbook,
   onClear,
 }: BulkBarProps) {
+  if (question !== null && label !== null) {
+    return (
+      <ActionBar label={question} name="Confirm delete" className="confirming">
+        <span key="confirm" className="action-bar-group rise-in">
+          <span className="action-bar-note">Their messages are not touched.</span>
+          <Button
+            variant="bad"
+            shape="pill"
+            className={BAR_BUTTON}
+            disabled={disabled}
+            onClick={onConfirmDelete}
+          >
+            Delete <Kbd className="ml-0.5">↵</Kbd>
+          </Button>
+          <Button variant="ghost" shape="pill" className={BAR_BUTTON} onClick={onCancelDelete}>
+            Cancel <Kbd className="ml-0.5">Esc</Kbd>
+          </Button>
+        </span>
+      </ActionBar>
+    )
+  }
   return (
     <ActionBar label={label} name={selection ? "Selection" : "Open person"}>
       <Button

@@ -125,6 +125,10 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
 
   // The bar and the s / p keys act on the selection, else on the open person.
   const targets = selection.selected.size ? [...selection.selected] : openId ? [openId] : []
+  // A delete question is about the people it named: a new selection or open person drops it.
+  const targetKey = targets.join("\n")
+  const { cancelDelete } = decisions
+  useEffect(() => cancelDelete(), [targetKey, cancelDelete])
   // The selection's one logbook action: View when everyone has a saved logbook, else Build.
   // The open person's is in the drawer.
   const saved = targets.map((id) => byId.get(id)?.logbook ?? "")
@@ -199,7 +203,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     askDelete: decisions.askDelete,
     confirmDelete: decisions.confirmDelete,
     armed: decisions.armed,
-    dismissToast: decisions.dismissToast,
+    cancelDelete: decisions.cancelDelete,
     targets,
   })
 
@@ -295,7 +299,10 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             logbook={barLogbook}
             onLogbook={() => (barLogbook === "view" ? onView(saved) : void logbook.build(targets))}
             onAction={(action) => void label(action, targets)}
+            question={decisions.question}
             onDelete={() => decisions.askDelete(targets)}
+            onConfirmDelete={decisions.confirmDelete}
+            onCancelDelete={decisions.cancelDelete}
             onClear={selection.selected.size ? clearSelection : closeDrawer}
           />
           <Toast

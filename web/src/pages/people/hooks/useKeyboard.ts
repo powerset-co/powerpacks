@@ -27,9 +27,14 @@ export function useKeyboard(active: boolean, run: KeyboardActions) {
       if (event.key === "Escape" && target instanceof HTMLElement) target.blur()
       return
     }
+    if (event.repeat && NO_REPEAT.has(event.key)) return
+    // While the bar asks about a delete, Enter answers it wherever focus is (a just-clicked checkbox).
+    if (event.key === "Enter" && run.confirmDelete()) {
+      event.preventDefault()
+      return
+    }
     // A focused button, link, label or checkbox keeps its native Enter and Space.
     if ((event.key === "Enter" || event.key === " ") && target.matches("button, a, label, input")) return
-    if (event.repeat && NO_REPEAT.has(event.key)) return
     const tab = TABS[event.key]
     if (tab !== undefined) {
       run.switchTab(tab)
@@ -70,7 +75,7 @@ export function useKeyboard(active: boolean, run: KeyboardActions) {
         run.askDelete()
         break
       case "Enter":
-        if (!run.confirmDelete()) run.openFocused()
+        run.openFocused()
         break
       case "Escape":
         run.escape()

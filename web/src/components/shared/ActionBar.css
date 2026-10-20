@@ -15,6 +15,27 @@
   background: var(--card);
   box-shadow: var(--shadow-2);
 }
+/* The .rise travel, plus the red a delete question tints the bar with. */
+.action-bar.rise {
+  transition-property: transform, opacity, border-color, box-shadow;
+}
+/* Asking before a delete (people/BulkBar): the same bar turns red and its buttons rise in. */
+.action-bar.confirming {
+  border-color: var(--bad);
+  box-shadow:
+    inset 0 0 0 999px var(--bad-soft),
+    var(--shadow-2);
+}
+.action-bar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.action-bar-note {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .action-bar b {
   margin-right: 4px;
   font-size: 13px;

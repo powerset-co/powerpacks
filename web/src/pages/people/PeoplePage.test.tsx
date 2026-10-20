@@ -396,7 +396,7 @@ describe("PeoplePage", () => {
     expect(fetch.mock.calls.some(([url]) => url.endsWith("/worth"))).toBe(false)
   })
 
-  it("deletes the selection after D and Enter, and Escape drops the question", async () => {
+  it("asks in the bar after D, deletes on Enter, and Escape drops the question", async () => {
     const sent: unknown[] = []
     const fetch = vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith("/delete")) {
@@ -410,15 +410,19 @@ describe("PeoplePage", () => {
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     fireEvent.click(must(container.querySelector("[data-select-all]")))
     fireEvent.keyDown(document.body, { key: "d" })
-    expect(
-      screen.getByText("Delete 3 people from this computer? Their messages are not touched."),
-    ).toBeTruthy()
+    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
+    expect(bar.classList.contains("confirming")).toBe(true)
+    expect(within(bar).getByText("Delete 3 people?")).toBeTruthy()
+    expect(container.querySelector(".toast")).toBeNull()
     fireEvent.keyDown(document.body, { key: "Escape" })
+    expect(bar.classList.contains("confirming")).toBe(false)
     fireEvent.keyDown(document.body, { key: "Enter" })
     expect(sent).toEqual([])
-    const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     fireEvent.click(within(bar).getByRole("button", { name: "Delete D" }))
-    fireEvent.keyDown(document.body, { key: "Enter" })
+    // Enter answers it even with a just-clicked checkbox focused.
+    const checkbox = must(container.querySelector<HTMLInputElement>(".row input[type=checkbox]"))
+    checkbox.focus()
+    fireEvent.keyDown(checkbox, { key: "Enter" })
     await waitFor(() => expect(screen.getByText("Deleted 3 people from this computer.")).toBeTruthy())
     expect(sent).toEqual([{ ids: ["p2", "p1", "p3"] }])
     expect(container.querySelectorAll(".row")).toHaveLength(0)
