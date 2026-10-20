@@ -282,7 +282,7 @@ class PeopleWorthTests(StoreTests):
         self.conn.execute("INSERT INTO review_queue VALUES (?, 'detach', '', '', ?)", (parent_id, NOW))
         self.conn.commit()
 
-    def test_delete_removes_every_row_of_one_family_and_none_of_the_other(self) -> None:
+    def test_delete_hides_one_family_and_keeps_every_row(self) -> None:
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         queries.upsert_candidates(self.conn, [("c3", "Riley Echo", 0, "{}", NOW), ("c4", "Riley E", 0, "{}", NOW)])
         self._parent("p:b", "c3", "c4")
@@ -309,12 +309,13 @@ class PeopleWorthTests(StoreTests):
 
         self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a"]}), (200, {"deleted": 1}))
 
-        self.assertEqual(set(self._family_rows(("c1", "c2"), "p:a").values()), {0})
-        kept["pair_verdicts"] -= 1  # the one verdict that paired c1 with c3
+        self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), {**deleted, "deleted_parents": 1})
         self.assertEqual(self._family_rows(("c3", "c4"), "p:b"), kept)
-        self.assertEqual(set(self.people.export_rows()), {"p:b"})
         self.assertIsNone(self.people.detail("p:a"))
         self.assertEqual([row.parent_id for row in self.people.load()], ["p:b"])
+        from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
+        self.assertNotIn("p:a", {member.family_key for member in queries_worth.members_with_facts(self.conn)})
+        self.assertNotIn("p:a", {member.parent_id for member in queries_realize.members_of_talked_to_parents(self.conn)})
 
     def test_delete_of_an_unknown_id_is_a_conflict_and_deletes_nothing(self) -> None:
         before = self._family_rows(("c1", "c2"), "p:a")
@@ -322,6 +323,40 @@ class PeopleWorthTests(StoreTests):
         for request in ({"ids": []}, {"ids": [1]}, []):
             self.assertEqual(self.post("/api/people/delete", request)[0], 400)
         self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), before)
+
+
+class DeletedImportTests(StoreTests):
+    def test_an_import_keeps_a_deleted_family_hidden(self) -> None:
+        from packs.ingestion.primitives.deep_context_v2.db import queries_share
+        from packs.ingestion.primitives.deep_context_v2.import_load.load import MESSAGES_CSV, OWNER_JSON, ImportLoad
+        root = Path(self.tmp.name) / "data"
+        (root / OWNER_JSON).parent.mkdir(parents=True)
+        (root / OWNER_JSON).write_text("{}")
+        (root / MESSAGES_CSV).parent.mkdir(parents=True)
+        (root / MESSAGES_CSV).write_text("full_name,source_channels,primary_phone\nRiley Echo,imessage,+15550100\n")
+        ImportLoad(self.conn, root).execute()
+        self._parent("p:riley", "candidate:phone:+15550100")
+        queries_share.delete_parents(self.conn, ("p:riley",), NOW)
+
+        ImportLoad(self.conn, root).execute()
+
+        parent = self.conn.execute("SELECT parent_id FROM current_parent WHERE candidate_id = 'candidate:phone:+15550100'")
+        self.assertEqual(parent.fetchone()[0], "p:riley")
+        self.assertEqual(queries_share.deleted_parents(self.conn), {"p:riley"})
+
+
+class DeletedMembersStayTests(StoreTests):
+    def test_a_deleted_familys_members_never_move_and_a_live_member_joining_it_stays_hidden(self) -> None:
+        from packs.ingestion.primitives.deep_context_v2.db import queries_share
+        from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import append_parent_rows, current_parents
+        self._parent("p:gone", "c1")
+        self._parent("p:live", "c2")
+        queries_share.delete_parents(self.conn, ("p:gone",), NOW)
+
+        append_parent_rows(self.conn, [("c1", "li:7", "judge_confirmed", "candidate_linkedins:1", LATER),
+                                       ("c2", "p:gone", "sol_same", "pair_verdicts:c1|c2|s", LATER)])
+
+        self.assertEqual(current_parents(self.conn), {"c1": "p:gone", "c2": "p:gone"})
 
 
 class WorthMigrationTests(StoreTests):

@@ -20,7 +20,8 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
-- 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh.
+- 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh; deleted_parents,
+  the families deleted on the People page, which the page hides and no stage moves.
 - 2026-10-16 (schema 5): remove the derived share table and Share/Private human tags.
 - 2026-10-07 (schema 3): person_tags and person_labels, keyed by candidate id, with current_tags per parent.
 - 2026-10-07 (schema 2): candidate_linkedins carries Sol's confidence and reason, as v1's
@@ -127,6 +128,23 @@ CREATE TABLE review_queue (
   guidance TEXT NOT NULL,  -- fix from a description: the reviewer's words; else ''
   updated_at TEXT NOT NULL
 );
+"""
+
+# Schema 6: the families the owner deleted on the People page. Nothing else is removed, so an import that
+# sees them again keeps them in their family and the page keeps hiding them. A deleted family's members
+# never move: dedupe, enrich and review append parent rows, and the trigger drops any for such a member,
+# so the family keeps its id. A live member merged onto a deleted family is the same person and stays hidden.
+DELETED_DDL = """
+CREATE TABLE IF NOT EXISTS deleted_parents (
+  parent_id TEXT NOT NULL PRIMARY KEY,
+  deleted_at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS deleted_members_stay BEFORE INSERT ON candidate_parent
+WHEN (SELECT parent_id FROM candidate_parent WHERE candidate_id = NEW.candidate_id ORDER BY seq DESC LIMIT 1)
+     IN (SELECT parent_id FROM deleted_parents)
+BEGIN
+  SELECT RAISE(IGNORE);
+END;
 """
 
 # Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page
@@ -307,6 +325,7 @@ CREATE INDEX research_by_parent ON research(parent_id);
 {PEOPLE_TABLES_DDL}
 {REVIEW_QUEUE_DDL}
 {SETS_DDL}
+{DELETED_DDL}
 CREATE VIEW current_parent AS
   SELECT candidate_id, parent_id, reason, seq FROM (
     SELECT m.*, row_number() OVER (PARTITION BY candidate_id ORDER BY seq DESC) AS rn
@@ -342,7 +361,7 @@ CREATE VIEW current_profile AS
 TABLES: tuple[str, ...] = (
     "meta", "owner", "candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections",
     "bundles", "facts", "candidate_parent", "pair_verdicts", "worth", "candidate_linkedins", "research",
-    "person_tags", "person_labels",
+    "person_tags", "person_labels", "deleted_parents",
 )
 VIEWS: tuple[str, ...] = ("current_parent", "current_worth", "current_linkedins", "current_profile", "current_tags")
 # A view is a saved query over these tables (and views); a node that declares the view reads them all.

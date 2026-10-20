@@ -69,7 +69,7 @@ def confirm_by_email(conn: sqlite3.Connection, found: Proposals, profiles: Profi
 class Enrich(Node):
     name = "enrich"
     reads = ("current_parent", "current_worth", "current_linkedins", "candidates", "candidate_identifiers", "facts",
-             "bundles", "connections", "candidate_linkedins", "research", "owner")
+             "bundles", "connections", "candidate_linkedins", "research", "owner", "deleted_parents")
     writes = ("candidate_linkedins", "research", "candidate_parent", "worth")
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int | None) -> None:

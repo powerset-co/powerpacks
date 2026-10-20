@@ -82,7 +82,7 @@ def input_fingerprint(prompts: tuple[str, ...], system: str, config: OpenAIRespo
 
 class Synthesize(Node):
     name = "synthesize"
-    reads = ("bundles", "owner", "facts")
+    reads = ("bundles", "owner", "facts", "current_parent", "candidate_parent", "deleted_parents")
     writes = ("facts",)
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:

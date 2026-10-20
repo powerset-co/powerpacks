@@ -64,7 +64,8 @@ class Plan:
 
 class Dedupe(Node):
     name = "dedupe"
-    reads = ("candidates", "candidate_identifiers", "facts", "bundles", "current_parent", "pair_verdicts", "owner")
+    reads = ("candidates", "candidate_identifiers", "facts", "bundles", "current_parent", "pair_verdicts", "owner",
+             "deleted_parents")
     writes = ("pair_verdicts", "candidate_parent")
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:

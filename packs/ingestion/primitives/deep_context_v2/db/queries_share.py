@@ -105,23 +105,15 @@ def write_tags(conn: sqlite3.Connection, tags: list[TagRow]) -> None:
             tags)
 
 
-def delete_family(conn: sqlite3.Connection, parent_id: str) -> None:
-    """Delete the family and its member candidates from every table, in one transaction.
-    candidate_names, candidate_identifiers, candidate_sources, bundles and facts go by ON DELETE CASCADE;
-    the tables below reference candidates without it, so they go first."""
-    members = [row["candidate_id"] for row in
-               conn.execute("SELECT candidate_id FROM current_parent WHERE parent_id = ?", (parent_id,))]
-    marks = ", ".join("?" * len(members))
+def delete_parents(conn: sqlite3.Connection, parent_ids: tuple[str, ...], now: str) -> None:
+    """Hide the families from the People page for good; their rows stay."""
     with conn:
-        conn.execute(f"DELETE FROM pair_verdicts WHERE candidate_a IN ({marks}) OR candidate_b IN ({marks})",
-                     members + members)
-        for table in ("worth", "candidate_linkedins", "person_tags", "person_labels"):
-            conn.execute(f"DELETE FROM {table} WHERE candidate_id IN ({marks})", members)
-        conn.execute(f"DELETE FROM candidate_parent WHERE candidate_id IN ({marks}) OR parent_id = ?",
-                     [*members, parent_id])
-        conn.execute("DELETE FROM research WHERE parent_id = ?", (parent_id,))
-        conn.execute("DELETE FROM review_queue WHERE parent_id = ?", (parent_id,))
-        conn.execute(f"DELETE FROM candidates WHERE candidate_id IN ({marks})", members)
+        conn.executemany("INSERT OR IGNORE INTO deleted_parents (parent_id, deleted_at) VALUES (?, ?)",
+                         [(parent_id, now) for parent_id in parent_ids])
+
+
+def deleted_parents(conn: sqlite3.Connection) -> set[str]:
+    return {row["parent_id"] for row in conn.execute("SELECT parent_id FROM deleted_parents")}
 
 
 # ---- the sets on this machine (sets.py): made here, or joined by accepting an invite

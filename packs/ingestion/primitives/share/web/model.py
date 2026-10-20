@@ -24,6 +24,7 @@ from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
 from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
@@ -176,7 +177,7 @@ class SharePeople:
 
     def export_rows(self) -> dict[str, dict[str, str]]:
         """parent_id -> its export row, rebuilt when the store changed."""
-        stamp = self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
+        stamp = self._store_stamp()
         if stamp != self._stamp:
             rows, _counts = Realize(self.conn, self.data_root).build()
             self._rows = {row["id"]: row for row in rows}
@@ -185,11 +186,13 @@ class SharePeople:
         return self._rows
 
     def delete(self, parent_ids: tuple[str, ...]) -> None:
-        """Delete each family for good. This connection's own commits leave data_version as it was and land in
-        the WAL, not the store file, so the export rows are rebuilt on the next read by forgetting the stamp."""
-        for parent_id in parent_ids:
-            queries_share.delete_family(self.conn, parent_id)
-        self._stamp = 0
+        """Hide each family from the page for good; `load` leaves deleted families out, so the cached rows
+        stand. A checkpoint on the write can move the store file's mtime, so the stamp is taken again after."""
+        queries_share.delete_parents(self.conn, parent_ids, now_iso())
+        self._stamp = self._store_stamp()
+
+    def _store_stamp(self) -> tuple[int, int]:
+        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
 
     def _store_mtime(self) -> int:
         path = self.conn.execute("PRAGMA database_list").fetchone()[2]
@@ -208,8 +211,11 @@ class SharePeople:
         worth: dict[str, sqlite3.Row] = {}
         for row in self.conn.execute("SELECT parent_id, worth, decided_by, reason FROM current_worth"):
             worth[row["parent_id"]] = row
+        deleted: set[str] = queries_share.deleted_parents(self.conn)
         people: list[SharePerson] = []
         for parent_id, label in labels.items():
+            if parent_id in deleted:
+                continue
             row = rows[parent_id]
             cells = parse_json_object(label.labels_json)
             fact = self._family_facts[parent_id]
@@ -255,7 +261,7 @@ class SharePeople:
 
     def detail(self, parent_id: str) -> PersonDetail | None:
         row = self.export_rows().get(parent_id)
-        if row is None:
+        if row is None or parent_id in queries_share.deleted_parents(self.conn):
             return None
         card = load_card(self.conn, self.data_root, parent_id)
         facts = card.facts.to_payload()

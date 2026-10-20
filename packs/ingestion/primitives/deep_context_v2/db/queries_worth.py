@@ -59,11 +59,12 @@ class Connection:
 
 def members_with_facts(conn: sqlite3.Connection) -> list[MemberFacts]:
     """Every candidate with a facts row, with its family key. A candidate without facts has no evidence
-    to judge and is not a member of any family worth looks at."""
+    to judge and is not a member of any family worth looks at; nor is a family deleted on the People page."""
     members: list[MemberFacts] = []
     for row in conn.execute(
         "SELECT f.candidate_id, COALESCE(p.parent_id, f.candidate_id) AS family_key, f.facts_json, "
         "f.synthesized_at FROM facts f LEFT JOIN current_parent p USING (candidate_id) "
+        "WHERE COALESCE(p.parent_id, f.candidate_id) NOT IN (SELECT parent_id FROM deleted_parents) "
         "ORDER BY family_key, f.candidate_id"
     ):
         members.append(MemberFacts(row["candidate_id"], row["family_key"], row["facts_json"], row["synthesized_at"]))
