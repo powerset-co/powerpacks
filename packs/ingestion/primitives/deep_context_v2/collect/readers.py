@@ -119,8 +119,9 @@ class ContextSources:
                 if not text:
                     continue
                 out.append(
-                    MessageEntry.of(
-                        MessageChannel.GMAIL, entry.at, from_me=entry.from_role == "me", text=text, subject=entry.subject
+                    MessageEntry(
+                        MessageChannel.GMAIL, entry.at, MessageDirection.of(entry.from_role == "me"),
+                        entry.subject, text, entry.email_headers,
                     )
                 )
         return out
@@ -306,10 +307,10 @@ class ContextSources:
             if not text:
                 continue
             # `pool and` keeps the first message even when it alone exceeds the cap.
-            if pool and used + len(text) > SAFETY_CHAR_CAP:
+            if pool and used + message.content_chars() > SAFETY_CHAR_CAP:
                 break
             pool.append(message)
-            used += len(text)
+            used += message.content_chars()
         pool.sort(key=MessageEntry.content_order_key)
         return pool, gmail_total + chat_total + len(group)
 

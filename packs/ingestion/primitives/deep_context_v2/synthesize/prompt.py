@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection, MessageEntry
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageChannel, MessageDirection, MessageEntry
 
 from packs.ingestion.primitives.deep_context_v2 import assets
 
@@ -21,6 +21,16 @@ SYNTHESIS_CONTRACT_VERSION = "relationship-category-v6"
 
 
 SYSTEM_PROMPT = assets.text(_HERE, "person_synthesis_system.txt")
+EMAIL_SYSTEM_PROMPT = (
+    "You build a rich profile of ONE person (the CONTACT) from selected messages. Gmail messages were sent "
+    "by the contact or an account owner, but may be addressed to other people; use the actual per-message "
+    "From/To/Cc/Bcc headers. The account owner addresses identify the mailbox owner. Cc does not imply "
+    "nonparticipation, and membership of a thread is not proof of direct correspondence. Bodies are excerpts; "
+    "quoted or forwarded text may remain and is not necessarily the sender's own words. Missing headers "
+    "mean unknown recipients. Phone-message direction labels identify their senders. Extract durable facts "
+    "ABOUT THE CONTACT — never attribute the owner's or another participant's identity to them."
+    + "\n\n" + SYSTEM_PROMPT.split("\n\n", 1)[1]
+)
 OWNER_PROMPT_SUFFIX = f"\n\n{assets.text(_HERE, 'owner_context_suffix.txt')}\n\n"
 OWNER_IDENTITY_CHECK = assets.text(_HERE, "owner_identity_check.txt")
 FACT_SCHEMA: dict[str, Any] = assets.json_file(_HERE, "fact_schema.json")
@@ -70,18 +80,28 @@ def render_batch(person: CollectionBundle, batch: Sequence[MessageEntry], *,
     if person.thread_participants:
         lines.append("")
         lines.append(
-            "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):"
+            "EMAIL THREAD PARTICIPANTS (thread context only; these are not per-message recipient roles):"
         )
         for thread in person.thread_participants[:25]:  # bounds prompt size
             lines.append(f"- {thread.subject or '(no subject)'} — {', '.join(thread.participants)}")
     lines.append("")
     lines.append("MESSAGES (most relevant, chronological):")
+    if any(message.channel == MessageChannel.GMAIL for message in batch):
+        lines.append("Gmail headers give actual addressing; Cc does not imply nonparticipation. "
+                     "Bodies are excerpts and may retain quoted or forwarded words; do not assign those to the sender.")
     for message in batch:
         date = (message.at or "")[:10]
-        head = f"[{message.channel} {date} {direction_labels[message.direction]}]"
+        if message.channel == MessageChannel.GMAIL:
+            role = "" if message.email_headers is not None else f" {_DIRECTION_LABEL[message.direction]}; recipients unavailable"
+            head = f"[{message.channel} {date}{role}]"
+        else:
+            head = f"[{message.channel} {date} {direction_labels[message.direction]}]"
         if message.subject:
             head += f" {message.subject}"
-        lines.append(f"{head}: {message.text or ''}")
+        if message.email_headers is not None:
+            lines.append(f"{head}\n{message.email_headers.render()}\nBody excerpt: {message.text or ''}")
+        else:
+            lines.append(f"{head}: {message.text or ''}")
     return "\n".join(lines)
 
 
@@ -100,7 +120,7 @@ def batches(messages: Sequence[MessageEntry], *, chunk_chars: int, max_batches: 
     current: list[MessageEntry] = []
     used = 0
     for message in newest:
-        size = len(message.text or "")
+        size = message.content_chars()
         if current and used + size > chunk_chars:
             chunks.append(current)
             if len(chunks) == max_batches:

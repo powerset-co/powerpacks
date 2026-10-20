@@ -26,7 +26,7 @@ from typing import Awaitable
 import tiktoken
 
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
-from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle
+from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageChannel
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
@@ -51,11 +51,13 @@ class Work:
     candidate_id: str
     prompts: tuple[str, ...]
     fingerprint: str
+    system_prompt: str
 
 
-def system_prompt(owner: OwnerProfile) -> str:
-    """The fixed system text, who the owner is, and the owner's background. Same for every call."""
-    return (prompting.SYSTEM_PROMPT + prompting.owner_identity_block(owner.name, owner.emails)
+def system_prompt(owner: OwnerProfile, *, email: bool = False) -> str:
+    """The source's attribution instructions, owner identity and background."""
+    return ((prompting.EMAIL_SYSTEM_PROMPT if email else prompting.SYSTEM_PROMPT)
+            + prompting.owner_identity_block(owner.name, owner.emails)
             + prompting.OWNER_PROMPT_SUFFIX + owner_background_block(owner))
 
 
@@ -90,7 +92,9 @@ class Synthesize(Node):
         self.limit = limit
         # Resolved once; the same effort goes into the request, the fingerprint and the row.
         self.config = OpenAIResponsesConfig.resolve(model=MODEL, effort=REASONING_EFFORT, timeout=120, max_retries=3)
-        self.prompt = system_prompt(read_owner(conn))
+        owner = read_owner(conn)
+        self.prompt = system_prompt(owner)
+        self.email_prompt = system_prompt(owner, email=True)
 
     def work(self) -> list[Work]:
         """Every bundle whose facts row is absent or carries another fingerprint."""
@@ -98,9 +102,10 @@ class Synthesize(Node):
         for row in queries.bundles_with_facts_fingerprint(self.conn):
             bundle: CollectionBundle = CollectionBundle.from_payload(json.loads(row.payload_json))
             prompts: tuple[str, ...] = batch_prompts(bundle)
-            fingerprint: str = input_fingerprint(prompts, self.prompt, self.config)
+            system = self.email_prompt if any(message.channel == MessageChannel.GMAIL for message in bundle.messages) else self.prompt
+            fingerprint: str = input_fingerprint(prompts, system, self.config)
             if fingerprint != row.facts_fingerprint:
-                todo.append(Work(row.candidate_id, prompts, fingerprint))
+                todo.append(Work(row.candidate_id, prompts, fingerprint, system))
         return todo
 
     def estimate(self) -> dict[str, object]:
@@ -113,7 +118,7 @@ class Synthesize(Node):
         for item in todo:
             for prompt in item.prompts:
                 calls += 1
-                input_tokens += len(encoder.encode(self.prompt + prompt))
+                input_tokens += len(encoder.encode(item.system_prompt + prompt))
         bundles: int = queries.count_bundles(self.conn)
         output_tokens: int = calls * OUTPUT_TOKENS_PER_CALL
         return {
@@ -175,7 +180,7 @@ class Synthesize(Node):
         Several: the answers are collapsed into one facts object."""
         calls: list[Awaitable[dict[str, object]]] = []
         for prompt in item.prompts:
-            calls.append(caller.call(system_prompt=self.prompt, user_prompt=prompt, schema=prompting.FACT_SCHEMA,
+            calls.append(caller.call(system_prompt=item.system_prompt, user_prompt=prompt, schema=prompting.FACT_SCHEMA,
                                      schema_name="person_facts", context="synthesize"))
         responses: list[dict[str, object]] = await asyncio.gather(*calls)
         chunks: list[SynthesizedFacts] = []
