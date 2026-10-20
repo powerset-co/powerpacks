@@ -64,7 +64,7 @@ def fill_profile(row: dict[str, str], record: dict[str, Any]) -> None:
 class Realize(Node):
     name = "realize"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
-             "candidate_sources", "facts")
+             "candidate_sources", "facts", "deleted_parents")
     writes = ()
 
     def build(self) -> tuple[list[dict[str, str]], dict[str, int]]:

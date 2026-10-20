@@ -55,9 +55,13 @@ def candidate_identifiers(conn: sqlite3.Connection) -> dict[str, list[Identifier
 
 
 def facts_fingerprints(conn: sqlite3.Connection) -> dict[str, str]:
-    """candidate_id -> its facts input fingerprint, for every candidate with facts."""
+    """candidate_id -> its facts input fingerprint, for every candidate with facts. A member of a family
+    deleted on the People page is left out, so dedupe never pairs it or pays to judge a pair with it."""
     fingerprints: dict[str, str] = {}
-    for row in conn.execute("SELECT candidate_id, input_fingerprint FROM facts"):
+    for row in conn.execute(
+        "SELECT candidate_id, input_fingerprint FROM facts WHERE candidate_id NOT IN "
+        "(SELECT p.candidate_id FROM current_parent p JOIN deleted_parents d USING (parent_id))"
+    ):
         fingerprints[row["candidate_id"]] = row["input_fingerprint"]
     return fingerprints
 

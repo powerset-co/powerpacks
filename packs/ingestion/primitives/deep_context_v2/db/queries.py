@@ -160,11 +160,14 @@ class BundleWithFacts:
 
 
 def bundles_with_facts_fingerprint(conn: sqlite3.Connection) -> list[BundleWithFacts]:
-    """Every bundle with the fingerprint of the facts row it has, or None when it has none yet."""
+    """Every bundle with the fingerprint of the facts row it has, or None when it has none yet. A member
+    of a family deleted on the People page is left out: nothing is synthesized for them again."""
     rows: list[BundleWithFacts] = []
     for row in conn.execute(
         "SELECT b.candidate_id, b.payload_json, f.input_fingerprint AS done "
-        "FROM bundles b LEFT JOIN facts f USING (candidate_id) ORDER BY b.candidate_id"
+        "FROM bundles b LEFT JOIN facts f USING (candidate_id) "
+        "WHERE b.candidate_id NOT IN (SELECT p.candidate_id FROM current_parent p JOIN deleted_parents d USING (parent_id)) "
+        "ORDER BY b.candidate_id"
     ):
         rows.append(BundleWithFacts(row["candidate_id"], row["payload_json"], row["done"]))
     return rows

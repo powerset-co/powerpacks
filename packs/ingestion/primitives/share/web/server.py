@@ -4,7 +4,7 @@ POST /api/people/worth records human worth for every member of the selected fami
 POST /api/people/relationship records a human relationship choice, preserved by refresh.
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
-POST /api/people/delete {ids} deletes each family from the store for good; returns `deleted`, the count.
+POST /api/people/delete {ids} hides each family for good (deleted_parents; no row is removed); returns `deleted`, the count.
 GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
 POST `/api/people/upload` confirms and starts one shared upload.
 GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
@@ -15,6 +15,7 @@ GET `/api/people/logbook` reads build status; POST builds the selected parents' 
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 
 Changelog:
+  2026-10-19: delete hides the family instead of removing its rows; an import or a rerun keeps it hidden.
   2026-10-16: POST /api/people/delete.
   2026-10-07: v2 store; a decision writes every member of the family.
   2026-09-26: created.

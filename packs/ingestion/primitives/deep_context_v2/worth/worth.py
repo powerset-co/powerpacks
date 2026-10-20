@@ -65,7 +65,8 @@ class Verdict:
 
 class Worth(Node):
     name = "worth"
-    reads = ("current_parent", "candidates", "candidate_sources", "facts", "bundles", "connections", "worth", "owner")
+    reads = ("current_parent", "candidates", "candidate_sources", "facts", "bundles", "connections", "worth", "owner",
+             "deleted_parents")
     writes = ("worth",)
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int,
