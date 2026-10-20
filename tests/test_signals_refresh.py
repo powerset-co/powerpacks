@@ -14,7 +14,6 @@ from test_logbook_people import Handler
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, Person
 from packs.ingestion.primitives.deep_context_v2.db import queries
-from packs.ingestion.primitives.deep_context_v2.enrich import settle
 from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.person_labels import PersonLabels
@@ -191,7 +190,7 @@ class SignalsRefreshTests(StoreTests):
 
     def test_a_family_luna_refuses_keeps_its_old_signals_and_labels_still_run(self) -> None:
         # p:a's latest machine row holds JEV's labels; Luna refuses it again, and answers p:b. You said
-        # both are worth yes, so the settle rule leaves them alone. The label export still completes.
+        # both are worth yes, so the human decisions hold. The label export still completes.
         self.conn.execute(
             "INSERT INTO worth (candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at) "
             "VALUES ('c1', 'yes', 'machine', 'old', ?, 'an-older-version-key', '2026-10-08')",
@@ -229,13 +228,14 @@ class SignalsRefreshTests(StoreTests):
         saved = json.loads(self.conn.execute("SELECT labels_json FROM person_labels WHERE candidate_id = 'c1'").fetchone()[0])
         self.assertEqual(saved["relationship_kind"], "family")
 
-    def test_a_refresh_keeps_the_settle_rule(self) -> None:
-        # Luna says p:a is worth yes; with no profile and no messages, settle still makes it no.
+    def test_a_refresh_keeps_lunas_worth_without_a_profile_or_messages(self) -> None:
         self._cache(self.families[0])
-        manifest = RefreshSignals(self.conn, self.root, ("p:a",)).run()
+        with NO_CALLS:
+            manifest = RefreshSignals(self.conn, self.root, ("p:a",)).run()
         self.assertEqual(manifest.status, "completed")
-        self.assertEqual(self.conn.execute("SELECT worth, reason FROM current_worth WHERE parent_id = 'p:a'").fetchone()[:],
-                         ("no", settle.REASON))
+        self.assertEqual(manifest.counts["settle_worth_rows"], 0)
+        self.assertEqual(self.conn.execute("SELECT worth FROM current_worth WHERE parent_id = 'p:a'").fetchone()[0],
+                         "yes")
 
     def test_paid_refresh_without_confirmation_never_starts(self) -> None:
         plan = self._check(("p:a",))
