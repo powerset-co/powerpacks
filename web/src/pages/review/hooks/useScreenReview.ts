@@ -17,7 +17,7 @@ interface ScreenReviewOptions {
 // The review the Check LinkedIn stage works through: the screen's settings, the live count,
 // the toast, and leave-and-reload (the fade, then the screen is read again).
 export function useScreenReview({ screen, toast, reload }: ScreenReviewOptions) {
-  const { page, preview, debug, index, parentSlug } = screen
+  const { page, preview, debug, index } = screen
   const reducedMotion = useReducedMotion()
   const fade = fadeMs(reducedMotion)
   /** The counts click responses carried, laid over the page load's. */
@@ -55,7 +55,6 @@ export function useScreenReview({ screen, toast, reload }: ScreenReviewOptions) 
       preview,
       debug,
       index,
-      parentSlug,
       fadeMs: fade,
       toast: say,
       toastError: sayError,
@@ -63,7 +62,7 @@ export function useScreenReview({ screen, toast, reload }: ScreenReviewOptions) 
       reload,
       leaveAndReload,
     }),
-    [progress, preview, debug, index, parentSlug, fade, say, sayError, applyProgress, reload, leaveAndReload],
+    [progress, preview, debug, index, fade, say, sayError, applyProgress, reload, leaveAndReload],
   )
   return { review, progress, leaving }
 }

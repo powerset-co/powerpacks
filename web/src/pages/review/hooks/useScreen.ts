@@ -14,7 +14,6 @@ export interface Screen {
   preview: boolean
   debug: boolean
   index: number
-  parentSlug?: string
 }
 
 /**
@@ -47,7 +46,6 @@ export function useScreen() {
       preview: asked.preview,
       debug: asked.debug,
       index: asked.index,
-      parentSlug: asked.parentSlug,
     })
   }
 

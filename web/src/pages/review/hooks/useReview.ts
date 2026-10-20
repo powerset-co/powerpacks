@@ -12,7 +12,6 @@ export interface Review {
   debug: boolean
   /** The queue position the URL asked for (`index`), 0 without one. */
   index: number
-  parentSlug?: string
   /** A card's fade-out wait: 150 ms, 0 under reduced motion. */
   fadeMs: number
   /** A message for 1.8 s; a new one replaces the old. */

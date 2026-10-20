@@ -129,7 +129,6 @@ export interface FactEvent {
 
 /** GET /api/people/person: what only the drawer shows. */
 export interface PersonDetail {
-  profile_review_url?: string
   relationship_kind_source: "human" | "machine" | ""
   parent_id: string
   linkedin_url: string

@@ -62,7 +62,7 @@ class ProposedProfilesTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT parent_id FROM current_parent").fetchone()[0], "p:1")
         self.assertEqual(self.api.linkedin_card({}).pending, 0)
         self.assertIsNone(self.api.linkedin_card({}).card)
-        self.assertEqual(self.api.linkedin_card({"parent_slug": ["p:1"]}).card.person.slug, "p:1")
+        self.assertEqual(self.api.linkedin_card({"index": ["0"]}).card.person.slug, "p:1")
 
     def test_worth_no_does_not_automatically_attach(self):
         self.linkedin()
@@ -174,12 +174,6 @@ class ProposedProfilesTests(unittest.TestCase):
             self.assertEqual(commit_review(self.conn, self.root), 1)
         self.assertEqual(queries_realize.profile_keys(self.conn), {"li:456": url})
 
-    def test_people_detail_exposes_only_a_correctable_profile_link(self):
-        self.conn.execute("INSERT INTO person_labels VALUES ('c1', '', 'Jordan Bravo', 'yes', '', '{}', ?)", (NOW,))
-        people = SharePeople(self.conn, self.root)
-        self.assertEqual(people.detail("p:1").profile_review_url, "")
-        self.synthetic()
-        self.assertEqual(people.detail("p:1").profile_review_url, "/?stage=linkedin&parent_slug=p%3A1")
 
 
 if __name__ == "__main__":

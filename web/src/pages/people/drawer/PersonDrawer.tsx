@@ -1,8 +1,6 @@
 import { useMemo } from "react"
-import { Link } from "react-router-dom"
 
 import { Drawer } from "@/components/shared"
-import { Button } from "@/components/ui/button"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import type { Person } from "@/types/people"
 
@@ -51,11 +49,6 @@ export function PersonDrawer(props: PersonDrawerProps) {
           <DrawerHeader row={row} detail={ready} action={<PersonFeedback row={row} />} onClose={onClose} />
           {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
           <div className="drawer-actions">
-            {ready?.profile_review_url ? (
-              <Button asChild shape="pill" size="sm">
-                <Link to={ready.profile_review_url}>Check profile</Link>
-              </Button>
-            ) : null}
             <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
             <LogbookButton
               row={row}
