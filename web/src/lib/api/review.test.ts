@@ -58,6 +58,9 @@ describe("the review reads", () => {
     fetchMock.mockClear()
     await fetchLinkedinCard()
     expect(sent().url).toBe("/api/review/linkedin-card")
+    fetchMock.mockClear()
+    await fetchLinkedinCard({ parentSlug: "p:example" })
+    expect(sent().url).toBe("/api/review/linkedin-card?parent_slug=p%3Aexample")
   })
 
   it("tells a person who is no longer pending from any other failure", async () => {

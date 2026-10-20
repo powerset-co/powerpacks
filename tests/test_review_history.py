@@ -34,6 +34,8 @@ def seed(conn):
         conn.execute("INSERT INTO worth VALUES (NULL, ?, 'yes', 'machine', '', NULL, 'facts', ?)", (candidate, NOW))
         conn.execute("INSERT INTO candidate_linkedins VALUES (NULL, ?, ?, '123', 'research', 'needs_review', 'machine', 'facts', NULL, '', ?)",
                      (candidate, URL, NOW))
+        conn.execute("INSERT INTO candidate_linkedins VALUES (NULL, ?, ?, '456', 'research', 'needs_review', 'machine', 'facts', NULL, '', ?)",
+                     (candidate, "https://www.linkedin.com/in/casey-delta", NOW))
     conn.commit()
 
 

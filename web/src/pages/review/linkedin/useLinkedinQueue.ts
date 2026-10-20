@@ -27,21 +27,21 @@ export interface Shown {
  * including previous decisions, which can be edited through the same endpoint.
  */
 export function useLinkedinQueue() {
-  const { debug, index, fadeMs, toast, toastError, applyProgress, leaveAndReload } = useReview()
+  const { debug, index, parentSlug, fadeMs, toast, toastError, applyProgress, leaveAndReload } = useReview()
   const [shown, setShown] = useState<Shown | null>(null)
   /** Why the first read failed; "" while it has not. */
   const [failure, setFailure] = useState("")
 
   useEffect(() => {
     const read = new AbortController()
-    fetchLinkedinCard({ index: debug || index ? index : undefined }, read.signal).then(
+    fetchLinkedinCard({ index: debug || index ? index : undefined, parentSlug }, read.signal).then(
       (payload) => setShown({ payload, phase: "ready" }),
       (error: unknown) => {
         if (!read.signal.aborted) setFailure(errorText(error))
       },
     )
     return () => read.abort()
-  }, [debug, index])
+  }, [debug, index, parentSlug])
 
   const setPhase = (phase: CardPhase) => setShown((current) => current && { ...current, phase })
   const follow = (payload: LinkedinCardPayload) => setShown({ payload, phase: "ready" })

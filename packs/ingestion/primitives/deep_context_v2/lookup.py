@@ -3,7 +3,7 @@
 Matches candidates by written name (every word of the name given appears in the written name or the
 dossier's canonical name) or by a normalized identifier, groups them into families, and prints each
 family's facts: who they are, how the owner knows them, their employers, topics and events, their
-identifiers and the one LinkedIn the store confirmed. `--json` prints the same as JSON. Nothing is
+identifiers and the selected LinkedIn. `--json` prints the same as JSON. Nothing is
 written; nothing is spent.
 
 Created: 2026-10-07
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
-from packs.ingestion.primitives.deep_context_v2.db import queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
@@ -67,6 +67,7 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
                 known.append(json.loads(member.facts_json).get("canonical_name") or "")
             if wanted and any(wanted <= _words(name) for name in known):
                 parents.add(parent_id)
+    profiles: dict[str, str] = queries_realize.profile_keys(conn)
     found: list[Match] = []
     for parent_id in sorted(parents):
         family_members = members.get(parent_id)
@@ -79,8 +80,8 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
             "SELECT i.kind, i.display_value FROM candidate_identifiers i JOIN current_parent p USING (candidate_id) "
             "WHERE p.parent_id = ? ORDER BY i.kind, i.display_value", (parent_id,)):
             (emails if row["kind"] == "email" else phones).append(row["display_value"])
-        profile = conn.execute("SELECT profile_key FROM current_profile WHERE parent_id = ?", (parent_id,)).fetchone()
-        url: str = profile["profile_key"] if profile and profile["profile_key"] and not profile["profile_key"].startswith("synthetic:") else ""
+        profile = profiles.get(parent_id, "")
+        url: str = profile if not profile.startswith("synthetic:") else ""
         found.append(Match(parent_id, facts["canonical_name"], facts["relationship_to_owner"], tuple(emails), tuple(phones), url, facts))
     return found
 

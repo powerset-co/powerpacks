@@ -92,6 +92,7 @@ export function fetchReviewPage(stage: string, view: string, signal?: AbortSigna
 
 /** Which card of a queue to read. */
 export interface CardQuery {
+  parentSlug?: string
   /** Slugs the queue leaves out: the card on screen, saves in flight. */
   exclude?: readonly string[]
   /** The queue position; the first card without one. */
@@ -100,11 +101,12 @@ export interface CardQuery {
   debug?: boolean
 }
 
-function cardQuery({ exclude = [], index, debug = false }: CardQuery): Record<string, string> {
+function cardQuery({ exclude = [], index, debug = false, parentSlug }: CardQuery): Record<string, string> {
   return {
     exclude: exclude.join(","),
     index: index === undefined ? "" : String(index),
     debug: debug ? "1" : "",
+    parent_slug: parentSlug ?? "",
   }
 }
 

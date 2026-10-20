@@ -68,6 +68,13 @@ function writeGuidance(text: string) {
 }
 
 describe("LinkedinStage: the card", () => {
+  it("opens the profile selected from the People drawer", async () => {
+    server.answer(`GET ${CARD}?parent_slug=p%3Aexample`, linkedinCard())
+    renderStage(spyReview({ parentSlug: "p:example" }))
+    await screen.findByRole("heading", { level: 2 })
+    expect(server.gets(CARD)).toEqual([`${CARD}?parent_slug=p%3Aexample`])
+  })
+
   it("draws one candidate as the person card under the question (L1)", async () => {
     const { container } = await open()
     expect(server.gets(CARD)).toEqual([CARD])

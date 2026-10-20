@@ -15,6 +15,7 @@ export interface ScreenQuery {
   debug: boolean
   /** The queue position to open on; 0 unless the URL names one. */
   index: number
+  parentSlug?: string
 }
 
 const ON = "1"
@@ -28,6 +29,7 @@ export function readScreenQuery(search: string): ScreenQuery {
     preview: params.get("preview") === ON,
     debug: params.get("debug") === ON,
     index: Number.isNaN(index) ? 0 : Math.max(0, index),
+    parentSlug: params.get("parent_slug") ?? undefined,
   }
 }
 

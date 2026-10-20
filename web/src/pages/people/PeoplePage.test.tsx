@@ -428,6 +428,25 @@ describe("PeoplePage", () => {
     expect(container.querySelectorAll(".row")).toHaveLength(0)
   })
 
+  it("opens the proposed profile correction for the selected person", async () => {
+    const reviewUrl = "/?stage=linkedin&parent_slug=p%3Acasey"
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) =>
+        url.includes("/person?")
+          ? Promise.resolve(respond({ ...DETAIL, profile_review_url: reviewUrl }))
+          : serve(url, init),
+      ),
+    )
+    const { container } = renderPage("/people?tab=no")
+    await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
+    fireEvent.click(must(container.querySelector(".row")))
+    const link = await screen.findByRole("link", { name: "Check profile" })
+    expect(link.getAttribute("href")).toBe(reviewUrl)
+    fireEvent.click(link)
+    expect(at()).toBe(reviewUrl)
+  })
+
   it("opens the drawer on a row click and closes it on the next", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage("/people?tab=no")

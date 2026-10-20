@@ -28,7 +28,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_review
+from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_review
 from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
 from packs.ingestion.primitives.deep_context_v2.db.schema import ReviewDecision
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
@@ -81,20 +81,23 @@ class ReviewApi:
         self.data_root = data_root
 
     def linkedin_card(self, params: Params) -> LinkedinCardPayload:
-        """Browse the fixed order (`index`), or the next family without a decision after `after`."""
+        """Open `parent_slug`, browse `index`, or find the next unresolved family after `after`."""
         order: list[str] = review_list(self.conn)
         queued: dict[str, Queued] = queries_review.review_queue(self.conn)
-        pending: int = len([slug for slug in order if slug not in queued])
+        attached: dict[str, str] = queries_realize.profile_keys(self.conn)
+        pending: int = len([slug for slug in order if slug not in queued and slug not in attached])
         asked: str = _value(params, "index")
-        slug: str = ""
-        if asked.isdigit() and int(asked) < len(order):
+        slug: str = _value(params, "parent_slug")
+        if slug and slug not in order:
+            raise Refusal(HTTPStatus.CONFLICT, "This family is not in this review. Reload the page.")
+        if not slug and asked.isdigit() and int(asked) < len(order):
             slug = order[int(asked)]
-        else:
+        elif not slug:
             after: str = _value(params, "after")
             start: int = order.index(after) + 1 if after in order else 0
             excluded: list[str] = _value(params, "exclude").split(",")
             for key in order[start:] + order[:start]:
-                if key not in queued and key not in excluded:
+                if key not in queued and key not in excluded and key not in attached:
                     slug = key
                     break
         total: int = len(order) + (pending == 0)
@@ -169,7 +172,10 @@ class ReviewApi:
         elif parsed.path == "/api/review/page":
             _send_json(handler, asdict(payloads.page(self.linkedin_card({}).pending)))
         elif parsed.path == "/api/review/linkedin-card":
-            _send_json(handler, asdict(self.linkedin_card(params)))
+            try:
+                _send_json(handler, asdict(self.linkedin_card(params)))
+            except Refusal as refusal:
+                _send_json(handler, {"error": refusal.text}, refusal.status)
         else:
             _send_json(handler, {"error": "not found"}, HTTPStatus.NOT_FOUND)
 

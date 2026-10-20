@@ -19,6 +19,7 @@ import sqlite3
 from dataclasses import asdict, astuple, dataclass, fields
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
@@ -27,7 +28,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFa
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
-from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
+from packs.ingestion.primitives.deep_context_v2.review.queue import load_card, review_list
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
@@ -112,6 +113,7 @@ class PersonDetail:
 
     parent_id: str
     linkedin_url: str
+    profile_review_url: str
     headline: str
     avatar_url: str
     worth_reason: str
@@ -173,7 +175,7 @@ class SharePeople:
         self.data_root = data_root
         self._rows: dict[str, dict[str, str]] = {}
         self._family_facts: dict[str, dict[str, Any]] = {}
-        self._stamp: int | tuple[int, int] = 0
+        self._stamp: int | tuple[int, int, tuple[sqlite3.Row, ...]] = 0
 
     def export_rows(self) -> dict[str, dict[str, str]]:
         """parent_id -> its export row, rebuilt when the store changed."""
@@ -191,8 +193,9 @@ class SharePeople:
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
         self._stamp = self._store_stamp()
 
-    def _store_stamp(self) -> tuple[int, int]:
-        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
+    def _store_stamp(self) -> tuple[int, int, tuple[sqlite3.Row, ...]]:
+        queued = tuple(self.conn.execute("SELECT parent_id, decision, key, guidance FROM review_queue ORDER BY parent_id"))
+        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime(), queued
 
     def _store_mtime(self) -> int:
         path = self.conn.execute("PRAGMA database_list").fetchone()[2]
@@ -278,6 +281,8 @@ class SharePeople:
         return PersonDetail(
             parent_id=parent_id,
             linkedin_url=row["linkedin_url"],
+            profile_review_url=("/?stage=linkedin&parent_slug=" + quote(parent_id, safe="")
+                                if parent_id in review_list(self.conn) else ""),
             headline=row["headline"],
             avatar_url=row["profile_picture_url"],
             worth_reason=str(worth["reason"] if worth else ""),
