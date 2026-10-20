@@ -158,6 +158,7 @@ class ProposedProfilesTests(unittest.TestCase):
     def test_human_rejection_prevents_new_machine_attachment(self):
         self.linkedin(decided_by="human", verdict="wrong_person")
         self.synthetic()
+        self.assertNotIn(URL, proposals.all_urls(proposals.derive(self.conn)))
         self.assertEqual(judge.plan(proposals.derive(self.conn), {}, set()).tasks, [])
         self.assertEqual(queries_realize.profile_keys(self.conn), {})
 
