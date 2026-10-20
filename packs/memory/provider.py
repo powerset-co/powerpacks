@@ -109,7 +109,7 @@ class OpenAIProvider:
             raise NeedsApproval(endpoint)
         reserved = 0.0
         if self.approved_spend_usd is not None:
-            encoder = tiktoken.get_encoding("o200k_base")
+            encoder = tiktoken.get_encoding("cl100k_base" if endpoint == "embeddings" else "o200k_base")
             tokens = len(encoder.encode(json.dumps(body))) + 1024
             cap = Usage(embedding=tokens) if endpoint == "embeddings" else Usage(
                 input=tokens, output=int(str(body["max_output_tokens"])))

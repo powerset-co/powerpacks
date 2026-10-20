@@ -142,7 +142,7 @@ class EmbeddingBatchTests(unittest.TestCase):
     def test_batches_obey_token_limit_as_well_as_document_limit(self) -> None:
         self.claims(10, ' token' * 2000)
         provider = FixtureProvider()
-        encoder = tiktoken.get_encoding('o200k_base')
+        encoder = tiktoken.get_encoding('cl100k_base')
         with patch.object(provider, 'embed_many', wraps=provider.embed_many) as requests:
             report = consume(Generate(self.store, provider).index(limit=100))
         self.assertEqual(report.failures, ())

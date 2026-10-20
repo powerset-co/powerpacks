@@ -275,7 +275,7 @@ class Generate:
                     return report
 
     def _embedding_batches(self, rows: Iterator[Row]) -> Iterator[tuple[tuple[str, str], ...]]:
-        encoder = tiktoken.get_encoding("o200k_base")
+        encoder = tiktoken.get_encoding("cl100k_base")
         batch: list[tuple[str, str]] = []
         tokens = 0
         for row in rows:
