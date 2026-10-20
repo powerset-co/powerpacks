@@ -175,9 +175,23 @@ class OpenAIProvider:
         })
 
     def embed(self, content: str) -> tuple[float, ...]:
-        payload = object_dict(json.loads(self._post("embeddings", {"model": self.embedding_model, "input": content, "encoding_format": "float",
-                                                              **({"dimensions": self.embedding_dimensions} if self.embedding_dimensions else {})})))
+        return self.embed_many((content,))[0]
+
+    def embed_many(self, contents: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        payload = object_dict(json.loads(self._post("embeddings", {
+            "model": self.embedding_model, "input": list(contents), "encoding_format": "float",
+            **({"dimensions": self.embedding_dimensions} if self.embedding_dimensions else {})})))
         data = payload["data"]
-        if not isinstance(data, list) or len(data) != 1:
-            raise ValueError("invalid embedding response")
-        return vector(object_dict(data[0])["embedding"])
+        if not isinstance(data, list) or len(data) != len(contents):
+            raise ValueError("invalid embedding response count")
+        indexed: dict[int, tuple[float, ...]] = {}
+        for item in data:
+            row = object_dict(item)
+            index = row["index"]
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(contents) or index in indexed:
+                raise ValueError("invalid embedding response index")
+            values = vector(row["embedding"])
+            if self.embedding_dimensions and len(values) != self.embedding_dimensions:
+                raise ValueError("invalid embedding response dimensions")
+            indexed[index] = values
+        return tuple(indexed[index] for index in range(len(contents)))

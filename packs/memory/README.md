@@ -53,7 +53,7 @@ Generation without `--dry-run`, and a nonempty query with an uncached query
 embedding, spend provider credits. Obtain a separate estimate and approval
 first. Fresh requests require `--approve-spend`; otherwise the CLI emits
 `needs_approval` and exits 20 through the shared spend contract. Cached work stays
-free. `--limit` bounds total fresh generation and document embedding calls,
+free. `--limit` bounds total fresh generation and embedding batch requests,
 including missing embeddings on resume. Supply `OPENAI_API_KEY` through the environment; no environment file is
 loaded. The dry-run requires no key. It reports actual input tokens, output
 token caps, existing embedding cache misses and the upper bound on new claim
@@ -63,12 +63,15 @@ After approval, repeat the generation command without `--dry-run` and with
 `--approve-spend`. Repeat the
 same command to resume; completed chunks and vectors are reused. One process,
 up to 64 in-flight generation requests, replenished as each finishes, at most 9,000 artifact characters and
-24 claims per chunk. The shared OpenAI concurrency setting can lower this bound. SQLite writes and embedding requests remain serial.
+24 claims per chunk. The shared OpenAI concurrency setting can lower this bound. SQLite writes remain serial. Embeddings use batches of at most 64 documents and
+8,000 tokens, with up to eight requests in flight. Both stages lower concurrency
+for the configured provider limit, CPU capacity, and available memory (including
+Linux container limits), reserving 128 MiB for the app and budgeting 16 MiB per request.
 In-flight requests reserve their maximum cost against the shared spend limit.
 Every paid generation response is committed before parsing, including malformed,
 incomplete and unsupported output. Exclusions are counted and saved on chunks;
 unsupported claims never enter search, and rerunning never buys the same response.
-Later chunks can progress. Each embedding is committed immediately. Imports commit
+Later chunks can progress. Each completed embedding batch is committed before progress is emitted. Imports commit
 every 250 identities / 100 sources and reconcile absence only after complete enumeration.
 Failed reads preserve prior evidence.
 

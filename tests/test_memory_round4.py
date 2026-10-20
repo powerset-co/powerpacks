@@ -63,7 +63,7 @@ class EmbeddingWidthTests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             seen.append(json.loads(request.content))
-            return httpx.Response(200, json={"data": [{"embedding": [3.0, 4.0]}], "usage": {"prompt_tokens": 5}})
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [3.0, 4.0] + [0.0] * 766}], "usage": {"prompt_tokens": 5}})
 
         client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://example.test/")
         with unittest.mock.patch.dict("os.environ", {"OPENAI_API_KEY": "synthetic"}):
@@ -78,7 +78,7 @@ class EmbeddingWidthTests(unittest.TestCase):
         provider = OpenAIProvider("gpt-6-luna", "text-embedding-3-small@768", client=client, approve_spend=True)
         self.assertEqual(EMBEDDING_DIMENSIONS, 768)
         self.assertEqual(provider.embedding_key, "text-embedding-3-small@768")
-        self.assertEqual(provider.embed("hello"), (0.6, 0.8))
+        self.assertEqual(provider.embed("hello"), (0.6, 0.8) + (0.0,) * 766)
         self.assertEqual(seen[0]["dimensions"], 768)
         self.assertEqual(seen[0]["model"], "text-embedding-3-small")
         self.assertIsNotNone(Usage(embedding=1000).cost("gpt-6-luna", provider.embedding_key))

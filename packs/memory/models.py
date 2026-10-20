@@ -220,6 +220,8 @@ class Provider(Protocol):
 
     def embed(self, content: str) -> tuple[float, ...]: ...
 
+    def embed_many(self, contents: tuple[str, ...]) -> tuple[tuple[float, ...], ...]: ...
+
 
 def response_json(raw: str) -> dict[str, object]:
     payload = object_dict(json.loads(raw))

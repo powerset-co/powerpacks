@@ -160,7 +160,7 @@ it("keeps the estimate and Enable Memory after an enable that could not start", 
   expect(screen.getByRole("button", { name: "Enable Memory" })).toBeTruthy()
 })
 
-it("while running lists the four steps with counts, the bar and the current item", async () => {
+it("while running lists the four steps with counts and the bar without internal checkpoint keys", async () => {
   serve(RUNNING)
   const steps = await screen.findByRole("list", { name: "Memory steps" })
   const rows = within(steps).getAllByRole("listitem")
@@ -172,7 +172,7 @@ it("while running lists the four steps with counts, the bar and the current item
   ])
   expect(rows[1]?.getAttribute("aria-current")).toBe("step")
   expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("7")
-  expect(screen.getByText("synthetic-source-17")).toBeTruthy()
+  expect(screen.queryByText("synthetic-source-17")).toBeNull()
   const running = screen.getByRole("region", { name: "Building your memory" })
   expect(within(running).getByText(/\$0\.40 of \$2\.35 approved/)).toBeTruthy()
 })

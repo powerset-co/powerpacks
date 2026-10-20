@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+from sqlite3 import Row
 from dataclasses import dataclass
 from collections.abc import Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
 import tiktoken
 
-from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
+from packs.memory.resources import concurrency_limit
 from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory.models import Claim, Provider, cached_vector, document, packed
 from packs.memory.provider import CHUNK_CHARS, MAX_CLAIMS, MAX_OUTPUT_TOKENS, SYSTEM, NeedsApproval, SpendReached, parse_response
@@ -17,6 +18,9 @@ from packs.memory.progress import Progress, Step, consume, retry_first
 
 
 GENERATION_WORKERS = 64
+EMBEDDING_BATCH_SIZE = 64
+EMBEDDING_BATCH_TOKENS = 8000
+EMBEDDING_WORKERS = 8
 
 
 def embedded(store: Store, provider: Provider, text: str) -> tuple[float, ...]:
@@ -73,8 +77,7 @@ class Generate:
         total = sum((len(source.content) + CHUNK_CHARS - 1) // CHUNK_CHARS for source in self.store.sources())
         done = 0
         inputs = self._inputs(first)
-        concurrency = min(GENERATION_WORKERS, env_or_profile_int(
-            "POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency", fallback=GENERATION_WORKERS))
+        concurrency = concurrency_limit(GENERATION_WORKERS)
         pending: dict[Future[str], list[_Chunk]] = {}
         stopped = False
         terminal: BaseException | None = None
@@ -198,30 +201,95 @@ class Generate:
         report = report if report is not None else GenerationReport()
         where = " WHERE source_id=?" if source_id is not None else ""
         params = (source_id,) if source_id is not None else ()
-        total = self.store.conn.execute("SELECT count(DISTINCT payload) FROM active_claims" + where, params).fetchone()[0]
+        claims = "SELECT document_hash,payload FROM active_claims" + where + " GROUP BY document_hash"
+        total = self.store.conn.execute("SELECT count(*) FROM (" + claims + ")", params).fetchone()[0]
         rows = self.store.conn.execute(
-            "SELECT DISTINCT payload,document_hash FROM active_claims" + where
-            + " ORDER BY document_hash IN (SELECT value FROM json_each(?)) DESC", (*params, json.dumps(first)))
-        for done, row in enumerate(rows, 1):
-            text = document(Claim.parse(json.loads(row[0])))
-            key = row["document_hash"]
-            try:
-                exists = self.store.conn.execute("SELECT 1 FROM embeddings WHERE model=? AND hash=?",
-                                                 (self.provider.embedding_key, key)).fetchone()
-                if exists is None:
-                    if report.generation_calls + report.embedding_calls >= limit:
-                        return report
-                    report.embedding_calls += 1
-                    embedded(self.store, self.provider, text)
-                yield Progress(Step.INDEX, done, total, key)
-            except SpendReached:
-                yield Progress(Step.INDEX, done - 1, total, "")
-                raise
-            except NeedsApproval:
-                raise
-            except Exception as exc:
-                yield Progress(Step.INDEX, done, total, key, str(exc))
-        return report
+            "SELECT c.document_hash,c.payload FROM (" + claims + ") c LEFT JOIN embeddings e "
+            "ON e.hash=c.document_hash AND e.model=? WHERE e.hash IS NULL "
+            "ORDER BY c.document_hash IN (SELECT value FROM json_each(?)) DESC",
+            (*params, self.provider.embedding_key, json.dumps(first)))
+        batches = self._embedding_batches(rows)
+        concurrency = concurrency_limit(EMBEDDING_WORKERS)
+        pending: dict[Future[tuple[tuple[float, ...], ...]], tuple[tuple[str, str], ...]] = {}
+        done = self.store.conn.execute(
+            "SELECT count(*) FROM (" + claims + ") c JOIN embeddings e ON e.hash=c.document_hash AND e.model=?",
+            (*params, self.provider.embedding_key)).fetchone()[0]
+        stopped = False
+        terminal: BaseException | None = None
+        with ThreadPoolExecutor(max_workers=concurrency) as workers:
+            while True:
+                events: list[tuple[str, str]] = []
+                try:
+                    if terminal is None and not stopped:
+                        for _ in range(concurrency - len(pending)):
+                            if report.generation_calls + report.embedding_calls >= limit:
+                                stopped = True
+                                break
+                            batch = next(batches, None)
+                            if batch is None:
+                                stopped = True
+                                break
+                            report.embedding_calls += 1
+                            pending[workers.submit(self.provider.embed_many, tuple(text for _, text in batch))] = batch
+                    while pending:
+                        ready = [future for future in pending if future.done()]
+                        if not ready:
+                            if events:
+                                break
+                            ready = [next(as_completed(pending))]
+                        for future in ready:
+                            batch = pending[future]
+                            try:
+                                vectors = future.result()
+                                with self.store.conn:
+                                    self.store.conn.executemany("INSERT INTO embeddings VALUES(?,?,?)", (
+                                        (self.provider.embedding_key, key, packed(values))
+                                        for (key, _), values in zip(batch, vectors, strict=True)))
+                            except (SpendReached, NeedsApproval) as exc:
+                                terminal = terminal or exc
+                            except Exception as exc:
+                                events.extend((key, str(exc)) for key, _ in batch)
+                            except BaseException as exc:
+                                terminal = terminal or exc
+                                if not future.done() or future.exception() is not exc:
+                                    continue
+                            else:
+                                events.extend((key, "") for key, _ in batch)
+                            pending.pop(future)
+                    for key, error in events:
+                        done += 1
+                        if terminal is None:
+                            yield Progress(Step.INDEX, done, total, key, error)
+                except BaseException as exc:
+                    terminal = terminal or exc
+                # A closed progress iterator must still checkpoint every paid response.
+                if pending:
+                    continue
+                if terminal is not None:
+                    if isinstance(terminal, SpendReached):
+                        yield Progress(Step.INDEX, done, total, "")
+                    raise terminal
+                if stopped:
+                    if not events:
+                        yield Progress(Step.INDEX, done, total, "")
+                    return report
+
+    def _embedding_batches(self, rows: Iterator[Row]) -> Iterator[tuple[tuple[str, str], ...]]:
+        encoder = tiktoken.get_encoding("o200k_base")
+        batch: list[tuple[str, str]] = []
+        tokens = 0
+        for row in rows:
+            text = document(Claim.parse(json.loads(row["payload"])))
+            size = len(encoder.encode(text))
+            if size > EMBEDDING_BATCH_TOKENS:
+                raise ValueError("claim embedding exceeds token bound")
+            if batch and (len(batch) == EMBEDDING_BATCH_SIZE or tokens + size > EMBEDDING_BATCH_TOKENS):
+                yield tuple(batch)
+                batch, tokens = [], 0
+            batch.append((row["document_hash"], text))
+            tokens += size
+        if batch:
+            yield tuple(batch)
 
     def estimate(self, *, limit: int) -> dict[str, object]:
         encoder = tiktoken.get_encoding("o200k_base")
@@ -253,4 +321,5 @@ class Generate:
                 "new_document_embedding_calls_cap": min(limit, missing_embeddings + min(limit, pending) * MAX_CLAIMS),
                 "total_fresh_calls_cap": limit,
                 "generation_key": self.provider.generation_key, "embedding_model": self.provider.embedding_key,
-                "pricing": "apply approved per-token prices; new claim embedding tokens unknown until generation"}
+                "pricing": "apply approved per-token prices; embedding call caps are conservative per-document upper bounds; "
+                           "new claim embedding tokens unknown until generation"}

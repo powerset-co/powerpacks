@@ -129,7 +129,7 @@ class RoundThreeTests(unittest.TestCase):
 
     def test_embedding_normalized_only_at_provider_boundary(self) -> None:
         client = httpx.Client(base_url='https://api.openai.com/v1/', transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [1, 2, 3]}]})))
+            lambda request: httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'index': 0, 'embedding': [1, 2, 3]}]})))
         self.addCleanup(client.close)
         provider = OpenAIProvider('synthetic', 'synthetic', client=client, approve_spend=True)
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic'}), patch('packs.memory.models.math.sqrt', wraps=math.sqrt) as norm:

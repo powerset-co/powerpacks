@@ -45,6 +45,9 @@ class JobProvider(OpenAIProvider):
     def embed(self, content: str) -> tuple[float, ...]:
         return self.fixture.embed(content)
 
+    def embed_many(self, contents: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        return self.fixture.embed_many(contents)
+
     def discover(self, content: str) -> str:
         return json.dumps({"status": "completed", "output": [{"type": "message", "content": [
             {"type": "output_text", "text": json.dumps({"decision": "ambiguous", "reason": "synthetic", "tags": []})}]}]})

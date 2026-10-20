@@ -49,9 +49,6 @@ export function Running({ record }: { record: MemoryJob }) {
               {active ? (
                 <div className="flex flex-col gap-1.5 pl-8">
                   <ProgressBar label={step.label} done={counts.done} total={counts.total} />
-                  <p className="m-0 truncate text-xs text-muted-foreground" title={record.current_item}>
-                    {record.current_item || "\u00a0"}
-                  </p>
                 </div>
               ) : null}
             </li>

@@ -104,7 +104,9 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual((first.generation_calls, first.embedding_calls), (1, 0))
             report = Generate(store, provider).run(limit=count * 3)
             self.assertEqual(report.generation_calls, count)
-            self.assertEqual(report.embedding_calls, count + 3)
+            # Each generated source uses one request; the extra projected claims share one batch.
+            self.assertEqual(report.embedding_calls, count + 1)
+            self.assertEqual(store.conn.execute("SELECT count(*) FROM embeddings").fetchone()[0], count + 3)
             saved = tuple(store.conn.execute('SELECT count(*) FROM ' + table).fetchone()[0]
                           for table in ('revisions', 'chunks', 'claims', 'embeddings'))
             again = store.import_source(adapter)

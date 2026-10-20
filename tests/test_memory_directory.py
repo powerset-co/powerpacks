@@ -134,7 +134,7 @@ class DirectoryTests(unittest.TestCase):
         Generate(self.store, provider).run(limit=1000)
         query = 'experienced advisor without shared terms'
         transport = httpx.MockTransport(lambda request: httpx.Response(
-            200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [0., 0., 1.]}]}))
+            200, json={'usage': {'prompt_tokens': 1}, 'data': [{'index': 0, 'embedding': [0., 0., 1.]}]}))
         with patch('httpx.HTTPTransport.handle_request', side_effect=transport.handle_request) as request, patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic-key'}):
             with self.assertRaises(NeedsApproval):
                 self.directory.resolve(query, embedding_model=provider.embedding_key)

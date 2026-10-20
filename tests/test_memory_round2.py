@@ -220,7 +220,7 @@ class RoundTwoTests(unittest.TestCase):
             called.append(request.url.path)
             if request.url.path.endswith('responses'):
                 return httpx.Response(200, json={**json.loads(response([])), "usage": {"input_tokens": 1, "output_tokens": 1}})
-            return httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [1, 0, 0]}]})
+            return httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'index': 0, 'embedding': [1, 0, 0]}]})
 
         client = httpx.Client(base_url='https://api.openai.com/v1/', transport=httpx.MockTransport(respond))
         self.addCleanup(client.close)

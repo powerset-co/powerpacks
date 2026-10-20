@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import time
@@ -23,6 +24,10 @@ from packs.memory.store import Store
 
 class ParallelGenerationTests(unittest.TestCase):
     def setUp(self) -> None:
+        capacity = patch('packs.memory.generate.concurrency_limit', side_effect=lambda maximum: min(
+            maximum, int(os.environ.get('POWERPACKS_OPENAI_CONCURRENCY', maximum))))
+        capacity.start()
+        self.addCleanup(capacity.stop)
         concurrency = patch.dict('os.environ', {'POWERPACKS_OPENAI_CONCURRENCY': '64'})
         concurrency.start()
         self.addCleanup(concurrency.stop)

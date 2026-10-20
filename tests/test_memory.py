@@ -56,9 +56,15 @@ class FixtureProvider:
         return response(json.loads(content).get("memory_claims", []))
 
     def embed(self, content: str) -> tuple[float, ...]:
+        return self.embed_many((content,))[0]
+
+    def embed_many(self, contents: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
         self.embeddings += 1
         if self.embeddings == self.fail_embedding:
             raise ValueError("synthetic embedding interruption")
+        return tuple(self._vector(content) for content in contents)
+
+    def _vector(self, content: str) -> tuple[float, ...]:
         # Distinct from lexical matching: this fixture maps a paraphrase to the IAM axis.
         if "permission architecture" in content or "IAM" in content:
             return (1.0, 0.0, 0.0)
@@ -316,7 +322,7 @@ class ProviderAndCliTests(unittest.TestCase):
             if request.url.path.endswith("responses"):
                 return httpx.Response(200, json={"usage": {"input_tokens": 1, "output_tokens": 1}, "status": "completed", "output": [{"type": "message", "content": [
                     {"type": "output_text", "text": json.dumps({"claims": [claim]})}]}]})
-            return httpx.Response(200, json={"usage": {"prompt_tokens": 1}, "data": [{"embedding": [1, 2, 3]}]})
+            return httpx.Response(200, json={"usage": {"prompt_tokens": 1}, "data": [{"index": 0, "embedding": [1, 2, 3]}]})
 
         client = httpx.Client(base_url="https://api.openai.com/v1/", transport=httpx.MockTransport(respond))
         self.addCleanup(client.close)
@@ -328,8 +334,8 @@ class ProviderAndCliTests(unittest.TestCase):
             provider.embed("query")
             provider.discover("Synthetic saved dossier excerpt")
         self.assertFalse(requests[0]["store"])
-        self.assertEqual(requests[1]["input"], "document")
-        self.assertEqual(requests[2]["input"], "query")
+        self.assertEqual(requests[1]["input"], ["document"])
+        self.assertEqual(requests[2]["input"], ["query"])
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(requests[0]["max_output_tokens"], 6000)
         instructions = requests[3]['instructions']
@@ -361,7 +367,7 @@ class ProviderAndCliTests(unittest.TestCase):
             self.assertEqual(cli("import", "--v2-root", str(adapter.root))[0]["members"], 5)
             with patch.dict(os.environ, {}, clear=True):
                 self.assertEqual(cli("query", "--embedding-model", "fixture")["hits"], [])
-            with patch.object(OpenAIProvider, "generate", side_effect=fixture.generate), patch.object(OpenAIProvider, "embed", side_effect=fixture.embed):
+            with patch.object(OpenAIProvider, "generate", side_effect=fixture.generate), patch.object(OpenAIProvider, "embed_many", side_effect=fixture.embed_many):
                 generated = cli("generate", "--model", "fixture", "--embedding-model", "fixture", "--limit", "1")
                 self.assertEqual(generated["generation_calls"], 1)
                 generated = cli("generate", "--model", "fixture", "--embedding-model", "fixture", "--limit", "100")
