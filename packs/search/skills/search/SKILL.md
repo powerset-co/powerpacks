@@ -20,6 +20,16 @@ Use this for any people search request:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
+For questions about remembered relationships, topics or preferences in an identified
+local corpus, follow `packs/memory/skills/memory/SKILL.md`. The agent chooses
+retrieval from query meaning and conversation context; open evidence before answering.
+
+For local contact labels or associations (“pull up SoF”, “South of France”,
+“people tagged mentor”), and follow-ups such as “hide these” or “remove SoF
+label”, follow `packs/search/skills/search/memory-directory.md` before the
+recruiting/JD flow below. Resolve meaning, enumerate all canonical people,
+then act on the exact selected IDs. Preserve an explicitly requested network.
+
 For a named person's profile, dossier, or "tell me everything about <person>",
 follow `packs/search/skills/search/person-lookup.md` and stop here. This read-only
 lookup skips search preparation, scoring, and `decision.json`. Requests for

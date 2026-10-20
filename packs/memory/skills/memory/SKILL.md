@@ -1,0 +1,75 @@
+---
+name: memory
+description: Retrieve saved local knowledge about people, relationships, topics, personal labels and preferences. Use for questions about what the user knows or remembers, and follow-ups on remembered groups. Not recruiting/JD search, shared-network search, or memory generation.
+---
+
+# Memory
+
+You choose the retrieval primitive from the meaning of the question and the
+conversation. Resolve references such as “those people” from the prior selection;
+never silently expand its scope. No classifier or extra model call is needed.
+
+Run from the installed checkout using `.venv/bin/python -m packs.memory`.
+Use the explicitly identified local corpus and its separate derived SQLite DB.
+Never guess among owners' stores. If the corpus is known but memory is absent,
+read `packs/search/skills/search/memory-directory.md` for the free import contract.
+Import current source changes before a new request. Do not generate, discover,
+enrich, upload or rebuild embeddings as a side effect of answering.
+
+## Choose and retrieve
+
+| Intent, including conversational context | Primitive sequence |
+| --- | --- |
+| “All my SoF people”; “those mentors”; an action on that group | Follow `packs/search/skills/search/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
+| “Who knows about permission architecture?”; “what do I know about this topic?” | `query` with the user's meaning and hard filters → `open` the useful claims. This is a ranked shortlist, not all matching people. |
+| “What do we remember about Jordan?” | `lookup` exact name or known identifier → disambiguate → `query --person` canonical parent → `open`. For the complete original dossier use `packs/search/skills/search/person-lookup.md`. |
+| “Who overlapped with Jordan at Acme?” | `lookup` → `overlap` with the canonical parent and organization. Overlap is a possible connection, not proof of friendship or willingness to introduce. |
+| “My LPs in Cedar Fund I” | Use the explicit `lp` kind and fund object; use directory resolution/enumeration for a complete saved group. Never infer membership from job titles. |
+| Recruiting, a JD, a named shared network, or cold prospects | Use search or GTM with the original scope; do not substitute local memory. |
+
+Replace the example database path and identifiers with observed values:
+
+```sh
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite lookup 'Jordan Bravo'
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite query 'permission architecture' --kind work
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite query --person CANONICAL_PARENT_ID
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite query --kind lp --object 'Cedar Fund I'
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite overlap CANONICAL_PARENT_ID --organization Acme
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite open CLAIM_ID
+```
+
+For hybrid retrieval, use the corpus's known embedding model via
+`--embedding-model`; never guess a model or mix vector spaces. Cached query
+embeddings are reused. On `needs_approval`, obtain permission for the estimated
+query embedding cost before adding `--approve-spend`. Without a known model or
+approved spend, lexical/typed retrieval remains available; describe it honestly.
+If the first query misses, try a bounded reformulation using synonyms or an
+observed alias while preserving hard filters. Report insufficient saved evidence
+rather than “nobody exists.” Check `truncated` and `missing_embeddings`; do not
+claim complete recall from a ranked or partially embedded result.
+
+## Answer with evidence
+
+Open the relevant claim IDs before making precise assertions. Inspect saved
+content, source hash, active state and read errors. Do not present a retracted
+claim as current, a topic mention as expertise, a naming association as residence,
+or retrieval rank as relationship strength. Human corrections take precedence.
+Recent indexing does not make old source evidence recent.
+
+Lead with the answer. Put a concise source link immediately after the supported
+sentence; for a block quote, put the source directly underneath. Quote only
+verbatim text verified in `saved_content`, labelled as a dossier/profile excerpt
+when that is the source—not as an original message.
+
+Citations currently identify saved artifacts, not a memory-viewer URL. Use an
+actual returned HTTP URL or an existing local artifact path when available.
+SQLite `file:...#facts/...` references are row locators, not working webpage
+links: show a short reference such as “saved dossier, claim 42” and retain its
+exact database locator, hash and claim ID for `open` follow-ups. Never invent a
+clickable route or original-message link. `original_message_citation_verified`
+is false in the current reader. If the user asks for original messages, use the
+existing authorized dossier/logbook workflow; memory alone cannot verify them.
+
+For groups, show canonical people count, names and the reason for membership.
+Separate literal tags, inferred labels and factual locations when they differ.
+For inferred connections, state the inference and its supporting evidence.
