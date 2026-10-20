@@ -34,14 +34,11 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  outline: 2px solid transparent;
-  outline-offset: -2px;
-  transition: outline-color var(--t-fast) var(--ease-out);
 }
-/* Beats index.css's [tabindex]:focus-visible ring: the viewport's ring sits inside it. */
+/* No ring, over index.css's [tabindex]:focus-visible one: the page's keys work wherever focus is,
+   and the focused row already shows where the keyboard is. */
 .grid-viewport:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 70%, transparent);
-  outline-offset: -2px;
+  outline: none;
 }
 
 /* --row-h comes from ROW_H in table/columns.ts, set on the shell. */
