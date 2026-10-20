@@ -15,7 +15,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -193,8 +193,15 @@ class MemoryJobTests(unittest.TestCase):
         self.assertTrue(any(record["steps"]["generate"]["done"] for record in seen))
         self.assertEqual(request("POST", "/api/memory/settings", {"keep_updated": False})[0], 200)
         self.assertFalse(request("GET", "/api/memory")[1]["keep_updated"])
-        self.assertEqual(request("POST", "/api/memory/update")[0], 202)
+        self.assertEqual(request("POST", "/api/memory/update", {"approved_spend_usd": 2})[0], 202)
         self.assertEqual(self.wait().status, Status.DONE)
+        self.assertEqual(job.read(self.root).approved_spend_usd, 2)
+        meanings = request("GET", "/api/memory/search?q=IAM")[1]
+        self.assertTrue(meanings)
+        page = request("GET", "/api/memory/people?" + urlencode({**meanings[0]["selector"], "limit": 1}))[1]
+        self.assertEqual(page["total"], meanings[0]["count"])
+        self.assertEqual(len(page["people"]), 1)
+        self.assertEqual(request("GET", "/api/memory/people?origin=topic&value=iam&limit=0")[0], 400)
         self.assertEqual(request("POST", "/api/memory/enable", {"approved_spend_usd": -1})[0], 400)
 
     def test_deep_context_completion_triggers_incremental_update(self) -> None:
@@ -238,6 +245,9 @@ from pathlib import Path
 from unittest.mock import patch
 from test_memory_job import JobProvider
 from packs.memory import job, runner
+from packs.shared.web.memory import MemoryApi
+from unittest.mock import Mock
+from urllib.parse import urlparse
 root = Path(sys.argv[1])
 provider = JobProvider()
 generate = provider.generate
@@ -258,7 +268,11 @@ def imported(*args, **kwargs):
         log.write("import\\n")
     return import_progress(*args, **kwargs)
 with patch.object(runner, "provider", return_value=provider), patch.object(job, "write", side_effect=interrupt), patch.object(Store, "import_progress", imported):
-    runner.start(root, 1)
+    if sys.argv[2] == "resume":
+        with patch("packs.shared.web.memory._send_json"):
+            MemoryApi(root).get(Mock(), urlparse("/api/memory"))
+    else:
+        runner.start(root, 1)
     runner._threads[root].join()
 '''
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).parent) + os.pathsep + str(Path.cwd())}

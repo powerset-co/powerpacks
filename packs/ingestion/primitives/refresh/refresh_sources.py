@@ -52,6 +52,7 @@ from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STO
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport  # noqa: E402
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport  # noqa: E402
 from packs.ingestion.primitives.setup.automations import accounts  # noqa: E402
+from packs.memory.runner import keep_updated  # noqa: E402
 
 Outcome = Literal["refreshed", "needs_you", "failed", "not_connected"]
 
@@ -183,7 +184,6 @@ def main() -> int:
     parser.add_argument("command", choices=["run"])
     parser.parse_args()
     run = refresh()
-    from packs.memory.runner import keep_updated
     keep_updated(Path.cwd())
     emit(asdict(run))
     return 1 if run.status == "failed" else 0

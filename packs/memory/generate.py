@@ -9,7 +9,7 @@ import tiktoken
 
 from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory.models import Claim, Provider, SourceRevision, cached_vector, document, packed
-from packs.memory.provider import CHUNK_CHARS, MAX_CLAIMS, MAX_OUTPUT_TOKENS, SYSTEM, NeedsApproval, parse_response
+from packs.memory.provider import CHUNK_CHARS, MAX_CLAIMS, MAX_OUTPUT_TOKENS, SYSTEM, NeedsApproval, SpendReached, parse_response
 from packs.memory.store import Store
 from packs.memory.progress import Progress, Step, consume, retry_first
 
@@ -27,6 +27,7 @@ def embedded(store: Store, provider: Provider, text: str) -> tuple[float, ...]:
 
 @dataclass
 class GenerationReport:
+    failures: tuple[tuple[str, str], ...] = ()
     generation_calls: int = 0
     embedding_calls: int = 0
     reused_chunks: int = 0
@@ -46,7 +47,7 @@ class Generate:
         report = GenerationReport()
         for event in self.chunks(limit=limit, first=first, report=report):
             yield event
-            if not event.error:
+            if event.key and not event.error:
                 yield from self.index(limit=limit, report=report, source_id=int(event.key.split(":")[0]))
         yield from self.index(limit=limit, report=report)
         return report
@@ -65,16 +66,20 @@ class Generate:
                 key = f"{source.id}:{position}"
                 done += 1
                 try:
-                    if not self._chunk(source, position, offset, report, limit):
+                    error = self._chunk(source, position, offset, report, limit)
+                    if error is None:
                         return report
-                    yield Progress(Step.GENERATE, done, total, key)
+                    yield Progress(Step.GENERATE, done, total, key, error)
+                except SpendReached:
+                    yield Progress(Step.GENERATE, done - 1, total, "")
+                    raise
                 except NeedsApproval:
                     raise
                 except Exception as exc:
                     yield Progress(Step.GENERATE, done, total, key, str(exc))
         return report
 
-    def _chunk(self, source: SourceRevision, position: int, offset: int, report: GenerationReport, limit: int) -> bool:
+    def _chunk(self, source: SourceRevision, position: int, offset: int, report: GenerationReport, limit: int) -> str | None:
         text = source.content[offset:offset + CHUNK_CHARS]
         fingerprint = short_hash(self.provider.generation_key + text, n=64)
         old = self.store.conn.execute(
@@ -82,7 +87,7 @@ class Generate:
             (source.id, fingerprint)).fetchone()
         if old is None:
             if report.generation_calls + report.embedding_calls >= limit:
-                return False
+                return None
             response = self.provider.generate(text)
             report.generation_calls += 1
         else:
@@ -114,7 +119,7 @@ class Generate:
                     continue
                 self.store.add_claim(source.id, source.hash, chunk_id, claim, human=False)
                 report.claims += 1
-        return True
+        return "; ".join(errors)
 
     def index(self, *, limit: int, report: GenerationReport | None = None, first: tuple[str, ...] = (), source_id: int | None = None) -> Generator[Progress, None, GenerationReport]:
         report = report if report is not None else GenerationReport()
@@ -136,6 +141,9 @@ class Generate:
                     embedded(self.store, self.provider, text)
                     report.embedding_calls += 1
                 yield Progress(Step.INDEX, done, total, key)
+            except SpendReached:
+                yield Progress(Step.INDEX, done - 1, total, "")
+                raise
             except NeedsApproval:
                 raise
             except Exception as exc:

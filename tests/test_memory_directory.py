@@ -133,7 +133,7 @@ class DirectoryTests(unittest.TestCase):
         provider = FixtureProvider()
         Generate(self.store, provider).run(limit=1000)
         query = 'experienced advisor without shared terms'
-        response = httpx.Response(200, json={'data': [{'embedding': [0., 0., 1.]}]})
+        response = httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [0., 0., 1.]}]})
         with patch('httpx.Client.post', return_value=response) as request, patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic-key'}):
             with self.assertRaises(NeedsApproval):
                 self.directory.resolve(query, embedding_model=provider.embedding_key)

@@ -16,6 +16,7 @@ from packs.ingestion.primitives.common.jsonio import now_iso, short_hash
 from packs.ingestion.primitives.common.contact_fields import identifier_phones
 from packs.memory.models import Claim, Identity, IdentityMatch, ImportReport, OpenedClaim, Source, SourceRevision, normalized, date_bound, document
 from packs.memory.progress import Progress, consume
+from packs.memory.import_stage import import_progress
 from packs.memory.projection import project, facts, fact_claims
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import collapse
 from packs.memory.sources import V2, identity_key
@@ -128,7 +129,6 @@ class Store:
         return consume(self.import_progress(adapter))
 
     def import_progress(self, adapter: V2, *, first: tuple[str, ...] = ()) -> Generator[Progress, None, ImportReport]:
-        from packs.memory.import_stage import import_progress
         return import_progress(self, adapter, first=first)
 
     def refresh(self, adapter: V2, members: tuple[str, ...]) -> None:

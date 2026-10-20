@@ -174,6 +174,7 @@ class OpenedClaim:
 
 @dataclass
 class ImportReport:
+    failures: tuple[tuple[str, str], ...] = ()
     members: int = 0
     parents: int = 0
     sources: int = 0

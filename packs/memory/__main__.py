@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                 result = [[asdict(left), asdict(right)] for left, right in
                           Query(store, provider).overlap(_one_parent(store, args.identity), organization=args.organization)]
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return int(isinstance(result, dict) and bool(result.get("failures")))
     except NeedsApproval as exc:
         print(json.dumps({"status": "needs_approval", "needs_approval": exc.payload}))
         return EXIT_NEEDS_APPROVAL

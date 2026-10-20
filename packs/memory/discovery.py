@@ -4,10 +4,10 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Generator, Iterator
-from dataclasses import dataclass
 
 from packs.ingestion.primitives.common.jsonio import short_hash
-from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS, Tag, Outcome
+from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS
+from packs.memory.discovery_run import Group, Person, Evidence, Insight, DiscoveryReport, Preview, preview, progress
 from packs.memory.models import Claim, Kind, IdentityMatch, cached_vector, document, normalized
 from packs.memory.store import Store
 from packs.memory.progress import Progress, consume
@@ -16,68 +16,6 @@ _ORIGINAL = "c.chunk_id IS NULL AND c.human=0"
 _VALUE = "normalized(CASE WHEN c.object<>'' THEN c.object ELSE c.text END)"
 NEIGHBORS = 8
 MIN_SIMILARITY = 0.35  # Pilot within-concept p25=.390; this rejects remote candidates, not false claims.
-
-
-@dataclass(frozen=True)
-class Group:
-    key: str
-    phrase: str
-    people: int
-    seed: int = 0
-
-
-@dataclass(frozen=True)
-class Person:
-    parent: str
-    claim_id: int = 0
-
-
-@dataclass(frozen=True)
-class Evidence:
-    parent: str
-    source_id: int
-    source_hash: str
-    quote: str
-
-
-@dataclass(frozen=True)
-class Insight:
-    candidate: str
-    decision: Outcome
-    reason: str
-    members: tuple[IdentityMatch, ...]
-    tags: tuple[Tag, ...]
-
-
-@dataclass
-class DiscoveryReport:
-    groups: int = 0
-    batches: int = 0
-    calls: int = 0
-    reused: int = 0
-    tags: int = 0
-    abstentions: int = 0
-    exclusions: int = 0
-    max_input_chars: int = 0
-    next_after: str = ""
-    has_more: bool = False
-    insights: tuple[Insight, ...] = ()
-
-
-@dataclass(frozen=True)
-class Preview:
-    groups: tuple[Group, ...]
-    batches: int
-    pending_calls: int
-    max_input_chars: int
-    input_chars_cap: int
-    output_tokens_per_call_cap: int
-    instruction_chars: int
-    fresh_calls_cap: int
-    next_after: str
-    has_more: bool
-    insights: tuple[Insight, ...] = ()
-    semantic_retrieval: str = 'cached approximate neighbors; no new embeddings'
 
 
 class Discover:
@@ -273,7 +211,6 @@ class Discover:
         return content, fingerprint, evidence
 
     def preview(self, *, min_people: int = 3, phrase: str = '', after: str = '', limit: int = 100) -> Preview:
-        from packs.memory.discovery_run import preview
         return preview(self, min_people=min_people, phrase=phrase, after=after, limit=limit)
 
     def run(self, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '') -> DiscoveryReport:
@@ -281,7 +218,6 @@ class Discover:
 
     def progress(self, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '',
                  first: tuple[str, ...] = ()) -> Generator[Progress, None, DiscoveryReport]:
-        from packs.memory.discovery_run import progress
         return progress(self, limit=limit, min_people=min_people, phrase=phrase, after=after, first=first)
 
     def _insight(self, group: Group, parents: list[Person], decision: Decision) -> Insight:

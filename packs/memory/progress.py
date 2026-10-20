@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 
 class Step(StrEnum):
@@ -25,7 +25,12 @@ class Progress:
     error: str = ""
 
 
+class _Report(Protocol):
+    failures: tuple[tuple[str, str], ...]
+
+
 T = TypeVar("T")
+R = TypeVar("R", bound=_Report)
 
 
 def retry_first(items: Callable[[], Iterator[T]], key: Callable[[T], str], first: tuple[str, ...]) -> Iterator[T]:
@@ -39,10 +44,14 @@ def retry_first(items: Callable[[], Iterator[T]], key: Callable[[T], str], first
             yield item
 
 
-def consume(events: Generator[Progress, None, T]) -> T:
+def consume(events: Generator[Progress, None, R]) -> R:
+    failures = []
     while True:
         try:
-            next(events)
+            event = next(events)
+            if event.error:
+                failures.append((event.key, event.error))
         except StopIteration as finished:
-            result: T = finished.value
+            result: R = finished.value
+            result.failures = tuple(failures)
             return result

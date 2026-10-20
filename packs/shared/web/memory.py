@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import json
-import tempfile
+from contextlib import closing
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import cast
-from urllib.parse import ParseResult, urlparse
+from urllib.parse import ParseResult, parse_qs, urlparse
 
 from packs.ingestion.primitives.refresh.api import _send_json
 from packs.memory import job, runner
 from packs.memory.cost import Usage
+from packs.memory.directory import Directory, Origin, Selector
 from packs.memory.generate import Generate
 from packs.memory.sources import V2
 from packs.memory.store import Store
@@ -21,37 +22,63 @@ from packs.memory.store import Store
 class MemoryApi:
     def __init__(self, root: Path) -> None:
         self.root = root
+        self._source_version: tuple[int, int] | None = None
+        self._preview: dict[str, object] = {}
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: ParseResult) -> bool:
-        if parsed.path != "/api/memory":
+        if parsed.path not in ("/api/memory", "/api/memory/search", "/api/memory/people"):
             return False
-        record = job.read(self.root)
-        payload = asdict(record)
-        if not record.enabled:
-            adapter = V2(self.root / ".powerpacks")
-            if adapter.database.is_file():
-                payload["inventory"] = adapter.inventory()
-                payload["sources"] = ["saved facts", "human tags and notes", "cached profiles", "display names"]
-                client = runner.provider()
-                try:
-                    with tempfile.TemporaryDirectory() as directory:
-                        store = Store(Path(directory) / "memory.sqlite", create=True)
-                        try:
-                            store.import_source(adapter)
-                            estimate = Generate(store, client).estimate(limit=2**31 - 1)
-                            usage = Usage(cast(int, estimate["generation_input_tokens"]),
-                                          cast(int, estimate["generation_output_token_cap"]),
-                                          cast(int, estimate["embedding_input_tokens"]))
-                            estimate["estimated_cost_usd"] = usage.cost(client.model, client.embedding_key)
-                            payload["estimate"] = estimate
-                        finally:
-                            store.close()
-                finally:
-                    client.close()
-            else:
-                payload.update(inventory={"counts": {}}, sources=[], estimate=None)
-        _send_json(handler, payload)
+        try:
+            if parsed.path != "/api/memory":
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                with closing(Store(job.database(self.root))) as store:
+                    directory = Directory(store)
+                    if parsed.path.endswith("/search"):
+                        result: object = [asdict(meaning) for meaning in directory.resolve(query.get("q", [""])[0])]
+                    else:
+                        selector = Selector(Origin(query.get("origin", [""])[0]), query.get("value", [""])[0])
+                        result = asdict(directory.enumerate(selector, after=query.get("after", [""])[0],
+                                                            limit=int(query.get("limit", ["50"])[0])))
+                _send_json(handler, result)
+                return True
+            with job.LOCK:
+                record = job.read(self.root)
+                if record.status == job.Status.RUNNING and not runner.running(self.root):
+                    record = runner.start(self.root, record.approved_spend_usd)
+                payload = asdict(record)
+                if not record.enabled:
+                    payload.update(self._before_enable())
+            _send_json(handler, payload)
+        except (ValueError, OSError) as exc:
+            _send_json(handler, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         return True
+
+    def _before_enable(self) -> dict[str, object]:
+        adapter = V2(self.root / ".powerpacks")
+        if not adapter.database.is_file():
+            return {"inventory": {"counts": {}}, "sources": [], "estimate": None}
+        stat = adapter.database.stat()
+        version = (stat.st_mtime_ns, stat.st_size)
+        if version == self._source_version:
+            return self._preview
+        client = runner.provider()
+        try:
+            with closing(Store(job.database(self.root), create=True)) as store:
+                store.import_source(adapter)
+                estimate = Generate(store, client).estimate(limit=2**31 - 1)
+                usage = Usage(cast(int, estimate["generation_input_tokens"]),
+                              cast(int, estimate["generation_output_token_cap"]),
+                              cast(int, estimate["embedding_input_tokens"]))
+                estimate["estimated_cost_usd"] = usage.cost(client.model, client.embedding_key)
+                self._preview = {
+                    "inventory": adapter.inventory(),
+                    "sources": ["saved facts", "human tags and notes", "cached profiles", "display names"],
+                    "estimate": estimate,
+                }
+                self._source_version = version
+        finally:
+            client.close()
+        return self._preview
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: ParseResult) -> bool:
         if parsed.path not in ("/api/memory/enable", "/api/memory/update", "/api/memory/settings"):
@@ -67,13 +94,12 @@ class MemoryApi:
             body = json.loads(handler.rfile.read(length) or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("Send a JSON object")
-            if parsed.path.endswith("/enable"):
+            if parsed.path.endswith(("/enable", "/update")):
                 amount = body.get("approved_spend_usd")
                 if isinstance(amount, bool) or not isinstance(amount, (int, float)):
                     raise ValueError("approved_spend_usd must be a number")
-                record = runner.start(self.root, float(amount))
-            elif parsed.path.endswith("/update"):
-                record = runner.update(self.root)
+                record = (runner.start(self.root, float(amount)) if parsed.path.endswith("/enable")
+                          else runner.update(self.root, float(amount)))
             else:
                 if not isinstance(body.get("keep_updated"), bool):
                     raise ValueError("keep_updated must be a boolean")

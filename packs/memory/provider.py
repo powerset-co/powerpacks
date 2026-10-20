@@ -44,6 +44,10 @@ SCHEMA: dict[str, object] = {
 }
 
 
+class SpendReached(ValueError):
+    """The next request would exceed this run's approved spend limit."""
+
+
 class NeedsApproval(Exception):
     def __init__(self, endpoint: str) -> None:
         self.payload = needs_approval_payload(step=endpoint, provider="OpenAI", estimated_calls=1,
@@ -98,8 +102,10 @@ class OpenAIProvider:
                 cap.input += tokens
                 cap.output += int(str(body["max_output_tokens"]))
             cost = cap.cost(self.model, self.embedding_key)
-            if cost is None or cost > self.approved_spend_usd:
-                raise ValueError("approved spend limit reached or model pricing unavailable")
+            if cost is None:
+                raise ValueError("model pricing unavailable")
+            if cost > self.approved_spend_usd:
+                raise SpendReached("approved spend limit reached")
         try:
             response = self.client.post(endpoint, json=body, headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})
         except httpx.HTTPError:
@@ -107,12 +113,22 @@ class OpenAIProvider:
         # Do not expose provider response bodies (they may echo input).
         if response.status_code != 200:
             raise ValueError(f"provider {endpoint}: HTTP {response.status_code}")
-        usage = object_dict(object_dict(response.json()).get("usage", {}))
+        try:
+            usage = object_dict(object_dict(response.json())["usage"])
+            fields = ("prompt_tokens",) if endpoint == "embeddings" else ("input_tokens", "output_tokens")
+            counts: list[int] = []
+            for field in fields:
+                count = usage[field]
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise ValueError("invalid token count")
+                counts.append(count)
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("provider returned missing or invalid usage") from None
         if endpoint == "embeddings":
-            self.usage.embedding += int(str(usage.get("prompt_tokens", 0)))
+            self.usage.embedding += counts[0]
         else:
-            self.usage.input += int(str(usage.get("input_tokens", 0)))
-            self.usage.output += int(str(usage.get("output_tokens", 0)))
+            self.usage.input += counts[0]
+            self.usage.output += counts[1]
         return response.text
 
     def generate(self, content: str) -> str:

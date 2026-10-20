@@ -314,9 +314,9 @@ class ProviderAndCliTests(unittest.TestCase):
             body = json.loads(request.content)
             requests.append(body)
             if request.url.path.endswith("responses"):
-                return httpx.Response(200, json={"status": "completed", "output": [{"type": "message", "content": [
+                return httpx.Response(200, json={"usage": {"input_tokens": 1, "output_tokens": 1}, "status": "completed", "output": [{"type": "message", "content": [
                     {"type": "output_text", "text": json.dumps({"claims": [claim]})}]}]})
-            return httpx.Response(200, json={"data": [{"embedding": [1, 2, 3]}]})
+            return httpx.Response(200, json={"usage": {"prompt_tokens": 1}, "data": [{"embedding": [1, 2, 3]}]})
 
         client = httpx.Client(base_url="https://api.openai.com/v1/", transport=httpx.MockTransport(respond))
         self.addCleanup(client.close)

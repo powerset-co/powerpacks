@@ -20,7 +20,7 @@ from packs.memory.discovery import Discover
 from packs.memory.generate import Generate
 from packs.memory.job import Counts, Failure, Job, Status
 from packs.memory.progress import Progress, Step
-from packs.memory.provider import OpenAIProvider
+from packs.memory.provider import OpenAIProvider, SpendReached
 from packs.memory.sources import V2
 from packs.memory.store import Store
 
@@ -52,6 +52,10 @@ def start(root: Path, approved_spend: float) -> Job:
             record.step = Step.IMPORT
             record.steps = {step: Counts() for step in job.STEPS}
             record.started_at = now_iso()
+            record.tokens = asdict(Usage())
+            record.spent_usd = 0
+        record.pid = os.getpid()
+        record.stopped = ""
         record.enabled = True
         record.approved_spend_usd = approved_spend
         record.status = Status.RUNNING
@@ -63,11 +67,23 @@ def start(root: Path, approved_spend: float) -> Job:
         return record
 
 
-def update(root: Path) -> Job:
+def running(root: Path) -> bool:
+    with job.LOCK:
+        handle = os.open(job.database(root).parent, os.O_RDONLY)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(handle)
+    return False
+
+
+def update(root: Path, approved_spend: float | None = None) -> Job:
     record = job.read(root)
     if not record.enabled:
         raise ValueError("enable memory first")
-    return start(root, record.approved_spend_usd)
+    return start(root, record.approved_spend_usd if approved_spend is None else approved_spend)
 
 
 def keep_updated(root: Path) -> None:
@@ -125,6 +141,15 @@ def _run(root: Path, resume: bool, handle: int) -> None:
             record.people_indexed = store.conn.execute("SELECT count(DISTINCT parent) FROM active_claims").fetchone()[0]
             record.status, record.step = Status.DONE, Step.DONE
             record.current_item = ""
+            job.write(root, record)
+    except SpendReached:
+        with job.LOCK:
+            record = job.read(root)
+            record.status = Status.DONE
+            record.stopped = "approved spend reached"
+            record.current_item = ""
+            if store is not None:
+                record.people_indexed = store.conn.execute("SELECT count(DISTINCT parent) FROM active_claims").fetchone()[0]
             job.write(root, record)
     except Exception as exc:
         with job.LOCK:

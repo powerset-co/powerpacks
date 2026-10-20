@@ -3,13 +3,81 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator, Iterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from packs.ingestion.primitives.common.jsonio import short_hash
-from packs.memory.discovery import Discover, DiscoveryReport, Group, Person, Insight, Preview
-from packs.memory.discovery_provider import Decision, INPUT_CHARS, OUTPUT_TOKENS, PEOPLE, SYSTEM
-from packs.memory.models import normalized
+from packs.memory.discovery_provider import Decision, INPUT_CHARS, OUTPUT_TOKENS, PEOPLE, SYSTEM, Tag, Outcome
+from packs.memory.models import normalized, IdentityMatch
 from packs.memory.progress import Progress, Step, retry_first
-from packs.memory.provider import NeedsApproval
+from packs.memory.provider import NeedsApproval, SpendReached
+
+
+if TYPE_CHECKING:
+    from packs.memory.discovery import Discover
+
+
+@dataclass(frozen=True)
+class Group:
+    key: str
+    phrase: str
+    people: int
+    seed: int = 0
+
+
+@dataclass(frozen=True)
+class Person:
+    parent: str
+    claim_id: int = 0
+
+
+@dataclass(frozen=True)
+class Evidence:
+    parent: str
+    source_id: int
+    source_hash: str
+    quote: str
+
+
+@dataclass(frozen=True)
+class Insight:
+    candidate: str
+    decision: Outcome
+    reason: str
+    members: tuple[IdentityMatch, ...]
+    tags: tuple[Tag, ...]
+
+
+@dataclass
+class DiscoveryReport:
+    failures: tuple[tuple[str, str], ...] = ()
+    groups: int = 0
+    batches: int = 0
+    calls: int = 0
+    reused: int = 0
+    tags: int = 0
+    abstentions: int = 0
+    exclusions: int = 0
+    max_input_chars: int = 0
+    next_after: str = ""
+    has_more: bool = False
+    insights: tuple[Insight, ...] = ()
+
+
+@dataclass(frozen=True)
+class Preview:
+    groups: tuple[Group, ...]
+    batches: int
+    pending_calls: int
+    max_input_chars: int
+    input_chars_cap: int
+    output_tokens_per_call_cap: int
+    instruction_chars: int
+    fresh_calls_cap: int
+    next_after: str
+    has_more: bool
+    insights: tuple[Insight, ...] = ()
+    semantic_retrieval: str = 'cached approximate neighbors; no new embeddings'
 
 
 def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '',
@@ -65,7 +133,11 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
                     conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
                 except (ValueError, KeyError, TypeError):
                     report.exclusions += 1
-                    conn.execute("UPDATE chunks SET error='invalid or unsupported discovery; saved response retained' WHERE id=?", (chunk_id,))
+                    error = "invalid or unsupported discovery; saved response retained"
+                    conn.execute("UPDATE chunks SET error=? WHERE id=?", (error, chunk_id))
+        except SpendReached:
+            yield Progress(Step.DISCOVER, done - 1, total, "")
+            raise
         except NeedsApproval:
             raise
         except Exception as exc:

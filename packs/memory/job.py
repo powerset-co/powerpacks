@@ -51,6 +51,8 @@ class Job:
     tokens: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0, "embedding": 0})
     failures: list[Failure] = field(default_factory=list)
     error: str = ""
+    stopped: str = ""
+    pid: int = 0
 
 
 def database(root: Path) -> Path:
