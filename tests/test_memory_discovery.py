@@ -217,8 +217,8 @@ class DiscoveryTests(unittest.TestCase):
         from packs.memory.discovery import Discover
         from packs.memory.generate import embedded
         from packs.memory.models import document
-        texts = ['permission architecture', 'identity governance', 'access control engineering']
-        people = [self.person(f'c{i}', f'Synthetic Person{i}') for i in range(3)]
+        texts = ['permission architecture'] * 3 + ['identity governance', 'access control engineering']
+        people = [self.person(f'c{i}', f'Synthetic Person{i}') for i in range(len(texts))]
         fields = {f'c{i}': {'topics': [text]} for i, text in enumerate(texts)}
         store = self.imported(people, fields)
         vector_provider = FixtureProvider()
@@ -228,7 +228,7 @@ class DiscoveryTests(unittest.TestCase):
                 embedded(store, vector_provider, document(claim))
         self.provider.embedding_key = vector_provider.embedding_key
         groups = list(Discover(store, self.provider).groups())
-        self.assertEqual({group.phrase for group in groups if group.seed}, set(texts))
+        self.assertEqual({group.phrase for group in groups if group.seed}, {texts[0]})
         group = next(group for group in groups if group.seed)
         preview = Discover(store, self.provider).preview(phrase=group.phrase, limit=1)
         self.assertEqual((preview.pending_calls, preview.groups[0].people), (1, 3))
@@ -245,7 +245,7 @@ class DiscoveryTests(unittest.TestCase):
             return discovery_response(response)
 
         with patch.object(self.provider, 'discover', side_effect=semantic):
-            self.assertEqual(Discover(store, self.provider).run(limit=1, phrase=group.phrase).tags, 3)
+            self.assertEqual(Discover(store, self.provider).run(limit=1, phrase=group.phrase).tags, 5)
             self.assertEqual(Discover(store, self.provider).run(limit=1, phrase=group.phrase).calls, 0)
         self.assertEqual({hit.claim.topic for hit in self.tags(store)}, {'access controls'})
         self.assertEqual(store.conn.execute("SELECT confirmed FROM aliases WHERE alias='iam'").fetchone()[0], 0)
@@ -291,18 +291,20 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_lexical_distinctive_shared_passages_nominate_without_vectors(self) -> None:
         from packs.memory.discovery import Discover
-        texts = ['speleology alpine expedition', 'speleology advanced expedition', 'alpine expedition planning']
-        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(3)]
-        store = self.imported(people, {f'c{i}': {'topics': [text]} for i, text in enumerate(texts)})
-        groups = list(Discover(store, self.provider).groups(phrase=texts[0]))
+        texts = ['speleology alpine expedition'] * 3 + ['speleology advanced expedition', 'alpine expedition planning']
+        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(len(texts))]
+        store = self.imported(people, {f'c{i}': {'topics': [text] + [f'decoy{i} topic{j}' for j in range(12)]} for i, text in enumerate(texts)})
+        discover = Discover(store, self.provider)
+        groups = list(discover.groups(phrase=texts[0]))
         self.assertEqual([(group.phrase, group.people) for group in groups], [(texts[0], 3)])
+        self.assertEqual(len(list(discover._parents(groups[0]))), 5)
 
     def test_retrieved_paraphrase_after_fourteen_decoys_is_supplied(self) -> None:
         from packs.memory.discovery import Discover
         from packs.memory.models import document
         from packs.ingestion.primitives.common.jsonio import short_hash
-        texts = ['permission architecture', 'identity governance', 'access control engineering']
-        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(3)]
+        texts = ['permission architecture'] * 3 + ['identity governance', 'access control engineering']
+        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(len(texts))]
         fields = {f'c{i}': {'topics': [f'Unrelated decoy topic {i} {j}' for j in range(14)] + [text]}
                   for i, text in enumerate(texts)}
         store = self.imported(people, fields)
@@ -311,7 +313,7 @@ class DiscoveryTests(unittest.TestCase):
             for row in store.conn.execute('SELECT payload FROM active_claims'):
                 claim = Claim.parse(json.loads(row[0]))
                 if claim.topic in texts:
-                    store.conn.execute('INSERT INTO embeddings VALUES(?,?,?)',
+                    store.conn.execute('INSERT OR IGNORE INTO embeddings VALUES(?,?,?)',
                                        ('synthetic-cache', short_hash(document(claim), n=64), packed([1., 0., 0.])))
         discover = Discover(store, self.provider)
         group = next(discover.groups(phrase=texts[0]))
@@ -327,7 +329,7 @@ class DiscoveryTests(unittest.TestCase):
         from packs.memory.models import document
         from packs.ingestion.primitives.common.jsonio import short_hash
         people = [self.person(f'c{i:02d}', f'Synthetic{i}') for i in range(12)]
-        store = self.imported(people, {person['member']: {'topics': [f'uniqueconcept{i}']} for i, person in enumerate(people)})
+        store = self.imported(people, {person['member']: {'topics': [f'uniqueconcept{0 if i < 3 else i}']} for i, person in enumerate(people)})
         self.provider.embedding_key = 'synthetic-cache'
         with store.conn:
             for row in store.conn.execute('SELECT c.member,a.payload FROM active_claims a JOIN sources c ON c.id=a.source_id'):
@@ -335,11 +337,11 @@ class DiscoveryTests(unittest.TestCase):
                 score = 1.0 if number == 0 else 0.35 + number * 0.05
                 vector = packed([score, math.sqrt(1 - score * score), 0.0])
                 claim = Claim.parse(json.loads(row['payload']))
-                store.conn.execute('INSERT INTO embeddings VALUES(?,?,?)', ('synthetic-cache', short_hash(document(claim), n=64), vector))
+                store.conn.execute('INSERT OR IGNORE INTO embeddings VALUES(?,?,?)', ('synthetic-cache', short_hash(document(claim), n=64), vector))
         discover = Discover(store, self.provider)
         group = next(discover.groups(phrase='uniqueconcept0'))
         matches = list(discover._parents(group))
-        self.assertEqual([match.parent.rsplit('#', 1)[-1] for match in matches], ['c00', 'c11', 'c10', 'c09', 'c08', 'c07', 'c06', 'c05', 'c04'])
+        self.assertEqual([match.parent.rsplit('#', 1)[-1] for match in matches], ['c00', 'c01', 'c02', 'c11', 'c10', 'c09', 'c08', 'c07', 'c06', 'c05', 'c04'])
 
     def test_unrelated_random_vectors_and_common_boilerplate_do_not_nominate(self) -> None:
         import random
@@ -393,27 +395,29 @@ class DiscoveryTests(unittest.TestCase):
         from packs.memory.models import document
         from packs.memory.models import vector
         from packs.ingestion.primitives.common.jsonio import short_hash
-        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(3)]
-        store = self.imported(people, {person['member']: {'topics': [f'uniqueseed{i}']} for i, person in enumerate(people)})
+        people = [self.person(f'c{i}', f'Synthetic{i}') for i in range(5)]
+        store = self.imported(people, {person['member']: {'topics': [f'uniqueseed{0 if i < 3 else i}']} for i, person in enumerate(people)})
         self.provider.embedding_key = 'synthetic-cache'
         values = []
-        for number in range(3):
+        for number in range(5):
             raw = [0.01] * 32 + [1.0]
-            if number:
-                for index in range((number - 1) * 4, number * 4):
+            if number >= 3:
+                for index in range((number - 3) * 4, (number - 2) * 4):
                     raw[index] = -0.01
             values.append(vector(raw))
-        for other in values[1:]:
+        for other in values[3:]:
             self.assertGreater(sum(a * b for a, b in zip(values[0], other)), 0.99)
             self.assertFalse(any(all((a > 0) == (b > 0) for a, b in zip(values[0][band::4][:8], other[band::4][:8]))
                                  for band in range(4)))
         with store.conn:
             for row in store.conn.execute('SELECT c.member,a.payload FROM active_claims a JOIN sources c ON c.id=a.source_id'):
                 claim = Claim.parse(json.loads(row['payload']))
-                store.conn.execute('INSERT INTO embeddings VALUES(?,?,?)',
+                store.conn.execute('INSERT OR IGNORE INTO embeddings VALUES(?,?,?)',
                                    ('synthetic-cache', short_hash(document(claim), n=64), packed(values[int(row['member'][1:])])) )
-        groups = list(Discover(store, self.provider).groups(phrase='uniqueseed0'))
+        discover = Discover(store, self.provider)
+        groups = list(discover.groups(phrase='uniqueseed0'))
         self.assertEqual([group.people for group in groups], [3])
+        self.assertEqual(len(list(discover._parents(groups[0]))), 5)
 
     def test_changed_explanation_and_quote_respect_removal_replacement_and_merge(self) -> None:
         from packs.memory.discovery import Discover

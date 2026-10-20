@@ -13,7 +13,19 @@ from packs.memory.store import Store
 from packs.memory.progress import Progress, consume
 
 _ORIGINAL = "c.chunk_id IS NULL AND c.human=0"
-_VALUE = "normalized(CASE WHEN c.object<>'' THEN c.object ELSE c.text END)"
+_STOPWORDS = frozenset("a an and as at be by for he her him his i if in is it its me my no not of on or our out she so the to up us we you about after again also been before being both could does doing during each from have here into just more most much must only other over same should some such than that their them then there these they this those through under very were what when where which while with would your".split())
+_SEED_TOPICS = "'title','school','field_of_study','location','location_str','schoolname','degree','fieldofstudy'"
+
+
+def _name_seed(phrase: str, name: str) -> bool:
+    tokens = re.findall(r"[^\W_]+", phrase)
+    acronyms = {token.casefold() for token in re.findall(r"[^\W_]+", name)
+                if sum(character.isupper() for character in token) >= 2}
+    return len(phrase) <= 40 and bool(tokens) and all(
+        not token.isnumeric() and token not in _STOPWORDS and (len(token) >= 4 or token in acronyms)
+        for token in tokens)
+
+
 NEIGHBORS = 8
 MIN_SIMILARITY = 0.35  # Pilot within-concept p25=.390; this rejects remote candidates, not false claims.
 
@@ -22,18 +34,23 @@ class Discover:
     def __init__(self, store: Store, provider: DiscoveryProvider) -> None:
         self.store, self.provider = store, provider
         self.next_after = ""
+        self._indexed = False
+        store.conn.create_function("discovery_name_seed", 2, _name_seed, deterministic=True)
 
     def _index(self) -> None:
+        if self._indexed:
+            return
+        self._indexed = True
         conn = self.store.conn
-        conn.executescript("DROP TABLE IF EXISTS temp.discovery_vectors; CREATE TEMP TABLE discovery_vectors("
+        conn.executescript("CREATE TEMP TABLE IF NOT EXISTS discovery_vectors("
                            "claim_id INTEGER,band INTEGER,value TEXT,PRIMARY KEY(claim_id,band)); "
-                           "CREATE INDEX temp.discovery_vector_values ON discovery_vectors(band,value);")
-        conn.executescript("DROP TABLE IF EXISTS temp.discovery_lexical; "
-                           "CREATE VIRTUAL TABLE temp.discovery_lexical USING fts5(text,topic,scope,object);")
+                           "CREATE INDEX IF NOT EXISTS temp.discovery_vector_values ON discovery_vectors(band,value);")
+        conn.executescript("DELETE FROM discovery_vectors; "
+                           "CREATE VIRTUAL TABLE IF NOT EXISTS temp.discovery_lexical USING fts5(text,topic,scope,object);")
+        conn.execute('DELETE FROM discovery_lexical')
         conn.execute('INSERT INTO discovery_lexical(rowid,text,topic,scope,object) '
                      'SELECT c.id,c.text,c.topic,c.scope,c.object FROM active_claims c WHERE ' + _ORIGINAL)
-        conn.executescript("DROP TABLE IF EXISTS temp.discovery_words; "
-                           "CREATE VIRTUAL TABLE temp.discovery_words USING fts5vocab('temp','discovery_lexical','row');")
+        conn.executescript("CREATE VIRTUAL TABLE IF NOT EXISTS temp.discovery_words USING fts5vocab('temp','discovery_lexical','row');")
         if not self.provider.embedding_key:
             return
         for row in conn.execute("SELECT c.id,e.vector FROM active_claims c JOIN embeddings e ON e.model=? AND e.hash=c.document_hash "
@@ -74,10 +91,12 @@ class Discover:
                 (group.phrase,)):
                 yield Person(row[0])
             return
-        people = [Person(row['parent'], row['id']) for row in conn.execute(
-            'SELECT c.parent,min(c.id) id FROM active_claims c WHERE ' + _ORIGINAL + ' AND ' + _VALUE + '=? '
-            'GROUP BY c.parent ORDER BY c.parent', (group.phrase,))]
-        found = {person.parent for person in people}
+        self._index()
+        for row in conn.execute(
+            'SELECT c.parent,min(c.id) id FROM active_claims c WHERE ' + _ORIGINAL + ' AND c.grouping_value=? '
+            'GROUP BY c.parent ORDER BY c.parent', (group.phrase,)):
+            yield Person(row['parent'], row['id'])
+        found: set[str] = set()
         seed = conn.execute('SELECT payload FROM active_claims WHERE id=?', (group.seed,)).fetchone()
         wanted = self._vector(seed[0]) if self.provider.embedding_key else None
         if wanted is not None:
@@ -101,52 +120,60 @@ class Discover:
                     nearest.append((score, row['id'], row['parent']))
             added = 0
             for _, claim_id, parent in sorted(nearest, key=lambda item: (-item[0], item[1])):
-                if parent in found:
+                if parent in found or conn.execute(
+                    'SELECT 1 FROM active_claims c WHERE ' + _ORIGINAL +
+                    ' AND c.grouping_value=? AND c.parent=? LIMIT 1', (group.phrase, parent)).fetchone():
                     continue
-                people.append(Person(parent, claim_id))
+                yield Person(parent, claim_id)
                 found.add(parent)
                 added += 1
                 if added == NEIGHBORS:
                     break
         for person in self._lexical(group.phrase):
-            if person.parent not in found:
-                people.append(person)
+            if person.parent not in found and not conn.execute(
+                'SELECT 1 FROM active_claims c WHERE ' + _ORIGINAL +
+                ' AND c.grouping_value=? AND c.parent=? LIMIT 1', (group.phrase, person.parent)).fetchone():
+                yield person
                 found.add(person.parent)
-        yield from people
 
     def groups(self, *, min_people: int = 3, phrase: str = '', after: str = '') -> Iterator[Group]:
         if min_people < 2:
             raise ValueError('min_people must be at least 2')
         phrase = normalized(phrase)
-        self._index()
         inspected = 0
         self.next_after = ''
-        for row in self.store.conn.execute(
-            'SELECT p.phrase,count(DISTINCT i.parent) people FROM phrases p JOIN sources s ON s.id=p.source_id '
-            'JOIN identities i USING(namespace,member) WHERE s.present=1 AND i.present=1 '
-            'AND (?=\'\' OR p.phrase=?) AND \'name:\'||p.phrase>? GROUP BY p.phrase HAVING count(DISTINCT i.parent)>=? ORDER BY p.phrase',
-            (phrase, phrase, after, min_people)):
-            self.next_after = 'name:' + row['phrase']
-            inspected += 1
-            yield Group(self.next_after, row['phrase'], row['people'])
-            if inspected == 100:
-                return
-        for row in self.store.conn.execute(
-            'SELECT ' + _VALUE + ' phrase,min(c.id) seed,count(DISTINCT c.parent) people '
-            'FROM active_claims c WHERE ' + _ORIGINAL + " AND (?='' OR " + _VALUE + '=?) AND \'saved:\'||' + _VALUE + '>? GROUP BY phrase ORDER BY phrase',
-            (phrase, phrase, after)):
+        conn = self.store.conn
+        if after < 'saved:':
+            cursor = after.removeprefix('name:')
+            name_filter = 'p.phrase=?' if phrase else 'discovery_name_seed(p.phrase,r.content)'
+            params = (cursor, phrase, min_people) if phrase else (cursor, min_people)
+            for row in list(conn.execute(
+                'SELECT p.phrase,count(DISTINCT i.parent) people FROM phrases p JOIN sources s ON s.id=p.source_id '
+                'JOIN identities i USING(namespace,member) JOIN revisions r ON r.source_id=s.id AND r.hash=s.hash '
+                'WHERE s.present=1 AND i.present=1 AND p.phrase>? AND ' + name_filter +
+                ' GROUP BY p.phrase HAVING count(DISTINCT i.parent)>=? ORDER BY p.phrase LIMIT 101', params)):
+                if inspected == 100:
+                    return
+                inspected += 1
+                self.next_after = 'name:' + row['phrase']
+                yield Group(self.next_after, row['phrase'], row['people'])
+        cursor = after.removeprefix('saved:') if after.startswith('saved:') else ''
+        saved_filter = 'c.grouping_value=?' if phrase else (
+            "length(c.grouping_value) BETWEEN 1 AND 40 AND (c.object<>'' OR c.kind IN ('mention','tag') OR c.topic IN (" + _SEED_TOPICS + '))')
+        params = (cursor, phrase, min_people) if phrase else (cursor, min_people)
+        for row in list(conn.execute(
+            'SELECT c.grouping_value phrase,min(c.id) seed,count(DISTINCT c.parent) people '
+            'FROM active_claims c WHERE ' + _ORIGINAL + ' AND c.grouping_value>? AND ' + saved_filter +
+            ' GROUP BY c.grouping_value HAVING count(DISTINCT c.parent)>=? ORDER BY c.grouping_value LIMIT 101', params)):
             if inspected == 100:
                 return
             inspected += 1
             self.next_after = 'saved:' + row['phrase']
-            group = Group('saved:' + row['phrase'], row['phrase'], row['people'], row['seed'])
-            count = sum(1 for _ in self._parents(group))
-            if count < min_people:
-                continue
-            yield Group(group.key, group.phrase, count, group.seed)
+            yield Group(self.next_after, row['phrase'], row['people'], row['seed'])
         self.next_after = ''
 
     def _evidence(self, person: Person, phrase: str) -> tuple[Evidence, ...]:
+        self._index()
         conn = self.store.conn
         parent = person.parent
         result: list[Evidence] = []

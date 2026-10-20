@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -243,7 +244,7 @@ class MemoryJobTests(unittest.TestCase):
         self.assertEqual(asdict(client.usage), {"input": 100, "output": 20, "embedding": 0})
         self.assertAlmostEqual(client.usage.cost(client.model, client.embedding_key), 0.00002)
 
-    def test_killed_generate_resumes_without_repeating_paid_calls(self) -> None:
+    def test_killed_generate_reuses_every_persisted_paid_response(self) -> None:
         script = '''
 import os, sys
 from pathlib import Path
@@ -287,12 +288,25 @@ with patch.object(runner, "provider", return_value=provider), patch.object(job, 
                 source_db(V2(root / ".powerpacks").database, STORIES)
                 first = subprocess.run([sys.executable, "-c", script, str(root), mode], env=env, capture_output=True)
                 self.assertEqual(first.returncode, 9, first.stderr)
+                calls_file = root / "calls"
+                first_calls = calls_file.read_text().splitlines() if calls_file.exists() else []
+                with sqlite3.connect(job.database(root)) as checkpoint:
+                    saved = {row[0] for row in checkpoint.execute(
+                        "SELECT revisions.content FROM chunks JOIN revisions "
+                        "ON revisions.source_id=chunks.source_id AND revisions.hash=chunks.source_hash")}
                 second = subprocess.run([sys.executable, "-c", script, str(root), "resume"], env=env, capture_output=True)
                 self.assertEqual(second.returncode, 0, second.stderr)
                 self.assertEqual(job.read(root).status, Status.DONE)
                 calls = (root / "calls").read_text().splitlines()
-                self.assertEqual(len(calls), 5)
                 self.assertEqual(len(set(calls)), 5)
+                self.assertTrue(all(calls.count(content) == 1 for content in saved))
+                # A hard exit can repeat submitted requests whose responses were not committed.
+                self.assertEqual(len(calls), 5 + len(first_calls) - len(saved))
+                self.assertLessEqual(len(first_calls) - len(saved), 64)
+                if mode == "between":
+                    self.assertEqual(len(calls), 5)
+                else:
+                    self.assertGreater(len(saved), 0)
                 self.assertEqual((root / "imports").read_text().splitlines(), ["import"])
 
 

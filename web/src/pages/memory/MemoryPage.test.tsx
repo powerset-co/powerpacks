@@ -177,6 +177,15 @@ it("while running lists the four steps with counts, the bar and the current item
   expect(within(running).getByText(/\$0\.40 of \$2\.35 approved/)).toBeTruthy()
 })
 
+it("shows completed discovery batches when its total is unknown", async () => {
+  serve({ ...RUNNING, step: "discover", steps: { ...RUNNING.steps, discover: { done: 7, total: 0 } } })
+  expect(await screen.findByText("7 batches completed")).toBeTruthy()
+  expect(screen.getByRole("progressbar").hasAttribute("aria-valuenow")).toBe(false)
+  fireEvent.click(screen.getByRole("button", { name: "Details" }))
+  expect(await screen.findByText("7 batches")).toBeTruthy()
+  expect(screen.queryByText("7 / 0 batches")).toBeNull()
+})
+
 it("once enabled shows Ready, updates now, and the toggle posts settings", async () => {
   const fetch = serve(ENABLED, {
     "POST /api/memory/settings": () => ({ ...ENABLED, keep_updated: false }),

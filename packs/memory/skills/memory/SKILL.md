@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Retrieve saved local knowledge about people, relationships, topics, personal labels and preferences. Use for questions about what the user knows or remembers, and follow-ups on remembered groups. Not recruiting/JD search, shared-network search, or memory generation.
+description: Retrieve saved local knowledge about people, relationships, topics, personal labels and preferences. Use for questions about what the user knows or remembers, and follow-ups on remembered groups. Includes named-person dossier lookup. Not recruiting/JD search, shared-network search, or memory generation.
 ---
 
 # Memory
@@ -10,19 +10,21 @@ conversation. Resolve references such as “those people” from the prior selec
 never silently expand its scope. No classifier or extra model call is needed.
 
 Run from the installed checkout using `.venv/bin/python -m packs.memory`.
-Use the explicitly identified local corpus and its separate derived SQLite DB.
+For memory queries use the explicitly identified local corpus and its separate
+derived SQLite DB. Original dossier lookup does not require a memory DB.
 Never guess among owners' stores. If the corpus is known but memory is absent,
-read `packs/search/skills/search/memory-directory.md` for the free import contract.
-Import current source changes before a new request. Do not generate, discover,
+read `packs/memory/skills/memory/memory-directory.md` for the free import contract.
+For memory queries, import current source changes before a new request. Do not generate, discover,
 enrich, upload or rebuild embeddings as a side effect of answering.
 
 ## Choose and retrieve
 
 | Intent, including conversational context | Primitive sequence |
 | --- | --- |
-| “All my SoF people”; “those mentors”; an action on that group | Follow `packs/search/skills/search/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
+| “All my SoF people”; “those mentors”; an action on that group | Follow `packs/memory/skills/memory/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
 | “Who knows about permission architecture?”; “what do I know about this topic?” | `query` with the user's meaning and hard filters → `open` the useful claims. This is a ranked shortlist, not all matching people. |
-| “What do we remember about Jordan?” | `lookup` exact name or known identifier → disambiguate → `query --person` canonical parent → `open`. For the complete original dossier use `packs/search/skills/search/person-lookup.md`. |
+| “Tell me everything about Jordan”; “open Jordan’s original dossier” | Follow `packs/memory/skills/memory/person-lookup.md`: use the free native dossier lookup; no memory generation or ranked search. |
+| “What do we remember about Jordan on this topic?” | `lookup` exact name or known identifier → disambiguate → `query --person` canonical parent → `open`. For the complete original dossier use `packs/memory/skills/memory/person-lookup.md`. |
 | “Who overlapped with Jordan at Acme?” | `lookup` → `overlap` with the canonical parent and organization. Overlap is a possible connection, not proof of friendship or willingness to introduce. |
 | “My LPs in Cedar Fund I” | Use the explicit `lp` kind and fund object; use directory resolution/enumeration for a complete saved group. Never infer membership from job titles. |
 | Recruiting, a JD, a named shared network, or cold prospects | Use search or GTM with the original scope; do not substitute local memory. |

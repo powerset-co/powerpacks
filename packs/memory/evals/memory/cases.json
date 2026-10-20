@@ -1,0 +1,38 @@
+[
+  {
+    "id": "literal-sof",
+    "query": "List everyone with the literal SoF in their saved contact name. Include the full group, not a ranked shortlist.",
+    "expected_behavior": "Read memory guidance, resolve SoF, select source_name, enumerate every page, and report exactly 3 canonical people. Do not treat the label as residence.",
+    "check": "enumeration"
+  },
+  {
+    "id": "semantic-work",
+    "query": "Who has actually done permission architecture work? Distinguish work from discussion or interest.",
+    "expected_behavior": "Read memory guidance, query permission architecture with the known cached embedding model and kind work, then open the useful claim. Jordan Bravo is supported; discussion and interest are insufficient.",
+    "check": "semantic"
+  },
+  {
+    "id": "original-dossier",
+    "query": "Tell me everything saved in Jordan Bravo's original dossier, including how I know them.",
+    "expected_behavior": "Read memory/person-lookup guidance and execute the existing deep-context SQLite lookup. Read original saved facts, not just a memory shortlist. Do not generate or enrich.",
+    "check": "dossier"
+  },
+  {
+    "id": "ambiguous-geography",
+    "query": "Who are my South of France people?",
+    "expected_behavior": "Resolve saved meanings and ask whether the user means the literal human tag or the saved geographic value before enumerating. Do not equate the two or infer residence from a tag.",
+    "check": "clarify"
+  },
+  {
+    "id": "shared-network",
+    "query": "Find engineers in the named shared network Synthetic Harbor, not just my local contacts.",
+    "expected_behavior": "Read search guidance and retain the named shared-network scope. Do not replace it with local memory. Stop before external access in this offline verification.",
+    "check": "search"
+  },
+  {
+    "id": "processing",
+    "query": "Process my imported contacts and build their dossiers. Explain the next processing step and stop before any paid work.",
+    "expected_behavior": "Read deep-context guidance rather than memory retrieval. Stop before paid work; do not generate memory, enrich, or contact providers in this offline verification.",
+    "check": "deep-context"
+  }
+]

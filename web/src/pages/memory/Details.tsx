@@ -19,8 +19,11 @@ export function Details({ record }: { record: MemoryJob }) {
               <div key={step.key} className="contents">
                 <dt>{step.label}</dt>
                 <dd className="m-0 text-right tabular-nums">
-                  {record.steps[step.key].done.toLocaleString()} /{" "}
-                  {record.steps[step.key].total.toLocaleString()} {step.unit}
+                  {record.steps[step.key].done.toLocaleString()}
+                  {record.steps[step.key].total
+                    ? ` / ${record.steps[step.key].total.toLocaleString()}`
+                    : ""}{" "}
+                  {step.unit}
                 </dd>
               </div>
             ))}

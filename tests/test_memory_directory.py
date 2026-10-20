@@ -53,7 +53,7 @@ class DirectoryTests(unittest.TestCase):
         self.directory = Directory(self.store)
 
     def test_exact_origins_counts_pages_and_hidden(self) -> None:
-        with patch('httpx.Client.post', side_effect=AssertionError('unsolicited API')):
+        with patch('httpx.HTTPTransport.handle_request', side_effect=AssertionError('unsolicited API')):
             meanings = self.directory.resolve('SoF')
             by_origin = {meaning.selector.origin: meaning for meaning in meanings}
             self.assertEqual(by_origin[Origin.SOURCE_NAME].count, 137)
@@ -104,7 +104,7 @@ class DirectoryTests(unittest.TestCase):
         query = 'experienced advisor'
         with self.store.conn:
             self.store.conn.execute('INSERT INTO embeddings VALUES(?,?,?)', (provider.embedding_key, short_hash(query, n=64), packed([0., 0., 1.])))
-        with patch('httpx.Client.post', side_effect=AssertionError('unsolicited API')):
+        with patch('httpx.HTTPTransport.handle_request', side_effect=AssertionError('unsolicited API')):
             suggestions = self.directory.resolve(query, embedding_model=provider.embedding_key)
         self.assertIn(Selector(Origin.HUMAN_TAG, 'mentor'), [meaning.selector for meaning in suggestions])
         with self.assertRaises(NeedsApproval):
@@ -133,8 +133,9 @@ class DirectoryTests(unittest.TestCase):
         provider = FixtureProvider()
         Generate(self.store, provider).run(limit=1000)
         query = 'experienced advisor without shared terms'
-        response = httpx.Response(200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [0., 0., 1.]}]})
-        with patch('httpx.Client.post', return_value=response) as request, patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic-key'}):
+        transport = httpx.MockTransport(lambda request: httpx.Response(
+            200, json={'usage': {'prompt_tokens': 1}, 'data': [{'embedding': [0., 0., 1.]}]}))
+        with patch('httpx.HTTPTransport.handle_request', side_effect=transport.handle_request) as request, patch.dict(os.environ, {'OPENAI_API_KEY': 'synthetic-key'}):
             with self.assertRaises(NeedsApproval):
                 self.directory.resolve(query, embedding_model=provider.embedding_key)
             request.assert_not_called()

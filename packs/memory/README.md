@@ -29,7 +29,7 @@ flowchart LR
 | provider.py | No-tracing generation/embedding requests | One bounded input | Provider request with generation `store:false` |
 | discovery.py | Original-evidence groups, cached retrieval, bounded interpretations | Original names/projections and existing vectors | SQLite checkpoints and inferred tags |
 | discovery_provider.py | Typed discovery decisions and request schema | One representative batch | Nothing |
-| generate.py | Serial checkpoints and embedding reuse | Derived sources and caches | Derived chunks, claims, vectors |
+| generate.py | Up to 64 concurrent generation calls, serial checkpoints and embedding reuse | Derived sources and caches | Derived chunks, claims, vectors |
 | query.py | Hard filters, hybrid ranking, tenure overlap | Active claims, streamed cached vectors | Query embedding cache |
 | directory.py | Typed meanings and complete canonical pages | Current names, tags, claims and cached hybrid query | Query embedding cache only after approval |
 | actions.py | Exact native People/tag actions and memory corrections | Explicit corpus-bound enumerated IDs | Existing source owners and memory corrections |
@@ -38,7 +38,7 @@ flowchart LR
 Run from the checkout with its Python environment. The derived DB must be
 outside the source roots. Each derived DB accepts exactly one corpus; unrelated
 source roots require separate databases. The search skill routes local label and association requests through
-`packs/search/skills/search/memory-directory.md`. Installed skill copies require
+`packs/memory/skills/memory/memory-directory.md`. Installed skill copies require
 the repository-supported installer before they reflect this checkout.
 
 ```sh
@@ -62,7 +62,9 @@ embedding calls. Apply approved current token prices before requesting spend.
 After approval, repeat the generation command without `--dry-run` and with
 `--approve-spend`. Repeat the
 same command to resume; completed chunks and vectors are reused. One process,
-one in-flight request, at most 9,000 artifact characters and 24 claims per chunk.
+up to 64 in-flight generation requests, replenished as each finishes, at most 9,000 artifact characters and
+24 claims per chunk. The shared OpenAI concurrency setting can lower this bound. SQLite writes and embedding requests remain serial.
+In-flight requests reserve their maximum cost against the shared spend limit.
 Every paid generation response is committed before parsing, including malformed,
 incomplete and unsupported output. Exclusions are counted and saved on chunks;
 unsupported claims never enter search, and rerunning never buys the same response.
@@ -109,8 +111,14 @@ the separately requested Fable review has not run.
 
 Discovery nominates recurring name tokens/phrases by distinct canonical people,
 plus shared original dossier values. Original names cite `candidates` rows even
-when synthesis changes the display name. Numeric-only phrases are excluded;
-case/punctuation normalize, while SF and SoF remain separate. Name patterns
+when synthesis changes the display name. Automatic name seeds exclude stopwords
+and tokens shorter than four letters, except original-name acronyms such as SF,
+SoF and BA. Targeted `--phrase` inspection remains available. Saved-value seeds
+are short structured values (at most 40 characters), not bios or event summaries.
+Seeds need the minimum number of exact distinct people before optional neighbors
+are added. Normalized claim values are indexed in SQLite; pages do not normalize
+the entire corpus again. Case/punctuation normalize, while SF and SoF remain
+separate. Name patterns
 are evidence to interpret, never identity merge instructions.
 
 ```sh
@@ -173,3 +181,11 @@ and HTTP mocks establish plumbing, **not semantic recall or live provider loggin
 privacy**. Live pilot, actual semantic quality and dashboard log absence require
 separate approved spend and verification. This package provides no dashboard
 verification claim.
+
+Routing verification uses `scripts/verify-memory-routing --live --limit 1`
+(first run a pilot; use a fresh `--out-dir` for each run). Cases share the existing
+skill-eval JSON format under `evals/memory/`. Unlike the plan-grading runner,
+this starts unhinted Codex sessions and checks executed commands and synthetic
+SQLite results. It requires subscription auth, blocks provider calls, preserves
+transcripts, and flags boundary answers for human review. Omit `--live` for
+fixture preparation only; that is not routing proof.

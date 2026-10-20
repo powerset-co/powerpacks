@@ -97,7 +97,6 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
             if not discover.next_after:
                 return
             cursor = discover.next_after
-    total = sum(1 for _ in items())
     for done, (group, parents) in enumerate(retry_first(items, batch_key, first), 1):
         if group.key != last_group:
             previous_group, last_group = last_group, group.key
@@ -147,13 +146,13 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
                         conn.execute("UPDATE chunks SET error=? WHERE id=?",
                                      ("unsupported discovery; saved response retained", chunk_id))
         except SpendReached:
-            yield Progress(Step.DISCOVER, done - 1, total, "")
+            yield Progress(Step.DISCOVER, done - 1, 0, "")
             raise
         except NeedsApproval:
             raise
         except Exception as exc:
             error = str(exc)
-        yield Progress(Step.DISCOVER, done, total, key, error)
+        yield Progress(Step.DISCOVER, done, 0, key, error)
     with conn:
         for row in conn.execute('SELECT key,chunk_id FROM discovery WHERE key NOT IN (SELECT key FROM discovery_seen)'):
             group_key = row['key'].rsplit(':', 1)[0]

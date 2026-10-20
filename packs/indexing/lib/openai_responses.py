@@ -53,6 +53,16 @@ def reasoning_effort(default: str = DEFAULT_REASONING_EFFORT) -> str:
     return effort if effort in VALID_EFFORTS else default
 
 
+def structured_response_kwargs(schema: dict[str, Any] | None, schema_name: str) -> dict[str, Any]:
+    """Responses storage policy and optional strict JSON schema."""
+    kwargs: dict[str, Any] = {"store": False}
+    if schema is not None:
+        kwargs["text"] = {
+            "format": {"type": "json_schema", "name": schema_name, "strict": True, "schema": schema}
+        }
+    return kwargs
+
+
 def responses_kwargs(
     model: str,
     *,
@@ -67,24 +77,13 @@ def responses_kwargs(
     models get ``reasoning.effort`` + the flex/default service tier; a JSON
     schema (when given) is enforced via ``text.format`` strict mode.
     """
-    kwargs: dict[str, Any] = {
-        "store": False,  # OpenAI keeps no request
-        "max_output_tokens": int(
-            os.getenv("POWERPACKS_DEEP_CONTEXT_MAX_OUTPUT_TOKENS", str(max_output_tokens))
-        ),
-    }
+    kwargs = structured_response_kwargs(schema, schema_name)
+    kwargs["max_output_tokens"] = int(
+        os.getenv("POWERPACKS_DEEP_CONTEXT_MAX_OUTPUT_TOKENS", str(max_output_tokens))
+    )
     if is_reasoning_model(model):
         kwargs["reasoning"] = {"effort": effort or reasoning_effort()}
         kwargs["service_tier"] = openai_service_tier()
-    if schema is not None:
-        kwargs["text"] = {
-            "format": {
-                "type": "json_schema",
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            }
-        }
     return kwargs
 
 

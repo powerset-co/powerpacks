@@ -120,6 +120,12 @@ class Store:
             self.conn.executescript(_DDL)
             self.conn.execute(f"PRAGMA application_id={_APPLICATION_ID}")
             self.conn.commit()
+        if not any(row['name'] == 'grouping_value' for row in self.conn.execute('PRAGMA table_xinfo(claims)')):
+            self.conn.execute("ALTER TABLE claims ADD COLUMN grouping_value TEXT GENERATED ALWAYS AS "
+                              "(normalized(CASE WHEN object<>'' THEN object ELSE text END)) VIRTUAL")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS claims_grouping ON claims(grouping_value,source_id,id) "
+                          "WHERE active=1 AND chunk_id IS NULL AND human=0")
+        self.conn.commit()
         self.conn.executescript(_ACTIVE_CLAIMS)
 
     def close(self) -> None:

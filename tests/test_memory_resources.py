@@ -167,7 +167,8 @@ class ResourceTests(unittest.TestCase):
             discover = Discover(store, CachedOnly())
             with patch.object(discover, '_vector', wraps=discover._vector) as vectors:
                 preview = discover.preview(limit=1)
-            self.assertEqual((preview.pending_calls, preview.groups[0].people), (1, 9))
+            self.assertEqual((preview.pending_calls, preview.groups), (0, ()))
+            self.assertEqual(vectors.call_count, 0)
             self.assertLessEqual(vectors.call_count, count + 400)
             self.assertLessEqual(preview.max_input_chars, 24000)
             print(json.dumps({'semantic_unique_passages': count, 'cached_dimensions': 1536,

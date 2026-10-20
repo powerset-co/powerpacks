@@ -36,6 +36,7 @@ install_skill() {
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
+install_skill memory "$REPO_ROOT/packs/memory/skills/memory/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"

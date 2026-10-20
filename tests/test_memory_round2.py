@@ -199,8 +199,9 @@ class RoundTwoTests(unittest.TestCase):
             self.assertEqual(Generate(self.store, self.provider).run(limit=100).generation_calls, 0)
             self.assertEqual(generate.call_count, 5)
         self.assertEqual(self.store.conn.execute('SELECT count(*) FROM active_claims').fetchone()[0], 3)
-        saved = self.store.conn.execute('SELECT response FROM chunks ORDER BY id LIMIT 1').fetchone()[0]
-        self.assertEqual(saved, 'not JSON')
+        saved = [row[0] for row in self.store.conn.execute('SELECT response FROM chunks')]
+        self.assertIn('not JSON', saved)
+        self.assertIn(response([], 'incomplete'), saved)
 
     def test_total_fresh_limit_includes_embeddings_on_resume(self) -> None:
         self.store.import_source(self.adapter)

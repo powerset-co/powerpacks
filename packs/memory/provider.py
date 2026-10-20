@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from typing import Any
 
 import httpx
 import tiktoken
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from packs.memory.cost import Usage
+from packs.indexing.lib.openai_responses import structured_response_kwargs
 
 from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory import discovery_provider
@@ -84,6 +88,8 @@ class OpenAIProvider:
                  approve_spend: bool = False, approved_spend_usd: float | None = None) -> None:
         self.approved_spend_usd = approved_spend_usd
         self.usage = Usage()
+        self._usage_lock = threading.Lock()
+        self._reserved_usd = 0.0
         self.approve_spend = approve_spend
         self.model = model
         # Empty means lexical only: no embedding model, no key, no embedding calls.
@@ -92,37 +98,49 @@ class OpenAIProvider:
         self.embedding_dimensions = int(width) if width else None
         self.discovery_key = short_hash(model + discovery_provider.SYSTEM + json.dumps(discovery_provider.SCHEMA, sort_keys=True), n=64)
         self.generation_key = short_hash(model + SYSTEM + json.dumps(SCHEMA, sort_keys=True), n=64)
-        self.client = client or httpx.Client(base_url=(os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1/").rstrip("/") + "/", timeout=120)
+        self.client = OpenAI(api_key=lambda: os.environ["OPENAI_API_KEY"],
+                             base_url=os.getenv("OPENAI_BASE_URL") or None, http_client=client, timeout=120)
 
     def close(self) -> None:
         self.client.close()
 
-    def _post(self, endpoint: str, body: dict[str, object]) -> str:
+    def _post(self, endpoint: str, body: dict[str, Any]) -> str:
         if not self.approve_spend:
             raise NeedsApproval(endpoint)
+        reserved = 0.0
         if self.approved_spend_usd is not None:
             encoder = tiktoken.get_encoding("o200k_base")
             tokens = len(encoder.encode(json.dumps(body))) + 1024
-            cap = Usage(self.usage.input, self.usage.output, self.usage.embedding)
-            if endpoint == "embeddings":
-                cap.embedding += tokens
-            else:
-                cap.input += tokens
-                cap.output += int(str(body["max_output_tokens"]))
+            cap = Usage(embedding=tokens) if endpoint == "embeddings" else Usage(
+                input=tokens, output=int(str(body["max_output_tokens"])))
             cost = cap.cost(self.model, self.embedding_key)
-            if cost is None:
-                raise ValueError("model pricing unavailable")
-            if cost > self.approved_spend_usd:
-                raise SpendReached("approved spend limit reached")
+            with self._usage_lock:
+                spent = self.usage.cost(self.model, self.embedding_key)
+                if cost is None or spent is None:
+                    raise ValueError("model pricing unavailable")
+                if spent + self._reserved_usd + cost > self.approved_spend_usd:
+                    raise SpendReached("approved spend limit reached")
+                reserved = cost
+                self._reserved_usd += reserved
         try:
-            response = self.client.post(endpoint, json=body, headers={"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})
-        except httpx.HTTPError:
+            return self._request(endpoint, body)
+        finally:
+            with self._usage_lock:
+                self._reserved_usd -= reserved
+
+    def _request(self, endpoint: str, body: dict[str, Any]) -> str:
+        try:
+            if endpoint == "embeddings":
+                response = self.client.embeddings.with_raw_response.create(**body)
+            else:
+                response = self.client.responses.with_raw_response.create(**body)
+        except APIStatusError as exc:
+            # Provider error bodies may echo input.
+            raise ValueError(f"provider {endpoint}: HTTP {exc.status_code}") from None
+        except APIConnectionError:
             raise ValueError("provider transport failed") from None
-        # Do not expose provider response bodies (they may echo input).
-        if response.status_code != 200:
-            raise ValueError(f"provider {endpoint}: HTTP {response.status_code}")
         try:
-            usage = object_dict(object_dict(response.json())["usage"])
+            usage = object_dict(object_dict(json.loads(response.text))["usage"])
             fields = ("prompt_tokens",) if endpoint == "embeddings" else ("input_tokens", "output_tokens")
             counts: list[int] = []
             for field in fields:
@@ -132,27 +150,28 @@ class OpenAIProvider:
                 counts.append(count)
         except (KeyError, TypeError, ValueError):
             raise ValueError("provider returned missing or invalid usage") from None
-        if endpoint == "embeddings":
-            self.usage.embedding += counts[0]
-        else:
-            self.usage.input += counts[0]
-            self.usage.output += counts[1]
+        with self._usage_lock:
+            if endpoint == "embeddings":
+                self.usage.embedding += counts[0]
+            else:
+                self.usage.input += counts[0]
+                self.usage.output += counts[1]
         return response.text
 
     def generate(self, content: str) -> str:
         return self._post("responses", {
-            "model": self.model, "store": False, "instructions": SYSTEM, "input": content,
+            **structured_response_kwargs(SCHEMA, "memory_claims"),
+            "model": self.model, "instructions": SYSTEM, "input": content,
             "max_output_tokens": MAX_OUTPUT_TOKENS,
-            "text": {"format": {"type": "json_schema", "name": "memory_claims", "strict": True, "schema": SCHEMA}},
         })
 
     def discover(self, content: str) -> str:
         if len(content) > discovery_provider.INPUT_CHARS:
             raise ValueError("discovery input exceeds bound")
         return self._post("responses", {
-            "model": self.model, "store": False, "instructions": discovery_provider.SYSTEM, "input": content,
+            **structured_response_kwargs(discovery_provider.SCHEMA, "memory_discovery"),
+            "model": self.model, "instructions": discovery_provider.SYSTEM, "input": content,
             "max_output_tokens": discovery_provider.OUTPUT_TOKENS,
-            "text": {"format": {"type": "json_schema", "name": "memory_discovery", "strict": True, "schema": discovery_provider.SCHEMA}},
         })
 
     def embed(self, content: str) -> tuple[float, ...]:

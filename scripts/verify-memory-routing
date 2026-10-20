@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Verify unhinted routing through fresh Codex sessions and real synthetic CLI reads.
+
+Default is dry-run. Live: scripts/verify-memory-routing --live --limit 1
+Uses Codex subscription auth, no API judge. Each case has a 180-second ceiling.
+Reports command events, stdout, stderr, exit status and final response. Boundary
+checks prove guidance was read and retrieval was not substituted; their final
+scope/clarification wording still requires human review. Fake vectors test
+retrieval plumbing, not embedding quality or real-world semantic recall.
+"""
+from __future__ import annotations
+
+import argparse
+from contextlib import closing
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+PYTHON = ROOT / '.venv/bin/python'
+if Path(sys.prefix) != ROOT / '.venv' and PYTHON.exists():
+    os.execv(str(PYTHON), [str(PYTHON), __file__, *sys.argv[1:]])
+sys.path[:0] = [str(ROOT), str(ROOT / 'tests')]
+
+
+def fixture(workspace: Path) -> dict:
+    from test_memory import FixtureProvider, STORIES, source_db
+    from packs.memory.generate import Generate
+    from packs.memory.models import packed
+    from packs.memory.sources import V2
+    from packs.memory.store import Store
+    from packs.ingestion.primitives.common.jsonio import short_hash
+    from packs.ingestion.primitives.deep_context_v2.db.store import open_store
+
+    adapter = V2(workspace / '.powerpacks')
+    stories = json.loads(json.dumps(STORIES))
+    stories.extend({'member': f'sof{i}', 'parent': f'sof{i}', 'name': f'Casey Synthetic{i} SoF', 'claims': []} for i in range(3))
+    source_db(adapter.database, stories)
+    with closing(open_store(adapter.database)) as conn, conn:
+        conn.execute("UPDATE facts SET facts_json=json_set(facts_json,'$.relationship_to_owner','Former synthetic teammate','$.location','South of France') WHERE candidate_id='c1'")
+        conn.execute("INSERT INTO person_tags(candidate_id,tags,note,updated_at) VALUES('c2','South of France','Synthetic literal label','now')")
+    derived = workspace / '.powerpacks-memory/memory.sqlite'
+    provider = FixtureProvider()
+    store = Store(derived, create=True)
+    store.import_source(adapter)
+    Generate(store, provider).run(limit=1000)
+    with store.conn:
+        for query in ('permission architecture', 'permission architecture work', 'Who has actually done permission architecture work?'):
+            store.conn.execute('INSERT INTO embeddings VALUES(?,?,?)', (provider.embedding_key, short_hash(query, n=64), packed((1., 0., 0.))))
+    store.close()
+    cache = Path(os.environ.get('TIKTOKEN_CACHE_DIR', os.environ.get('DATA_GYM_CACHE_DIR', str(Path(tempfile.gettempdir()) / 'data-gym-cache'))))
+    shutil.copytree(cache, workspace / '.tokenizer-cache')
+    return {'source': str(adapter.root), 'source_db': str(adapter.database), 'derived': str(derived), 'embedding_model': provider.embedding_key}
+
+
+def snapshot(workspace: Path) -> None:
+    files = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '--',
+                                     'AGENTS.md', 'docs', 'packs', 'bin', 'tests', 'pyproject.toml', 'uv.lock'], cwd=ROOT, text=True).splitlines()
+    for name in files:
+        path = Path(name)
+        if any(part.startswith('.') for part in path.parts) or path.suffix in ('.sqlite', '.db', '.csv', '.jsonl'):
+            continue
+        source = ROOT / path
+        if not source.is_file() or source.is_symlink():
+            continue
+        target = workspace / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    (workspace / '.venv').symlink_to(ROOT / '.venv', target_is_directory=True)
+    for skill in (workspace / 'packs').glob('*/skills/*/SKILL.md'):
+        target = workspace / '.agents/skills' / skill.parent.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            target.symlink_to(skill.parent, target_is_directory=True)
+
+
+def evidence(stdout: str) -> tuple[list[dict], str, list[str]]:
+    commands, messages, errors = [], [], []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            errors.append('non-JSON event')
+            continue
+        item = event.get('item', {})
+        if event.get('type') == 'item.completed' and item.get('type') == 'command_execution':
+            commands.append({key: item.get(key) for key in ('command', 'aggregated_output', 'exit_code', 'status')})
+        if event.get('type') == 'item.completed' and item.get('type') == 'agent_message':
+            messages.append(item.get('text', ''))
+        if event.get('type') == 'item.completed' and item.get('type') in ('mcp_tool_call', 'web_search'):
+            errors.append('external tool called; offline case failed')
+        if event.get('type') in ('error', 'turn.failed'):
+            errors.append(event.get('message') or str(event))
+    return commands, '\n\n'.join(messages), errors
+
+
+def validate(case: dict, commands: list[dict], final: str) -> list[str]:
+    failures = []
+    succeeded = [c for c in commands if c['exit_code'] == 0 and c['status'] == 'completed']
+    def read(path: str) -> bool:
+        return any(path in c['command'] and re.search(r'\b(cat|sed|head|tail)\b', c['command']) for c in succeeded)
+    def results(command: str) -> list:
+        found = []
+        for c in succeeded:
+            if not re.search(r'(?:-m\s+packs\.memory\b|bin/deep-context-v2\b|deep_context_v2\.lookup\b)', c['command']):
+                continue
+            if not re.search(r'\b' + command + r'\b', c['command']):
+                continue
+            try:
+                found.append(json.loads(c['aggregated_output']))
+            except (TypeError, json.JSONDecodeError):
+                pass
+        return found
+    if not read('AGENTS.md'):
+        failures.append('no successful AGENTS.md read')
+    route = case['check']
+    skill = route if route in ('search', 'deep-context') else 'memory'
+    if not read(f'/skills/{skill}/SKILL.md'):
+        failures.append(f'no successful {skill} skill read')
+    invoked = '\n'.join(c['command'] or '' for c in commands)
+    if re.search(r'--approve-spend|\b(curl|wget)\b|(?:-m\s+packs\.memory\b[^\n;&]*\b(?:generate|discover)\b)|(?:bin/deep-context-v2\s+(?:run|collect|synthesize|enrich|finish)\b)', invoked):
+        failures.append('forbidden paid/network/processing command; inspect transcript')
+    if route == 'enumeration':
+        pages = [r for r in results('enumerate') if isinstance(r, dict) and r.get('selector') == {'origin': 'source_name', 'value': 'sof'}]
+        people = {p['parent'] for page in pages for p in page.get('people', [])}
+        if not results('resolve') or people != {'sof0', 'sof1', 'sof2'} or not any(p.get('total') == 3 and not p.get('next_after') for p in pages):
+            failures.append('resolve and complete 3-person source_name enumeration not observed')
+    elif route == 'semantic':
+        queries = [r for r in results('query') if isinstance(r, dict) and r.get('vector_candidates', 0) > 0 and r.get('hits') and all(h.get('claim', {}).get('kind') == 'work' for h in r['hits'])]
+        ids = {h['claim_id'] for r in queries for h in r.get('hits', []) if h.get('claim', {}).get('kind') == 'work' and h.get('name') == 'Jordan Bravo'}
+        opened_ids = {int(match.group(1)) for c in succeeded for match in [re.search(r'\bopen\s+[\'"]?(\d+)', c['command'])] if match}
+        opened = [r for r in results('open') if isinstance(r, dict) and r.get('claim', {}).get('kind') == 'work' and r.get('saved_content') and r.get('source_hash')]
+        if not ids.intersection(opened_ids) or not opened:
+            failures.append('cached semantic work query and opening returned Jordan claim not observed')
+    elif route == 'dossier':
+        original = [c for c in succeeded if re.search(r'(bin/deep-context-v2\s+lookup|deep_context_v2\.lookup)', c['command'])]
+        if not read('/person-lookup.md') or not any('Former synthetic teammate' in (c['aggregated_output'] or '') and 'Jordan Bravo' in c['aggregated_output'] for c in original):
+            failures.append('original dossier lookup and saved relationship not observed')
+    elif route == 'clarify':
+        meanings = [r for r in results('resolve') if isinstance(r, list) and len(r) >= 2]
+        if not meanings or results('enumerate') or '?' not in final:
+            failures.append('ambiguous meanings and clarification before enumeration not observed')
+    elif results('query') or results('enumerate') or results('lookup'):
+        failures.append('boundary request substituted local memory retrieval')
+    if not final:
+        failures.append('no final agent message')
+    return failures
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--live', action='store_true', help='Run subscription Codex sessions; default is dry-run')
+    parser.add_argument('--limit', type=int, default=6)
+    parser.add_argument('--case', help='Case id regex')
+    parser.add_argument('--timeout', type=int, default=180, choices=range(1, 181), metavar='1..180')
+    parser.add_argument('--out-dir', type=Path, default=ROOT / '.powerpacks/memory-routing-verification')
+    args = parser.parse_args()
+    cases = json.loads((ROOT / 'packs/memory/evals/memory/cases.json').read_text())
+    cases = [c for c in cases if not args.case or re.search(args.case, c['id'])][:args.limit]
+    if args.limit < 1 or not cases or any(not all(c.get(k) for k in ('id', 'query', 'expected_behavior', 'check')) for c in cases):
+        parser.error('select at least one valid case')
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    reports = []
+    for case in cases:
+        case_dir = args.out_dir / case['id']
+        if case_dir.exists():
+            parser.error(f'{case_dir} already exists; use a fresh --out-dir (preserves prior evidence)')
+        workspace = case_dir / 'workspace'
+        workspace.mkdir(parents=True)
+        snapshot(workspace)
+        context = fixture(workspace)
+        prompt = ('Read this checkout\'s AGENTS.md and use its current guidance. This is a synthetic offline verification. '
+                  'Use only files in this checkout; do not read real user stores or installed skill copies. '
+                  'Do not edit product/source data, contact providers, use external tools, or approve spend. '
+                  'Free local derived imports are allowed. Stop processing/shared-network workflows before external access. '
+                  'Run retrieval commands separately with JSON stdout so results remain inspectable. '
+                  'Corpus context (not a routing instruction): ' + json.dumps(context) + '\n\nUser request:\n' + case['query'])
+        (case_dir / 'prompt.txt').write_text(prompt)
+        cmd = ['codex', 'exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
+               '-m', 'gpt-6.1-sol', '-s', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false', '-c', 'web_search="disabled"',
+               '-c', 'model_reasoning_effort="high"', '-C', str(workspace), '-']
+        report = {'id': case['id'], 'command': cmd, 'dry_run': not args.live, 'fixture': context}
+        if args.live:
+            before = hashlib.sha256(Path(context['source_db']).read_bytes()).hexdigest()
+            with tempfile.TemporaryDirectory(prefix='memory-routing-auth-') as home:
+                auth = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'auth.json'
+                if not auth.is_file():
+                    parser.error('Codex subscription auth.json required; no API-key fallback')
+                if json.loads(auth.read_text()).get('OPENAI_API_KEY') or not json.loads(auth.read_text()).get('tokens'):
+                    parser.error('Codex subscription tokens required; API-key auth is not allowed')
+                (Path(home) / 'auth.json').symlink_to(auth)
+                env = {'PATH': os.environ['PATH'], 'HOME': home, 'CODEX_HOME': home, 'UV_NO_SYNC': '1', 'UV_OFFLINE': '1', 'UV_CACHE_DIR': str(workspace / '.uv-cache'),
+                       'TIKTOKEN_CACHE_DIR': str(workspace / '.tokenizer-cache'), 'PYTHONDONTWRITEBYTECODE': '1'}
+                proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True)
+                try:
+                    stdout, stderr = proc.communicate(prompt, timeout=args.timeout)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    stdout, stderr = proc.communicate()
+                    report['timeout'] = True
+            (case_dir / 'events.jsonl').write_text(stdout)
+            (case_dir / 'stderr.txt').write_text(stderr)
+            commands, final, errors = evidence(stdout)
+            failures = errors + validate(case, commands, final)
+            if proc.returncode:
+                failures.append(f'codex exit {proc.returncode}')
+            if before != hashlib.sha256(Path(context['source_db']).read_bytes()).hexdigest():
+                failures.append('source SQLite changed')
+            report.update(exit_code=proc.returncode, commands=commands, final=final, failures=failures, passed=not failures, human_review=case['check'] in ('clarify', 'search', 'deep-context'))
+            (case_dir / 'final.txt').write_text(final)
+        (case_dir / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
+        reports.append(report)
+        print(json.dumps({k: report[k] for k in ('id', 'dry_run', 'passed', 'failures') if k in report}), flush=True)
+    (args.out_dir / 'report.json').write_text(json.dumps(reports, indent=2) + '\n')
+    return int(any(r.get('failures') for r in reports))
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

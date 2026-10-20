@@ -41,7 +41,9 @@ export function Running({ record }: { record: MemoryJob }) {
                     ? "Next"
                     : counts.total
                       ? `${counts.done.toLocaleString()} / ${counts.total.toLocaleString()} ${step.unit}`
-                      : "Starting"}
+                      : counts.done || done
+                        ? `${counts.done.toLocaleString()} ${step.unit} completed`
+                        : "Starting"}
                 </span>
               </div>
               {active ? (
