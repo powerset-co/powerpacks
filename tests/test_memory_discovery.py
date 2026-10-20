@@ -267,6 +267,7 @@ class DiscoveryTests(unittest.TestCase):
         with patch.object(self.provider, 'discover', side_effect=unsupported):
             report = Discover(store, self.provider).run(limit=1, phrase='sf')
         self.assertEqual(report.exclusions, 1)
+        self.assertEqual(report.failures, ())
         self.assertEqual(self.tags(store), ())
         self.assertEqual(Discover(store, self.provider).preview(phrase='sf').insights, ())
 

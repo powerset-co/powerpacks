@@ -168,15 +168,12 @@ R = TypeVar("R")
 
 
 def _record(root: Path, events: Generator[Progress, None, R], client: OpenAIProvider) -> R:
-    succeeded = failed = 0
     previous = job.read(root)
     before = previous.steps[previous.step]
     while True:
         try:
             event = next(events)
         except StopIteration as finished:
-            if failed and not succeeded:
-                raise ValueError("every item failed in memory step " + job.read(root).step)
             result: R = finished.value
             return result
         with job.LOCK:
@@ -187,8 +184,5 @@ def _record(root: Path, events: Generator[Progress, None, R], client: OpenAIProv
             record.spent_usd = client.usage.cost(client.model, client.embedding_key)
             record.failures = [item for item in record.failures if (item.step, item.key) != (event.step, event.key)]
             if event.error:
-                failed += 1
                 record.failures.append(Failure(event.step, event.key, event.error, now_iso()))
-            else:
-                succeeded += bool(event.key)
             job.write(root, record)

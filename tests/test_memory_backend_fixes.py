@@ -4,8 +4,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 import unittest
-from contextlib import closing, redirect_stdout
+from contextlib import ExitStack, closing, redirect_stdout
 from dataclasses import asdict
 from unittest.mock import Mock, patch
 from urllib.parse import urlencode, urlparse
@@ -13,13 +14,15 @@ from urllib.parse import urlencode, urlparse
 import httpx
 
 import test_memory_job as jobs
+from test_memory import response
 from packs.memory import job, runner
 from packs.memory.__main__ import main
 from packs.memory.cost import Usage
 from packs.memory.discovery import Discover
+from packs.memory.discovery_run import DiscoveryReport
 from packs.memory.generate import Generate, parse_response
-from packs.memory.job import Job, Status
-from packs.memory.progress import Step
+from packs.memory.job import Counts, Job, Status
+from packs.memory.progress import Progress, Step
 from packs.memory.sources import V2
 from packs.memory.provider import OpenAIProvider
 from packs.memory.store import Store
@@ -119,10 +122,10 @@ class BackendFixTests(unittest.TestCase):
         client = OpenAIProvider("gpt-6-luna", "text-embedding-3-small", client=transport, approve_spend=True)
         with patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic"}), patch.object(runner, "provider", return_value=client):
             runner.start(self.root, 1)
-            failed = self.wait()
-        self.assertEqual(failed.status, Status.FAILED)
-        self.assertEqual(len(failed.failures), 5)
-        self.assertTrue(all("usage" in failure.error for failure in failed.failures))
+            completed = self.wait()
+        self.assertEqual(completed.status, Status.DONE)
+        self.assertEqual(len(completed.failures), 5)
+        self.assertTrue(all("usage" in failure.error for failure in completed.failures))
 
     def test_job_retries_cached_parse_failure_first(self):
         generate = self.provider.generate
@@ -200,6 +203,68 @@ class BackendFixTests(unittest.TestCase):
             if page["next_after"]:
                 second = self.get(api, "/api/memory/people?" + urlencode({**selector, "after": page["next_after"], "limit": 1}))
                 self.assertNotEqual(second["people"][0]["parent"], page["people"][0]["parent"])
+
+    def test_every_item_failing_still_runs_all_four_steps(self):
+        def events(step, result=None):
+            yield Progress(step, 1, 1, str(step), "synthetic " + step + " failure")
+            return result
+
+        with ExitStack() as stack:
+            imported = stack.enter_context(patch.object(Store, "import_progress", return_value=events(Step.IMPORT)))
+            generated = stack.enter_context(patch.object(Generate, "chunks", return_value=events(Step.GENERATE)))
+            discovered = stack.enter_context(patch.object(
+                Discover, "progress", return_value=events(Step.DISCOVER, DiscoveryReport())))
+            indexed = stack.enter_context(patch.object(Generate, "index", return_value=events(Step.INDEX)))
+            runner.start(self.root, 1)
+            completed = self.wait()
+        for operation in (imported, generated, discovered, indexed):
+            operation.assert_called_once()
+        self.assertEqual((completed.status, completed.step), (Status.DONE, Step.DONE))
+        self.assertEqual([failure.step for failure in completed.failures], list(job.STEPS))
+        for failure in completed.failures:
+            self.assertEqual(completed.steps[failure.step], Counts(1, 1))
+            self.assertTrue(failure.at)
+        self.assertEqual(completed.error, "")
+
+    def test_claim_exclusions_are_not_chunk_failures_and_index_still_runs(self):
+        generate = self.provider.generate
+
+        def with_exclusion(content):
+            raw = json.loads(generate(content))
+            claims = json.loads(raw["output"][0]["content"][0]["text"])["claims"]
+            return response([*claims, {"invalid": "synthetic excluded claim"}])
+
+        with patch.object(self.provider, "generate", side_effect=with_exclusion):
+            runner.start(self.root, 1)
+            completed = self.wait()
+        self.assertEqual(completed.status, Status.DONE)
+        self.assertEqual(completed.failures, [])
+        self.assertGreater(completed.steps[Step.INDEX].done, 0)
+        with closing(Store(job.database(self.root))) as store:
+            report = Generate(store, self.provider).run(limit=100)
+            self.assertEqual(report.exclusions, 5)
+            self.assertEqual(report.failures, ())
+            self.assertGreater(report.claims, 0)
+
+    def test_preview_invalidates_on_wal_commit_without_main_file_change(self):
+        source = V2(self.root / ".powerpacks").database
+        with closing(sqlite3.connect(source)) as writer:
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            api = MemoryApi(self.root)
+            with patch.object(Generate, "estimate", side_effect=Generate.estimate, autospec=True) as estimate:
+                self.get(api)
+                self.get(api)
+                self.assertEqual(estimate.call_count, 1)
+                before = source.stat()
+                with writer:
+                    writer.execute("UPDATE facts SET facts_json=json_set(facts_json,'$.topics',json('[\"synthetic WAL topic\"]'))")
+                after = source.stat()
+                self.assertEqual((before.st_mtime_ns, before.st_size), (after.st_mtime_ns, after.st_size))
+                self.get(api)
+                self.assertEqual(estimate.call_count, 2)
+            with closing(Store(job.database(self.root))) as store:
+                self.assertGreater(store.conn.execute(
+                    "SELECT count(*) FROM active_claims WHERE topic='synthetic wal topic'").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

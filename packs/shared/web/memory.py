@@ -19,10 +19,19 @@ from packs.memory.sources import V2
 from packs.memory.store import Store
 
 
+def _source_version(database: Path) -> tuple[tuple[int, int], ...]:
+    version = []
+    for path in (database, Path(str(database) + "-wal")):
+        if path.exists():
+            stat = path.stat()
+            version.append((stat.st_mtime_ns, stat.st_size))
+    return tuple(version)
+
+
 class MemoryApi:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self._source_version: tuple[int, int] | None = None
+        self._source_version: tuple[tuple[int, int], ...] | None = None
         self._preview: dict[str, object] = {}
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: ParseResult) -> bool:
@@ -57,8 +66,7 @@ class MemoryApi:
         adapter = V2(self.root / ".powerpacks")
         if not adapter.database.is_file():
             return {"inventory": {"counts": {}}, "sources": [], "estimate": None}
-        stat = adapter.database.stat()
-        version = (stat.st_mtime_ns, stat.st_size)
+        version = _source_version(adapter.database)
         if version == self._source_version:
             return self._preview
         client = runner.provider()
@@ -75,7 +83,7 @@ class MemoryApi:
                     "sources": ["saved facts", "human tags and notes", "cached profiles", "display names"],
                     "estimate": estimate,
                 }
-                self._source_version = version
+                self._source_version = _source_version(adapter.database)
         finally:
             client.close()
         return self._preview
@@ -95,11 +103,14 @@ class MemoryApi:
             if not isinstance(body, dict):
                 raise ValueError("Send a JSON object")
             if parsed.path.endswith(("/enable", "/update")):
-                amount = body.get("approved_spend_usd")
-                if isinstance(amount, bool) or not isinstance(amount, (int, float)):
-                    raise ValueError("approved_spend_usd must be a number")
-                record = (runner.start(self.root, float(amount)) if parsed.path.endswith("/enable")
-                          else runner.update(self.root, float(amount)))
+                if parsed.path.endswith("/update") and "approved_spend_usd" not in body:
+                    record = runner.update(self.root)
+                else:
+                    amount = body.get("approved_spend_usd")
+                    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+                        raise ValueError("approved_spend_usd must be a number")
+                    record = (runner.start(self.root, float(amount)) if parsed.path.endswith("/enable")
+                              else runner.update(self.root, float(amount)))
             else:
                 if not isinstance(body.get("keep_updated"), bool):
                     raise ValueError("keep_updated must be a boolean")

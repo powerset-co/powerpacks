@@ -196,6 +196,9 @@ class MemoryJobTests(unittest.TestCase):
         self.assertEqual(request("POST", "/api/memory/update", {"approved_spend_usd": 2})[0], 202)
         self.assertEqual(self.wait().status, Status.DONE)
         self.assertEqual(job.read(self.root).approved_spend_usd, 2)
+        self.assertEqual(request("POST", "/api/memory/update")[0], 202)
+        self.assertEqual(self.wait().status, Status.DONE)
+        self.assertEqual(job.read(self.root).approved_spend_usd, 2)
         meanings = request("GET", "/api/memory/search?q=IAM")[1]
         self.assertTrue(meanings)
         page = request("GET", "/api/memory/people?" + urlencode({**meanings[0]["selector"], "limit": 1}))[1]

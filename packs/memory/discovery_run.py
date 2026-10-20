@@ -126,15 +126,21 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
                 conn.execute('INSERT INTO discovery VALUES(?,?) ON CONFLICT(key) DO UPDATE SET chunk_id=excluded.chunk_id', (key, chunk_id))
                 try:
                     decision = Decision.parse(response)
-                    report.abstentions += decision.decision != 'supported'
-                    report.tags += discover._apply(decision, evidence, chunk_id)
-                    if len(report.insights) < 4:
-                        report.insights += (discover._insight(group, parents, decision),)
-                    conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
                 except (ValueError, KeyError, TypeError):
                     report.exclusions += 1
-                    error = "invalid or unsupported discovery; saved response retained"
+                    error = "invalid discovery; saved response retained"
                     conn.execute("UPDATE chunks SET error=? WHERE id=?", (error, chunk_id))
+                else:
+                    try:
+                        report.abstentions += decision.decision != 'supported'
+                        report.tags += discover._apply(decision, evidence, chunk_id)
+                        if len(report.insights) < 4:
+                            report.insights += (discover._insight(group, parents, decision),)
+                        conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
+                    except (ValueError, KeyError, TypeError):
+                        report.exclusions += 1
+                        conn.execute("UPDATE chunks SET error=? WHERE id=?",
+                                     ("unsupported discovery; saved response retained", chunk_id))
         except SpendReached:
             yield Progress(Step.DISCOVER, done - 1, total, "")
             raise

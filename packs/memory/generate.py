@@ -119,7 +119,7 @@ class Generate:
                     continue
                 self.store.add_claim(source.id, source.hash, chunk_id, claim, human=False)
                 report.claims += 1
-        return "; ".join(errors)
+        return "; ".join(error for error in errors if error.startswith("invalid or incomplete generation"))
 
     def index(self, *, limit: int, report: GenerationReport | None = None, first: tuple[str, ...] = (), source_id: int | None = None) -> Generator[Progress, None, GenerationReport]:
         report = report if report is not None else GenerationReport()

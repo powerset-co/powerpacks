@@ -184,7 +184,7 @@ def main() -> int:
     parser.add_argument("command", choices=["run"])
     parser.parse_args()
     run = refresh()
-    keep_updated(Path.cwd())
+    keep_updated(_REPO_ROOT)
     emit(asdict(run))
     return 1 if run.status == "failed" else 0
 
