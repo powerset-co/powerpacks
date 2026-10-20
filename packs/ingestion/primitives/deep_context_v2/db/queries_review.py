@@ -21,11 +21,12 @@ WITH members AS (SELECT candidate_id, parent_id FROM current_parent WHERE parent
 yes AS (SELECT parent_id FROM current_worth WHERE worth = '{Worth.YES.value}' AND parent_id LIKE 'p:%'),
 verdicts AS (
   SELECT m.parent_id, MAX(l.decided_by = '{DecidedBy.HUMAN.value}') AS human,
+         MAX(l.match_probability IS NOT NULL) AS judged,
          MAX(l.verdict = '{Verdict.NEEDS_REVIEW.value}') AS needs_review
   FROM current_linkedins l JOIN members m USING (candidate_id) GROUP BY m.parent_id),
 cards AS (SELECT DISTINCT parent_id FROM research
           WHERE status = '{ResearchStatus.NO_MATCH.value}' AND result_json IS NOT NULL)
-SELECT y.parent_id, COALESCE(v.needs_review, 0) AS needs_review, c.parent_id IS NOT NULL AS has_card
+SELECT y.parent_id, COALESCE(v.needs_review, 0) AS needs_review, c.parent_id IS NOT NULL AND COALESCE(v.judged, 0) = 0 AS has_card
 FROM yes y LEFT JOIN verdicts v USING (parent_id) LEFT JOIN cards c USING (parent_id)
 WHERE COALESCE(v.human, 0) = 0
 ORDER BY y.parent_id

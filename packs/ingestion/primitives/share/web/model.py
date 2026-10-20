@@ -173,7 +173,7 @@ class SharePeople:
         self.data_root = data_root
         self._rows: dict[str, dict[str, str]] = {}
         self._family_facts: dict[str, dict[str, Any]] = {}
-        self._stamp: int | tuple[int, int, tuple[sqlite3.Row, ...]] = 0
+        self._stamp: int | tuple[int, int] = 0
 
     def export_rows(self) -> dict[str, dict[str, str]]:
         """parent_id -> its export row, rebuilt when the store changed."""
@@ -191,9 +191,8 @@ class SharePeople:
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
         self._stamp = self._store_stamp()
 
-    def _store_stamp(self) -> tuple[int, int, tuple[sqlite3.Row, ...]]:
-        queued = tuple(self.conn.execute("SELECT parent_id, decision, key, guidance FROM review_queue ORDER BY parent_id"))
-        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime(), queued
+    def _store_stamp(self) -> tuple[int, int]:
+        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
 
     def _store_mtime(self) -> int:
         path = self.conn.execute("PRAGMA database_list").fetchone()[2]

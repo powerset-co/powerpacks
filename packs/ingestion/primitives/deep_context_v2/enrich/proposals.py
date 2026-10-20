@@ -42,6 +42,11 @@ def derive(conn: sqlite3.Connection) -> Proposals:
         if family.parent_id not in matches.by_email:
             for url in matches.matched.get(family.parent_id, []):
                 urls.append(Proposal(url, Origin.LINKEDIN_NETWORK.value))
+        # Keep the profile evidence set stable across judgments, even when research has no LinkedIn.
+        for verdict in family.verdicts:
+            if verdict.origin != Origin.SYNTHETIC:
+                if not any(proposal.linkedin_url == verdict.linkedin_url for proposal in urls):
+                    urls.append(Proposal(verdict.linkedin_url, verdict.origin))
         # A complete research row at the family's current handle proposes its URL.
         row: Research | None = rows.get(research.handle(family.facts))
         if row is not None and row.status == ResearchStatus.COMPLETE:

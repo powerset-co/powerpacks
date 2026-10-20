@@ -28,7 +28,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_review
+from packs.ingestion.primitives.deep_context_v2.db import queries_review
 from packs.ingestion.primitives.deep_context_v2.db.queries_review import Queued
 from packs.ingestion.primitives.deep_context_v2.db.schema import ReviewDecision
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
@@ -81,11 +81,10 @@ class ReviewApi:
         self.data_root = data_root
 
     def linkedin_card(self, params: Params) -> LinkedinCardPayload:
-        """Browse `index`, or find the next unresolved family after `after`."""
+        """Browse the fixed order (`index`), or the next family without a decision after `after`."""
         order: list[str] = review_list(self.conn)
         queued: dict[str, Queued] = queries_review.review_queue(self.conn)
-        attached: dict[str, str] = queries_realize.profile_keys(self.conn)
-        pending: int = len([slug for slug in order if slug not in queued and slug not in attached])
+        pending: int = len([slug for slug in order if slug not in queued])
         asked: str = _value(params, "index")
         slug: str = ""
         if asked.isdigit() and int(asked) < len(order):
@@ -95,7 +94,7 @@ class ReviewApi:
             start: int = order.index(after) + 1 if after in order else 0
             excluded: list[str] = _value(params, "exclude").split(",")
             for key in order[start:] + order[:start]:
-                if key not in queued and key not in excluded and key not in attached:
+                if key not in queued and key not in excluded:
                     slug = key
                     break
         total: int = len(order) + (pending == 0)

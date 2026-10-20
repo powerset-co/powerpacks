@@ -7,14 +7,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_worth
-from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
-from packs.ingestion.primitives.deep_context_v2.db.schema import (
-    SYNTHETIC_PROFILE_PREFIX, IdentifierKind, ResearchStatus, ReviewDecision, Verdict, Worth,
-)
-from packs.ingestion.primitives.deep_context_v2.enrich.research import handle as research_handle
-from packs.ingestion.primitives.deep_context_v2.review.queue import review_list
-from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
+from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, Worth
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 
@@ -76,49 +69,9 @@ def channels_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def profile_keys(conn: sqlite3.Connection) -> dict[str, str]:
-    """Accepted profiles win; otherwise use a worth-yes family's single unopposed proposal.
-
-    A human answer stops automatic attachment. The verdict and parent rows stay untouched, so a
-    proposed profile remains correctable through Check LinkedIn.
-    """
-    keys: dict[str, str] = {}
-    for row in conn.execute("SELECT parent_id, profile_key FROM current_profile WHERE profile_key IS NOT NULL"):
-        keys[row["parent_id"]] = row["profile_key"]
-
-    proposed: dict[str, dict[str, str]] = {}
-    queued: set[str] = {row["parent_id"] for row in conn.execute(
-        "SELECT parent_id FROM review_queue WHERE decision IN (?, ?)",
-        (ReviewDecision.DETACH.value, ReviewDecision.FIX.value),
-    )}
-    wrong: set[tuple[str, str]] = set()
-    for row in conn.execute(
-        "SELECT p.parent_id, l.member_id, l.linkedin_url, l.verdict "
-        "FROM current_parent p JOIN current_linkedins l USING (candidate_id)"
-    ):
-        parent_id = row["parent_id"]
-        if row["verdict"] == Verdict.WRONG_PERSON:
-            wrong.add((parent_id, row["member_id"]))
-        if row["verdict"] == Verdict.NEEDS_REVIEW:
-            proposed.setdefault(parent_id, {})[row["member_id"]] = row["linkedin_url"]
-
-    cards = {row["handle"] for row in conn.execute(
-        "SELECT handle FROM research WHERE status = ? AND result_json IS NOT NULL", (ResearchStatus.NO_MATCH.value,)
-    )}
-    members: dict[str, list[MemberFacts]] = {}
-    for member in queries_worth.members_with_facts(conn):
-        members.setdefault(member.family_key, []).append(member)
-    for parent_id, family in members.items():
-        handle = research_handle(family_facts(family))
-        if handle in cards:
-            key = SYNTHETIC_PROFILE_PREFIX + handle
-            proposed.setdefault(parent_id, {})[key] = key
-    for parent_id in review_list(conn):
-        if parent_id in keys or parent_id in queued:
-            continue
-        choices = {url for member_id, url in proposed.get(parent_id, {}).items() if (parent_id, member_id) not in wrong}
-        if len(choices) == 1:
-            keys[parent_id] = choices.pop()
-    return keys
+    """The profile confirmed by the pipeline or the human, from the canonical view."""
+    return {row["parent_id"]: row["profile_key"] for row in conn.execute(
+        "SELECT parent_id, profile_key FROM current_profile WHERE profile_key IS NOT NULL")}
 
 
 def worth_by_parent(conn: sqlite3.Connection) -> dict[str, Worth]:
