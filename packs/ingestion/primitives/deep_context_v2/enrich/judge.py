@@ -42,6 +42,7 @@ class ProposedProfile:
     def supported(self) -> bool:
         """A name and location alone are not a competing biography."""
         if self.origin == Origin.SYNTHETIC:
+            assert self.research_result is not None
             content = self.research_result["content"]
             return bool(content.get("summary") or content.get("work_experience") or content.get("education"))
         return bool(self.profile.experiences or self.profile.education
@@ -132,7 +133,7 @@ def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[s
 
 def _same_identity(linkedin: ProposedProfile, synthetic: ProposedProfile) -> bool:
     """Matching biography and the same research URL describe one identity."""
-    if linkedin.origin == Origin.SYNTHETIC or synthetic.origin != Origin.SYNTHETIC:
+    if linkedin.origin == Origin.SYNTHETIC or synthetic.origin != Origin.SYNTHETIC or synthetic.research_result is None:
         return False
     content = synthetic.research_result["content"]
     if normalize_linkedin_url(content.get("linkedin_url") or "") == linkedin.profile.linkedin_url:

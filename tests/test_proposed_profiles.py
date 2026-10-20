@@ -18,7 +18,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.family import load_famili
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile
 from packs.ingestion.primitives.deep_context_v2.enrich.sol_identity import SolVerdict
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
-from packs.ingestion.primitives.deep_context_v2.review.queue import review_list
+from packs.ingestion.primitives.deep_context_v2.review.queue import load_card, review_list
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
 
 NOW = "2026-10-20T00:00:00Z"
@@ -153,6 +153,7 @@ class ProposedProfilesTests(unittest.TestCase):
         self.decide(task, SolVerdict("needs_review", .92, "Plausible employer."), SolVerdict("confirmed", .96, "Plausible biography."))
         self.assertEqual(queries_realize.profile_keys(self.conn), {})
         self.assertEqual(review_list(self.conn), ["p:1"])
+        self.assertEqual(len(load_card(self.conn, self.root, "p:1").pending), 2)
 
     def test_human_rejection_prevents_new_machine_attachment(self):
         self.linkedin(decided_by="human", verdict="wrong_person")

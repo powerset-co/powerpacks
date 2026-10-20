@@ -74,7 +74,7 @@ def _needs_review(verdicts: list[CurrentVerdict], profiles: Profiles) -> list[Pe
     found: list[Pending] = []
     seen: set[str] = set()
     for verdict in verdicts:
-        if verdict.verdict != Verdict.NEEDS_REVIEW or verdict.member_id in seen:
+        if verdict.verdict != Verdict.NEEDS_REVIEW or verdict.origin == Origin.SYNTHETIC or verdict.member_id in seen:
             continue
         seen.add(verdict.member_id)
         found.append(Pending(verdict.member_id, verdict.linkedin_url, verdict.member_id, verdict.origin,
@@ -95,7 +95,7 @@ def load_card(conn: sqlite3.Connection, data_root: Path, parent_id: str) -> Card
     verdicts: list[CurrentVerdict] = queries_review.current_verdicts(conn, ids)
     urls: list[str] = []
     for verdict in verdicts:
-        if verdict.verdict == Verdict.NEEDS_REVIEW:
+        if verdict.verdict == Verdict.NEEDS_REVIEW and verdict.origin != Origin.SYNTHETIC:
             urls.append(verdict.linkedin_url)
     profiles: Profiles = load_profiles(data_root, urls, fetch=False)
     pending: list[Pending] = _needs_review(verdicts, profiles)
