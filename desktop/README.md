@@ -62,7 +62,13 @@ web assets into the runtime folder alone is not an app release. Existing `.power
 ## Build
 
 Needs Rust, Node 22 and pnpm. CI (`.github/workflows/desktop.yml`) builds the Apple Silicon
-`.dmg` on every change and keeps it as a run artifact. Each release
+`.dmg` on every merge to `main` and publishes it to the rolling
+[Edge prerelease](https://github.com/powerset-co/powerpacks/releases/tag/edge), with the debug menu.
+The release notes identify the bundled commit. Download its
+[installer](https://github.com/powerset-co/powerpacks/releases/download/edge/Powerpacks-macos-arm64.dmg)
+to replace your installed app; it uses the same local data. Edge does not replace the stable
+release or change the app's stable updater feed. Native/web changes on PRs also build run artifacts.
+Each release
 (`release-please.yml`) builds the `.dmg` without the debug menu and attaches it to the release as
 `Powerpacks-macos-arm64.dmg`, the README's download link; the app's version (tauri.conf.json,
 Cargo.toml, package.json) moves with the release, which is what its update check compares. Gmail needs
