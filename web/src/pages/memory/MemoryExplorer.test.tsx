@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { MemoryExplorer } from "./MemoryExplorer"
 
 const graphCalls = vi.hoisted(() => ({ select: vi.fn(), highlight: vi.fn(), destroy: vi.fn() }))
+vi.mock("@/lib/agent/store", () => ({
+  newChat: vi.fn(),
+  send: vi.fn(),
+  useAgent: () => ({ running: false }),
+}))
 vi.mock("./graph", () => ({
   MemoryGraph: class {
     select = graphCalls.select
@@ -71,7 +77,9 @@ it("a search lists people and clicking one focuses their connected nodes", async
   vi.stubGlobal("fetch", fetch)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryExplorer running={false} />
+      <MemoryRouter>
+        <MemoryExplorer running={false} />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "family" } })

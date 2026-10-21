@@ -26,6 +26,8 @@ class PeopleTests(unittest.TestCase):
         for name, text, kind, topic in (
             ('Alex', 'Co-homebuyer', Kind.RELATIONSHIP, 'relationship'),
             ('Alex', '2024 Wedding with the owner', Kind.STATEMENT, 'event'),
+            ('Alex', '2013 Coursework with the owner', Kind.STATEMENT, 'event'),
+            ('Alex', 'Undated Picnic with the owner', Kind.STATEMENT, 'event'),
             ('Alex', 'Enjoys sailing', Kind.MENTION, 'sailing'),
             ('Blair', 'Romantic partner in 2015', Kind.RELATIONSHIP, 'relationship'),
         ):
@@ -42,6 +44,8 @@ class PeopleTests(unittest.TestCase):
         texts = [hit.claim.text for hit in person.context]
         self.assertIn('Co-homebuyer', texts)
         self.assertIn('2024 Wedding with the owner', texts)
+        self.assertLess(texts.index('2024 Wedding with the owner'), texts.index('2013 Coursework with the owner'))
+        self.assertLess(texts.index('2013 Coursework with the owner'), texts.index('Undated Picnic with the owner'))
         self.assertTrue(all(hit.parent == person.evidence[0].parent for hit in (*person.evidence, *person.context)))
         self.assertTrue(all(hit.citations for hit in person.context))
 

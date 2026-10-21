@@ -72,9 +72,7 @@ export function MemorySearch({ onPersonSelect }: MemorySearchProps) {
         onClick={() => {
           newChat()
           void navigate(AGENT.href)
-          void send(
-            `$memory ${text.trim()}\nUse search --limit 5 to retrieve and compare saved evidence per person. Read relevant dossier context and cite the evidence. Do not generate or update memory.`,
-          )
+          void send(`$memory ${text.trim()}`)
         }}
       >
         Ask memory

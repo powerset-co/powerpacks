@@ -250,10 +250,12 @@ class Query:
         return People(tuple(people), tuple(sorted(layers)), filtered, len(ranked), len(lexical), len(vectors), missing)
 
     def _context(self, parent: str, matched: set[int], budget: int) -> tuple[tuple[Hit, ...], bool]:
-        """Supporting evidence for interpretation, never extra search matches."""
+        """Supporting evidence for interpretation, never extra search matches. Dated events newest first (a dated
+        statement starts with its date), undated ones after, so the budget goes to the recent ones."""
         rows = self.store.conn.execute(
             "SELECT c.* FROM active_claims c WHERE c.parent=? AND c.id=" + _first("c") +
-            " ORDER BY c.human DESC,(c.kind='relationship') DESC,(c.topic='event') DESC,c.id", (parent,))
+            " ORDER BY c.human DESC,(c.kind='relationship') DESC,(c.topic='event') DESC,"
+            "CASE WHEN c.topic='event' AND c.text GLOB '[0-9]*' THEN c.text END DESC,c.id", (parent,))
         context: list[Hit] = []
         used = 0
         for row in rows:

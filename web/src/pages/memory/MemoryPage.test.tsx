@@ -333,6 +333,5 @@ it("hands a natural-language question to the memory agent with evidence comparis
   fireEvent.change(input, { target: { value: "Who is my wife?" } })
   fireEvent.click(screen.getByRole("button", { name: "Ask memory" }))
   expect(newChat).toHaveBeenCalled()
-  expect(send).toHaveBeenCalledWith(expect.stringContaining("$memory Who is my wife?"))
-  expect(send).toHaveBeenCalledWith(expect.stringContaining("search --limit 5"))
+  expect(send).toHaveBeenCalledWith("$memory Who is my wife?")
 })
