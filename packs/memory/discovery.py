@@ -12,7 +12,9 @@ from packs.memory.models import Claim, Kind, IdentityMatch, cached_vector, docum
 from packs.memory.store import Store
 from packs.memory.progress import Progress, consume
 
-_ORIGINAL = "c.chunk_id IS NULL AND c.human=0"
+# Original saved evidence: never a model's own output, and never the owner labels (family, close friend …),
+# which already say who someone is and must not seed or re-key paid discovery.
+_ORIGINAL = "c.chunk_id IS NULL AND c.human=0 AND NOT (c.kind='tag' AND c.scope='owner')"
 _STOPWORDS = frozenset("a an and as at be by for he her him his i if in is it its me my no not of on or our out she so the to up us we you about after again also been before being both could does doing during each from have here into just more most much must only other over same should some such than that their them then there these they this those through under very were what when where which while with would your".split())
 _SEED_TOPICS = "'title','school','field_of_study','location','location_str','schoolname','degree','fieldofstudy'"
 
@@ -213,7 +215,7 @@ class Discover:
             parent = person.parent
             dependencies.extend(tuple(row) for row in conn.execute(
                 'SELECT s.id,s.hash,s.error,i.member,i.parent FROM sources s JOIN identities i USING(namespace,member) '
-                'WHERE i.parent=? AND i.present=1 AND s.present=1 ORDER BY s.id', (parent,)))
+                "WHERE i.parent=? AND i.present=1 AND s.present=1 AND s.key NOT LIKE 'labels:%' ORDER BY s.id", (parent,)))
             labels.update(row[0] for row in conn.execute(
                 'SELECT DISTINCT c.topic FROM active_claims c WHERE c.parent=? AND ' + _ORIGINAL + ' ORDER BY c.topic LIMIT 12', (parent,)))
         match = ' OR '.join('"' + token + '"' for token in re.findall(r'\w+', group.phrase)[:32])

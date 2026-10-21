@@ -227,6 +227,11 @@ class Store:
         changed = old is None or old["hash"] != fingerprint
         if changed:
             self.conn.execute("UPDATE claims SET active=0 WHERE source_id=? AND human=0", (source_id,))
+        # The store holds the current projection: a claim the projection no longer makes is switched off,
+        # even when the source itself did not change.
+        kept = [replace(claim, topic=normalized(claim.topic)).fingerprint() for claim in projected]
+        self.conn.execute("UPDATE claims SET active=0 WHERE source_id=? AND human=0 AND chunk_id IS NULL AND active=1 "
+                          "AND fingerprint NOT IN (SELECT value FROM json_each(?))", (source_id, json.dumps(kept)))
         for claim in projected:
             self.add_claim(source_id, fingerprint, None, claim, human=False)
         return changed
@@ -298,7 +303,7 @@ class Store:
     def sources(self) -> Iterator[SourceRevision]:
         for row in self.conn.execute(
             "SELECT s.id,s.hash,r.content FROM sources s JOIN revisions r ON r.source_id=s.id AND r.hash=s.hash "
-            "WHERE s.present=1 AND s.error='' AND s.key NOT LIKE 'name:%' ORDER BY s.id"):
+            "WHERE s.present=1 AND s.error='' AND s.key LIKE 'facts:%' ORDER BY s.id"):
             yield SourceRevision(row["id"], row["hash"], row["content"])
 
     def open(self, claim_id: int) -> OpenedClaim:

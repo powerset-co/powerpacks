@@ -212,6 +212,30 @@ class Hit:
     citations: tuple[Citation, ...]
 
 
+@dataclass(frozen=True)
+class PersonHit:
+    """One person in a search answer: their score, warmth (0-4 from Deep Context) and the claims that matched."""
+    parent: str
+    name: str
+    warmth: float
+    score: float
+    evidence: tuple[Hit, ...]
+    members: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class People:
+    """The one search answer the page and the agent both read.
+    `layers` are the owner labels the text named; with other words present they filter, alone they list everyone."""
+    people: tuple[PersonHit, ...]
+    layers: tuple[str, ...]
+    filtered: bool
+    total: int
+    lexical_candidates: int
+    vector_candidates: int
+    missing_embeddings: int
+
+
 class Provider(Protocol):
     generation_key: str
     embedding_key: str

@@ -32,7 +32,9 @@ def provider() -> OpenAIProvider:
                           approve_spend=True)
 
 
-def start(root: Path, approved_spend: float) -> Job:
+def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
+    """Run every step. `discover=False` (an update) only retries discovery batches that failed before: its labels
+    are not what search ranks on, and re-keyed batches would buy them again after every import."""
     if not math.isfinite(approved_spend) or approved_spend < 0:
         raise ValueError("approved_spend_usd must be a finite nonnegative number")
     root = root.resolve()
@@ -71,7 +73,7 @@ def start(root: Path, approved_spend: float) -> Job:
         record.approved_spend_usd = approved_spend
         record.status = Status.RUNNING
         job.write(root, record)
-        thread = threading.Thread(target=_run, args=(root, resume, handle, client), daemon=True, name="memory")
+        thread = threading.Thread(target=_run, args=(root, resume, handle, client, discover), daemon=True, name="memory")
         _threads[root] = thread
         thread.start()
         return record
@@ -93,7 +95,7 @@ def update(root: Path, approved_spend: float | None = None) -> Job:
     record = job.read(root)
     if not record.enabled:
         raise ValueError("enable memory first")
-    return start(root, record.approved_spend_usd if approved_spend is None else approved_spend)
+    return start(root, record.approved_spend_usd if approved_spend is None else approved_spend, discover=False)
 
 
 def keep_updated(root: Path) -> None:
@@ -110,7 +112,7 @@ def keep_updated(root: Path) -> None:
         thread.join()
 
 
-def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider) -> None:
+def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider, discover: bool) -> None:
     store: Store | None = None
     try:
         record = job.read(root)
@@ -125,6 +127,8 @@ def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider) -> None:
             if resume and job.STEPS.index(step) < job.STEPS.index(record.step):
                 continue
             first = tuple(item.key for item in record.failures if item.step == step)
+            if step == Step.DISCOVER and not discover and not first:
+                continue
             with job.LOCK:
                 current = job.read(root)
                 current.step = step
@@ -138,7 +142,8 @@ def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider) -> None:
             elif step == Step.INDEX:
                 _record(root, generate.index(limit=2**31 - 1, first=first), client)
             else:
-                _record(root, Discover(store, client).progress(limit=2**31 - 1, first=first), client)
+                # An update only retries the batches that failed: the limit bounds fresh calls to exactly those.
+                _record(root, Discover(store, client).progress(limit=2**31 - 1 if discover else len(first), first=first), client)
         with job.LOCK:
             record = job.read(root)
             record.people_indexed = store.conn.execute("SELECT count(DISTINCT parent) FROM active_claims").fetchone()[0]

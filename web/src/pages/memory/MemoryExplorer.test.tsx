@@ -31,29 +31,41 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
-it("search selection highlights its graph and clicking a person focuses their connected nodes", async () => {
+it("a search lists people and clicking one focuses their connected nodes", async () => {
   vi.stubGlobal("matchMedia", () => ({ matches: false }))
+  // The result list is virtualized: give rows a height so they render in jsdom.
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 360 })
+  Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 800 })
   const fetch = vi.fn((input: string) => {
     const url = new URL(input, "http://localhost")
     let payload: unknown = GRAPH
     if (url.pathname.endsWith("/search"))
-      payload = [
-        {
-          selector: { origin: "topic", value: "family" },
-          count: 1,
-          evidence: [],
-          match: "saved lexical match",
-        },
-      ]
-    if (url.pathname.endsWith("/people"))
       payload = {
-        corpus: "synthetic",
-        people: [{ parent: "parent-1", name: "Jordan Example", members: [], evidence: [] }],
+        people: [
+          {
+            parent: "parent-1",
+            name: "Jordan Example",
+            warmth: 2.4,
+            score: 0.05,
+            evidence: [
+              {
+                claim_id: 1,
+                claim: { text: "family", kind: "tag", topic: "family", scope: "owner", object: "" },
+                citations: [],
+              },
+            ],
+            members: [],
+          },
+        ],
+        layers: ["family"],
+        filtered: false,
         total: 1,
-        next_after: "",
+        lexical_candidates: 0,
+        vector_candidates: 0,
+        missing_embeddings: 0,
       }
-    if (url.pathname.endsWith("/graph") && url.searchParams.has("origin"))
-      payload = { ...GRAPH, selected_ids: ["parent-1", "topic:family"] }
+    if (url.pathname.endsWith("/graph") && url.searchParams.has("parent"))
+      payload = { ...GRAPH, selected_ids: ["parent-1"] }
     return Promise.resolve(new Response(JSON.stringify(payload)))
   })
   vi.stubGlobal("fetch", fetch)
@@ -64,14 +76,13 @@ it("search selection highlights its graph and clicking a person focuses their co
   )
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "family" } })
   fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  fireEvent.click(await screen.findByRole("button", { name: "family topic · 1" }))
-  await waitFor(() => expect(graphCalls.select).toHaveBeenCalledWith("topic:family"))
-  await waitFor(() => expect(graphCalls.highlight).toHaveBeenCalledWith(["parent-1", "topic:family"]))
-  const person = (await screen.findAllByRole("button", { name: "Jordan Example" }))[0]
+  expect(await screen.findByText("1 person · everyone saved as family")).toBeTruthy()
+  const person = (await screen.findAllByRole("button", { name: /Jordan Example/ }))[0]
   if (!person) throw new Error("Person result missing")
   fireEvent.click(person)
   await waitFor(() => expect(graphCalls.select).toHaveBeenCalledWith("parent-1"))
   expect(fetch.mock.calls.some(([url]) => url.includes("parent=parent-1"))).toBe(true)
+  await waitFor(() => expect(graphCalls.highlight).toHaveBeenCalledWith(["parent-1"]))
   fireEvent.click(screen.getByRole("button", { name: "Show all" }))
   await waitFor(() => expect(graphCalls.select).toHaveBeenLastCalledWith(null))
   cleanup()

@@ -37,6 +37,7 @@ class JobProvider(OpenAIProvider):
         self.fixture = FixtureProvider()
         self.generation_key = self.fixture.generation_key
         self.inputs: list[str] = []
+        self.discoveries = 0
 
     def generate(self, content: str) -> str:
         self.inputs.append(content)
@@ -49,6 +50,7 @@ class JobProvider(OpenAIProvider):
         return self.fixture.embed_many(contents)
 
     def discover(self, content: str) -> str:
+        self.discoveries += 1
         return json.dumps({"status": "completed", "output": [{"type": "message", "content": [
             {"type": "output_text", "text": json.dumps({"decision": "ambiguous", "reason": "synthetic", "tags": []})}]}]})
 
@@ -91,12 +93,16 @@ class MemoryJobTests(unittest.TestCase):
         failed_input = self.provider.inputs[1]
         self.provider.fixture.fail_generation = 0
         before = self.provider.fixture.generations
+        discoveries = self.provider.discoveries
         runner.update(self.root)
         second = self.wait()
         self.assertEqual(second.failures, [])
         self.assertEqual(self.provider.inputs[-1], failed_input)
         self.assertEqual(self.provider.fixture.generations, before + 1)
         self.assertGreater(second.people_indexed, 0)
+        # An update never buys cross-person discovery again; the first run's counts stay on the record.
+        self.assertEqual(self.provider.discoveries, discoveries)
+        self.assertEqual(second.steps[Step.DISCOVER], first.steps[Step.DISCOVER])
 
     def test_running_refuses_second_start_and_settings_survive(self) -> None:
         entered, release = threading.Event(), threading.Event()
@@ -205,10 +211,11 @@ class MemoryJobTests(unittest.TestCase):
         self.assertEqual(request("POST", "/api/memory/update")[0], 202)
         self.assertEqual(self.wait().status, Status.DONE)
         self.assertEqual(job.read(self.root).approved_spend_usd, 2)
-        meanings = request("GET", "/api/memory/search?q=IAM")[1]
-        self.assertTrue(meanings)
-        page = request("GET", "/api/memory/people?" + urlencode({**meanings[0]["selector"], "limit": 1}))[1]
-        self.assertEqual(page["total"], meanings[0]["count"])
+        answer = request("GET", "/api/memory/search?q=IAM")[1]
+        self.assertTrue(answer["people"])
+        topic = answer["people"][0]["evidence"][0]["claim"]["topic"]
+        page = request("GET", "/api/memory/people?" + urlencode({"origin": "topic", "value": topic, "limit": 1}))[1]
+        self.assertGreaterEqual(page["total"], 1)
         self.assertEqual(len(page["people"]), 1)
         self.assertEqual(request("GET", "/api/memory/people?origin=topic&value=iam&limit=0")[0], 400)
         self.assertEqual(request("POST", "/api/memory/enable", {"approved_spend_usd": -1})[0], 400)

@@ -17,6 +17,7 @@ from packs.memory.directory import Directory, Origin, Selector
 from packs.memory.generate import Generate
 from packs.memory.graph import graph
 from packs.memory.import_stage import has_changes
+from packs.memory.query import Query
 from packs.memory.sources import V2
 from packs.memory.store import Store
 
@@ -42,10 +43,20 @@ class MemoryApi:
         try:
             if parsed.path != "/api/memory":
                 query = parse_qs(parsed.query, keep_blank_values=True)
+                if parsed.path.endswith("/search"):
+                    # The same call the memory skill makes; the query embedding is cached in the store.
+                    client = runner.provider()
+                    try:
+                        with closing(Store(job.database(self.root))) as store:
+                            result: object = asdict(Query(store, client).people(
+                                query.get("q", [""])[0], layer=query.get("layer", [""])[0],
+                                limit=int(query.get("limit", ["50"])[0])))
+                    finally:
+                        client.close()
+                    _send_json(handler, result)
+                    return True
                 with closing(Store(job.database(self.root), read_only=True)) as store:
-                    if parsed.path.endswith("/search"):
-                        result: object = [asdict(meaning) for meaning in Directory(store).resolve(query.get("q", [""])[0])]
-                    elif parsed.path.endswith('/graph'):
+                    if parsed.path.endswith('/graph'):
                         selector = Selector(Origin(query['origin'][0]), query.get('value', [''])[0]) if 'origin' in query else None
                         result = asdict(graph(store, limit=int(query.get('limit', ['1000'])[0]),
                                               parent=query.get('parent', [''])[0], topic=query.get('topic', [''])[0], selector=selector))

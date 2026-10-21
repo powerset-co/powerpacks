@@ -34,7 +34,7 @@ def import_progress(store: Store, adapter: V2, *, first: tuple[str, ...] = ()) -
         store.conn.commit()
         counts = adapter.inventory()["counts"]
         assert isinstance(counts, dict)
-        total = sum(int(counts[name]) for name in ("candidates", "facts", "person_tags", "current_profile"))
+        total = sum(int(counts[name]) for name in ("candidates", "facts", "person_tags", "person_labels", "current_profile"))
         for source in retry_first(adapter.sources, lambda source: source.key, first):
             report.sources += 1
             try:
@@ -54,6 +54,9 @@ def import_progress(store: Store, adapter: V2, *, first: tuple[str, ...] = ()) -
         store.conn.execute("UPDATE identities SET present=0 WHERE namespace=? AND member NOT IN (SELECT member FROM seen_identities)", (namespace,))
         store.conn.execute("UPDATE sources SET present=0 WHERE namespace=? AND key NOT IN (SELECT key FROM seen_sources)", (namespace,))
         store.conn.execute("UPDATE claims SET active=0 WHERE human=0 AND source_id IN (SELECT id FROM sources WHERE present=0)")
+        # Only message dossiers are generated from; whatever a model once wrote about a profile is retired.
+        store.conn.execute("UPDATE claims SET active=0 WHERE human=0 AND chunk_id IS NOT NULL "
+                           "AND source_id IN (SELECT id FROM sources WHERE key NOT LIKE 'facts:%')")
         store.conn.commit()
         store._families()
         report.parents = store.conn.execute("SELECT count(DISTINCT parent) FROM identities WHERE present=1").fetchone()[0]

@@ -1,7 +1,9 @@
 # Local memory directory
 
-Use this guide for local contact labels and associations: “pull up SoF”,
+Use this guide for a label the user named exactly: “pull up SoF”,
 “South of France”, “people tagged mentor”, and follow-up actions on those people.
+For every other “who” question use `search` (see SKILL.md); it already lists a
+whole owner label (family, coworkers …) completely and is what the Memory page runs.
 Deep Context owns generation and identity. Ranked `query` finds evidence; it
 never establishes an exhaustive selection. Ordinary recruiting/JD search stays
 on the existing search route. An explicitly named Powerset/shared network stays

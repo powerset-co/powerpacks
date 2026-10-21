@@ -1,13 +1,7 @@
 // The Memory page's JSON routes on the Python review server (packs/shared/web/memory.py).
 
 import { body, failure } from "@/lib/api/http"
-import type {
-  MemoryGraphData,
-  MemoryJob,
-  MemoryMeaning,
-  MemoryPeoplePage,
-  MemorySelector,
-} from "@/types/memory"
+import type { MemoryGraphData, MemoryJob, MemoryPeople, MemorySelector } from "@/types/memory"
 
 export const MEMORY_KEY = ["memory"]
 
@@ -40,21 +34,11 @@ export function setKeepUpdated(keepUpdated: boolean): Promise<MemoryJob> {
   return post("/api/memory/settings", { keep_updated: keepUpdated }, "Couldn't change the setting.")
 }
 
-export async function searchMemory(q: string, signal?: AbortSignal): Promise<MemoryMeaning[]> {
+/** The same search the memory skill runs: people, warmest first, with the claims that matched. */
+export async function searchMemory(q: string, signal?: AbortSignal): Promise<MemoryPeople> {
   const response = await fetch(`/api/memory/search?${new URLSearchParams({ q })}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't search Memory.")
-  return body<MemoryMeaning[]>(response)
-}
-
-export async function memoryPeople(
-  selector: MemorySelector,
-  after: string,
-  signal?: AbortSignal,
-): Promise<MemoryPeoplePage> {
-  const params = new URLSearchParams({ ...selector, after, limit: "50" })
-  const response = await fetch(`/api/memory/people?${params}`, { signal })
-  if (!response.ok) throw await failure(response, "Couldn't list these people.")
-  return body<MemoryPeoplePage>(response)
+  return body<MemoryPeople>(response)
 }
 
 export async function fetchMemoryGraph(
