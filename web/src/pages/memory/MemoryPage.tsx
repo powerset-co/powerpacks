@@ -24,7 +24,6 @@ export function MemoryPage() {
     <main className="min-h-0 overflow-y-auto">
       <PageHeader title="Memory" />
       <div className="flex flex-col gap-5 px-5 pb-8 pt-5">
-        {record?.enabled ? <MemoryExplorer running={record.status === "running"} /> : null}
         {!record ? (
           <EmptyState role={memory.error ? "alert" : undefined}>
             {memory.error ? errorText(memory.error) : "Reading your network…"}
@@ -36,6 +35,7 @@ export function MemoryPage() {
         ) : (
           <FirstRun record={record} />
         )}
+        {record?.enabled ? <MemoryExplorer running={record.status === "running"} /> : null}
         {record?.enabled ? <Details record={record} /> : null}
       </div>
     </main>

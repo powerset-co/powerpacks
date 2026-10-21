@@ -192,22 +192,21 @@ it("shows completed discovery batches when its total is unknown", async () => {
   expect(screen.queryByText("7 / 0 batches")).toBeNull()
 })
 
-it("once enabled shows Ready, updates now, and the toggle posts settings", async () => {
-  const fetch = serve(ENABLED, {
-    "POST /api/memory/settings": () => ({ ...ENABLED, keep_updated: false }),
-    "POST /api/memory/update": () => RUNNING,
-  })
-  expect(await screen.findByRole("heading", { name: "Ready" })).toBeTruthy()
-  expect(screen.getByText(/Updated today · 980 people indexed/)).toBeTruthy()
-  const toggle = screen.getByRole<HTMLInputElement>("checkbox", { name: "Keep memory updated" })
-  expect(toggle.checked).toBe(true)
-  fireEvent.click(toggle)
-  await waitFor(() => expect(posted(fetch, "/api/memory/settings")).toEqual({ keep_updated: false }))
-  await waitFor(() => expect(toggle.checked).toBe(false))
-  expect(screen.getByText(/Memory stays searchable/)).toBeTruthy()
+it("shows status above the graph and offers updates only when inputs changed", async () => {
+  const fetch = serve({ ...ENABLED, update_available: true }, { "POST /api/memory/update": () => RUNNING })
+  const status = await screen.findByRole("heading", { name: "Ready" })
+  const viewer = screen.getByRole("region", { name: "Explore memory" })
+  expect(status.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(screen.queryByRole("checkbox", { name: "Keep memory updated" })).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "Update now" }))
   await waitFor(() => expect(posted(fetch, "/api/memory/update")).toEqual({}))
-  expect(await screen.findByRole("list", { name: "Memory steps" })).toBeTruthy()
+})
+
+it("disables Updated when there are no new inputs and keeps Details collapsed", async () => {
+  serve({ ...ENABLED, update_available: false })
+  const button = await screen.findByRole<HTMLButtonElement>("button", { name: "Updated" })
+  expect(button.disabled).toBe(true)
+  expect(screen.getByRole("button", { name: "Details" }).getAttribute("aria-expanded")).toBe("false")
 })
 
 it("Details shows coverage, failures to retry and the cost in tokens when prices are unknown", async () => {

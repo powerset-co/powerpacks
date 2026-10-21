@@ -31,6 +31,7 @@ export interface MemoryInventory {
 export interface MemoryJob {
   enabled: boolean
   keep_updated: boolean
+  update_available?: boolean
   step: "idle" | MemoryStep | "done"
   status: "idle" | "running" | "done" | "failed"
   steps: Record<MemoryStep, StepCounts>

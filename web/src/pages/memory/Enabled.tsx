@@ -3,18 +3,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { ago } from "@/lib/copy"
 import { errorText } from "@/lib/api/http"
-import { MEMORY_KEY, setKeepUpdated, updateMemory } from "@/lib/api/memory"
+import { MEMORY_KEY, updateMemory } from "@/lib/api/memory"
 import type { MemoryJob } from "@/types/memory"
 
-/** Memory is on: its state, Update now, the keep-updated switch, and the directory's search. */
+/** Compact status above the graph; automatic refresh stays enabled by default. */
 export function Enabled({ record }: { record: MemoryJob }) {
   const client = useQueryClient()
   const update = useMutation({
     mutationFn: updateMemory,
-    onSuccess: (next) => client.setQueryData(MEMORY_KEY, next),
-  })
-  const settings = useMutation({
-    mutationFn: setKeepUpdated,
     onSuccess: (next) => client.setQueryData(MEMORY_KEY, next),
   })
   const state =
@@ -23,7 +19,7 @@ export function Enabled({ record }: { record: MemoryJob }) {
       : record.stopped
         ? `Ready · stopped early: ${record.stopped}`
         : "Ready"
-  const error = update.error ?? settings.error
+  const error = update.error
   return (
     <>
       <section className="flex flex-col gap-3" aria-labelledby="memory-state">
@@ -37,8 +33,12 @@ export function Enabled({ record }: { record: MemoryJob }) {
               indexed
             </p>
           </div>
-          <Button type="button" onClick={() => update.mutate()} disabled={update.isPending}>
-            {update.isPending ? "Starting…" : "Update now"}
+          <Button
+            type="button"
+            onClick={() => update.mutate()}
+            disabled={update.isPending || record.update_available === false}
+          >
+            {update.isPending ? "Starting…" : record.update_available === false ? "Updated" : "Update now"}
           </Button>
         </div>
         {record.status === "failed" && record.error ? (
@@ -46,21 +46,6 @@ export function Enabled({ record }: { record: MemoryJob }) {
             {record.error}
           </p>
         ) : null}
-        <label className="flex w-fit cursor-pointer items-center gap-3 text-[13px]">
-          <input
-            type="checkbox"
-            checked={record.keep_updated}
-            disabled={settings.isPending}
-            onChange={() => settings.mutate(!record.keep_updated)}
-            className="accent-[var(--primary)]"
-          />
-          Keep memory updated
-        </label>
-        <p className="m-0 -mt-1 text-xs text-muted-foreground">
-          {record.keep_updated
-            ? "Memory updates after Deep Context finishes and with the daily refresh in Scheduled tasks."
-            : "Memory stays searchable; it updates only when you click Update now."}
-        </p>
         {error ? (
           <p role="alert" className="m-0 text-xs text-bad">
             {errorText(error)}
