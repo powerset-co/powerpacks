@@ -54,6 +54,34 @@ observed alias while preserving hard filters. Report insufficient saved evidence
 rather than “nobody exists.” Check `truncated` and `missing_embeddings`; do not
 claim complete recall from a ranked or partially embedded result.
 
+## Questions that require combining evidence
+
+For natural-language questions about people or relationships, use `search`
+with the corpus's embedding model under the existing spend rules. Use `--limit 5`.
+Keep `resolve` → `enumerate` for literal saved groups and exhaustive tag actions;
+keyword overlap or semantic similarity alone does not establish membership.
+
+Check whether the retrieved evidence actually supports the question before answering.
+If the shortlist contains only weak associations, try up to two meaning-preserving
+reformulations for supporting activities or events and compare the combined people
+by canonical ID. Do not accept the top vector hit as an answer or interpret a poor
+shortlist as absence. Use lexical reformulations if fresh embeddings lack approval.
+
+Compare each person's `evidence` AND `context`, not just their relationship summary.
+These are candidate evidence bundles, not final answers or confidence scores.
+Read relevant events, owner scope, dates, human corrections and contradictory
+claims together. A dated past relationship does not establish a current one;
+an unspecified relationship summary does not negate specific event evidence.
+Do not infer relationships from co-ownership, names or topic similarity alone.
+When multiple independent facts support an inference, state it with citations.
+
+If `context_truncated` is true or the relationship remains ambiguous, `open` supporting
+claim IDs and read their saved dossier; use person-filtered `query` for additional
+relevant evidence. Preserve canonical identities and do not write an inferred
+relationship back into the source. Return the best-supported person first, explain
+why, and distinguish historical or uncertain alternatives. This applies equally
+to personal relationships, professional expertise and other remembered connections.
+
 ## Answer with evidence
 
 Open the relevant claim IDs before making precise assertions. Inspect saved

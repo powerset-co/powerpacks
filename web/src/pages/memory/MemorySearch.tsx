@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
 import { useState } from "react"
+import { useNavigate } from "react-router-dom"
 
 import { SearchField, VirtualRows } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import { newChat, send, useAgent } from "@/lib/agent/store"
+import { AGENT } from "@/lib/nav"
 import { errorText } from "@/lib/api/http"
 import { searchMemory } from "@/lib/api/memory"
 import { cn } from "@/lib/utils"
@@ -28,6 +31,8 @@ interface MemorySearchProps {
 }
 
 export function MemorySearch({ onPersonSelect }: MemorySearchProps) {
+  const navigate = useNavigate()
+  const agent = useAgent()
   const [text, setText] = useState("")
   const [query, setQuery] = useState("")
   const answer = useQuery({
@@ -60,6 +65,20 @@ export function MemorySearch({ onPersonSelect }: MemorySearchProps) {
           Search
         </Button>
       </form>
+      <Button
+        type="button"
+        className="self-start"
+        disabled={!text.trim() || agent.running}
+        onClick={() => {
+          newChat()
+          void navigate(AGENT.href)
+          void send(
+            `$memory ${text.trim()}\nUse search --limit 5 to retrieve and compare saved evidence per person. Read relevant dossier context and cite the evidence. Do not generate or update memory.`,
+          )
+        }}
+      >
+        Ask memory
+      </Button>
       {answer.error ? (
         <p role="alert" className="m-0 text-xs text-bad">
           {errorText(answer.error)}

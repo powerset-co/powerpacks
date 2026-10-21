@@ -221,6 +221,8 @@ class PersonHit:
     score: float
     evidence: tuple[Hit, ...]
     members: tuple[str, ...]
+    context: tuple[Hit, ...] = ()
+    context_truncated: bool = False
 
 
 @dataclass(frozen=True)

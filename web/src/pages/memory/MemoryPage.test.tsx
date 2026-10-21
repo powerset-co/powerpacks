@@ -1,10 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { MemoryRouter } from "react-router-dom"
+import { newChat, send } from "@/lib/agent/store"
 import { afterEach, expect, it, vi } from "vitest"
 
 import type { MemoryJob } from "@/types/memory"
 
 import { MemoryPage } from "./MemoryPage"
+
+vi.mock("@/lib/agent/store", () => ({
+  newChat: vi.fn(),
+  send: vi.fn(),
+  useAgent: () => ({ running: false }),
+}))
 
 const IDLE: MemoryJob = {
   enabled: false,
@@ -94,7 +102,9 @@ function serve(record: MemoryJob, routes: Record<string, Reply> = {}) {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryPage />
+      <MemoryRouter>
+        <MemoryPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
   return fetch
@@ -303,7 +313,9 @@ it("polls every 2 s while a run works and stops once it is done", async () => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryPage />
+      <MemoryRouter>
+        <MemoryPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
   await act(() => vi.advanceTimersByTimeAsync(100))
@@ -314,4 +326,13 @@ it("polls every 2 s while a run works and stops once it is done", async () => {
   expect(screen.getByRole("heading", { name: "Ready" })).toBeTruthy()
   await act(() => vi.advanceTimersByTimeAsync(6_000))
   expect(fetch.mock.calls.filter(([url]) => url === "/api/memory")).toHaveLength(2)
+})
+it("hands a natural-language question to the memory agent with evidence comparison", async () => {
+  serve(ENABLED)
+  const input = await screen.findByRole("searchbox", { name: "Search memory" })
+  fireEvent.change(input, { target: { value: "Who is my wife?" } })
+  fireEvent.click(screen.getByRole("button", { name: "Ask memory" }))
+  expect(newChat).toHaveBeenCalled()
+  expect(send).toHaveBeenCalledWith(expect.stringContaining("$memory Who is my wife?"))
+  expect(send).toHaveBeenCalledWith(expect.stringContaining("search --limit 5"))
 })

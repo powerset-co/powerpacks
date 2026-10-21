@@ -244,8 +244,28 @@ class Query:
             name = self.store.conn.execute("SELECT min(name) FROM identities WHERE parent=? AND present=1", (parent,)).fetchone()[0]
             members = tuple(row[0] for row in self.store.conn.execute(
                 "SELECT member FROM identities WHERE parent=? AND present=1 ORDER BY member", (parent,)))
-            people.append(PersonHit(parent[len(prefix):], name, warmth.get(parent, 0.0), final, tuple(evidence.values()), members))
+            context, truncated = self._context(parent, set(evidence), MAX_CONTEXT_CHARS // max(1, min(limit, len(ranked))))
+            people.append(PersonHit(parent[len(prefix):], name, warmth.get(parent, 0.0), final,
+                                    tuple(evidence.values()), members, context, truncated))
         return People(tuple(people), tuple(sorted(layers)), filtered, len(ranked), len(lexical), len(vectors), missing)
+
+    def _context(self, parent: str, matched: set[int], budget: int) -> tuple[tuple[Hit, ...], bool]:
+        """Supporting evidence for interpretation, never extra search matches."""
+        rows = self.store.conn.execute(
+            "SELECT c.* FROM active_claims c WHERE c.parent=? AND c.id=" + _first("c") +
+            " ORDER BY c.human DESC,(c.kind='relationship') DESC,(c.topic='event') DESC,c.id", (parent,))
+        context: list[Hit] = []
+        used = 0
+        for row in rows:
+            if row['id'] in matched:
+                continue
+            hit = self._hit(row, 0.0, None, None)
+            size = len(json.dumps(asdict(hit), ensure_ascii=False))
+            if used + size > budget or len(context) >= 12:
+                return tuple(context), True
+            context.append(hit)
+            used += size
+        return tuple(context), False
 
     def _hit(self, row: sqlite3.Row, score: float, lexical: int | None, semantic: int | None) -> Hit:
         claim = Claim.parse(json.loads(row["payload"]))
