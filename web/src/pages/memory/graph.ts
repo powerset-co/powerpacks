@@ -85,12 +85,13 @@ export class MemoryGraph {
   }
   private layout() {
     const hubs = this.nodes.filter((node) => node.kind === "topic")
+    const depth = 75 * Math.sqrt(hubs.length + 1) * 0.65
     hubs.forEach((node, index) => {
       const angle = index * 2.399963,
         radius = 75 * Math.sqrt(index + 1)
       node.x = Math.cos(angle) * radius
       node.y = Math.sin(angle) * radius
-      node.z = (random(node.id, 3) - 0.5) * 350
+      node.z = (random(node.id, 3) * 2 - 1) * depth * Math.sqrt(1 - (index + 1) / (hubs.length + 1))
     })
     for (const node of this.nodes.filter((node) => node.kind === "person")) {
       const hub = [...(this.adjacent.get(node.id) ?? [])]
@@ -104,7 +105,7 @@ export class MemoryGraph {
       node.y = (hub?.y ?? 0) + Math.sin(angle) * radius
       node.z = (hub?.z ?? 0) + (random(node.id, 4) - 0.5) * 180
     }
-    this.extent = Math.max(100, ...this.nodes.map((node) => Math.hypot(node.x, node.y))) + 100
+    this.extent = Math.max(100, ...this.nodes.map((node) => Math.hypot(node.x, node.y, node.z))) + 100
   }
   private resize() {
     this.width = this.canvas.clientWidth
