@@ -82,10 +82,16 @@ function serve(record: MemoryJob, routes: Record<string, Reply> = {}) {
   const fetch = vi.fn((input: string, init?: RequestInit) => {
     const path = input.split("?")[0] ?? input
     const reply = routes[`${init?.method ?? "GET"} ${path}`]
-    const payload = reply ? reply(input, init) : record
+    const payload = reply
+      ? reply(input, init)
+      : path === "/api/memory/graph"
+        ? { nodes: [], edges: [], selected_ids: [], total_people: 0, total_topics: 0, truncated: false }
+        : record
     return Promise.resolve(new Response(JSON.stringify(payload)))
   })
   vi.stubGlobal("fetch", fetch)
+  vi.stubGlobal("matchMedia", () => ({ matches: false }))
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <MemoryPage />
@@ -285,19 +291,31 @@ it("lists a suggestion's people only once it is picked", async () => {
 it("polls every 2 s while a run works and stops once it is done", async () => {
   vi.useFakeTimers()
   let record = RUNNING
-  const fetch = vi.fn(() => Promise.resolve(new Response(JSON.stringify(record))))
+  const fetch = vi.fn((url: string) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify(
+          url === "/api/memory"
+            ? record
+            : { nodes: [], edges: [], selected_ids: [], total_people: 0, total_topics: 0, truncated: false },
+        ),
+      ),
+    ),
+  )
   vi.stubGlobal("fetch", fetch)
+  vi.stubGlobal("matchMedia", () => ({ matches: false }))
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <MemoryPage />
     </QueryClientProvider>,
   )
   await act(() => vi.advanceTimersByTimeAsync(100))
-  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/memory")).toHaveLength(1)
   record = ENABLED
   await act(() => vi.advanceTimersByTimeAsync(2_000))
-  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/memory")).toHaveLength(2)
   expect(screen.getByRole("heading", { name: "Ready" })).toBeTruthy()
   await act(() => vi.advanceTimersByTimeAsync(6_000))
-  expect(fetch).toHaveBeenCalledTimes(2)
+  expect(fetch.mock.calls.filter(([url]) => url === "/api/memory")).toHaveLength(2)
 })

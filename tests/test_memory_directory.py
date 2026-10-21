@@ -81,10 +81,49 @@ class DirectoryTests(unittest.TestCase):
         selected = next(meaning.selector for meaning in meanings if meaning.selector.origin == Origin.SAVED_VALUE)
         self.assertEqual([person.parent for person in self.directory.enumerate(selected).people], ['p001'])
         suggestions = self.directory.resolve('France')
-        geographic = next(meaning for meaning in suggestions if 'France' in meaning.selector.value)
+        geographic = next(meaning for meaning in suggestions if 'france' in meaning.selector.value)
         self.assertEqual(geographic.selector.origin, Origin.SAVED_VALUE)
         self.assertEqual(geographic.count, 1)
         self.assertNotIn('p002', [person.parent for person in self.directory.enumerate(geographic.selector).people])
+
+    def test_exact_value_does_not_hide_supported_family_meanings(self) -> None:
+        for member, text, kind, topic in (
+            ('c001', 'family', Kind.RELATIONSHIP, 'relationship'),
+            ('c002', 'Sibling in the family', Kind.RELATIONSHIP, 'relationship'),
+            ('c003', 'Family relationship', Kind.TAG, 'family relationship'),
+            ('c004', 'Professional acquaintance', Kind.RELATIONSHIP, 'relationship'),
+        ):
+            source = self.store.conn.execute('SELECT id,hash FROM sources WHERE key=?', ('facts:' + member,)).fetchone()
+            with self.store.conn:
+                self.store.add_claim(source['id'], source['hash'], None,
+                                     Claim(text, kind, topic, 'owner', '', '', '', text), human=False)
+        meanings = self.directory.resolve('family')
+        people = {person.parent for meaning in meanings for person in self.directory.enumerate(meaning.selector).people}
+        self.assertEqual(people, {'p001', 'p002', 'p003'})
+
+    def test_relationship_suggestion_never_selects_every_relationship(self) -> None:
+        for member, text in (('c001', 'Younger brother'), ('c002', 'Professional acquaintance')):
+            source = self.store.conn.execute('SELECT id,hash FROM sources WHERE key=?', ('facts:' + member,)).fetchone()
+            with self.store.conn:
+                self.store.add_claim(source['id'], source['hash'], None,
+                                     Claim(text, Kind.RELATIONSHIP, 'relationship', 'owner', '', '', '', text), human=False)
+                if member == 'c001':
+                    self.store.add_claim(source['id'], source['hash'], None,
+                                         Claim(text, Kind.TAG, 'relationship', 'owner', '', '', '', text), human=False)
+        meanings = self.directory.resolve('brother')
+        self.assertEqual(len(meanings), 1)
+        self.assertEqual(meanings[0].selector.origin, Origin.SAVED_VALUE)
+        self.assertEqual([person.parent for person in self.directory.enumerate(meanings[0].selector).people], ['p001'])
+
+    def test_title_match_does_not_expand_to_every_employee(self) -> None:
+        for member, text in (('c001', 'Founder @ Synthetic Company'), ('c002', 'Engineer @ Synthetic Company')):
+            source = self.store.conn.execute('SELECT id,hash FROM sources WHERE key=?', ('facts:' + member,)).fetchone()
+            with self.store.conn:
+                self.store.add_claim(source['id'], source['hash'], None,
+                                     Claim(text, Kind.STATEMENT, 'employment', '', 'Synthetic Company', '', '', text), human=False)
+        meanings = self.directory.resolve('Founder')
+        people = {person.parent for meaning in meanings for person in self.directory.enumerate(meaning.selector).people}
+        self.assertEqual(people, {'p001'})
 
     def test_alias_ambiguity_and_semantic_existing_selector_recall(self) -> None:
         self.store.conn.execute("INSERT INTO topics VALUES('engineering')")

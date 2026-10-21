@@ -1,7 +1,13 @@
 // The Memory page's JSON routes on the Python review server (packs/shared/web/memory.py).
 
 import { body, failure } from "@/lib/api/http"
-import type { MemoryJob, MemoryMeaning, MemoryPeoplePage, MemorySelector } from "@/types/memory"
+import type {
+  MemoryGraphData,
+  MemoryJob,
+  MemoryMeaning,
+  MemoryPeoplePage,
+  MemorySelector,
+} from "@/types/memory"
 
 export const MEMORY_KEY = ["memory"]
 
@@ -49,4 +55,22 @@ export async function memoryPeople(
   const response = await fetch(`/api/memory/people?${params}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't list these people.")
   return body<MemoryPeoplePage>(response)
+}
+
+export async function fetchMemoryGraph(
+  selector: MemorySelector | null,
+  parent: string | null,
+  topic: string | null,
+  signal?: AbortSignal,
+): Promise<MemoryGraphData> {
+  const params = new URLSearchParams({ limit: "1000" })
+  if (topic) params.set("topic", topic)
+  else if (parent) params.set("parent", parent)
+  else if (selector) {
+    params.set("origin", selector.origin)
+    params.set("value", selector.value)
+  }
+  const response = await fetch(`/api/memory/graph?${params}`, { signal })
+  if (!response.ok) throw await failure(response, "Couldn't load the memory graph.")
+  return body<MemoryGraphData>(response)
 }

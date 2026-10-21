@@ -26,17 +26,23 @@ function personKey(person: MemoryPerson): string {
 /** Search the directory: the meanings a phrase resolves to, each with its count, then everyone
  *  under the chosen one. An exact match lists the first meaning's people until another is picked;
  *  suggestions list nobody until one is. */
-export function MemorySearch() {
+interface MemorySearchProps {
+  selection: MemorySelector | null
+  onSelectionChange: (selector: MemorySelector | null) => void
+  onPersonSelect: (parent: string) => void
+}
+
+export function MemorySearch({ selection, onSelectionChange, onPersonSelect }: MemorySearchProps) {
   const [text, setText] = useState("")
   const [query, setQuery] = useState("")
-  const [chosen, setChosen] = useState<MemorySelector | null>(null)
+  const [visibleCount, setVisibleCount] = useState(8)
   const meanings = useQuery({
     queryKey: ["memory-search", query],
     queryFn: ({ signal }) => searchMemory(query, signal),
     enabled: query !== "",
   })
   const first = meanings.data?.[0]
-  const selector = chosen ?? (first?.match === "exact or confirmed alias" ? first.selector : null)
+  const selector = selection ?? (first?.match === "exact or confirmed alias" ? first.selector : null)
   return (
     <section className="flex flex-col gap-3" aria-labelledby="memory-search">
       <h2 id="memory-search" className="m-0 text-[15px] font-semibold">
@@ -47,13 +53,14 @@ export function MemorySearch() {
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault()
-          setChosen(null)
+          onSelectionChange(null)
           setQuery(text.trim())
+          setVisibleCount(8)
         }}
       >
         <SearchField
           aria-label="Search memory"
-          placeholder="investor, climate, met at YC…"
+          placeholder="Find a person, family, topic…"
           value={text}
           onChange={(event) => setText(event.target.value)}
           className="min-w-0 flex-1"
@@ -72,8 +79,8 @@ export function MemorySearch() {
         <p className="m-0 text-sm text-muted-foreground">Nothing in memory matches “{query}”.</p>
       ) : null}
       {meanings.data?.length ? (
-        <ul className="m-0 flex list-none flex-wrap gap-2 p-0" aria-label="Meanings">
-          {meanings.data.map((meaning) => {
+        <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Meanings">
+          {meanings.data.slice(0, visibleCount).map((meaning) => {
             const selected =
               selector?.origin === meaning.selector.origin && selector.value === meaning.selector.value
             return (
@@ -81,15 +88,19 @@ export function MemorySearch() {
                 <button
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => setChosen(meaning.selector)}
+                  onClick={() => onSelectionChange(meaning.selector)}
                   className={cn(
-                    "flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors duration-fast ease-out motion-reduce:transition-none",
+                    "flex w-full cursor-pointer flex-wrap items-center gap-1.5 rounded-md border px-3 py-2 text-left text-xs transition-colors duration-fast ease-out motion-reduce:transition-none",
                     selected
                       ? "border-primary bg-surface-2 text-foreground"
                       : "border-border bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
-                  <span className="font-semibold">{meaning.selector.value}</span>{" "}
+                  <span className="w-full break-words font-semibold" title={meaning.selector.value}>
+                    {meaning.selector.value.length > 110
+                      ? meaning.selector.value.slice(0, 109) + "…"
+                      : meaning.selector.value}
+                  </span>{" "}
                   <span>{ORIGIN[meaning.selector.origin]}</span>{" "}
                   <span className="tabular-nums">· {meaning.count.toLocaleString()}</span>
                 </button>
@@ -98,18 +109,40 @@ export function MemorySearch() {
           })}
         </ul>
       ) : null}
+      {meanings.data && meanings.data.length > visibleCount ? (
+        <Button type="button" className="self-start" onClick={() => setVisibleCount(visibleCount + 8)}>
+          More matches
+        </Button>
+      ) : null}
+      {meanings.data && meanings.data.length >= 40 ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          Showing the first 40 matching meanings. Narrow your search for more specific results.
+        </p>
+      ) : null}
       {!selector && meanings.data?.length ? (
         <p className="m-0 text-xs text-muted-foreground">
           No exact match: pick the meaning you want to list.
         </p>
       ) : null}
-      {selector ? <People key={`${selector.origin}:${selector.value}`} selector={selector} /> : null}
+      {selector ? (
+        <People
+          key={`${selector.origin}:${selector.value}`}
+          selector={selector}
+          onPersonSelect={onPersonSelect}
+        />
+      ) : null}
     </section>
   )
 }
 
 /** Everyone under one meaning, fifty at a time. */
-function People({ selector }: { selector: MemorySelector }) {
+function People({
+  selector,
+  onPersonSelect,
+}: {
+  selector: MemorySelector
+  onPersonSelect: (parent: string) => void
+}) {
   const people = useInfiniteQuery({
     queryKey: ["memory-people", selector],
     queryFn: ({ pageParam, signal }) => memoryPeople(selector, pageParam, signal),
@@ -145,7 +178,13 @@ function People({ selector }: { selector: MemorySelector }) {
               index < rows.length - 1 && "border-b border-line",
             )}
           >
-            <span className="font-medium">{person.name}</span>
+            <button
+              type="button"
+              onClick={() => onPersonSelect(person.parent)}
+              className="text-left font-medium hover:text-primary"
+            >
+              {person.name}
+            </button>
             {person.evidence[0]?.quote ? (
               <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {person.evidence[0].quote}

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import re
 
 from packs.memory.models import Citation, IdentityMatch, object_dict, string, strings, normalized
 from packs.memory.provider import OpenAIProvider
 from packs.memory.query import Query
 from packs.memory.store import Store
+
+MAX_MEANINGS = 40
 
 
 class Origin(StrEnum):
@@ -21,6 +24,9 @@ class Origin(StrEnum):
 class Selector:
     origin: Origin
     value: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'value', normalized(self.value))
 
 
 @dataclass(frozen=True)
@@ -80,7 +86,7 @@ class Directory:
         sql = "SELECT c.parent,c.name,c.citation,c.source_hash,json_extract(c.payload,'$.quote') quote,c.id claim_id FROM active_claims c WHERE "
         original = "c.kind='tag' AND c.source_key LIKE 'tags:%' AND c.chunk_id IS NULL AND c.human=0"
         if selector.origin == Origin.SAVED_VALUE:
-            return (sql + 'NOT (' + original + ") AND normalized(CASE WHEN c.object<>'' THEN c.object ELSE c.text END)=?", (value,))
+            return (sql + 'NOT (' + original + ') AND (normalized(c.object)=? OR normalized(c.text)=?)', (value, value))
         where = original if selector.origin == Origin.HUMAN_TAG else 'NOT (' + original + ')'
         return (sql + where + " AND c.topic IN "
                 "(SELECT ? UNION SELECT alias FROM aliases WHERE topic=? AND confirmed=1)", (value, value))
@@ -103,6 +109,14 @@ class Directory:
             people.append(Person(row['parent'][len(prefix):], row['name'], members, evidence))
         return Page(self.corpus, tuple(people), selector, total, people[-1].parent if len(rows) > limit else '')
 
+    def _meaning(self, selector: Selector, match: str) -> Meaning | None:
+        sql, params = self.matching_sql(selector)
+        row = self.store.conn.execute('SELECT count(DISTINCT parent) total,citation,source_hash,quote FROM (' + sql + ')', params).fetchone()
+        if not row['total']:
+            return None
+        citation = Citation(row['citation'], row['source_hash'], row['quote'], selector.origin.value)
+        return Meaning(selector, row['total'], (citation,), match)
+
     def resolve(self, text: str, *, embedding_model: str = '', approve_spend: bool = False) -> tuple[Meaning, ...]:
         value = normalized(text)
         if not value or len(text) > 9000:
@@ -112,17 +126,46 @@ class Directory:
         for origin in Origin:
             for topic in sorted(topics if origin in (Origin.HUMAN_TAG, Origin.TOPIC) else {value}):
                 selector = Selector(origin, topic)
-                page = self.enumerate(selector, limit=1)
-                if page.total:
-                    meanings.append(Meaning(selector, page.total, page.people[0].evidence, 'exact or confirmed alias'))
-        if meanings:
+                meaning = self._meaning(selector, 'exact or confirmed alias')
+                if meaning:
+                    meanings.append(meaning)
+        selectors = {meaning.selector for meaning in meanings}
+        tokens = re.findall(r'\w+', value, re.UNICODE)[:64]
+        if tokens:
+            match = ' OR '.join('"' + token + '"' for token in tokens)
+            rows = list(self.store.conn.execute(
+                'SELECT c.* FROM lexical JOIN active_claims c ON c.id=lexical.rowid '
+                'WHERE lexical MATCH ? ORDER BY bm25(lexical),c.id', (match,)))
+            # Shared topics and explicit relationships precede incidental prose matches.
+            rows.sort(key=lambda row: (
+                0 if row['kind'] == 'relationship' else
+                1 if row['kind'] in ('tag', 'mention') and set(tokens) & set(re.findall(r'\w+', row['topic'], re.UNICODE))
+                else 2))
+            for row in rows:
+                original = row['kind'] == 'tag' and row['source_key'].startswith('tags:') and row['chunk_id'] is None and not row['human']
+                topic_match = bool(set(tokens) & set(re.findall(r'\w+', row['topic'], re.UNICODE)))
+                if original:
+                    selector = Selector(Origin.HUMAN_TAG, row['topic'])
+                elif row['kind'] in ('mention', 'tag') and topic_match:
+                    selector = Selector(Origin.TOPIC, row['topic'])
+                else:
+                    object_match = bool(set(tokens) & set(re.findall(r'\w+', row['object'], re.UNICODE)))
+                    selector = Selector(Origin.SAVED_VALUE, row['object'] if object_match else row['text'])
+                if selector in selectors:
+                    continue
+                selectors.add(selector)
+                meaning = self._meaning(selector, 'saved lexical match')
+                if meaning:
+                    meanings.append(meaning)
+                if len(meanings) >= MAX_MEANINGS:
+                    break
+        if meanings or not embedding_model:
             return tuple(meanings)
         provider = OpenAIProvider('', embedding_model, approve_spend=approve_spend)
         try:
             hits = Query(self.store, provider).run(text, limit=20).hits
         finally:
             provider.close()
-        selectors: set[Selector] = set()
         for hit in hits:
             origin = Origin.HUMAN_TAG if any(c.level == 'original human tag' for c in hit.citations) else Origin.TOPIC
             selector = Selector(origin, hit.claim.topic) if hit.claim.kind in ('mention', 'tag') else Selector(Origin.SAVED_VALUE, hit.claim.object or hit.claim.text)

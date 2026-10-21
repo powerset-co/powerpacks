@@ -71,7 +71,7 @@ export interface MemoryMeaning {
   count: number
   evidence: MemoryCitation[]
   // A suggestion is listed only once the user picks it.
-  match: "exact or confirmed alias" | "suggestion; confirm meaning before enumeration"
+  match: "exact or confirmed alias" | "saved lexical match" | "suggestion; confirm meaning before enumeration"
 }
 
 export interface MemoryPerson {
@@ -88,4 +88,20 @@ export interface MemoryPeoplePage {
   total: number
   // "" on the last page.
   next_after: string
+}
+
+export interface MemoryGraphNode {
+  id: string
+  label: string
+  kind: "person" | "topic"
+}
+
+export interface MemoryGraphData {
+  corpus: string
+  nodes: MemoryGraphNode[]
+  edges: { source: string; target: string }[]
+  selected_ids: string[]
+  total_people: number
+  total_topics: number
+  truncated: boolean
 }

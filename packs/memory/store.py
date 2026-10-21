@@ -91,19 +91,19 @@ CREATE TEMP VIEW active_claims AS
  SELECT c.*,i.parent,i.name,s.citation,s.error,s.key source_key FROM claims c JOIN sources s ON s.id=c.source_id
  JOIN identities i ON i.namespace=s.namespace AND i.member=s.member
  WHERE c.active=1 AND s.present=1 AND i.present=1 AND NOT EXISTS(
- SELECT 1 FROM corrections r JOIN claims old ON old.id=r.claim_id JOIN sources os ON os.id=old.source_id
- JOIN identities oi ON oi.namespace=os.namespace AND oi.member=os.member
+ SELECT 1 FROM corrections r CROSS JOIN claims old ON old.id=r.claim_id CROSS JOIN sources os ON os.id=old.source_id
+ CROSS JOIN identities oi ON oi.namespace=os.namespace AND oi.member=os.member
  WHERE c.human=0 AND oi.parent=i.parent AND """ + _CORRECTED_CLAIM.format(claim="c") + ");"
 
 
 class Store:
-    def __init__(self, path: Path, *, create: bool = False) -> None:
+    def __init__(self, path: Path, *, create: bool = False, read_only: bool = False) -> None:
         path = path.resolve()
         if not create and not path.is_file():
             raise ValueError("derived memory does not exist; import first")
         if create:
             path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) if read_only else sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.create_function("normalized", 1, normalized, deterministic=True)
         self.conn.create_function("date_lower", 1, date_bound, deterministic=True)
@@ -116,6 +116,9 @@ class Store:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA cache_size=-8192")
         self.conn.execute("PRAGMA temp_store=FILE")
+        if read_only:
+            self.conn.executescript(_ACTIVE_CLAIMS)
+            return
         if not tables:
             self.conn.executescript(_DDL)
             self.conn.execute(f"PRAGMA application_id={_APPLICATION_ID}")

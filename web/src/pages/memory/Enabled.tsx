@@ -6,8 +6,6 @@ import { errorText } from "@/lib/api/http"
 import { MEMORY_KEY, setKeepUpdated, updateMemory } from "@/lib/api/memory"
 import type { MemoryJob } from "@/types/memory"
 
-import { MemorySearch } from "./MemorySearch"
-
 /** Memory is on: its state, Update now, the keep-updated switch, and the directory's search. */
 export function Enabled({ record }: { record: MemoryJob }) {
   const client = useQueryClient()
@@ -69,7 +67,6 @@ export function Enabled({ record }: { record: MemoryJob }) {
           </p>
         ) : null}
       </section>
-      <MemorySearch />
     </>
   )
 }

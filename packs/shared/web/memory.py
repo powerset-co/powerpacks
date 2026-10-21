@@ -15,6 +15,7 @@ from packs.memory import job, runner
 from packs.memory.cost import Usage
 from packs.memory.directory import Directory, Origin, Selector
 from packs.memory.generate import Generate
+from packs.memory.graph import graph
 from packs.memory.sources import V2
 from packs.memory.store import Store
 
@@ -35,19 +36,22 @@ class MemoryApi:
         self._preview: dict[str, object] = {}
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: ParseResult) -> bool:
-        if parsed.path not in ("/api/memory", "/api/memory/search", "/api/memory/people"):
+        if parsed.path not in ("/api/memory", "/api/memory/search", "/api/memory/people", "/api/memory/graph"):
             return False
         try:
             if parsed.path != "/api/memory":
                 query = parse_qs(parsed.query, keep_blank_values=True)
-                with closing(Store(job.database(self.root))) as store:
-                    directory = Directory(store)
+                with closing(Store(job.database(self.root), read_only=True)) as store:
                     if parsed.path.endswith("/search"):
-                        result: object = [asdict(meaning) for meaning in directory.resolve(query.get("q", [""])[0])]
+                        result: object = [asdict(meaning) for meaning in Directory(store).resolve(query.get("q", [""])[0])]
+                    elif parsed.path.endswith('/graph'):
+                        selector = Selector(Origin(query['origin'][0]), query.get('value', [''])[0]) if 'origin' in query else None
+                        result = asdict(graph(store, limit=int(query.get('limit', ['1000'])[0]),
+                                              parent=query.get('parent', [''])[0], topic=query.get('topic', [''])[0], selector=selector))
                     else:
                         selector = Selector(Origin(query.get("origin", [""])[0]), query.get("value", [""])[0])
-                        result = asdict(directory.enumerate(selector, after=query.get("after", [""])[0],
-                                                            limit=int(query.get("limit", ["50"])[0])))
+                        result = asdict(Directory(store).enumerate(selector, after=query.get("after", [""])[0],
+                                                                  limit=int(query.get("limit", ["50"])[0])))
                 _send_json(handler, result)
                 return True
             with job.LOCK:

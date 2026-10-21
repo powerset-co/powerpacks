@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 
-import { EmptyState, Page } from "@/components/shared"
+import { EmptyState, PageHeader } from "@/components/shared"
 import { errorText } from "@/lib/api/http"
 import { fetchMemory, MEMORY_KEY } from "@/lib/api/memory"
 
@@ -8,6 +8,7 @@ import { Details } from "./Details"
 import { Enabled } from "./Enabled"
 import { FirstRun } from "./FirstRun"
 import { Running } from "./Running"
+import { MemoryExplorer } from "./MemoryExplorer"
 
 /** The local memory directory: enable it once, watch the run, then update and search it. The run
  *  lives in the server's job record (packs/memory/job.py); the page only polls it, every 2 s while
@@ -20,19 +21,23 @@ export function MemoryPage() {
   })
   const record = memory.data
   return (
-    <Page title="Memory">
-      {!record ? (
-        <EmptyState role={memory.error ? "alert" : undefined}>
-          {memory.error ? errorText(memory.error) : "Reading your network…"}
-        </EmptyState>
-      ) : record.status === "running" ? (
-        <Running record={record} />
-      ) : record.enabled ? (
-        <Enabled record={record} />
-      ) : (
-        <FirstRun record={record} />
-      )}
-      {record?.enabled ? <Details record={record} /> : null}
-    </Page>
+    <main className="min-h-0 overflow-y-auto">
+      <PageHeader title="Memory" />
+      <div className="flex flex-col gap-5 px-5 pb-8 pt-5">
+        {record?.enabled ? <MemoryExplorer running={record.status === "running"} /> : null}
+        {!record ? (
+          <EmptyState role={memory.error ? "alert" : undefined}>
+            {memory.error ? errorText(memory.error) : "Reading your network…"}
+          </EmptyState>
+        ) : record.status === "running" ? (
+          <Running record={record} />
+        ) : record.enabled ? (
+          <Enabled record={record} />
+        ) : (
+          <FirstRun record={record} />
+        )}
+        {record?.enabled ? <Details record={record} /> : null}
+      </div>
+    </main>
   )
 }
