@@ -21,8 +21,9 @@ enrich, upload or rebuild embeddings as a side effect of answering.
 
 | Intent, including conversational context | Primitive sequence |
 | --- | --- |
-| “All my SoF people”; “those mentors”; an action on that group | Follow `packs/memory/skills/memory/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
-| “Who knows about permission architecture?”; “what do I know about this topic?” | `query` with the user's meaning and hard filters → `open` the useful claims. This is a ranked shortlist, not all matching people. |
+| Any “who” question: “who is family”, “my Roblox coworkers”, “who helped me buy a house”, “friends in LA” | `search` with the user's words. It is the same call the Memory page makes, so the user can replay it there. People come back warmest first with the claims that matched; a word that names an owner label (family, wife, coworkers, classmates, investors, recruiters, founders) lists everyone holding it, and with other words filters them. `--layer` names a label directly. An empty answer means nothing saved matches: say so. |
+| “All my SoF people”; a label the user named exactly; an action on that group | Follow `packs/memory/skills/memory/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
+| “What do I know about this topic?”; evidence behind a search answer | `query` with the user's meaning and hard filters → `open` the useful claims. This is a ranked shortlist of claims, not people. |
 | “Tell me everything about Jordan”; “open Jordan’s original dossier” | Follow `packs/memory/skills/memory/person-lookup.md`: use the free native dossier lookup; no memory generation or ranked search. |
 | “What do we remember about Jordan on this topic?” | `lookup` exact name or known identifier → disambiguate → `query --person` canonical parent → `open`. For the complete original dossier use `packs/memory/skills/memory/person-lookup.md`. |
 | “Who overlapped with Jordan at Acme?” | `lookup` → `overlap` with the canonical parent and organization. Overlap is a possible connection, not proof of friendship or willingness to introduce. |
@@ -32,6 +33,9 @@ enrich, upload or rebuild embeddings as a side effect of answering.
 Replace the example database path and identifiers with observed values:
 
 ```sh
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'roblox coworkers' --embedding-model KNOWN_MODEL --approve-spend
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'family'
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'los angeles' --layer 'close friend' --embedding-model KNOWN_MODEL --approve-spend
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite lookup 'Jordan Bravo'
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite query 'permission architecture' --kind work
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite query --person CANONICAL_PARENT_ID

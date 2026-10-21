@@ -26,6 +26,9 @@ def fact_claims(saved: SynthesizedFacts) -> Iterator[Claim]:
             yield claim(text, Kind.STATEMENT, name)
     if saved.relationship_to_owner.strip():
         yield claim(saved.relationship_to_owner, Kind.RELATIONSHIP, "relationship", "owner")
+    category = saved.relationship_category.strip().casefold()
+    if category and category != "unknown":
+        yield claim(category, Kind.TAG, category, "owner")
     for employer in saved.employers:
         if employer.name.strip():
             yield claim(f"{employer.role} @ {employer.name} ({employer.status})", Kind.STATEMENT,
@@ -55,8 +58,13 @@ def _date(value: object) -> str:
 def project(key: str, content: str) -> tuple[Claim, ...]:
     if key.startswith("facts:"):
         return tuple(fact_claims(facts(content)))
-    row = object_dict(json.loads(content)) if key.startswith(("profile:", "tags:")) else {}
+    row = object_dict(json.loads(content)) if key.startswith(("profile:", "tags:", "labels:")) else {}
     result: list[Claim] = []
+    if key.startswith("labels:"):
+        # Deep Context's own answer to "who is this person to me"; the label is the claim.
+        kind = string(row["relationship_kind"])
+        for label in (*([kind] if kind else []), *strings(row["labels"])):
+            result.append(Claim(label, Kind.TAG, label, "owner", "", "", "", ""))
     if key.startswith("tags:"):
         for tag in strings(row["human_tags"]):
             if tag.strip():
@@ -65,10 +73,10 @@ def project(key: str, content: str) -> tuple[Claim, ...]:
         if note.strip():
             result.append(Claim(note, Kind.STATEMENT, "human note", "owner", "", "", "", note))
     if key.startswith("profile:"):
-        for field in ("headline", "summary", "location_str"):
-            text = string(row.get(field) or "")
-            if text.strip():
-                result.append(Claim(text, Kind.STATEMENT, field, "", "", "", "", text))
+        # A profile contributes where someone is, worked and studied; never its headline, summary or skills.
+        text = string(row.get("location_str") or "")
+        if text.strip():
+            result.append(Claim(text, Kind.STATEMENT, "location_str", "", "", "", "", text))
         experiences = row.get("experiences") or []
         if not isinstance(experiences, list):
             raise ValueError("expected experiences list")

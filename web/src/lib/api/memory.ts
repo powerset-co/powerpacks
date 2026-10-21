@@ -4,7 +4,7 @@ import { body, failure } from "@/lib/api/http"
 import type {
   MemoryGraphData,
   MemoryJob,
-  MemoryMeaning,
+  MemoryPeople,
   MemoryPeoplePage,
   MemorySelector,
 } from "@/types/memory"
@@ -40,10 +40,11 @@ export function setKeepUpdated(keepUpdated: boolean): Promise<MemoryJob> {
   return post("/api/memory/settings", { keep_updated: keepUpdated }, "Couldn't change the setting.")
 }
 
-export async function searchMemory(q: string, signal?: AbortSignal): Promise<MemoryMeaning[]> {
+/** The same search the memory skill runs: people, warmest first, with the claims that matched. */
+export async function searchMemory(q: string, signal?: AbortSignal): Promise<MemoryPeople> {
   const response = await fetch(`/api/memory/search?${new URLSearchParams({ q })}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't search Memory.")
-  return body<MemoryMeaning[]>(response)
+  return body<MemoryPeople>(response)
 }
 
 export async function memoryPeople(

@@ -3,7 +3,10 @@
 Agent retrieval contract: [memory skill](skills/memory/SKILL.md). It owns semantic
 routing, evidence expansion and answer citations; the CLI below owns execution.
 
-This package reads original contact names, the current schema 6 Deep Context SQLite and saved profiles. Import is read-only. Explicit confirmed selection actions reuse the native
+This package reads original contact names, the current schema 6 Deep Context SQLite (facts, human tags and
+`person_labels`: relationship kind, label probabilities and warmth) and saved profiles. A profile contributes only
+where someone is, worked and studied; its headline, summary and skills are never projected, generated from or
+embedded. Generation reads message dossiers (`facts:` sources) only. Import is read-only. Explicit confirmed selection actions reuse the native
 People hide and human-tag writers; inferred-label removal uses memory corrections. Model claims cite saved artifacts; original message citations
 are **unverified**. No crawler, message synthesis, identity matching or upload
 runs here.
@@ -30,7 +33,7 @@ flowchart LR
 | discovery.py | Original-evidence groups, cached retrieval, bounded interpretations | Original names/projections and existing vectors | SQLite checkpoints and inferred tags |
 | discovery_provider.py | Typed discovery decisions and request schema | One representative batch | Nothing |
 | generate.py | Up to 64 concurrent generation calls, serial checkpoints and embedding reuse | Derived sources and caches | Derived chunks, claims, vectors |
-| query.py | Hard filters, hybrid ranking, tenure overlap | Active claims, streamed cached vectors | Query embedding cache |
+| query.py | `people`: the one search (owner labels as layers, people ranked with evidence, warmth); hard filters, hybrid claim ranking, tenure overlap | Active claims, streamed cached vectors, labels sources | Query embedding cache |
 | directory.py | Typed meanings and complete canonical pages | Current names, tags, claims and cached hybrid query | Query embedding cache only after approval |
 | actions.py | Exact native People/tag actions and memory corrections | Explicit corpus-bound enumerated IDs | Existing source owners and memory corrections |
 | __main__.py | JSON CLI | Explicit paths and arguments | Derived SQLite; explicit source actions only |
@@ -76,6 +79,9 @@ every 250 identities / 100 sources and reconcile absence only after complete enu
 Failed reads preserve prior evidence.
 
 ```sh
+python -m packs.memory --db /tmp/memory.sqlite search 'roblox coworkers' \
+  --embedding-model APPROVED_EMBEDDING_MODEL --approve-spend
+python -m packs.memory --db /tmp/memory.sqlite search 'family'
 python -m packs.memory --db /tmp/memory.sqlite query 'permission architecture' \
   --embedding-model APPROVED_EMBEDDING_MODEL --approve-spend --kind work --person 'Jordan Bravo'
 python -m packs.memory --db /tmp/memory.sqlite query --embedding-model APPROVED_EMBEDDING_MODEL \

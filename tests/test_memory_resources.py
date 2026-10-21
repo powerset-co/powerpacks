@@ -103,7 +103,8 @@ class ResourceTests(unittest.TestCase):
             first = Generate(store, provider).run(limit=1)
             self.assertEqual((first.generation_calls, first.embedding_calls), (1, 0))
             report = Generate(store, provider).run(limit=count * 3)
-            self.assertEqual(report.generation_calls, count)
+            # Only message dossiers are generated from: the human tags source is projected, never sent to a model.
+            self.assertEqual(report.generation_calls, count - 1)
             # Each generated source uses one request; the extra projected claims share one batch.
             self.assertEqual(report.embedding_calls, count + 1)
             self.assertEqual(store.conn.execute("SELECT count(*) FROM embeddings").fetchone()[0], count + 3)

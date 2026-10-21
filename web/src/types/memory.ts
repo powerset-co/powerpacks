@@ -67,12 +67,41 @@ export interface MemoryCitation {
   level: string
 }
 
-export interface MemoryMeaning {
-  selector: MemorySelector
-  count: number
-  evidence: MemoryCitation[]
-  // A suggestion is listed only once the user picks it.
-  match: "exact or confirmed alias" | "saved lexical match" | "suggestion; confirm meaning before enumeration"
+// packs/memory/query.py People and PersonHit: the one search the page and the memory skill share.
+export interface MemoryClaim {
+  text: string
+  kind: string
+  topic: string
+  scope: string
+  object: string
+}
+
+export interface MemoryHit {
+  claim_id: number
+  claim: MemoryClaim
+  citations: MemoryCitation[]
+}
+
+export interface MemoryPersonHit {
+  parent: string
+  name: string
+  // 0-4, Deep Context's own read of how warm the relationship is.
+  warmth: number
+  score: number
+  evidence: MemoryHit[]
+  members: string[]
+}
+
+export interface MemoryPeople {
+  people: MemoryPersonHit[]
+  // Owner labels the words named (family, close friend, past coworker …).
+  layers: string[]
+  // True when other words narrowed the layer; false when a layer alone lists everyone holding it.
+  filtered: boolean
+  total: number
+  lexical_candidates: number
+  vector_candidates: number
+  missing_embeddings: number
 }
 
 export interface MemoryPerson {

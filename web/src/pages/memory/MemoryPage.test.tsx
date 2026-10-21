@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
-import type { MemoryJob, MemoryPeoplePage } from "@/types/memory"
+import type { MemoryJob } from "@/types/memory"
 
 import { MemoryPage } from "./MemoryPage"
 
@@ -218,73 +218,70 @@ it("Details shows coverage, failures to retry and the cost in tokens when prices
   expect(screen.getByText(/1,230 tokens \(prices unknown\)/)).toBeTruthy()
 })
 
-it("search resolves meanings, lists the first one's people and loads more", async () => {
-  stubLayout()
-  const page = (after: string): MemoryPeoplePage => ({
-    corpus: "v2",
-    selector: { origin: "human_tag", value: "investor" },
-    total: 2,
-    people: [
-      after
-        ? { parent: "p2", name: "Synthetic Two", members: ["m2"], evidence: [] }
-        : { parent: "p1", name: "Synthetic One", members: ["m1"], evidence: [] },
-    ],
-    next_after: after ? "" : "p1",
-  })
-  const fetch = serve(ENABLED, {
-    "GET /api/memory/search": () => [
-      {
-        selector: { origin: "human_tag", value: "investor" },
-        count: 2,
-        evidence: [],
-        match: "exact or confirmed alias",
-      },
-    ],
-    "GET /api/memory/people": (url) => page(new URL(url, "http://local").searchParams.get("after") ?? ""),
-  })
-  fireEvent.change(await screen.findByRole("searchbox", { name: "Search memory" }), {
-    target: { value: "investor" },
-  })
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  expect(await screen.findByRole("button", { name: /investor your tag · 2/ })).toBeTruthy()
-  expect(await screen.findByText("Synthetic One")).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "Load more" }))
-  expect(await screen.findByText("Synthetic Two")).toBeTruthy()
-  expect(screen.getByText("2 of 2 people")).toBeTruthy()
-  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull()
-  expect(fetch.mock.calls.map(([url]) => url)).toContain(
-    "/api/memory/people?origin=human_tag&value=investor&after=p1&limit=50",
-  )
-})
-
-it("lists a suggestion's people only once it is picked", async () => {
+it("search lists people warmest first with the claim that matched", async () => {
   stubLayout()
   const fetch = serve(ENABLED, {
-    "GET /api/memory/search": () => [
-      {
-        selector: { origin: "topic", value: "climate" },
-        count: 1,
-        evidence: [],
-        match: "suggestion; confirm meaning before enumeration",
-      },
-    ],
-    "GET /api/memory/people": () => ({
-      corpus: "v2",
-      selector: { origin: "topic", value: "climate" },
-      total: 1,
-      people: [{ parent: "p1", name: "Synthetic One", members: ["m1"], evidence: [] }],
-      next_after: "",
+    "GET /api/memory/search": () => ({
+      people: [
+        {
+          parent: "p1",
+          name: "Synthetic One",
+          warmth: 3.6,
+          score: 0.2,
+          evidence: [
+            {
+              claim_id: 7,
+              claim: {
+                text: "Software Engineer @ Roblox",
+                kind: "tenure",
+                topic: "employment",
+                scope: "",
+                object: "roblox",
+              },
+              citations: [],
+            },
+          ],
+          members: ["m1"],
+        },
+        { parent: "p2", name: "Synthetic Two", warmth: 1.2, score: 0.1, evidence: [], members: ["m2"] },
+      ],
+      layers: ["past coworker"],
+      filtered: true,
+      total: 2,
+      lexical_candidates: 2,
+      vector_candidates: 2,
+      missing_embeddings: 0,
     }),
   })
   fireEvent.change(await screen.findByRole("searchbox", { name: "Search memory" }), {
-    target: { value: "carbon" },
+    target: { value: "roblox coworkers" },
   })
   fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  const meaning = await screen.findByRole("button", { name: /climate topic · 1/ })
-  expect(meaning.getAttribute("aria-pressed")).toBe("false")
-  expect(fetch.mock.calls.some(([url]) => url.startsWith("/api/memory/people"))).toBe(false)
-  fireEvent.click(meaning)
   expect(await screen.findByText("Synthetic One")).toBeTruthy()
+  expect(screen.getByText("Software Engineer @ Roblox")).toBeTruthy()
+  expect(screen.getByText("2 people · within past coworker")).toBeTruthy()
+  expect(screen.getByLabelText("warmth 3.6 of 4").textContent).toBe("●●●●")
+  expect(fetch.mock.calls.map(([url]) => url)).toContain("/api/memory/search?q=roblox+coworkers")
+})
+
+it("says so when nothing in memory matches", async () => {
+  stubLayout()
+  serve(ENABLED, {
+    "GET /api/memory/search": () => ({
+      people: [],
+      layers: [],
+      filtered: false,
+      total: 0,
+      lexical_candidates: 0,
+      vector_candidates: 0,
+      missing_embeddings: 0,
+    }),
+  })
+  fireEvent.change(await screen.findByRole("searchbox", { name: "Search memory" }), {
+    target: { value: "zebra" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Search" }))
+  expect(await screen.findByText("Nothing in memory matches “zebra”.")).toBeTruthy()
 })
 
 it("polls every 2 s while a run works and stops once it is done", async () => {

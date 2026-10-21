@@ -56,6 +56,11 @@ def main(argv: list[str] | None = None) -> int:
     discovery.add_argument("--phrase", default="")
     discovery.add_argument("--after", default="", help="continue after preview/run cursor")
     discovery.add_argument("--dry-run", action="store_true")
+    search = commands.add_parser("search", help="everyone the words name, warmest first, with matching evidence")
+    search.add_argument("text")
+    search.add_argument("--layer", default="", help="an owner label such as family or past coworker")
+    search.add_argument("--limit", type=int, default=50)
+    search.add_argument("--embedding-model", default="", help="omit for lexical and label retrieval only")
     query = commands.add_parser("query")
     query.add_argument("text", nargs="?", default="")
     query.add_argument("--embedding-model", default="", help="omit for free lexical/typed retrieval")
@@ -80,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     overlap = commands.add_parser("overlap")
     overlap.add_argument("identity")
     overlap.add_argument("--organization", default="")
-    for command_parser in (resolve, generate, discovery, query):
+    for command_parser in (resolve, generate, discovery, query, search):
         command_parser.add_argument("--approve-spend", action="store_true")
     args = parser.parse_args(argv)
     store = None
@@ -117,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
                 discover = Discover(store, provider)
                 result = asdict(discover.preview(min_people=args.min_people, phrase=args.phrase, after=args.after, limit=args.limit)) if args.dry_run else asdict(
                     discover.run(limit=args.limit, min_people=args.min_people, phrase=args.phrase, after=args.after))
+            elif args.command == "search":
+                provider = OpenAIProvider("", args.embedding_model, approve_spend=args.approve_spend)
+                result = asdict(Query(store, provider).people(args.text, layer=args.layer, limit=args.limit))
             elif args.command == "query":
                 provider = OpenAIProvider("", args.embedding_model, approve_spend=args.approve_spend)
                 parents = [_one_parent(store, identity) for identity in args.person]

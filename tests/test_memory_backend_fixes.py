@@ -289,21 +289,25 @@ class BackendFixTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue(json.loads(output.getvalue())["failures"])
 
-    def test_search_and_people_use_lexical_directory(self):
+    def test_search_ranks_people_and_people_pages_a_topic(self):
         api = MemoryApi(self.root)
         self.get(api)
         runner.start(self.root, 1)
         self.wait()
-        with patch.object(OpenAIProvider, "embed", side_effect=AssertionError("lexical only")):
-            meanings = self.get(api, "/api/memory/search?q=IAM")
-            self.assertTrue(meanings)
-            selector = meanings[0]["selector"]
-            page = self.get(api, "/api/memory/people?" + urlencode({**selector, "limit": 1}))
-            self.assertEqual(page["total"], meanings[0]["count"])
-            self.assertEqual(len(page["people"]), 1)
-            if page["next_after"]:
-                second = self.get(api, "/api/memory/people?" + urlencode({**selector, "after": page["next_after"], "limit": 1}))
-                self.assertNotEqual(second["people"][0]["parent"], page["people"][0]["parent"])
+        # The page's search is the agent's search: people with their matching claims, not meanings.
+        answer = self.get(api, "/api/memory/search?q=IAM")
+        self.assertTrue(answer["people"])
+        self.assertEqual(list(answer["layers"]), [])
+        first = answer["people"][0]
+        self.assertTrue(first["evidence"])
+        self.assertIn("IAM", first["evidence"][0]["claim"]["text"])
+        selector = {"origin": "topic", "value": first["evidence"][0]["claim"]["topic"]}
+        page = self.get(api, "/api/memory/people?" + urlencode({**selector, "limit": 1}))
+        self.assertGreaterEqual(page["total"], 1)
+        self.assertEqual(len(page["people"]), 1)
+        if page["next_after"]:
+            second = self.get(api, "/api/memory/people?" + urlencode({**selector, "after": page["next_after"], "limit": 1}))
+            self.assertNotEqual(second["people"][0]["parent"], page["people"][0]["parent"])
 
     def test_every_item_failing_still_runs_all_four_steps(self):
         def events(step, result=None):

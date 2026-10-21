@@ -36,6 +36,16 @@ def readonly(path: Path) -> sqlite3.Connection:
     return conn
 
 
+# person_labels probabilities that become searchable labels, in the owner's words.
+LABELS = {
+    "is_family": "family", "is_close_friend": "close friend", "is_classmate": "classmate",
+    "is_coworker_past": "past coworker", "is_coworker_current": "current coworker", "is_investor": "investor",
+    "is_recruiter": "recruiter", "is_founder": "founder", "is_mentor_or_advisor": "mentor or advisor",
+    "is_service_provider": "service provider", "is_neighbor_or_local": "neighbor or local", "is_client": "client",
+    "is_vendor_or_partner": "vendor or partner",
+}
+
+
 def _only(members: tuple[str, ...]) -> str:
     return "WHERE candidate_id IN (" + ",".join("?" for _ in members) + ")" if members else ""
 
@@ -110,6 +120,19 @@ class V2:
                 key = row["candidate_id"]
                 content = json.dumps({"human_tags": row["tags"].split("|"), "human_note": row["note"]})
                 yield Source("tags:" + key, key, self.location + "#person_tags/" + key, content)
+            # Who the person is to the owner, as Deep Context already decided it: the relationship kind,
+            # the labels it holds with probability at least one half, and warmth (0-4) for ranking.
+            for row in conn.execute("SELECT candidate_id,labels_json FROM person_labels JOIN current_parent USING(candidate_id) "
+                                    + only + " ORDER BY candidate_id", members):
+                key = row["candidate_id"]
+                labels = object_dict(json.loads(row["labels_json"]))
+                held = sorted(LABELS[name] for name, value in labels.items()
+                              if name in LABELS and isinstance(value, (int, float)) and value >= 0.5)
+                kind = string(labels.get("relationship_kind") or "").replace("_", " ")
+                warmth = labels.get("warmth")
+                content = json.dumps({"relationship_kind": kind if kind not in ("", "unknown", "stranger") else "",
+                                      "labels": held, "warmth": float(warmth) if isinstance(warmth, (int, float)) else 0.0})
+                yield Source("labels:" + key, key, self.location + "#person_labels/" + key, content)
             profiles = profile_keys(conn)
             for row in conn.execute(
                 "SELECT min(candidate_id) candidate_id,parent_id FROM current_parent "
@@ -146,7 +169,7 @@ class V2:
     def inventory(self) -> dict[str, object]:
         with closing(readonly(self.database)) as conn:
             counts = {}
-            for table in ("candidates", "current_parent", "facts", "person_tags", "current_profile"):
+            for table in ("candidates", "current_parent", "facts", "person_tags", "person_labels", "current_profile"):
                 counts[table] = conn.execute("SELECT count(*) FROM " + table).fetchone()[0]
             counts["parents"] = conn.execute("SELECT count(DISTINCT parent_id) FROM current_parent").fetchone()[0]
             counts["parents_without_facts"] = conn.execute(

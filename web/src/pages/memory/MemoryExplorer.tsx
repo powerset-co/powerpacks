@@ -4,13 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { fetchMemoryGraph } from "@/lib/api/memory"
-import type { MemorySelector } from "@/types/memory"
 
 import { MemoryGraph } from "./graph"
 import { MemorySearch } from "./MemorySearch"
 
 export function MemoryExplorer({ running }: { running: boolean }) {
-  const [selection, setSelection] = useState<MemorySelector | null>(null)
   const [topic, setTopic] = useState<string | null>(null)
   const [parent, setParent] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -19,8 +17,8 @@ export function MemoryExplorer({ running }: { running: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const renderer = useRef<MemoryGraph | null>(null)
   const graph = useQuery({
-    queryKey: ["memory-graph", selection, parent, topic],
-    queryFn: ({ signal }) => fetchMemoryGraph(selection, parent, topic, signal),
+    queryKey: ["memory-graph", parent, topic],
+    queryFn: ({ signal }) => fetchMemoryGraph(null, parent, topic, signal),
     refetchInterval: running ? 30_000 : false,
   })
   const data = graph.data
@@ -29,19 +27,12 @@ export function MemoryExplorer({ running }: { running: boolean }) {
     setSelectedId(id)
     if (id.startsWith("topic:")) {
       setTopic(id.slice(6))
-      setSelection(null)
       setParent(null)
     } else {
       setParent(id)
       setTopic(null)
     }
   }, [])
-  const selectMeaning = (selector: MemorySelector | null) => {
-    setSelection(selector)
-    setTopic(null)
-    setParent(null)
-    setSelectedId(selector?.origin === "topic" ? `topic:${selector.value}` : null)
-  }
   useEffect(() => {
     if (!canvas.current || !data?.nodes.length) return
     const instance = new MemoryGraph(canvas.current, data, selectNode)
@@ -71,7 +62,6 @@ export function MemoryExplorer({ running }: { running: boolean }) {
   const reset = () => {
     setSelectedId(null)
     setTopic(null)
-    setSelection(null)
     setParent(null)
   }
   return (
@@ -125,7 +115,7 @@ export function MemoryExplorer({ running }: { running: boolean }) {
         aria-label="Quick lookup"
         className="flex max-h-[80vh] flex-col gap-5 overflow-y-auto border-t border-border bg-card p-5 lg:max-h-[max(560px,65vh)] lg:border-l lg:border-t-0"
       >
-        <MemorySearch selection={selection} onSelectionChange={selectMeaning} onPersonSelect={selectNode} />
+        <MemorySearch onPersonSelect={selectNode} />
         {selected ? (
           <section aria-label="Selected memory" className="border-t border-border pt-4">
             <h3 className="m-0 text-[15px] font-semibold">{selected.label}</h3>
