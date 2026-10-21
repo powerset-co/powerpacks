@@ -128,10 +128,12 @@ class V2:
                 labels = object_dict(json.loads(row["labels_json"]))
                 held = sorted(LABELS[name] for name, value in labels.items()
                               if name in LABELS and isinstance(value, (int, float)) and value >= 0.5)
-                kind = string(labels.get("relationship_kind") or "").replace("_", " ")
-                warmth = labels.get("warmth")
-                content = json.dumps({"relationship_kind": kind if kind not in ("", "unknown", "stranger") else "",
-                                      "labels": held, "warmth": float(warmth) if isinstance(warmth, (int, float)) else 0.0})
+                kind = string(labels["relationship_kind"]).replace("_", " ")
+                warmth = labels["warmth"]
+                if isinstance(warmth, bool) or not isinstance(warmth, (int, float)):
+                    raise ValueError("person_labels warmth must be a number")
+                content = json.dumps({"relationship_kind": kind if kind not in ("unknown", "stranger") else "",
+                                      "labels": held, "warmth": float(warmth)})
                 yield Source("labels:" + key, key, self.location + "#person_labels/" + key, content)
             profiles = profile_keys(conn)
             for row in conn.execute(

@@ -104,22 +104,6 @@ export interface MemoryPeople {
   missing_embeddings: number
 }
 
-export interface MemoryPerson {
-  parent: string
-  name: string
-  members: string[]
-  evidence: MemoryCitation[]
-}
-
-export interface MemoryPeoplePage {
-  corpus: string
-  people: MemoryPerson[]
-  selector: MemorySelector
-  total: number
-  // "" on the last page.
-  next_after: string
-}
-
 export interface MemoryGraphNode {
   id: string
   label: string
