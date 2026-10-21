@@ -227,6 +227,8 @@ class Query:
             score = sum(top) + LAYER_SCORE * len(by_layer.get(parent, ()))
             ranked.append((score * (1 + warmth.get(parent, 0.0) / 10), parent, score))
         ranked.sort(key=lambda entry: (-entry[0], entry[1]))
+        # People carry the native parent id the graph and the People page use, without the corpus prefix.
+        prefix = self.store.conn.execute("SELECT namespace FROM identities LIMIT 1").fetchone()[0] + "#"
         people = []
         for final, parent, score in ranked[:limit]:
             # The claims that matched the words first, then the labels the layer selected on.
@@ -242,7 +244,7 @@ class Query:
             name = self.store.conn.execute("SELECT min(name) FROM identities WHERE parent=? AND present=1", (parent,)).fetchone()[0]
             members = tuple(row[0] for row in self.store.conn.execute(
                 "SELECT member FROM identities WHERE parent=? AND present=1 ORDER BY member", (parent,)))
-            people.append(PersonHit(parent, name, warmth.get(parent, 0.0), final, tuple(evidence.values()), members))
+            people.append(PersonHit(parent[len(prefix):], name, warmth.get(parent, 0.0), final, tuple(evidence.values()), members))
         return People(tuple(people), tuple(sorted(layers)), filtered, len(ranked), len(lexical), len(vectors), missing)
 
     def _hit(self, row: sqlite3.Row, score: float, lexical: int | None, semantic: int | None) -> Hit:

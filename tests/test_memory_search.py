@@ -63,6 +63,8 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(answer.layers, ("romantic partner",))
         self.assertFalse(answer.filtered)
         self.assertEqual([person.name for person in answer.people], ["Jordan Bravo"])
+        # The native id the graph and People page use, not the corpus-prefixed one.
+        self.assertEqual(answer.people[0].parent, "p:1")
         self.assertEqual(answer.people[0].warmth, 3.5)
         self.assertIn("romantic partner", [hit.claim.text for hit in answer.people[0].evidence])
         family = Query(self.store, self.provider).people("my family")

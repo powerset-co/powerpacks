@@ -37,6 +37,7 @@ class JobProvider(OpenAIProvider):
         self.fixture = FixtureProvider()
         self.generation_key = self.fixture.generation_key
         self.inputs: list[str] = []
+        self.discoveries = 0
 
     def generate(self, content: str) -> str:
         self.inputs.append(content)
@@ -49,6 +50,7 @@ class JobProvider(OpenAIProvider):
         return self.fixture.embed_many(contents)
 
     def discover(self, content: str) -> str:
+        self.discoveries += 1
         return json.dumps({"status": "completed", "output": [{"type": "message", "content": [
             {"type": "output_text", "text": json.dumps({"decision": "ambiguous", "reason": "synthetic", "tags": []})}]}]})
 
@@ -91,12 +93,16 @@ class MemoryJobTests(unittest.TestCase):
         failed_input = self.provider.inputs[1]
         self.provider.fixture.fail_generation = 0
         before = self.provider.fixture.generations
+        discoveries = self.provider.discoveries
         runner.update(self.root)
         second = self.wait()
         self.assertEqual(second.failures, [])
         self.assertEqual(self.provider.inputs[-1], failed_input)
         self.assertEqual(self.provider.fixture.generations, before + 1)
         self.assertGreater(second.people_indexed, 0)
+        # An update never buys cross-person discovery again; the first run's counts stay on the record.
+        self.assertEqual(self.provider.discoveries, discoveries)
+        self.assertEqual(second.steps[Step.DISCOVER], first.steps[Step.DISCOVER])
 
     def test_running_refuses_second_start_and_settings_survive(self) -> None:
         entered, release = threading.Event(), threading.Event()

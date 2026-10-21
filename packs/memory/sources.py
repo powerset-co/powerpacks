@@ -126,12 +126,13 @@ class V2:
                                     + only + " ORDER BY candidate_id", members):
                 key = row["candidate_id"]
                 labels = object_dict(json.loads(row["labels_json"]))
+                warmth = labels.get("warmth")
+                if isinstance(warmth, bool) or not isinstance(warmth, (int, float)):
+                    # A family the label pass never judged has a row with only the deterministic fields: no source.
+                    continue
                 held = sorted(LABELS[name] for name, value in labels.items()
                               if name in LABELS and isinstance(value, (int, float)) and value >= 0.5)
                 kind = string(labels["relationship_kind"]).replace("_", " ")
-                warmth = labels["warmth"]
-                if isinstance(warmth, bool) or not isinstance(warmth, (int, float)):
-                    raise ValueError("person_labels warmth must be a number")
                 content = json.dumps({"relationship_kind": kind if kind not in ("unknown", "stranger") else "",
                                       "labels": held, "warmth": float(warmth)})
                 yield Source("labels:" + key, key, self.location + "#person_labels/" + key, content)

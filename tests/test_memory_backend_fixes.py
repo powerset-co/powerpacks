@@ -107,7 +107,7 @@ class BackendFixTests(unittest.TestCase):
                     self.assertEqual((record.status, record.error, record.failures), (Status.FAILED, error, []))
                     self.assertEqual(send.call_args.args[1]["error"], error)
 
-    def test_discovery_retries_failures_across_pages_before_other_batches(self):
+    def test_update_retries_failed_discovery_batches_across_pages_and_nothing_else(self):
         with closing(sqlite3.connect(V2(self.root / ".powerpacks").database)) as source:
             with source:
                 source.execute("UPDATE candidates SET display_name=?",
@@ -135,9 +135,8 @@ class BackendFixTests(unittest.TestCase):
             completed = self.wait()
         self.assertEqual(completed.status, Status.DONE)
         self.assertEqual(completed.failures, [])
-        self.assertEqual(seen[:2], list(failed_keys))
-        self.assertEqual(seen[2:], sorted(seen[2:], key=lambda key: key.rsplit(":", 1)[0]))
-        self.assertEqual((len(seen), len(set(seen))), (102, 102))
+        # An update retries exactly the discovery batches that failed, on whatever page they sit, and buys nothing else.
+        self.assertEqual(seen, list(failed_keys))
 
     def test_status_projects_once_into_real_database_and_caches_estimate(self):
         api = MemoryApi(self.root)
@@ -171,7 +170,7 @@ class BackendFixTests(unittest.TestCase):
         record.tokens = asdict(Usage(123, 456, 789))
         record.spent_usd = 0.5
         job.write(self.root, record)
-        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client: os.close(handle)):
+        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client, discover: os.close(handle)):
             started = runner.update(self.root, 2)
             self.wait()
         self.assertEqual(started.tokens, asdict(Usage()))
@@ -181,7 +180,7 @@ class BackendFixTests(unittest.TestCase):
         record.tokens = asdict(Usage(123, 456, 789))
         record.spent_usd = 0.5
         job.write(self.root, record)
-        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client: os.close(handle)):
+        with patch.object(runner, "_run", side_effect=lambda root, resume, handle, client, discover: os.close(handle)):
             resumed = runner.start(self.root, 2)
             self.wait()
         self.assertEqual(resumed.tokens, record.tokens)
