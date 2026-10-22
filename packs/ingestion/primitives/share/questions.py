@@ -4,6 +4,7 @@ Request 1 (worth/luna.py) asks `label_questions()` with worth's own questions ov
 state: their raw messages, profile, message counts and the owner's background.
 
 Changelog:
+  2026-10-22: family and is_family name the person marked (owner) and exclude other participants' relatives (shared surnames were read as the owner's family).
   2026-10-13: Luna Decisions replace JEV. mode, hierarchy, seniority and sensitive_context are gone;
     is_hr_benefits_or_payroll and is_support_billing_or_landlord are new; the dossier left the input
     (it repeated the facts line by line); relationship_kind asks about now.
@@ -27,7 +28,10 @@ CHOICE_QUESTIONS: dict[str, tuple[str, dict[str, str]]] = {
         "From `messages` and `channels`, what kind of relationship does "
         "the owner have with this contact now? When it changed, the most recent evidence wins.",
         {
-            "family": "A relative of the owner by blood, marriage or adoption.",
+            "family": "The contact is explicitly established as the OWNER'S OWN relative by blood, marriage or adoption. "
+                      "Owner means the person marked (owner). Someone else's spouse/parent/child, a family friend "
+                      "or a family-office investor is NOT this category. Without owner-contact kinship evidence "
+                      "choose another category.",
             "romantic_partner": "A current or former romantic partner of the owner.",
             "close_friend": "A personal friend the owner confides in or sees by choice.",
             "friend": "A personal friend without evidence of confiding closeness.",
@@ -96,7 +100,13 @@ SCORE_QUESTIONS: dict[str, tuple[str, list[str]]] = {
 
 # name -> instructions (each answered as a probability)
 NOUL_QUESTIONS: dict[str, str] = {
-    "is_family": "Is this contact a relative of the owner, per `messages`?",
+    "is_family": "Is this contact a relative by blood, marriage or adoption of the person explicitly marked (owner) "
+                 "in messages? Identify the owner first. Count only kinship connecting THIS contact to THAT owner. "
+                 "Sharing a surname with another contact or participant, or being someone else's relative, spouse "
+                 "or child, does not make this contact the owner's family. Investors, business counterparts and "
+                 "their relatives are not family unless messages establish kinship to the owner. A family office, "
+                 "family friend, parent's friend or friend's parent is not kinship. Preserve genuine owner-relative "
+                 "relationships even when they also do business.",
     "is_close_friend": "Is this contact a close personal friend of the owner, per `messages`?",
     "is_personal": "Does this relationship carry personal, non-work substance, per `messages`?",
     "is_professional": "Does this relationship carry work substance, per `messages`?",
