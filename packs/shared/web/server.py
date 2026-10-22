@@ -54,7 +54,7 @@ from typing import Any
 from packs.powerset.primitives.install.controller import InstallController, permission_app
 from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.shared.web import account, features, feedback, providers, search_scope, team
+from packs.shared.web import account, features, feedback, providers, search_scope
 from packs.shared.web.app import AppRoutes
 
 PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page has answered with
@@ -210,6 +210,10 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if (self.command, parsed.path) not in {
                     ("GET", "/api/team"), ("GET", "/api/team/thread"), ("POST", "/api/team/ask")}:
                 return False
+            # Bootstrap starts this server before the project environment exists; the Team page's
+            # agent inbox needs that environment, so it joins the path here like the mounted routes.
+            _load_project_packages(root)
+            from packs.shared.web import team
             me = account.read(root)
             if not account.is_team(me["email"]):
                 self._json({"error": "Team requires a @powerset.co account"}, HTTPStatus.FORBIDDEN)
