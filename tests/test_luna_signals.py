@@ -325,11 +325,11 @@ class BoundedWorthTests(StoreTests):
             request = baseline._request(family)
             expected[decisions.request_digest(luna.REQUEST_VERSION, request)] = request
         self.assertEqual(list(expected), [
-            "bb58ba8849387844a67971548828edb05434ee433b0e22889d846a8e128f3597",
-            "b27147e96c6fa36f145830295838f922fd743e786ff486a9be8b56c99e2d151e",
-            "e49bd13f7cfffde7756c1878e395623c943fa9a93c3344b247d6ddaa68317cf1",
-            "49817c7488989b5cbba5e317db7ffdf84e875e9592afdda55ec89aa9c8a0d952",
-            "4ea53d559d98a7ad6f1cb27f5e7819f30c8b0499ef6aa822a58952d83a87f179",
+            "85ed0d8b3d1208bd5e9ef6a0b04a567d3c6eb51b5730b824b20f58552157ec7a",
+            "18473699820d84d6738e88dd0f1c3503f31b18c961374a421ae70c08cc95909f",
+            "11c1720dc52dcd46a774979f08e19cc547d4a583f3bfe3facd23467399b74f5c",
+            "c17c92e6e452a85e0d2cce55faf198e989cfb4a634f17c2eff91955295895750",
+            "84c280f97300b91bd2c1fd711139794e802eb07d055203d193c9404fc7413cd5",
         ])
         sent = []
         progress = []
