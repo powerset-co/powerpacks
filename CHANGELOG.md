@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.35.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.34.0...powerpacks-v3.35.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** build on Modal behind a flag; concurrent discovery ([e73fe58](https://github.com/powerset-co/powerpacks/commit/e73fe58a41c188cecaeafd159b9f89545ee90457))
+* **memory:** build on Modal behind POWERPACKS_MEMORY_REMOTE and run discovery concurrently ([1aad9ff](https://github.com/powerset-co/powerpacks/commit/1aad9ffe75766c47a4d639abcb7924f399167d99))
+
 ## [3.34.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.33.0...powerpacks-v3.34.0) (2026-10-22)
 
 
