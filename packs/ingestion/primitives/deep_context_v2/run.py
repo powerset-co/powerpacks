@@ -54,6 +54,7 @@ from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Syn
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT as WORTH_LIMIT
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
+from packs.memory.runner import keep_updated
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEW_PID_FILE = Path("deep-context") / "review-server.pid"
@@ -250,6 +251,7 @@ def run(data_root: Path, port: int, msgvault_db: Path, chat_db: Path, operator_i
         print(f"review: {pending} people to check at {url}; finish after the review updates the index", flush=True)
     else:
         print(f"review: nothing to check ({url}); run finish", flush=True)
+    keep_updated(data_root.parent)
     return 0
 
 
@@ -267,6 +269,8 @@ def finish(data_root: Path, operator_id: str) -> int:
     code: int = subprocess.run(command, cwd=ROOT, env=index_env(operator_id)).returncode
     if code != 0:
         print("index: the Modal build did not complete; run finish again", flush=True)
+    if code == 0:
+        keep_updated(data_root.parent)
     return code
 
 

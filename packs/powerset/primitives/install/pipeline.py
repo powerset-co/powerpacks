@@ -50,6 +50,7 @@ from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CS
 from packs.ingestion.primitives.deep_context_v2.run import (archive_v1, index_command, index_env, realize,
                                                             resolve_operator_id, stages)
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
+from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
@@ -238,6 +239,7 @@ class ProcessingOnboarding:
                     self._write("discover.done")
                     self._enrich(enrich)
                 self._index()
+                keep_updated(self.root)
             except _Stopped:
                 pass
             except (Exception, SystemExit) as error:

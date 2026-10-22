@@ -59,3 +59,21 @@ it("drops Setup once setup is done; Settings offers Repair setup instead", async
   await waitFor(() => expect(screen.getByRole("link", { name: "Searches" })).toBeTruthy())
   expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
 })
+
+it("lists Memory after People with a beta badge, and drops the badge in the rail", async () => {
+  mount()
+  const memory = await screen.findByRole("link", { name: "Memory beta" })
+  const links = screen.getAllByRole("link").map((link) => link.getAttribute("data-nav"))
+  expect(links.indexOf("memory")).toBe(links.indexOf("people") + 1)
+  expect(memory.getAttribute("href")).toBe("/memory")
+  cleanup()
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: true,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }))
+  mount()
+  const rail = await screen.findByTitle("Memory")
+  expect(rail.textContent).toBe("")
+})

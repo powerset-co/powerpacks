@@ -9,6 +9,7 @@ Changelog:
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +44,7 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
         conn.executescript(DDL)
         conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         conn.commit()
+        ensure_store_id(conn)
         return conn
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     version = int(row["value"]) if row is not None else 0
@@ -64,7 +66,20 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
+    ensure_store_id(conn)
     return conn
+
+
+def ensure_store_id(conn: sqlite3.Connection) -> str:
+    """The store's own id: it survives moving or copying the `.powerpacks` directory, so anything
+    derived from this store (the memory directory) keys on it rather than on a file path."""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'store_id'").fetchone()
+    if row is not None:
+        return str(row["value"])
+    store_id = uuid.uuid4().hex
+    with conn:
+        conn.execute("INSERT INTO meta (key, value) VALUES ('store_id', ?)", (store_id,))
+    return store_id
 
 
 def _migrate_2_to_3(conn: sqlite3.Connection) -> None:

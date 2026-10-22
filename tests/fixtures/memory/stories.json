@@ -1,0 +1,24 @@
+[
+  {"member":"c1","parent":"p:1","name":"Jordan Bravo","claims":[
+    {"text":"Jordan Bravo is a close friend of the owner.","kind":"relationship","topic":"friends","scope":"owner","object":"","start":"","end":"","quote":"close friend","aliases":[]},
+    {"text":"Jordan Bravo built IAM access policies at Acme.","kind":"work","topic":"identity access management","scope":"Acme","object":"Acme","start":"","end":"","quote":"built IAM access policies","aliases":["IAM"]},
+    {"text":"Jordan Bravo was an engineer at Acme from 2020 through 2022.","kind":"tenure","topic":"employment","scope":"","object":"Acme","start":"2020-01-01","end":"2022-12-31","quote":"engineer at Acme","aliases":[]},
+    {"text":"Jordan Bravo prefers email for Cedar Fund updates.","kind":"preference","topic":"communication","scope":"Cedar Fund updates","object":"email","start":"","end":"","quote":"prefers email for Cedar Fund updates","aliases":[]}
+  ]},
+  {"member":"c1b","parent":"p:1","name":"Jordan Bravo","claims":[
+    {"text":"Jordan Bravo is a close friend of the owner.","kind":"relationship","topic":"friends","scope":"owner","object":"","start":"","end":"","quote":"close friend","aliases":[]}
+  ]},
+  {"member":"c2","parent":"p:2","name":"Casey Delta","claims":[
+    {"text":"Casey Delta discussed IAM, without doing IAM implementation work.","kind":"discussion","topic":"identity access management","scope":"conversation","object":"","start":"","end":"","quote":"discussed IAM","aliases":[]},
+    {"text":"Casey Delta is an LP in Cedar Fund I.","kind":"lp","topic":"limited partner","scope":"Fund I","object":"Cedar Fund I","start":"","end":"","quote":"LP in Cedar Fund I","aliases":[]},
+    {"text":"Casey Delta worked at Acme from 2021 through 2023.","kind":"tenure","topic":"employment","scope":"","object":"Acme","start":"2021-01-01","end":"2023-12-31","quote":"worked at Acme","aliases":[]}
+  ]},
+  {"member":"c3","parent":"p:3","name":"Morgan Echo","claims":[
+    {"text":"Morgan Echo is an LP in Birch Fund I.","kind":"lp","topic":"limited partner","scope":"Fund I","object":"Birch Fund I","start":"","end":"","quote":"LP in Birch Fund I","aliases":[]},
+    {"text":"Morgan Echo worked at Acme from 2024 through 2025.","kind":"tenure","topic":"employment","scope":"","object":"Acme","start":"2024-01-01","end":"2025-12-31","quote":"worked at Acme","aliases":[]}
+  ]},
+  {"member":"c4","parent":"p:4","name":"Taylor Foxtrot","claims":[
+    {"text":"Taylor Foxtrot listed IAM as a topic of interest.","kind":"mention","topic":"identity access management","scope":"","object":"","start":"","end":"","quote":"listed IAM as a topic","aliases":[]},
+    {"text":"Taylor Foxtrot is a venture investor, with no documented LP commitment.","kind":"statement","topic":"investing","scope":"","object":"","start":"","end":"","quote":"venture investor","aliases":[]}
+  ]}
+]

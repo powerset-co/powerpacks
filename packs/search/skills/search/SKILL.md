@@ -1,14 +1,14 @@
 ---
 name: search
-description: "Find people in your network, look up a named person or their dossier, or search from a job description. Use for 'who is this person', 'tell me everything about someone', people searches, and shortlists. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
+description: "Find and rank people in your network or search from a job description. Use for discovery, recruiting and shortlists. Saved personal knowledge and named-person dossiers use memory. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
 ---
 
 # Search
 
-The single entry point for people search. `$search` routes every query to the right surface, then
-runs fast local/TurboPuffer retrieval itself for ordinary people searches.
+Find and rank people through local or Powerset network retrieval.
+Saved personal knowledge and dossier lookups route to memory below.
 
-Use this for any people search request:
+Use this for discovery and recruiting requests:
 
 - `$search software engineers in sf`
 - `$search local: product managers in nyc`
@@ -20,10 +20,10 @@ Use this for any people search request:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
-For a named person's profile, dossier, or "tell me everything about <person>",
-follow `packs/search/skills/search/person-lookup.md` and stop here. This read-only
-lookup skips search preparation, scoring, and `decision.json`. Requests for
-people *like* someone or who worked with them continue through search below.
+For saved personal knowledge, labels, relationships, preferences or a named
+person's dossier, follow `packs/memory/skills/memory/SKILL.md` and stop here.
+Explicit shared-network requests and recruiting stay on this skill. Requests
+for people like someone continue through search below.
 
 ## How to run this skill
 

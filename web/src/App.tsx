@@ -12,6 +12,7 @@ import { AgentPage } from "@/pages/agent/AgentPage"
 import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
+import { MemoryPage } from "@/pages/memory/MemoryPage"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
@@ -69,6 +70,7 @@ export function App() {
               <Route index element={null} />
               <Route path="logbook" element={<LogbookReader />} />
             </Route>
+            <Route path="/memory" element={<MemoryPage />} />
             <Route path="/searches" element={<SearchesPage />}>
               <Route index element={null} />
               <Route path="run" element={null} />

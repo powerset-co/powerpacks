@@ -52,6 +52,16 @@ export function TeamIcon(props: IconProps) {
   )
 }
 
+/** A head with a spark of recall: the memory directory. */
+export function MemoryIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M5 20v-3.2A7.5 7.5 0 1 1 18.4 13l1.1 2.5h-2V18a2 2 0 0 1-2 2H13" />
+      <path d="M11 6.5v3M9.5 8h3M14.5 10.5v2M13.5 11.5h2" />
+    </svg>
+  )
+}
+
 export function TasksIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>

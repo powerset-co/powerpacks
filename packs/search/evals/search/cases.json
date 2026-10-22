@@ -2,7 +2,7 @@
   {
     "id": "person-dossier",
     "query": "Tell me everything about Jordan Bravo.",
-    "expected_behavior": "Read search/person-lookup.md and run the free person lookup by name from the installed checkout. Read the returned combined parent and child dossier bodies from SQLite and summarize supported facts with sources and uncertainty. Do not run semantic retrieval, a judge, synthesis, enrichment, or a full deep-context workflow. If information is unavailable, report the actual result rather than inventing a biography."
+    "expected_behavior": "Read memory/person-lookup.md and run the free person lookup by name from the installed checkout. Read the returned combined parent and child dossier bodies from SQLite and summarize supported facts with sources and uncertainty. Do not run semantic retrieval, a judge, synthesis, enrichment, or a full deep-context workflow. If information is unavailable, report the actual result rather than inventing a biography."
   },
   {
     "id": "person-email",

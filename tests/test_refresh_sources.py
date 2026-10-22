@@ -126,9 +126,12 @@ class GmailRefreshAuthorizationTests(unittest.TestCase):
             patch.object(refresh_sources, "SYNC_LOCK", self.home / "sync.lock"), \
             patch.object(refresh_sources, "sync_imessage", return_value=disconnected), \
             patch.object(refresh_sources, "sync_whatsapp", return_value=disconnected), \
+            patch.object(refresh_sources, "_REPO_ROOT", self.home), \
+            patch.object(refresh_sources, "keep_updated") as memory_update, \
             patch.object(refresh_sources.sys, "argv", ["refresh_sources.py", "run"]), redirect_stdout(output):
             code = refresh_sources.main()
         self.assertEqual(code, 0)
+        memory_update.assert_called_once_with(self.home)
         authorize.assert_called_once()
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["status"], "ok")

@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. To read a named person's existing dossier, use search.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. To retrieve saved knowledge or a named person's dossier, use memory.
 ---
 
 # deep-context
@@ -148,9 +148,8 @@ Uploading to Powerset is the page's own button, shown only with the Share networ
 
 "Show me my network", "who do I know", "my people": the same page.
 
-"Tell me about Jordan Bravo", a name, email or phone: `bin/deep-context-v2 lookup --name "Jordan Bravo"`
-prints the family's facts (relationship, work, topics, events, identifiers, the confirmed LinkedIn);
-`--json` for the raw facts. Several matches print as several blocks; pick by the identifiers.
+For a named person's saved dossier or questions about existing personal knowledge,
+follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
 
 ## What is where
 
