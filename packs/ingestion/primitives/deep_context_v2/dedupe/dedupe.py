@@ -76,9 +76,8 @@ class Dedupe(Node):
         self.fingerprints: dict[str, str] = queries.facts_fingerprints(conn)
         self.parents: dict[str, str] = queries.current_parents(conn)
         self.written: dict[str, str] = display_names(conn)
-        # The name each candidate is matched on: its written name, or the dossier's when that only
-        # extends a one-word written name.
-        self.names: dict[str, str] = {}
+        # Both names can reach the judge; its evidence keeps the original written name.
+        self.names: dict[str, tuple[str, ...]] = {}
         dossier: dict[str, str] = queries.dossier_names(conn)
         for candidate_id, written in self.written.items():
             self.names[candidate_id] = names_for_matching(written, dossier.get(candidate_id, ""))
@@ -112,7 +111,7 @@ class Dedupe(Node):
         todo: list[tuple[str, str, str]] = []
         for a, b in blocking.pairs:
             # Rule 2: the two names must be able to be one person's.
-            if not written_names_can_match(self.names[a], self.names[b]):
+            if not any(written_names_can_match(first, second) for first in self.names[a] for second in self.names[b]):
                 continue
             gated += 1
             # Rule 3: already one family, or already judged.

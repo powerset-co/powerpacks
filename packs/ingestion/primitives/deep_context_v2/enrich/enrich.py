@@ -9,10 +9,9 @@ In order:
    handle and no human LinkedIn verdict (research.py). The dry run prices it first.
 3. Profiles: the profile behind every URL, cache first, RapidAPI once per miss (profiles.py). A URL whose
    fetch failed is not judged this run.
-4. Confirm the email pre-matches, then judge: JEV on every undecided profile, Sol on the families JEV
-   did not settle on exactly one member id (judge.py). A confirmed LinkedIn moves every member onto
+4. Confirm email pre-matches, then use Sol to judge each LinkedIn or research identity (judge.py). A confirmed LinkedIn moves every member onto
    li:<member id>; a member already wrong on it splits onto a fresh p: id.
-5. Settle: a family with no real profile and under 25 messages is worth no (settle.py).
+5. Settle: an own LinkedIn connection is worth yes unless a human decided otherwise (settle.py).
 
 Created: 2026-10-07
 """
@@ -75,7 +74,6 @@ class Enrich(Node):
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int | None) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
-        self.jev_cache = data_root / judge.JEV_CACHE_RELATIVE_DIR
 
     def execute(self) -> dict[str, int]:
         """The five steps in the page's order; every count comes from what each step built."""
@@ -110,11 +108,11 @@ class Enrich(Node):
         counts["judge_already_judged"] = planned.already_judged
         counts["judge_families"] = len(tasks)
         owner_block: str = owner_background_block(read_owner(self.conn))
-        for key, value in asyncio.run(judge.decide(self.conn, tasks, self.jev_cache, owner_block, now,
+        for key, value in asyncio.run(judge.decide(self.conn, tasks, owner_block, now,
                                                    on_progress=self.progress)).items():
             counts[key] = value
         # Step 5: settle, on the families as the judge left them.
-        counts["settle_worth_rows"] = settle.settle(self.conn, self.data_root, now)
+        counts["settle_worth_rows"] = settle.settle(self.conn, now)
         return counts
 
     def estimate(self) -> dict[str, object]:
@@ -137,7 +135,7 @@ class Enrich(Node):
             "judge_entering": planned.entering, "judge_no_profile": planned.no_profile,
             "judge_already_judged": planned.already_judged, "judge_families": len(tasks),
         }
-        priced: dict[str, int | float] = judge.estimate(tasks, self.jev_cache, owner_background_block(read_owner(self.conn)))
+        priced: dict[str, int | float] = judge.estimate(tasks, owner_background_block(read_owner(self.conn)))
         for key, value in priced.items():
             result[key] = value
         # The block's price: the research runs plus the judge at most (profile fetches are not priced).

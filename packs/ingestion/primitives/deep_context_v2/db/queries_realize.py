@@ -69,12 +69,9 @@ def channels_by_candidate(conn: sqlite3.Connection) -> dict[str, list[str]]:
 
 
 def profile_keys(conn: sqlite3.Connection) -> dict[str, str]:
-    """parent_id -> its accepted profile key: a confirmed LinkedIn URL or a synthetic key. A parent
-    with neither is absent."""
-    keys: dict[str, str] = {}
-    for row in conn.execute("SELECT parent_id, profile_key FROM current_profile WHERE profile_key IS NOT NULL"):
-        keys[row["parent_id"]] = row["profile_key"]
-    return keys
+    """The profile confirmed by the pipeline or the human, from the canonical view."""
+    return {row["parent_id"]: row["profile_key"] for row in conn.execute(
+        "SELECT parent_id, profile_key FROM current_profile WHERE profile_key IS NOT NULL")}
 
 
 def worth_by_parent(conn: sqlite3.Connection) -> dict[str, Worth]:

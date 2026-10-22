@@ -58,7 +58,7 @@ def _run(message: dict, repo_root: Path) -> str:
             subprocess.run(
                 [binary, "-c", "cli_auth_credentials_store=file",
                  "-c", "sandbox_workspace_write.network_access=true",
-                 "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write",
+                 "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
                  # .powerpacks is often a link to a folder outside the checkout: name its real path.
                  "--add-dir", str((repo_root / ".powerpacks").resolve()),
                  "--output-last-message", str(report), prompt],

@@ -2,8 +2,8 @@
 
 A family is the candidates sharing a current parent; it is exported when any member has facts. Its
 members' emails, phones, channels and message counts are unioned into one row. The row's URL is the
-family's accepted LinkedIn from current_profile, and the profile columns are filled from the profile
-cache. A synthetic key is not a URL: that family is exported with no URL, so the index skips it. No
+family's confirmed profile, and the profile columns come from its cache or research.
+A synthetic key is not a URL: that family is exported with no URL. No
 decisions and no provider calls here; a URL without a cached profile is counted.
 
 The search index is built from this people.csv by the indexing pipeline, which may spend; this block
@@ -25,7 +25,7 @@ from packs.ingestion.primitives.deep_context_v2.db.store import open_store, stor
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import CACHE_RELATIVE_DIR
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
-from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
+from packs.ingestion.primitives.enrich.profile_transforms import current_position, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
 from packs.shared.csv_io import CsvIO
 
@@ -61,10 +61,23 @@ def fill_profile(row: dict[str, str], record: dict[str, Any]) -> None:
         row[column] = value
 
 
+def fill_research(row: dict[str, str], content: dict[str, Any]) -> None:
+    """Map the research schema to the shared people fields."""
+    row["full_name"] = content.get("real_name") or ""
+    row["summary"] = content.get("summary") or ""
+    row["city"] = content.get("location_city") or ""
+    row["country"] = content.get("location_country") or ""
+    row["location_raw"] = ", ".join(value for value in (row["city"], row["country"]) if value)
+    experiences = content.get("work_experience") or []
+    row["work_experiences"] = json.dumps(experiences, ensure_ascii=False)
+    row["education"] = json.dumps(content.get("education") or [], ensure_ascii=False)
+    row["current_title"], row["current_company"], _ = current_position(experiences)
+
+
 class Realize(Node):
     name = "realize"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
-             "candidate_sources", "facts", "deleted_parents")
+             "candidate_sources", "facts", "research", "deleted_parents")
     writes = ()
 
     def build(self) -> tuple[list[dict[str, str]], dict[str, int]]:
@@ -77,6 +90,12 @@ class Realize(Node):
         channels: dict[str, list[str]] = queries_realize.channels_by_candidate(self.conn)
         profile_keys: dict[str, str] = queries_realize.profile_keys(self.conn)
         worth: dict[str, Worth] = queries_realize.worth_by_parent(self.conn)
+        research_profiles = {stored["parent_id"]: json.loads(stored["result_json"])["content"]
+                             for stored in self.conn.execute(
+            "SELECT p.parent_id, r.result_json FROM current_parent p JOIN current_linkedins l USING (candidate_id) "
+            "JOIN research r ON 'synthetic:' || r.handle = l.linkedin_url "
+            "WHERE l.origin = 'synthetic' AND l.verdict = 'confirmed' ORDER BY l.seq")}
+
         cache_dir: Path = self.data_root / CACHE_RELATIVE_DIR
 
         rows: list[dict[str, str]] = []
@@ -116,14 +135,13 @@ class Realize(Node):
             row["interaction_counts"] = json.dumps(interaction_counts, ensure_ascii=False)
             row["last_interaction"] = last_interaction
 
-            # The family's one accepted profile: a LinkedIn URL is exported and filled from the cache. A
-            # synthetic key is not a URL: the row goes out without one (the index still takes a URL-less
-            # row; the page's "synthetic rows are not indexed" is not what the indexer does, flagged).
+            # LinkedIn columns come from its cache; a synthetic profile uses the stored research, without a URL.
             key: str = profile_keys.get(parent_id, "")
             if not key:
                 counts["no_profile_key"] += 1
             elif key.startswith(SYNTHETIC_PROFILE_PREFIX):
                 counts["synthetic"] += 1
+                fill_research(row, research_profiles[parent_id])
             else:
                 counts["with_url"] += 1
                 row["linkedin_url"] = key
@@ -135,6 +153,16 @@ class Realize(Node):
                 else:
                     fill_profile(row, record)
                     counts["profiles_filled"] += 1
+
+            # A confirmed research representation can add context to the same verified LinkedIn.
+            if key and not key.startswith(SYNTHETIC_PROFILE_PREFIX):
+                content = research_profiles.get(parent_id)
+                if content is not None:
+                    richer: dict[str, str] = {}
+                    fill_research(richer, content)
+                    for column, value in richer.items():
+                        if value and len(value) > len(row[column]):
+                            row[column] = value
 
             # The family's one name: the profile's when it has one, else the display name of the
             # member with the most messages.

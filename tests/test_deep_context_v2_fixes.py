@@ -73,14 +73,16 @@ class GmailBindingTests(unittest.TestCase):
         self.addCleanup(conn.close)
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE participants (id INTEGER, email_address TEXT);
+            CREATE TABLE participants (id INTEGER, email_address TEXT, display_name TEXT DEFAULT '');
+            CREATE TABLE conversations (id TEXT, source_conversation_id TEXT);
             CREATE TABLE messages (id INTEGER, sender_id INTEGER, sent_at TEXT, received_at TEXT,
                 internal_date TEXT, conversation_id TEXT, subject TEXT, snippet TEXT,
-                message_type TEXT, deleted_at TEXT, deleted_from_source_at TEXT);
+                message_type TEXT, deleted_at TEXT, deleted_from_source_at TEXT, source_message_id TEXT DEFAULT '');
             CREATE TABLE message_bodies (message_id INTEGER, body_text TEXT);
             CREATE TABLE message_recipients (message_id INTEGER, participant_id INTEGER);
-            INSERT INTO participants VALUES (1, 'jordan@example.com'), (2, 'owner@example.com'), (3, 'other@example.com');
-            INSERT INTO messages VALUES
+            INSERT INTO participants (id, email_address) VALUES (1, 'jordan@example.com'), (2, 'owner@example.com'), (3, 'other@example.com');
+            INSERT INTO messages (id, sender_id, sent_at, received_at, internal_date, conversation_id, subject, snippet,
+                                  message_type, deleted_at, deleted_from_source_at) VALUES
                 (1, 1, '2026-10-01', NULL, NULL, 't1', 'contact mail', 'one', 'email', NULL, NULL),
                 (2, 2, '2026-10-02', NULL, NULL, 't2', 'owner reply', 'two', 'email', NULL, NULL),
                 (3, 3, '2026-10-03', NULL, NULL, 't3', 'unrelated', 'three', 'email', NULL, NULL),

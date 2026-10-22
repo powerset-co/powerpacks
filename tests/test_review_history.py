@@ -12,7 +12,6 @@ from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles
 from packs.ingestion.primitives.deep_context_v2.review.api import ReviewApi
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich
-from packs.ingestion.primitives.deep_context_v2.enrich import research
 from packs.ingestion.primitives.deep_context_v2.review import commit
 from packs.ingestion.primitives.deep_context_v2.review.commit import commit_review
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
@@ -32,7 +31,7 @@ def seed(conn):
         conn.execute("INSERT INTO candidate_parent VALUES (NULL, ?, ?, 'singleton', NULL, ?)",
                      (candidate, "p:" + candidate, NOW))
         conn.execute("INSERT INTO worth VALUES (NULL, ?, 'yes', 'machine', '', NULL, 'facts', ?)", (candidate, NOW))
-        conn.execute("INSERT INTO candidate_linkedins VALUES (NULL, ?, ?, '123', 'research', 'needs_review', 'machine', 'facts', NULL, '', ?)",
+        conn.execute("INSERT INTO candidate_linkedins (seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, confidence, reason, created_at) VALUES (NULL, ?, ?, '123', 'research', 'needs_review', 'machine', 'facts', NULL, '', ?)",
                      (candidate, URL, NOW))
     conn.commit()
 

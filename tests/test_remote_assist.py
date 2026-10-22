@@ -64,7 +64,7 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         binary.chmod(0o755)
         self.enterContext(patch.dict(os.environ, {"PATH": str(binary.parent) + os.pathsep + os.environ["PATH"]}))
 
-    def test_codex_flags_home_guide_history_and_result(self):
+    def test_codex_persists_session_and_passes_home_guide_history_and_result(self):
         root = self.root
         first = request(root, text="First question", at="2026-10-17T11:00:00Z")
         with patch.object(agent_inbox, "send") as send:
@@ -76,7 +76,7 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         args = record["args"]
         assert args[:-2] == ["-c", "cli_auth_credentials_store=file", "-c",
                             "sandbox_workspace_write.network_access=true", "exec", "--skip-git-repo-check",
-                            "--ephemeral", "--sandbox", "workspace-write",
+                            "--sandbox", "workspace-write",
                             "--add-dir", str((root / ".powerpacks").resolve()), "--output-last-message"]
         assert record["cwd"] == str(root)
         assert record["home"] == str(root / support.CODEX_HOME)
