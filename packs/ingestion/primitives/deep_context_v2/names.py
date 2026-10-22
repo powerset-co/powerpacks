@@ -294,13 +294,12 @@ def written_names_can_match(first: str, second: str) -> bool:
     return names_can_match(name_words(first), name_words(second))
 
 
-def names_for_matching(written: str, dossier_name: str) -> str:
-    """The name dedupe blocks and gates on. The written name, unless it is a single word and the
-    dossier's canonical name begins with that word: then the dossier name, which only extends what the
-    source wrote ("Chris" with a dossier of "Chris Furmanski" matches as Chris Furmanski). An empty
-    written name matches nothing."""
-    words: tuple[str, ...] = name_words(written)
-    dossier_words: tuple[str, ...] = name_words(dossier_name)
-    if len(words) == 1 and len(dossier_words) >= 2 and dossier_words[0] == words[0]:
-        return dossier_name
-    return written
+def names_for_matching(written: str, dossier_name: str) -> tuple[str, ...]:
+    """Written and canonical names, also with surname particles/punctuation joined, can reach the judge."""
+    names = dict.fromkeys(name for name in (written, dossier_name) if name.strip())
+    for name in tuple(names):
+        person: Name = parse_name(name)
+        family: str = "".join(_LETTER_WORDS.findall(person.family))
+        if person.given and family != person.family:
+            names[" ".join((person.given[0], *person.middle, family, person.generation)).strip()] = None
+    return tuple(names)

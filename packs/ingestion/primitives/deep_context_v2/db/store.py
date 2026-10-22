@@ -60,6 +60,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 5:
         _migrate_5_to_6(conn)
         version = 6
+    if version == 6:
+        _migrate_6_to_7(conn)
+        version = 7
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -114,3 +117,27 @@ def _migrate_5_to_6(conn: sqlite3.Connection) -> None:
         if "relationship_kind" not in {row["name"] for row in conn.execute("PRAGMA table_info(person_tags)")}:
             conn.execute(f"ALTER TABLE person_tags ADD COLUMN {RELATIONSHIP_KIND_COLUMN_DDL}")
         conn.execute("UPDATE meta SET value = '6' WHERE key = 'schema_version'")
+
+
+def _migrate_6_to_7(conn: sqlite3.Connection) -> None:
+    """Keep every historical score and decision; new probabilities start NULL."""
+    table = DDL[DDL.index("CREATE TABLE candidate_linkedins ("):DDL.index("CREATE TABLE research (")]
+    views = DDL[DDL.index("CREATE VIEW current_linkedins AS"):DDL.index("CREATE VIEW current_tags AS")]
+    with conn:
+        conn.execute("BEGIN")
+        conn.execute("DROP VIEW current_profile")
+        conn.execute("DROP VIEW current_linkedins")
+        conn.execute("ALTER TABLE candidate_linkedins RENAME TO old_candidate_linkedins")
+        conn.execute("DROP INDEX candidate_linkedins_by_member")
+        conn.execute("DROP INDEX candidate_linkedins_by_url")
+        statements = "\n".join(line.split("--", 1)[0] for line in table.splitlines())
+        for statement in statements.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        columns = "seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, confidence, reason, created_at"
+        conn.execute(f"INSERT INTO candidate_linkedins ({columns}) SELECT {columns} FROM old_candidate_linkedins")
+        conn.execute("DROP TABLE old_candidate_linkedins")
+        conn.execute(views.strip().removesuffix(";"))
+        profile = DDL[DDL.index("CREATE VIEW current_profile AS"):]
+        conn.execute(profile.strip().removesuffix(";"))
+        conn.execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'")

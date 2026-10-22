@@ -70,7 +70,7 @@ def bundle(candidate_id: str, messages: list[MessageEntry]) -> CollectionBundle:
 
 
 class RequestTests(unittest.TestCase):
-    def test_synthesis_default_render_is_byte_identical(self) -> None:
+    def test_legacy_gmail_does_not_invent_recipient_directions(self) -> None:
         messages = [
             MessageEntry.of(MessageChannel.GMAIL, "2026-10-14T12:00:00Z", from_me=True,
                             subject="Hello", text="Can we talk?"),
@@ -89,10 +89,11 @@ class RequestTests(unittest.TestCase):
                          "Known phones: +15550100\n"
                          "Channels: gmail, imessage\n"
                          "Shared group chats (names only): Project\n\n"
-                         "EMAIL THREADS & WHO WAS ON THEM (from/to/cc — shared colleagues, teams, and my own address if I'm a participant):\n"
+                         "EMAIL THREAD PARTICIPANTS (thread context only; these are not per-message recipient roles):\n"
                          "- Hello — owner@example.com, jordan@example.com\n\n"
                          "MESSAGES (most relevant, chronological):\n"
-                         "[gmail 2026-10-14 ME] Hello: Can we talk?\n"
+                         "Gmail headers give actual addressing; Cc does not imply nonparticipation. Bodies are excerpts and may retain quoted or forwarded words; do not assign those to the sender.\n"
+                         "[gmail 2026-10-14 ME; recipients unavailable] Hello: Can we talk?\n"
                          "[imessage 2026-10-15 THEM]: Yes!\n"
                          "[imessage_group  OTHER-IN-GROUP]: See you there.")
 
@@ -236,9 +237,9 @@ class WorthRunTests(StoreTests):
         self.assertEqual(state["messages"].count("CONTACT:"), 1)
         self.assertIn("Known emails: c1@example.com, c2@example.com", state["messages"])
         self.assertEqual([line for line in state["messages"].splitlines() if line.startswith("[")], [
-            "[gmail 2026-10-15 from Jordan Bravo to Test Owner (owner)]: Newest",
-            "[gmail 2026-10-10 from Test Owner (owner) to Jordan Bravo]: Middle",
-            "[gmail 2026-10-01 from Test Owner (owner) to Jordan Bravo]: Oldest",
+            "[gmail 2026-10-15 THEM; recipients unavailable]: Newest",
+            "[gmail 2026-10-10 ME; recipients unavailable]: Middle",
+            "[gmail 2026-10-01 ME; recipients unavailable]: Oldest",
             "[imessage_group 2026-09-30 from another group participant to Test Owner (owner) and Jordan Bravo]: Group",
         ])
         self.assertEqual((state["channels"]["from_me"], state["channels"]["from_them"]), (2, 1))
@@ -324,11 +325,11 @@ class BoundedWorthTests(StoreTests):
             request = baseline._request(family)
             expected[decisions.request_digest(luna.REQUEST_VERSION, request)] = request
         self.assertEqual(list(expected), [
-            "130bc3ae0cdd580ec7e8ca8ce2bd0209357a3ea8b0259517adb55c65df163f9b",
-            "a1637f240a6b0cd25f132cc6be2dba6db6189e9a305688950a97cd0da7525134",
-            "0550f0a1b69764cbff921d6aad9051c726f9a2620d3e4cf0774e793050f774e3",
-            "493bffe9454f2faf34e2e58d98ceffbca714eb67393732a6abec255be5fd220f",
-            "71630ae86b0a2c4bb5cbcb8bb8e124b878610f1269703be0e6c1d85790f18992",
+            "bb58ba8849387844a67971548828edb05434ee433b0e22889d846a8e128f3597",
+            "b27147e96c6fa36f145830295838f922fd743e786ff486a9be8b56c99e2d151e",
+            "e49bd13f7cfffde7756c1878e395623c943fa9a93c3344b247d6ddaa68317cf1",
+            "49817c7488989b5cbba5e317db7ffdf84e875e9592afdda55ec89aa9c8a0d952",
+            "4ea53d559d98a7ad6f1cb27f5e7819f30c8b0499ef6aa822a58952d83a87f179",
         ])
         sent = []
         progress = []

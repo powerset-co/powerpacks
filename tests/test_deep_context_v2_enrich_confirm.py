@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import FamilyWorth
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.enrich.enrich import EMAIL_CONFIRMED_REASON, confirm_by_email
-from packs.ingestion.primitives.deep_context_v2.enrich.family import Family
+from packs.ingestion.primitives.deep_context_v2.enrich import judge
+from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, judgment_fingerprint
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles
-from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
+from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposal, Proposals
+from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
 
 URL = "https://www.linkedin.com/in/jordan-bravo"
 NOW = "2026-10-07T20:00:00Z"
@@ -35,6 +39,20 @@ def profile(member_id: str) -> Profile:
 
 
 class ConfirmByEmailTests(unittest.TestCase):
+    def test_prior_uncertain_judgment_is_reconsidered_once_with_owned_url_policy(self) -> None:
+        facts = SynthesizedFacts("Jordan Bravo", (), (), "", "", "", "", "friend", "personal",
+                                 (), (), (), OwnedIdentifiers((), (), (URL,)), (), 0.9, False)
+        contact = replace(family("p:1", ("c1",)), facts=facts, worth=FamilyWorth("yes", "machine", "{}"))
+        found = Proposals([contact], {}, {"p:1": [Proposal(URL, "research")]}, {})
+        old = judgment_fingerprint(contact, [(URL, "research", NOW)], "enrich-judge-2026-10-07-owner-domains")
+        pending = judge.plan(found, {URL: profile("4242")}, {("c1", old)})
+        self.assertEqual(len(pending.tasks), 1)
+        current = pending.tasks[0].fingerprint
+        self.assertNotEqual(current, old)
+        repeat = judge.plan(found, {URL: profile("4242")}, {("c1", old), ("c1", current)})
+        self.assertEqual(repeat.tasks, [])
+        self.assertEqual(repeat.already_judged, 1)
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.conn = open_store(Path(self.tmp.name) / "store.sqlite")

@@ -90,12 +90,12 @@ def research_by_handle(conn: sqlite3.Connection) -> dict[str, Research]:
     return found
 
 
-def insert_linkedin(conn: sqlite3.Connection, row: LinkedinRow) -> int:
+def insert_linkedin(conn: sqlite3.Connection, row: LinkedinRow, *, match_probability: float | None = None) -> int:
     """One verdict row, appended alone so its seq can be named by the parent row it confirms."""
     cursor = conn.execute(
         "INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
-        "judgment_fingerprint, confidence, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        row,
+        "judgment_fingerprint, confidence, reason, created_at, match_probability) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (*row, match_probability),
     )
     assert cursor.lastrowid is not None  # A successful INSERT into this rowid table sets lastrowid.
     return cursor.lastrowid

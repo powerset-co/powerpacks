@@ -335,7 +335,7 @@ class AskLoopServerTests(unittest.TestCase):
                     patch.object(server, "_announce"), \
                     patch.object(server, "mounted_handler") as mount, \
                     patch.object(server.account, "read", return_value={"email": "jordan@powerset.co"}), \
-                    patch.object(server.team, "members", return_value={"members": []}), \
+                    patch("packs.shared.web.team.members", return_value={"members": []}), \
                     patch.object(asks_loop, "run", side_effect=run) as loop:
                 thread = threading.Thread(target=server.main, args=(["serve", "--port", "0"],), daemon=True)
                 thread.start()

@@ -1,18 +1,4 @@
-"""Step 4, judge: every undecided URL of a family that enters, JEV first, then Sol on what JEV left pending.
-
-Who enters: a worth yes or maybe family on a p: id with at least one undecided URL, and no human LinkedIn
-verdict on any member. A URL is undecided for the family unless every member already holds a wrong-person
-verdict on its member id; a URL with no profile is not judged this run. Two URLs with one member id are
-one profile. A family whose every member already holds a verdict under this judgment's fingerprint was
-judged on this evidence and is skipped at $0.
-
-JEV judges each profile alone and never says wrong person. Exactly one JEV-confirmed member id confirms
-the family and its other URLs are never judged. Otherwise Sol judges each remaining profile against the
-family with the identity prompt (the owner's own connection carries a note that being connected is strong
-evidence); a family may end with at most one confirmed profile, two confirms both go to the human queue.
-
-Created: 2026-10-07
-"""
+"""Judge LinkedIn and research identities; attach only an unopposed match at 0.90."""
 from __future__ import annotations
 
 import argparse
@@ -26,177 +12,191 @@ from typing import Any, Callable
 import tiktoken
 
 from packs.indexing.lib.openai_responses import estimate_cost_usd
-from packs.search.primitives.llm_rerank_candidates.jev.client import INPUT_PRICE_PER_MILLION, cache_path, request_digest
-
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import ParentRow, append_parent_rows
-from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import LinkedinRow, Research
-from packs.ingestion.primitives.deep_context_v2.db.schema import DecidedBy, MergeReason, Origin, Verdict, Worth
+from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import Research
+from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, DecidedBy, MergeReason, Origin, Verdict, Worth
 from packs.ingestion.primitives.deep_context_v2.db.owner import owner_background_block, read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import mint
-from packs.ingestion.primitives.deep_context_v2.enrich import jev_identity, proposals, research
-from packs.ingestion.primitives.deep_context_v2.enrich import sol_identity
+from packs.ingestion.primitives.deep_context_v2.enrich import proposals, research, sol_identity
 from packs.ingestion.primitives.deep_context_v2.enrich.sol_identity import SolVerdict
-from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, family_evidence, judgment_fingerprint
+from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, confirm, judgment_fingerprint
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
 from packs.ingestion.primitives.deep_context_v2.enrich.proposals import Proposals
-from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig, load_env
+from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCaller, OpenAIResponsesConfig
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url
 
-VERSION = "enrich-judge-2026-10-07-owner-domains"  # in every judgment fingerprint: a new judge is a new judgment
-# What a JEV-alone confirmation writes: JEV's two views agreeing carry no Sol confidence or reason (confirmed rows
-# never reach the review card).
-JEV_CONFIRMED = SolVerdict(Verdict.CONFIRMED.value, None, "")
-OUTPUT_TOKENS_PER_CALL = 1500  # assumed Sol output+reasoning tokens per profile, estimate only
-JEV_CACHE_RELATIVE_DIR = Path("deep-context") / "identity"  # <data root>/deep-context/identity/<view>/jev/
-# The owner's own connection: being connected on LinkedIn is itself strong evidence (decided 2026-10-07).
+VERSION = "enrich-judge-2026-10-20-match-probability"
+MATCH_THRESHOLD = 0.90
+OUTPUT_TOKENS_PER_CALL = 1500
 
 
 @dataclass(frozen=True)
 class ProposedProfile:
-    """One profile proposed for a family."""
-
     origin: str
     profile: Profile
+    research_result: dict[str, Any] | None = None
+
+    @property
+    def supported(self) -> bool:
+        """A name and location alone are not a competing biography."""
+        if self.origin == Origin.SYNTHETIC:
+            assert self.research_result is not None
+            content = self.research_result["content"]
+            return bool(content.get("summary") or content.get("work_experience") or content.get("education"))
+        return bool(self.profile.experiences or self.profile.education
+                    or self.profile.headline.strip() not in ("", "-", "--"))
 
 
 @dataclass(frozen=True)
 class JudgeTask:
     family: Family
-    candidates: tuple[ProposedProfile, ...]  # one per member id, in proposal order
+    candidates: tuple[ProposedProfile, ...]
     fingerprint: str
-    citations: tuple[dict[str, Any], ...]  # the research row's source URLs, titles and excerpts
+    citations: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
 class JudgePlan:
     tasks: list[JudgeTask]
-    entering: int        # families that enter the judge
-    no_profile: int      # families whose every undecided URL lacks a profile this run
-    already_judged: int  # families judged on this evidence before
+    entering: int
+    no_profile: int
+    already_judged: int
 
 
 def _citations(row: Research | None) -> tuple[dict[str, Any], ...]:
-    """The research row's sources, once each: the judge's research evidence."""
     found: list[dict[str, Any]] = []
     if row is None or row.result_json is None:
-        return tuple(found)
+        return ()
     for basis in json.loads(row.result_json).get("basis", []):
         for citation in basis.get("citations") or []:
-            kept: dict[str, Any] = {}
-            for key in ("url", "title", "excerpts"):
-                if key in citation:
-                    kept[key] = citation[key]
+            kept = {key: citation[key] for key in ("url", "title", "excerpts") if key in citation}
             if kept not in found:
                 found.append(kept)
     return tuple(found)
 
 
 def plan(proposals: Proposals, profiles: dict[str, Profile], judged: set[tuple[str, str]]) -> JudgePlan:
-    """Who enters the judge and with which profiles: the tasks, plus the counts of families entering, without a profile, and already judged on this evidence."""
     tasks: list[JudgeTask] = []
-    entering: int = 0
-    no_profile: int = 0
-    already: int = 0
+    entering = no_profile = already = 0
     for family in proposals.families:
         if not family.minted or family.worth.worth == Worth.NO or family.human_linkedin:
             continue
-        if family.parent_id not in proposals.proposed:
-            continue
-        # The member ids every member already holds a wrong-person verdict on: never proposed again.
-        wrong_by: dict[str, set[str]] = {}
-        for verdict in family.verdicts:
-            if verdict.verdict == Verdict.WRONG_PERSON:
-                wrong_by.setdefault(verdict.member_id, set()).add(verdict.candidate_id)
+        row = proposals.research.get(research.handle(family.facts))
         candidates: list[ProposedProfile] = []
         seen: set[str] = set()
-        unfetched: int = 0  # undecided URLs with no profile this run
-        profiled: list[tuple[str, str, str]] = []  # every proposal with a profile: (url, origin, fetched at), the key
-        for proposal in proposals.proposed[family.parent_id]:
-            profile: Profile | None = profiles.get(proposal.linkedin_url)
+        profiled: list[tuple[str, str, str]] = []
+        for proposal in proposals.proposed.get(family.parent_id, []):
+            profile = profiles.get(proposal.linkedin_url)
             if profile is None:
-                unfetched += 1
                 continue
             profiled.append((profile.linkedin_url, proposal.origin, profile.fetched_at))
-            if profile.member_id in seen or len(wrong_by.get(profile.member_id, set())) == len(family.candidates):
+            wrong = {v.candidate_id for v in family.verdicts
+                     if v.member_id == profile.member_id and v.verdict == Verdict.WRONG_PERSON}
+            if profile.member_id in seen or len(wrong) == len(family.candidates):
                 continue
             seen.add(profile.member_id)
-            candidates.append(ProposedProfile(proposal.origin, profile))
-        if not candidates and not unfetched:
-            continue  # every URL is decided
+            context = None
+            if row is not None and row.result_json is not None:
+                result = json.loads(row.result_json)
+                if _same_identity(ProposedProfile(proposal.origin, profile),
+                                  ProposedProfile(Origin.SYNTHETIC.value, profile, result)):
+                    context = result
+            candidates.append(ProposedProfile(proposal.origin, profile, context))
+        if row is not None and row.result_json is not None:
+            result = json.loads(row.result_json)
+            content = result["content"]
+            represented = any(candidate.supported and candidate.research_result is not None for candidate in candidates)
+            if not represented and content.get("real_name") and (content.get("summary") or content.get("work_experience") or content.get("education")):
+                key = SYNTHETIC_PROFILE_PREFIX + research.handle(family.facts)
+                profile = Profile(key, "", key, content["real_name"], content.get("summary") or "",
+                                  ", ".join(v for v in (content.get("location_city"), content.get("location_country")) if v),
+                                  tuple(f"{job.get('title') or ''} @ {job.get('company_name') or ''}"
+                                        for job in content.get("work_experience") or []),
+                                  tuple(school.get("school_name") or "" for school in content.get("education") or []), "")
+                candidates.append(ProposedProfile(Origin.SYNTHETIC.value, profile, result))
+                profiled.append((key, Origin.SYNTHETIC.value, row.result_json))
+        if not candidates and family.parent_id not in proposals.proposed:
+            continue
         entering += 1
         if not candidates:
             no_profile += 1
             continue
-        fingerprint: str = judgment_fingerprint(family, profiled, VERSION)
-        done: bool = True
-        for candidate_id in family.candidates:
-            if (candidate_id, fingerprint) not in judged:
-                done = False
-        if done:
+        fingerprint = judgment_fingerprint(family, profiled, VERSION)
+        if all((candidate_id, fingerprint) in judged for candidate_id in family.candidates):
             already += 1
             continue
-        tasks.append(JudgeTask(family, tuple(candidates), fingerprint,
-                          _citations(proposals.research.get(research.handle(family.facts)))))
+        tasks.append(JudgeTask(family, tuple(candidates), fingerprint, _citations(row)))
     return JudgePlan(tasks, entering, no_profile, already)
 
 
-def jev_pairs(task: JudgeTask) -> list[dict[str, dict[str, Any]]]:
-    """The two view requests for each of the task's profiles."""
-    network_urls: list[str] = []
-    for candidate in task.candidates:
-        if candidate.origin == Origin.LINKEDIN_NETWORK:
-            network_urls.append(candidate.profile.linkedin_url)
-    pairs: list[dict[str, dict[str, Any]]] = []
-    for candidate in task.candidates:
-        pairs.append(jev_identity.requests(family_evidence(task.family), candidate.profile.judge_view(),
-                                           candidate.origin == Origin.LINKEDIN_NETWORK, network_urls))
-    return pairs
+def _same_identity(linkedin: ProposedProfile, synthetic: ProposedProfile) -> bool:
+    """Matching biography and the same research URL describe one identity."""
+    if linkedin.origin == Origin.SYNTHETIC or synthetic.origin != Origin.SYNTHETIC or synthetic.research_result is None:
+        return False
+    content = synthetic.research_result["content"]
+    if normalize_linkedin_url(content.get("linkedin_url") or "") == linkedin.profile.linkedin_url:
+        return True
+    urls: set[str] = set()
+    for basis in synthetic.research_result.get("basis", []):
+        urls.update(normalize_linkedin_url(c.get("url") or "") for c in basis.get("citations") or [])
+    companies = [job["company_name"].casefold() for job in content.get("work_experience") or [] if job.get("company_name")]
+    return (linkedin.profile.linkedin_url in urls
+            and linkedin.profile.full_name.strip().casefold() == (content.get("real_name") or "").strip().casefold()
+            and any(company in job.casefold() for company in companies for job in linkedin.profile.experiences))
 
 
 async def sol(caller: OpenAIResponsesCaller, task: JudgeTask, owner_block: str) -> dict[str, SolVerdict]:
-    """URL -> Sol's answer, one call per profile (sol_identity). A family may end with at most one confirmed
-    profile: when two are confirmed, both go to the human queue instead."""
-    verdicts: dict[str, SolVerdict] = {}
+    answers: dict[str, SolVerdict] = {}
     for candidate in task.candidates:
-        prompt: str = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations, owner_block)
-        verdicts[candidate.profile.linkedin_url] = await sol_identity.verdict(caller, prompt)
-    confirmed: int = 0
-    for answer in verdicts.values():
-        if answer.verdict == Verdict.CONFIRMED:
-            confirmed += 1
-    if confirmed > 1:
-        for url, answer in verdicts.items():
-            if answer.verdict == Verdict.CONFIRMED:
-                verdicts[url] = replace(answer, verdict=Verdict.NEEDS_REVIEW.value)
-    return verdicts
+        prompt = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations,
+                                               owner_block, candidate.research_result)
+        answers[candidate.profile.linkedin_url] = await sol_identity.verdict(caller, prompt)
+    # Group source representations before counting distinct plausible identities.
+    groups: list[list[ProposedProfile]] = [[c] for c in task.candidates if c.origin != Origin.SYNTHETIC and c.supported
+                                           and answers[c.profile.linkedin_url].verdict != Verdict.WRONG_PERSON]
+    for candidate in task.candidates:
+        if candidate.origin != Origin.SYNTHETIC or not candidate.supported or answers[candidate.profile.linkedin_url].verdict == Verdict.WRONG_PERSON:
+            continue
+        matching = [group for group in groups if _same_identity(group[0], candidate)]
+        if len(matching) == 1:
+            matching[0].append(candidate)
+        else:
+            groups.append([candidate])
+    for candidate in task.candidates:
+        url = candidate.profile.linkedin_url
+        answer = answers[url]
+        if answer.verdict == Verdict.WRONG_PERSON:
+            continue
+        group = next((g for g in groups if candidate in g), [])
+        unopposed = len(groups) <= 1 and (not groups or bool(group))
+        if unopposed and answer.match_probability >= MATCH_THRESHOLD:
+            verdict = Verdict.CONFIRMED
+        elif len(groups) > 1 and group:
+            verdict = Verdict.NEEDS_REVIEW
+        else:
+            verdict = Verdict.INSUFFICIENT_EVIDENCE
+        answers[url] = replace(answer, verdict=verdict.value)
+    return answers
 
 
 def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, SolVerdict], now: str) -> dict[str, int]:
-    """One verdict row per member per judged URL, carrying Sol's confidence and reason. A confirmed URL moves
-    every member onto li:<member id>, except a member already holding a wrong-person verdict on it: that one
-    is split onto a fresh p: id."""
-    family: Family = task.family
-    rows: list[LinkedinRow] = []
+    family = task.family
     parents: list[ParentRow] = []
-    counts: dict[str, int] = {"confirmed": 0, "wrong_person": 0, "needs_review": 0, "split": 0}
+    counts = {"confirmed": 0, "wrong_person": 0, "needs_review": 0, "insufficient_evidence": 0, "split": 0}
     for candidate in task.candidates:
-        url: str = candidate.profile.linkedin_url
-        if url not in verdicts:
-            continue  # not judged: another member id was confirmed by JEV alone
-        answer: SolVerdict = verdicts[url]
+        url = candidate.profile.linkedin_url
+        answer = verdicts[url]
         counts[answer.verdict] += 1
-        if answer.verdict != Verdict.CONFIRMED:
+        if answer.verdict != Verdict.CONFIRMED or candidate.origin == Origin.SYNTHETIC:
             for candidate_id in family.candidates:
-                rows.append((candidate_id, url, candidate.profile.member_id, candidate.origin, answer.verdict,
-                             DecidedBy.MACHINE.value, task.fingerprint, answer.confidence, answer.reason, now))
+                row = (candidate_id, url, candidate.profile.member_id, candidate.origin, answer.verdict,
+                       DecidedBy.MACHINE.value, task.fingerprint, None, answer.reason, now)
+                queries_enrich.insert_linkedin(conn, row, match_probability=answer.match_probability)
             continue
-        # The split: a member already judged someone else on this member id leaves the family, its parent
-        # row naming that wrong-person verdict.
-        wrong: dict[str, int] = {}  # candidate_id -> the seq of its wrong-person verdict
-        for held in family.verdicts:
-            if held.member_id == candidate.profile.member_id and held.verdict == Verdict.WRONG_PERSON:
-                wrong[held.candidate_id] = held.seq
+        wrong = {held.candidate_id: held.seq for held in family.verdicts
+                 if held.member_id == candidate.profile.member_id and held.verdict == Verdict.WRONG_PERSON}
         staying: list[str] = []
         for candidate_id in family.candidates:
             if candidate_id in wrong:
@@ -205,115 +205,79 @@ def write(conn: sqlite3.Connection, task: JudgeTask, verdicts: dict[str, SolVerd
                 counts["split"] += 1
             else:
                 staying.append(candidate_id)
-        moved: Family = replace(family, candidates=tuple(staying))
-        parents.extend(confirm(conn, moved, url, candidate.profile.member_id, candidate.origin, task.fingerprint,
-                               answer.confidence, answer.reason, now))
-    queries_enrich.append_linkedins(conn, rows)
+        parents.extend(confirm(conn, replace(family, candidates=tuple(staying)), url, candidate.profile.member_id,
+                               candidate.origin, task.fingerprint, None, answer.reason, now,
+                               match_probability=answer.match_probability))
+        if candidate.research_result is not None:
+            key = SYNTHETIC_PROFILE_PREFIX + research.handle(family.facts)
+            for candidate_id in staying:
+                row = (candidate_id, key, key, Origin.SYNTHETIC.value, Verdict.CONFIRMED.value,
+                       DecidedBy.MACHINE.value, task.fingerprint, None, answer.reason, now)
+                queries_enrich.insert_linkedin(conn, row, match_probability=answer.match_probability)
+    current_synthetic = SYNTHETIC_PROFILE_PREFIX + research.handle(family.facts)
+    for held in family.verdicts:
+        if (held.origin == Origin.SYNTHETIC and held.verdict == Verdict.CONFIRMED
+                and held.member_id != current_synthetic and held.decided_by == DecidedBy.MACHINE):
+            row = (held.candidate_id, held.linkedin_url, held.member_id, held.origin,
+                   Verdict.INSUFFICIENT_EVIDENCE.value, DecidedBy.MACHINE.value, task.fingerprint, None,
+                   "The contact evidence changed; this research profile has not been confirmed on it.", now)
+            queries_enrich.insert_linkedin(conn, row)
+        if held.verdict == Verdict.NEEDS_REVIEW and held.linkedin_url not in verdicts and held.decided_by == DecidedBy.MACHINE:
+            row = (held.candidate_id, held.linkedin_url, held.member_id, held.origin,
+                   Verdict.INSUFFICIENT_EVIDENCE.value, DecidedBy.MACHINE.value, task.fingerprint, None,
+                   "The proposed LinkedIn has no usable cached profile to establish identity.", now)
+            queries_enrich.insert_linkedin(conn, row)
     append_parent_rows(conn, parents)
     counts["parent_rows"] = len(parents)
     return counts
 
 
-def estimate(tasks: list[JudgeTask], cache_dir: Path, owner_block: str) -> dict[str, int | float]:
-    """The dry run: JEV requests and their price, and Sol at most once per family. No call."""
-    requests: int = 0
-    cached: int = 0
-    jev_tokens: int = 0
-    sol_tokens: int = 0
-    sol_calls: int = 0
+def estimate(tasks: list[JudgeTask], owner_block: str) -> dict[str, int | float]:
     encoder = tiktoken.get_encoding("o200k_base")
+    tokens = calls = 0
     for task in tasks:
-        # JEV: two view requests per profile, each cached on disk under <cache_dir>/<view>/ by its digest.
-        for pair in jev_pairs(task):
-            for view, request in pair.items():
-                requests += 1
-                if cache_path(cache_dir / view, request_digest(request)).exists():
-                    cached += 1
-                    continue
-                jev_tokens += len(encoder.encode(json.dumps(request, ensure_ascii=False, sort_keys=True)))
-        # Sol: one call per profile.
         for candidate in task.candidates:
-            prompt: str = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations, owner_block)
-            sol_tokens += len(encoder.encode(sol_identity.SYSTEM_PROMPT + prompt))
-            sol_calls += 1
-    output: int = sol_calls * OUTPUT_TOKENS_PER_CALL
-    jev_usd: float = jev_tokens * INPUT_PRICE_PER_MILLION / 1_000_000
-    sol_usd: float = estimate_cost_usd(sol_tokens, output, sol_identity.MODEL)
-    return {"jev_requests": requests, "jev_cached": cached, "jev_input_tokens": jev_tokens,
-            "jev_cost_usd": round(jev_usd, 4), "sol_calls_at_most": sol_calls, "sol_input_tokens": sol_tokens,
-            "sol_output_tokens_assumed": output, "sol_cost_usd_at_most": round(sol_usd, 4),
-            "estimated_cost_usd_at_most": round(jev_usd + sol_usd, 4)}
+            prompt = sol_identity.identity_prompt(task.family, candidate.profile, candidate.origin, task.citations,
+                                                   owner_block, candidate.research_result)
+            tokens += len(encoder.encode(sol_identity.SYSTEM_PROMPT + prompt))
+            calls += 1
+    output = calls * OUTPUT_TOKENS_PER_CALL
+    cost = round(estimate_cost_usd(tokens, output, sol_identity.MODEL), 4)
+    return {"sol_calls_at_most": calls, "sol_input_tokens": tokens, "sol_output_tokens_assumed": output,
+            "sol_cost_usd_at_most": cost, "estimated_cost_usd_at_most": cost}
 
 
-async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], cache_dir: Path, owner_block: str, now: str,
+async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], owner_block: str, now: str,
                  on_progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
-    """Judge every task and write each family's rows the moment its verdicts are known, committing as it
-    goes, so a stopped run keeps what it paid for. JEV answers every profile first (its own disk cache);
-    Sol sees the families JEV did not settle on exactly one member id. A failed Sol call is counted and
-    the family is judged next run. `on_progress("judge", done, total)` follows the families as they
-    are decided."""
-    load_env()  # the JEV key, read from the environment on a cache miss
-    decided: int = 0
-
-    def report() -> None:
-        if on_progress is not None:
-            on_progress("judge", decided, len(tasks))
-
-    report()
-    pairs: list[dict[str, dict[str, Any]]] = []
-    for task in tasks:
-        pairs.extend(jev_pairs(task))
-    jev: list[str] = await jev_identity.answer_all(pairs, cache_dir)
-    counts: dict[str, int] = {"judge_failed": 0}
-    for_sol: list[JudgeTask] = []
-    position: int = 0
-    for task in tasks:
-        confirmed: list[str] = []
-        for candidate in task.candidates:
-            if jev[position] == Verdict.CONFIRMED:
-                confirmed.append(candidate.profile.linkedin_url)
-            position += 1
-        if len(confirmed) == 1:
-            _tally(counts, write(conn, task, {confirmed[0]: JEV_CONFIRMED}, now))
-            conn.commit()
-            decided += 1
-            report()
-            continue
-        for_sol.append(task)
+    """Write and commit each family's paid answers immediately; reruns skip its fingerprint."""
+    if not tasks:
+        return {"judge_failed": 0}
     config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
+    counts: dict[str, int] = {"judge_failed": 0}
     async with OpenAIResponsesCaller(config) as caller:
-
         async def guarded(task: JudgeTask) -> tuple[JudgeTask, dict[str, SolVerdict] | None]:
-            """The family's verdicts, or None when its Sol call failed (printed without the prompt)."""
             try:
                 return task, await sol(caller, task, owner_block)
             except Exception as exc:
                 print(f"failed one family: {type(exc).__name__}")
                 return task, None
 
-        calls: list[asyncio.Task[tuple[JudgeTask, dict[str, SolVerdict] | None]]] = []
-        for task in for_sol:
-            calls.append(asyncio.create_task(guarded(task)))
-        for call in asyncio.as_completed(calls):
+        calls = [asyncio.create_task(guarded(task)) for task in tasks]
+        for done, call in enumerate(asyncio.as_completed(calls), 1):
             task, verdicts = await call
             if verdicts is None:
                 counts["judge_failed"] += 1
             else:
-                _tally(counts, write(conn, task, verdicts, now))
+                for key, value in write(conn, task, verdicts, now).items():
+                    counts[key] = counts.get(key, 0) + value
                 conn.commit()
-            decided += 1
-            report()
+            if on_progress is not None:
+                on_progress("judge", done, len(tasks))
     return counts
 
 
-def _tally(counts: dict[str, int], written: dict[str, int]) -> None:
-    for key, value in written.items():
-        counts[key] = counts.get(key, 0) + value
-
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="07 Enrich step 4, the JEV and Sol LinkedIn judge: counts and price "
+    parser = argparse.ArgumentParser(description="07 Enrich step 4, the Sol profile judge: counts and price "
                                                  "only. The judge runs through enrich.")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
     parser.add_argument("--limit", type=int, default=None, help="price only the first N families")
@@ -331,8 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     for task in tasks:
         profiles_judged += len(task.candidates)
     counts["profiles_to_judge"] = profiles_judged
-    estimated: dict[str, int | float] = estimate(tasks, args.data_root / JEV_CACHE_RELATIVE_DIR,
-                                            owner_background_block(read_owner(conn)))
+    estimated: dict[str, int | float] = estimate(tasks, owner_background_block(read_owner(conn)))
     for key, value in estimated.items():
         counts[key] = value
     print(json.dumps(counts, indent=2))

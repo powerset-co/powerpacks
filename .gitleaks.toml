@@ -4,6 +4,14 @@ title = "Powerpacks gitleaks configuration"
 useDefault = true
 
 [[allowlists]]
+description = "Synthetic generation-version labels in memory tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = ['''tests/test_memory\.py''']
+regexes = ['''generation_key = "synthetic-generation-v[12]"''']
+
+[[allowlists]]
 description = "Public Auth0 PKCE client ID in explicit Powerset-hosted env example"
 targetRules = ["generic-api-key"]
 condition = "AND"

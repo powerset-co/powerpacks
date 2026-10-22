@@ -1,5 +1,5 @@
-"""Refresh People's signals from saved facts and counts: Worth (one Luna request per family), the settle rule
-(as Enrich applies it after worth), then the labels.
+"""Refresh People's signals from saved facts and counts: Worth (one Luna request per family), own LinkedIn
+connections to worth yes (as Enrich applies it after worth), then the labels.
 
 With no one selected it asks every family; a selection asks those. An unchanged request is answered
 from the saved answers for free. The check never calls OpenAI. A start
@@ -88,7 +88,7 @@ class RefreshSignals(Node):
         if self.checked is not None and self.checked != plan.checked:
             raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
         counts = self.worth.execute(cache_only=self.cache_only)
-        counts["settle_worth_rows"] = settle(self.conn, self.data_root, now_iso())
+        counts["settle_worth_rows"] = settle(self.conn, now_iso())
         self.progress("Updating People", 0, 0)
         PersonLabels(self.conn, self.data_root).execute()
         return counts

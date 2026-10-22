@@ -39,11 +39,6 @@ class Profile:
     education: tuple[str, ...]    # "degree, field — school"
     fetched_at: str
 
-    @property
-    def real(self) -> bool:
-        """A real profile: a name, and positions or a location."""
-        return bool(self.full_name and (self.experiences or self.location))
-
     def judge_view(self) -> dict[str, Any]:
         """The profile as both judges see it."""
         return {"public_identifier": self.public_identifier, "linkedin_url": self.linkedin_url,

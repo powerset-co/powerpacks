@@ -20,6 +20,7 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-10-20 (schema 7): separate match probability from legacy verdict confidence; allow judged synthetic profiles.
 - 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh; deleted_parents,
   the families deleted on the People page, which the page hides and no stage moves.
 - 2026-10-16 (schema 5): remove the derived share table and Share/Private human tags.
@@ -49,7 +50,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -90,7 +91,7 @@ class DecidedBy(StrEnum):
 class Origin(StrEnum):
     LINKEDIN_NETWORK = "linkedin_network"
     RESEARCH = "research"
-    SYNTHETIC = "synthetic"  # a human-accepted or human-rejected synthetic card; the machine never writes it
+    SYNTHETIC = "synthetic"
     HUMAN_OVERRIDE = "human_override"
 
 
@@ -98,6 +99,7 @@ class Verdict(StrEnum):
     CONFIRMED = "confirmed"
     WRONG_PERSON = "wrong_person"
     NEEDS_REVIEW = "needs_review"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
 class ResearchStatus(StrEnum):
@@ -303,11 +305,12 @@ CREATE TABLE candidate_linkedins (
   verdict TEXT NOT NULL CHECK (verdict IN {_in(Verdict)}),
   decided_by TEXT NOT NULL CHECK (decided_by IN {_in(DecidedBy)}),
   judgment_fingerprint TEXT NOT NULL,
+  match_probability REAL,  -- probability of same person (legacy confidence never populates this)
   confidence REAL,  -- Sol's confidence in its verdict; NULL when no Sol call made the row (a human, or JEV's two views agreeing)
   reason TEXT NOT NULL,  -- Sol's reason, shown on the review card; '' when no Sol call made the row
   created_at TEXT NOT NULL,
   CHECK ((origin = 'synthetic') = (linkedin_url LIKE 'synthetic:%')),
-  CHECK (origin <> 'synthetic' OR decided_by = 'human')
+  CHECK (match_probability IS NULL OR match_probability BETWEEN 0 AND 1)
 );
 CREATE INDEX candidate_linkedins_by_member ON candidate_linkedins(candidate_id, member_id, seq);
 CREATE INDEX candidate_linkedins_by_url ON candidate_linkedins(linkedin_url, candidate_id, seq);
@@ -340,7 +343,7 @@ CREATE VIEW current_worth AS
   WHERE rn = 1;
 
 CREATE VIEW current_linkedins AS
-  SELECT seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, confidence, reason, created_at FROM (
+  SELECT seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, match_probability, confidence, reason, created_at FROM (
     SELECT l.*, row_number() OVER (
       PARTITION BY candidate_id, member_id ORDER BY (decided_by = 'human') DESC, seq DESC) AS rn
     FROM candidate_linkedins l)

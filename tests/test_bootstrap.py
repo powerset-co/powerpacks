@@ -103,6 +103,14 @@ def last_line(proc: subprocess.CompletedProcess[str]) -> str:
     return proc.stdout.rstrip("\n").splitlines()[-1] if proc.stdout.strip() else ""
 
 
+class PageServerImportTests(unittest.TestCase):
+    def test_progress_page_imports_with_the_standard_library_alone(self) -> None:
+        """Bootstrap starts the page before the project environment exists (bin/bootstrap, server start)."""
+        result = subprocess.run([sys.executable, "-I", "-S", "-c", "import sys; sys.path.insert(0, sys.argv[1]); "
+                                 "import packs.shared.web.server", str(ROOT)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr[-800:])
+
+
 class BootstrapTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
