@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.34.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.33.0...powerpacks-v3.34.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** local memory directory and the Memory page (beta) ([#884](https://github.com/powerset-co/powerpacks/issues/884)) ([138f5c1](https://github.com/powerset-co/powerpacks/commit/138f5c1a88a6b718e5ad00804c48302df057bf9e))
+
+
+### Bug Fixes
+
+* judge proposed profiles before attaching ([#882](https://github.com/powerset-co/powerpacks/issues/882)) ([999537d](https://github.com/powerset-co/powerpacks/commit/999537da7e97bb6a2809255b712052e92eb5c039))
+* preserve Luna worth for sparse contacts ([#876](https://github.com/powerset-co/powerpacks/issues/876)) ([e248ced](https://github.com/powerset-co/powerpacks/commit/e248cedf32cde626fa88d6d3758b4a0e23ec3f9d))
+* **server:** the progress page imports with the standard library alone ([#888](https://github.com/powerset-co/powerpacks/issues/888)) ([4b5fbec](https://github.com/powerset-co/powerpacks/commit/4b5fbec7f56defa739564ac4958c296695d73b80))
+
 ## [3.33.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.32.0...powerpacks-v3.33.0) (2026-10-20)
 
 
