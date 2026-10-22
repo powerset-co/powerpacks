@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.35.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.0...powerpacks-v3.35.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **worth:** Luna's family question names the owner and excludes other participants' relatives ([4720357](https://github.com/powerset-co/powerpacks/commit/472035738c0c4616c51cae70e42db31d4f50871c))
+* **worth:** Luna's family question names the owner, excludes other participants' relatives ([a81d3a9](https://github.com/powerset-co/powerpacks/commit/a81d3a90e89434b082ebf2310cf267a60351e580))
+
 ## [3.35.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.34.0...powerpacks-v3.35.0) (2026-10-22)
 
 
