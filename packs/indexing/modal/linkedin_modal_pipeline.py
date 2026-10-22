@@ -150,7 +150,7 @@ REAL_SEEDS = {
 }
 
 
-def build_image() -> modal.Image:
+def build_image(*extra_packages: str) -> modal.Image:
     return (
         modal.Image.debian_slim(python_version="3.12")
         .pip_install(
@@ -164,6 +164,7 @@ def build_image() -> modal.Image:
             "pyyaml==6.0.3",
             "snowballstemmer==3.0.1",
             "tiktoken==0.13.0",
+            *extra_packages,
         )
         .add_local_dir(REPO / "packs", "/repo/packs")
         .add_local_dir(REPO / "scripts", "/repo/scripts")
@@ -193,6 +194,23 @@ def make_sandbox(cpu: float, memory_mib: int, timeout: int) -> modal.Sandbox:
         cpu=cpu,
         memory=memory_mib,
         timeout=timeout,
+    )
+
+
+def memory_sandbox(name: str, root: str, *, discover: bool) -> modal.Sandbox:
+    return modal.Sandbox.create(
+        "python", "-m", "packs.memory.modal_entrypoint", root, str(int(discover)),
+        app=modal.App.lookup(APP_NAME, create_if_missing=True),
+        name=name,
+        image=build_image("parallel-web==1.1.0", "jinja2==3.1.6", "nameparser==2.3.0", "modal==1.5.0"),
+        workdir="/repo",
+        volumes={"/data": get_volume()},
+        secrets=[modal.Secret.from_name("powerset-openai")],
+        env={"POWERPACKS_OPENAI_CONCURRENCY": "64",
+             "POWERPACKS_OPENAI_EMBEDDING_MODEL": os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL")},
+        cpu=16,
+        memory=4096,
+        timeout=4 * 60 * 60,
     )
 
 

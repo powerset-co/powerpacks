@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -131,6 +132,90 @@ class DiscoveryTests(unittest.TestCase):
         return tuple(hit for row in store.conn.execute('SELECT DISTINCT parent FROM active_claims')
                      for hit in Query(store, lexical).run('', filters=Filters(parents=(row[0],), kind=Kind.TAG), limit=100).hits)
 
+    def test_concurrent_calls_match_serial_rows_and_keep_fresh_call_limit(self) -> None:
+        from packs.memory.discovery import Discover
+        people = [self.person(f'c{i:02d}', f'Synthetic West{i} SF') for i in range(40)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        serial = Store(self.base / 'serial.sqlite', create=True)
+        self.addCleanup(serial.close)
+        store.conn.backup(serial.conn)
+        lock, overlap = threading.Lock(), threading.Event()
+        active = maximum = calls = 0
+
+        def concurrent(content: str) -> str:
+            nonlocal active, maximum, calls
+            with lock:
+                calls += 1
+                active += 1
+                maximum = max(maximum, active)
+                if active > 1:
+                    overlap.set()
+            overlap.wait(0.2)
+            try:
+                return DiscoveryFixture().discover(content)
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch('packs.memory.resources.available_capacity', return_value=(16, 2 ** 30)), \
+                patch('packs.memory.resources.env_or_profile_int', return_value=64), \
+                patch.object(self.provider, 'discover', side_effect=concurrent):
+            limited = Discover(store, self.provider).run(limit=2, phrase='sf')
+            self.assertEqual((limited.calls, calls), (2, 2))
+            self.assertTrue(limited.has_more)
+            self.assertGreater(maximum, 1)
+            remaining = Discover(store, self.provider).run(limit=2, phrase='sf', after=limited.next_after)
+            self.assertEqual((remaining.calls, remaining.reused, calls), (1, 2, 3))
+            self.assertFalse(remaining.has_more)
+            self.assertEqual(Discover(store, self.provider).run(limit=2, phrase='sf').calls, 0)
+        with patch('packs.memory.resources.available_capacity', return_value=(1, 0)):
+            report = Discover(serial, DiscoveryFixture()).run(limit=5, phrase='sf')
+        self.assertEqual(report.calls, 3)
+        for sql in ("SELECT source_id,payload,active FROM claims ORDER BY source_id,payload,active",
+                    "SELECT d.key,c.fingerprint,c.response,c.error FROM discovery d JOIN chunks c ON c.id=d.chunk_id ORDER BY d.key"):
+            self.assertEqual([tuple(row) for row in store.conn.execute(sql)],
+                             [tuple(row) for row in serial.conn.execute(sql)])
+        self.assertEqual(len(self.tags(store)), 40)
+
+    def test_terminal_provider_errors_drain_and_save_inflight_responses(self) -> None:
+        from packs.memory.discovery import Discover
+        from packs.memory.provider import NeedsApproval, SpendReached
+        people = [self.person(f'c{i:02d}', f'Synthetic West{i} SF') for i in range(40)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        for exception in (SpendReached, NeedsApproval):
+            with self.subTest(exception=exception):
+                self.provider.discovery_key = exception.__name__
+                lock, failed, finished = threading.Lock(), threading.Event(), threading.Event()
+                calls = 0
+
+                def discover(content: str) -> str:
+                    nonlocal calls
+                    with lock:
+                        calls += 1
+                        number = calls
+                    if number == 1:
+                        failed.set()
+                        raise exception('synthetic stop')
+                    self.assertTrue(failed.wait(2))
+                    response = DiscoveryFixture().discover(content)
+                    finished.set()
+                    return response
+
+                events = []
+                with patch('packs.memory.discovery_run.concurrency_limit', return_value=2), \
+                        patch.object(self.provider, 'discover', side_effect=discover):
+                    with self.assertRaisesRegex(exception, 'synthetic stop'):
+                        for event in Discover(store, self.provider).progress(limit=5, phrase='sf'):
+                            events.append(event)
+                self.assertEqual(calls, 2)
+                self.assertTrue(finished.is_set())
+                self.assertEqual(store.conn.execute('SELECT count(*) FROM chunks WHERE position=-1').fetchone()[0],
+                                 1 if exception is SpendReached else 2)
+                if exception is SpendReached:
+                    self.assertEqual((events[-1].done, events[-1].key), (1, ''))
+
     def test_original_names_canonical_counts_abbreviations_and_numeric_noise(self) -> None:
         from packs.memory.discovery import Discover
         people = [self.person(f'c{i}', f'Synthetic Name{i} SoF. 2026') for i in range(3)]
@@ -234,10 +319,11 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual((preview.pending_calls, preview.groups[0].people), (1, 3))
         self.assertEqual(self.provider.inputs, [])
         response = {'decision': 'supported', 'reason': 'Shared access-controls experience', 'tags': []}
+        parents = {store.lookup(person['name'])[0].parent for person in people}
 
         def semantic(content: str) -> str:
             payload = json.loads(content)
-            self.assertEqual({item['parent'] for item in payload['evidence']}, {store.lookup(person['name'])[0].parent for person in people})
+            self.assertEqual({item['parent'] for item in payload['evidence']}, parents)
             self.assertTrue(any(text in item['quote'] for text in texts for item in payload['evidence']))
             supports = [{key: item[key] for key in ('parent', 'source_id', 'quote')}
                         for item in payload['evidence'] if not item['quote'].startswith('Synthetic')]
