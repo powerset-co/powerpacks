@@ -10,6 +10,8 @@ from dataclasses import asdict
 from typing import TypeVar
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
@@ -18,6 +20,7 @@ from packs.memory.cost import Usage
 from packs.memory.discovery import Discover
 from packs.memory.generate import Generate
 from packs.memory.job import Counts, Failure, Job, Status
+from packs.memory.modal_run import Remote
 from packs.memory.progress import Progress, Step
 from packs.memory.provider import DEFAULT_EMBEDDING_MODEL, OpenAIProvider, SpendReached
 from packs.memory.sources import V2
@@ -38,6 +41,8 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
     if not math.isfinite(approved_spend) or approved_spend < 0:
         raise ValueError("approved_spend_usd must be a finite nonnegative number")
     root = root.resolve()
+    load_dotenv(root / ".env", override=False)
+    remote = os.getenv("POWERPACKS_MEMORY_REMOTE") == "1"
     with job.LOCK:
         directory = job.database(root).parent
         directory.mkdir(parents=True, exist_ok=True)
@@ -50,7 +55,10 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
         record = job.read(root)
         client = provider()
         record.error = ""
-        if not os.getenv("OPENAI_API_KEY"):
+        missing = [name for name in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET") if not os.getenv(name)]
+        if remote and missing:
+            record.error = "Missing Modal token: " + ", ".join(missing)
+        elif not remote and not os.getenv("OPENAI_API_KEY"):
             record.error = "OPENAI_API_KEY is not set"
         elif client.usage.cost(client.model, client.embedding_key) is None:
             record.error = "model pricing unavailable"
@@ -73,7 +81,8 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
         record.approved_spend_usd = approved_spend
         record.status = Status.RUNNING
         job.write(root, record)
-        thread = threading.Thread(target=_run, args=(root, resume, handle, client, discover), daemon=True, name="memory")
+        thread = threading.Thread(target=_run, args=(root, resume, handle, client, discover),
+                                  kwargs={"remote": remote}, daemon=True, name="memory")
         _threads[root] = thread
         thread.start()
         return record
@@ -112,9 +121,14 @@ def keep_updated(root: Path) -> None:
         thread.join()
 
 
-def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider, discover: bool) -> None:
+def _run(root: Path, resume: bool, handle: int | None, client: OpenAIProvider, discover: bool, *,
+         remote: bool = False, steps: tuple[Step, ...] = job.STEPS) -> None:
     store: Store | None = None
     try:
+        if remote:
+            remote_run = Remote(root)
+            if remote_run.reattach(resume=resume):
+                return
         record = job.read(root)
         client.approved_spend_usd = record.approved_spend_usd
         client.usage = Usage(**record.tokens)
@@ -122,10 +136,16 @@ def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider, discover
         adapter = V2(root / ".powerpacks")
         generate = Generate(store, client)
         if resume and record.failures:
-            record.step = min((record.step, *(failure.step for failure in record.failures)), key=job.STEPS.index)
-        for step in job.STEPS:
+            record.step = min((record.step, *(failure.step for failure in record.failures if failure.step in steps)),
+                              key=job.STEPS.index)
+        for step in steps:
             if resume and job.STEPS.index(step) < job.STEPS.index(record.step):
                 continue
+            if remote and step != Step.IMPORT:
+                store.close()
+                store = None
+                remote_run.run(discover)
+                return
             first = tuple(item.key for item in record.failures if item.step == step)
             if step == Step.DISCOVER and not discover and not first:
                 continue
@@ -168,7 +188,8 @@ def _run(root: Path, resume: bool, handle: int, client: OpenAIProvider, discover
         if store is not None:
             store.close()
         client.close()
-        os.close(handle)
+        if handle is not None:
+            os.close(handle)
 
 
 R = TypeVar("R")

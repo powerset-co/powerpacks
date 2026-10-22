@@ -64,7 +64,11 @@ def read(root: Path) -> Job:
     with LOCK:
         if not path.exists():
             return Job()
-        record = json.loads(path.read_text())
+        return decode(path.read_bytes())
+
+
+def decode(payload: bytes | str) -> Job:
+    record = json.loads(payload)
     record["step"] = Step(record["step"])
     record["status"] = Status(record["status"])
     record["steps"] = {step: Counts(**counts) for step, counts in record["steps"].items()}

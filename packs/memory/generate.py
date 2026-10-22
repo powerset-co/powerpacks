@@ -18,6 +18,7 @@ from packs.memory.progress import Progress, Step, consume, retry_first
 
 
 GENERATION_WORKERS = 64
+DISCOVERY_WORKERS = 64
 EMBEDDING_BATCH_SIZE = 64
 EMBEDDING_BATCH_TOKENS = 8000
 EMBEDDING_WORKERS = 8

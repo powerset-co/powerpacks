@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory.discovery_provider import Decision, INPUT_CHARS, OUTPUT_TOKENS, PEOPLE, SYSTEM, Tag, Outcome
 from packs.memory.models import normalized, IdentityMatch
+from packs.memory.generate import DISCOVERY_WORKERS
+from packs.memory.resources import concurrency_limit
 from packs.memory.progress import Progress, Step, retry_first
 from packs.memory.provider import NeedsApproval, SpendReached
 
@@ -97,62 +100,119 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
             if not discover.next_after:
                 return
             cursor = discover.next_after
-    for done, (group, parents) in enumerate(retry_first(items, batch_key, first), 1):
-        if group.key != last_group:
-            previous_group, last_group = last_group, group.key
-        key = group.key + ':' + short_hash(json.dumps([person.parent for person in parents]), n=64)
-        conn.execute('INSERT INTO discovery_seen VALUES(?)', (key,))
+    def save(group: Group, parents: list[Person], key: str, evidence: tuple[Evidence, ...],
+             chunk_id: int, response: str) -> str:
         error = ""
-        try:
-            content, fingerprint, evidence = discover._batch(group, parents)
-            report.max_input_chars = max(report.max_input_chars, len(content))
-            old = conn.execute('SELECT d.chunk_id,c.fingerprint FROM discovery d JOIN chunks c ON c.id=d.chunk_id WHERE d.key=?', (key,)).fetchone()
-            if old is not None and old['fingerprint'] != fingerprint:
-                with conn:
-                    conn.execute('UPDATE claims SET active=0 WHERE chunk_id=? AND human=0', (old['chunk_id'],))
-            saved = conn.execute('SELECT id,response FROM chunks WHERE fingerprint=? AND position=-1 ORDER BY id LIMIT 1', (fingerprint,)).fetchone()
-            if saved is None:
-                if report.calls == limit:
-                    report.next_after, report.has_more = previous_group, True
-                    return report
-                response = discover.provider.discover(content)
-                report.calls += 1
-                source = evidence[0]
-                with conn:
-                    conn.execute('INSERT INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,-1,?,?,\'\')',
-                                          (source.source_id, source.source_hash, fingerprint, response))
-                chunk_id = int(conn.execute('SELECT last_insert_rowid()').fetchone()[0])
+        report.batches += 1
+        with conn:
+            conn.execute('INSERT INTO discovery VALUES(?,?) ON CONFLICT(key) DO UPDATE SET chunk_id=excluded.chunk_id', (key, chunk_id))
+            try:
+                decision = Decision.parse(response)
+            except (ValueError, KeyError, TypeError):
+                report.exclusions += 1
+                error = "invalid discovery; saved response retained"
+                conn.execute("UPDATE chunks SET error=? WHERE id=?", (error, chunk_id))
             else:
-                chunk_id, response = saved['id'], saved['response']
-                report.reused += 1
-            report.batches += 1
-            with conn:
-                conn.execute('INSERT INTO discovery VALUES(?,?) ON CONFLICT(key) DO UPDATE SET chunk_id=excluded.chunk_id', (key, chunk_id))
                 try:
-                    decision = Decision.parse(response)
+                    report.abstentions += decision.decision != 'supported'
+                    report.tags += discover._apply(decision, evidence, chunk_id)
+                    if len(report.insights) < 4:
+                        report.insights += (discover._insight(group, parents, decision),)
+                    conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
                 except (ValueError, KeyError, TypeError):
                     report.exclusions += 1
-                    error = "invalid discovery; saved response retained"
-                    conn.execute("UPDATE chunks SET error=? WHERE id=?", (error, chunk_id))
-                else:
-                    try:
-                        report.abstentions += decision.decision != 'supported'
-                        report.tags += discover._apply(decision, evidence, chunk_id)
-                        if len(report.insights) < 4:
-                            report.insights += (discover._insight(group, parents, decision),)
-                        conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
-                    except (ValueError, KeyError, TypeError):
-                        report.exclusions += 1
-                        conn.execute("UPDATE chunks SET error=? WHERE id=?",
-                                     ("unsupported discovery; saved response retained", chunk_id))
-        except SpendReached:
-            yield Progress(Step.DISCOVER, done - 1, 0, "")
-            raise
-        except NeedsApproval:
-            raise
-        except Exception as exc:
-            error = str(exc)
-        yield Progress(Step.DISCOVER, done, 0, key, error)
+                    conn.execute("UPDATE chunks SET error=? WHERE id=?",
+                                 ("unsupported discovery; saved response retained", chunk_id))
+        return error
+
+    inputs = retry_first(items, batch_key, first)
+    concurrency = concurrency_limit(DISCOVERY_WORKERS)
+    pending: dict[Future[str], tuple[Group, list[Person], str, str, tuple[Evidence, ...]]] = {}
+    done = 0
+    stopped = False
+    terminal: BaseException | None = None
+    with ThreadPoolExecutor(max_workers=concurrency) as workers:
+        while True:
+            events: list[tuple[str, str]] = []
+            try:
+                if terminal is None and not stopped:
+                    for _ in range(concurrency - len(pending)):
+                        item = next(inputs, None)
+                        if item is None:
+                            stopped = True
+                            break
+                        group, parents = item
+                        if group.key != last_group:
+                            previous_group, last_group = last_group, group.key
+                        key = batch_key(item)
+                        conn.execute('INSERT INTO discovery_seen VALUES(?)', (key,))
+                        try:
+                            content, fingerprint, evidence = discover._batch(group, parents)
+                            report.max_input_chars = max(report.max_input_chars, len(content))
+                            old = conn.execute('SELECT d.chunk_id,c.fingerprint FROM discovery d JOIN chunks c ON c.id=d.chunk_id WHERE d.key=?', (key,)).fetchone()
+                            if old is not None and old['fingerprint'] != fingerprint:
+                                with conn:
+                                    conn.execute('UPDATE claims SET active=0 WHERE chunk_id=? AND human=0', (old['chunk_id'],))
+                            saved = conn.execute('SELECT id,response FROM chunks WHERE fingerprint=? AND position=-1 ORDER BY id LIMIT 1', (fingerprint,)).fetchone()
+                            if saved is not None:
+                                report.reused += 1
+                                events.append((key, save(group, parents, key, evidence, saved['id'], saved['response'])))
+                                continue
+                            if report.calls == limit:
+                                report.next_after, report.has_more = previous_group, True
+                                stopped = True
+                                break
+                            report.calls += 1
+                            pending[workers.submit(discover.provider.discover, content)] = (group, parents, key, fingerprint, evidence)
+                        except (SpendReached, NeedsApproval):
+                            raise
+                        except Exception as exc:
+                            events.append((key, str(exc)))
+                while pending:
+                    ready = [future for future in pending if future.done()]
+                    if not ready:
+                        if events:
+                            break
+                        ready = [next(as_completed(pending))]
+                    for future in ready:
+                        group, parents, key, fingerprint, evidence = pending[future]
+                        try:
+                            response = future.result()
+                        except (SpendReached, NeedsApproval) as exc:
+                            terminal = terminal or exc
+                        except Exception as exc:
+                            events.append((key, str(exc)))
+                        except BaseException as exc:
+                            terminal = terminal or exc
+                            if not future.done() or future.exception() is not exc:
+                                continue
+                        else:
+                            try:
+                                source = evidence[0]
+                                with conn:
+                                    conn.execute('INSERT INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,-1,?,?,\'\')',
+                                                 (source.source_id, source.source_hash, fingerprint, response))
+                                chunk_id = int(conn.execute('SELECT last_insert_rowid()').fetchone()[0])
+                                events.append((key, save(group, parents, key, evidence, chunk_id, response)))
+                            except Exception as exc:
+                                events.append((key, str(exc)))
+                        pending.pop(future)
+                for key, error in events:
+                    done += 1
+                    if terminal is None:
+                        yield Progress(Step.DISCOVER, done, 0, key, error)
+            except BaseException as exc:
+                terminal = terminal or exc
+            if pending:
+                continue
+            if terminal is not None:
+                if isinstance(terminal, SpendReached):
+                    yield Progress(Step.DISCOVER, done, 0, "")
+                raise terminal
+            if stopped:
+                break
+    if report.has_more:
+        return report
     with conn:
         for row in conn.execute('SELECT key,chunk_id FROM discovery WHERE key NOT IN (SELECT key FROM discovery_seen)'):
             group_key = row['key'].rsplit(':', 1)[0]
