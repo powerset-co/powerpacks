@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
+use crate::children;
 use crate::paths;
 
 mod questions;
@@ -28,6 +29,8 @@ use questions::QuestionEvents;
 /// Where this app keeps Codex's sign-in, config and chat history, under the data folder.
 pub const CODEX_HOME: &str = ".powerpacks/desktop/codex";
 pub const CREDENTIALS_IN_FILE: &str = "cli_auth_credentials_store=file";
+/// How this app, and only this app, starts Codex: what to stop from an earlier run.
+const APP_SERVER_PATTERN: &str = "codex -c cli_auth_credentials_store=file app-server";
 const CLIENT_NAME: &str = "powerpacks_desktop";
 const CLIENT_TITLE: &str = "Powerpacks";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -87,6 +90,8 @@ impl Connection {
                 .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
             command.current_dir(cwd).env("CODEX_HOME", home);
         }
+        // An app-server from a run that did not exit cleanly still holds the chats' writer locks.
+        children::stop_matching(APP_SERVER_PATTERN);
         let mut child = command
             .spawn()
             .map_err(|error| format!("Could not start Codex: {error}"))?;
@@ -264,11 +269,13 @@ impl Codex {
         Ok(connection)
     }
 
-    /// Stop the Codex process, if one runs (its drop kills it).
+    /// Stop the Codex process, if one runs. A request in flight holds the connection, so the
+    /// process is stopped by its command line rather than through the lock.
     pub fn shutdown(&self) {
         if let Ok(mut slot) = self.connection.try_lock() {
             slot.take();
         }
+        children::stop_matching(APP_SERVER_PATTERN);
     }
 
     pub async fn call(
