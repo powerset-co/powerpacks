@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.36.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.2...powerpacks-v3.36.0) (2026-10-23)
+
+
+### Features
+
+* **memory:** intelligent discovery and layered search ([28b44e1](https://github.com/powerset-co/powerpacks/commit/28b44e148a4a43aa6f67564c16788313f26285cf))
+* **memory:** intelligent discovery and layered search ([bbcb6a5](https://github.com/powerset-co/powerpacks/commit/bbcb6a50b638ab9808493375f689aa5057d514fb))
+
 ## [3.35.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.1...powerpacks-v3.35.2) (2026-10-23)
 
 
