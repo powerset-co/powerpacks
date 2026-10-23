@@ -213,8 +213,8 @@ it("shows completed discovery batches when its total is unknown", async () => {
   expect(screen.queryByText("7 / 0 batches")).toBeNull()
 })
 
-it("shows status above the graph and offers updates only when inputs changed", async () => {
-  const fetch = serve({ ...ENABLED, update_available: true }, { "POST /api/memory/update": () => RUNNING })
+it("shows status above the graph and always offers Update now", async () => {
+  const fetch = serve(ENABLED, { "POST /api/memory/update": () => RUNNING })
   const status = await screen.findByRole("heading", { name: "Ready" })
   const viewer = screen.getByRole("region", { name: "Explore memory" })
   expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
@@ -224,10 +224,9 @@ it("shows status above the graph and offers updates only when inputs changed", a
   await waitFor(() => expect(posted(fetch, "/api/memory/update")).toEqual({}))
 })
 
-it("disables Updated when there are no new inputs and keeps Details collapsed", async () => {
-  serve({ ...ENABLED, update_available: false })
-  const button = await screen.findByRole<HTMLButtonElement>("button", { name: "Updated" })
-  expect(button.disabled).toBe(true)
+it("keeps Details collapsed until asked", async () => {
+  serve(ENABLED)
+  await screen.findByRole("button", { name: "Update now" })
   expect(screen.getByRole("button", { name: "Details" }).getAttribute("aria-expanded")).toBe("false")
 })
 

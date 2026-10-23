@@ -33,12 +33,8 @@ export function Enabled({ record }: { record: MemoryJob }) {
               indexed
             </p>
           </div>
-          <Button
-            type="button"
-            onClick={() => update.mutate()}
-            disabled={update.isPending || record.update_available === false}
-          >
-            {update.isPending ? "Starting…" : record.update_available === false ? "Updated" : "Update now"}
+          <Button type="button" onClick={() => update.mutate()} disabled={update.isPending}>
+            {update.isPending ? "Starting…" : "Update now"}
           </Button>
         </div>
         {record.status === "failed" && record.error ? (

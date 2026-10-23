@@ -16,7 +16,6 @@ from packs.memory.cost import Usage
 from packs.memory.directory import Directory, Origin, Selector
 from packs.memory.generate import Generate
 from packs.memory.graph import graph
-from packs.memory.import_stage import has_changes
 from packs.memory.query import Query
 from packs.memory.sources import V2
 from packs.memory.store import Store
@@ -73,9 +72,6 @@ class MemoryApi:
                 payload = asdict(record)
                 if not record.enabled:
                     payload.update(self._before_enable())
-                elif record.status != job.Status.RUNNING:
-                    with closing(Store(job.database(self.root), read_only=True)) as store:
-                        payload['update_available'] = bool(record.failures or record.error or record.stopped) or has_changes(store, V2(self.root / '.powerpacks'))
             _send_json(handler, payload)
         except (ValueError, OSError) as exc:
             _send_json(handler, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
