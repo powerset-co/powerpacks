@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,46 +23,69 @@ ACCOUNTS = {"jordan": {"email": "jordan@example.com", "operator_id": "op-jordan"
 SHARED = {"op-jordan": 5, "op-casey": 5, "op-riley": 5}
 
 
-class PeopleCacheTests(unittest.TestCase):
-    def test_facts_rebuild_only_when_the_store_changes(self) -> None:
+class FamiliesTableTests(unittest.TestCase):
+    """The page's roster is the families table realize writes: a decision or tag needs no rebuild, a change
+    to the store's facts or profiles shows after the next realize, and a store from before the table is filled
+    once by the page."""
+
+    def _store(self, root: Path) -> sqlite3.Connection:
+        conn = open_store(root / "store.sqlite")
+        self.addCleanup(conn.close)
+        now = "2026-10-15T00:00:00Z"
+        queries.upsert_candidates(conn, [("c1", "Jordan Bravo", 0, "{}", now)])
+        conn.execute("INSERT INTO candidate_identifiers VALUES ('c1', 'email', 'jordan@example.com', 'jordan@example.com')")
+        conn.execute("INSERT INTO candidate_sources VALUES ('c1', 'gmail_msgvault')")
+        queries_review.insert_parent(conn, "c1", "p:1", "singleton", None, now)
+        facts = SynthesizedFacts(
+            canonical_name="Jordan Bravo", aliases=(), employers=(), title="", school="",
+            field_of_study="", location="", relationship_to_owner="", relationship_category="",
+            topics=(), notable_events=(), identifiers=(), owned_identifiers=OwnedIdentifiers((), (), ()),
+            shared_context=(), confidence=1.0, is_owner=False)
+        conn.execute("INSERT INTO facts VALUES ('c1', ?, 'f', 'test', '', ?)",
+                     (json.dumps(facts.to_payload()), now))
+        conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
+                     "VALUES ('c1', 'yes', 'human', '', ?)", (now,))
+        queries_share.replace_labels(conn, [("c1", "", "Jordan Bravo", "yes", "", "{}", now)])
+        conn.commit()
+        return conn
+
+    def test_the_page_reads_what_realize_wrote_and_a_tag_needs_no_rebuild(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            conn = open_store(root / "store.sqlite")
-            self.addCleanup(conn.close)
+            conn = self._store(root)
             now = "2026-10-15T00:00:00Z"
-            queries.upsert_candidates(conn, [("c1", "Jordan Bravo", 0, "{}", now)])
-            conn.execute("INSERT INTO candidate_identifiers VALUES ('c1', 'email', 'jordan@example.com', 'jordan@example.com')")
-            conn.execute("INSERT INTO candidate_sources VALUES ('c1', 'gmail_msgvault')")
-            queries_review.insert_parent(conn, "c1", "p:1", "singleton", None, now)
-            facts = SynthesizedFacts(
-                canonical_name="Jordan Bravo", aliases=(), employers=(), title="", school="",
-                field_of_study="", location="", relationship_to_owner="", relationship_category="",
-                topics=(), notable_events=(), identifiers=(), owned_identifiers=OwnedIdentifiers((), (), ()),
-                shared_context=(), confidence=1.0, is_owner=False)
-            conn.execute("INSERT INTO facts VALUES ('c1', ?, 'f', 'test', '', ?)",
-                         (json.dumps(facts.to_payload()), now))
-            conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
-                         "VALUES ('c1', 'yes', 'human', '', ?)", (now,))
-            queries_share.replace_labels(conn, [("c1", "", "Jordan Bravo", "yes", "", "{}", now)])
-            conn.commit()
+            self.assertEqual(Realize(conn, root).run().status, "completed")
             people = SharePeople(conn, root)
-            with mock.patch.object(people, "_facts", wraps=people._facts) as build, \
-                 mock.patch("packs.ingestion.primitives.share.web.model.Realize.build", wraps=Realize(conn, root).build) as export:
+            with mock.patch("packs.ingestion.primitives.share.web.model.Realize.build") as build:
                 self.assertEqual(people.load()[0].name, "Jordan Bravo")
-                people.load()
-                self.assertEqual(build.call_count, 1)
                 queries_share.write_tags(conn, [("c1", "is_family", "", now)])
                 self.assertEqual(people.load()[0].tags, ("is_family",))
-                self.assertEqual(build.call_count, 1)
-                self.assertEqual(export.call_count, 1)
+                # A fact changed in the store: the page keeps realize's row until realize runs again.
                 with open_store(root / "store.sqlite") as writer:
                     writer.execute("UPDATE facts SET facts_json = json_set(facts_json, '$.canonical_name', 'Casey Delta')")
-                self.assertEqual(people.load()[0].name, "Casey Delta")
-                self.assertEqual(build.call_count, 2)
-                with open_store(root / "store.sqlite") as writer:
-                    writer.execute("UPDATE facts SET facts_json = json_set(facts_json, '$.canonical_name', 'Riley Echo')")
-                self.assertEqual(people.load()[0].name, "Riley Echo")
-                self.assertEqual(build.call_count, 3)
+                self.assertEqual(people.load()[0].name, "Jordan Bravo")
+                build.assert_not_called()
+            self.assertEqual(Realize(conn, root).run().status, "completed")
+            self.assertEqual(people.load()[0].name, "Casey Delta")
+
+    def test_a_store_from_before_the_table_is_filled_once_by_the_page(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conn = self._store(root)
+            conn.execute("DROP TABLE families")
+            conn.execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'")
+            conn.commit()
+            conn.close()
+            conn = open_store(root / "store.sqlite")
+            self.addCleanup(conn.close)
+            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], "8")
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM families").fetchone()[0], 0)
+            people = SharePeople(conn, root)
+            self.assertEqual([row["name"] for row in conn.execute("SELECT name FROM families")], ["Jordan Bravo"])
+            self.assertEqual(people.load()[0].name, "Jordan Bravo")
+            with mock.patch("packs.ingestion.primitives.share.web.model.Realize.fill") as fill:
+                SharePeople(conn, root)
+                fill.assert_not_called()
 
 
 class RelayInviteTests(unittest.TestCase):

@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, DELETED_DDL, RELATIONSHIP_KIND_COLUMN_DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, DELETED_DDL, FAMILIES_DDL, RELATIONSHIP_KIND_COLUMN_DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -63,6 +63,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 6:
         _migrate_6_to_7(conn)
         version = 7
+    if version == 7:
+        _migrate_7_to_8(conn)
+        version = 8
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -141,3 +144,11 @@ def _migrate_6_to_7(conn: sqlite3.Connection) -> None:
         profile = DDL[DDL.index("CREATE VIEW current_profile AS"):]
         conn.execute(profile.strip().removesuffix(";"))
         conn.execute("UPDATE meta SET value = '7' WHERE key = 'schema_version'")
+
+
+def _migrate_7_to_8(conn: sqlite3.Connection) -> None:
+    """Add the families table, empty: the page server fills it from the store on its first People request
+    (realize needs the data root for the profile cache, which the store opener does not have)."""
+    conn.executescript(FAMILIES_DDL)
+    with conn:
+        conn.execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'")

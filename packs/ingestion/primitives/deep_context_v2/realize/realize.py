@@ -6,6 +6,9 @@ family's confirmed profile, and the profile columns come from its cache or resea
 A synthetic key is not a URL: that family is exported with no URL. No
 decisions and no provider calls here; a URL without a cached profile is counted.
 
+The same rows go to the store's `families` table (schema 8), replaced whole: the People page and the
+labels pass read the family from there instead of rebuilding it from the profile cache per request.
+
 The search index is built from this people.csv by the indexing pipeline, which may spend; this block
 prints its command.
 
@@ -18,12 +21,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_realize
-from packs.ingestion.primitives.deep_context_v2.db.queries_realize import Identifier, Member
+from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db.queries_realize import FamilyRow, Identifier, Member
+from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, IdentifierKind, Worth
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import CACHE_RELATIVE_DIR
 from packs.ingestion.primitives.deep_context_v2.node import Node
+from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.primitives.enrich.profile_transforms import current_position, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
@@ -74,11 +79,18 @@ def fill_research(row: dict[str, str], content: dict[str, Any]) -> None:
     row["current_title"], row["current_company"], _ = current_position(experiences)
 
 
+def facts_title(facts: dict[str, Any]) -> tuple[str, str]:
+    """The dossier's title and employer when the profile has none: the current employer first."""
+    employers = [row for row in facts.get("employers") or [] if isinstance(row, dict)]
+    current = next((row for row in employers if row.get("status") == "current"), employers[0] if employers else {})
+    return str(facts.get("title") or current.get("role") or ""), str(current.get("name") or "")
+
+
 class Realize(Node):
     name = "realize"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
              "candidate_sources", "facts", "research", "deleted_parents")
-    writes = ()
+    writes = ("families",)
 
     def build(self) -> tuple[list[dict[str, str]], dict[str, int]]:
         """Every exported row, and the counts for the manifest."""
@@ -182,11 +194,41 @@ class Realize(Node):
         """Where the export is written: merged/people.csv under the data root (the file the index builder reads)."""
         return self.data_root / PEOPLE_CSV_RELATIVE_PATH
 
+    def family_rows(self, rows: list[dict[str, str]]) -> list[FamilyRow]:
+        """The families table's rows: the export row's profile and message columns, with the family's facts
+        filling what the profile lacks (the page's name, title, company and location)."""
+        members: dict[str, list[MemberFacts]] = {}
+        for member in queries_worth.members_with_facts(self.conn):
+            members.setdefault(member.family_key, []).append(member)
+        families: list[FamilyRow] = []
+        for row in rows:
+            facts: dict[str, Any] = family_facts(members[row["id"]]).to_payload()
+            title, company = facts_title(facts)
+            families.append((row["id"], row["public_identifier"], row["linkedin_url"],
+                             str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],
+                             row["current_title"] or title, row["current_company"] or company,
+                             row["location_raw"] or str(facts.get("location") or ""), row["profile_picture_url"],
+                             row["source_channels"], row["interaction_counts"], row["last_interaction"]))
+        return families
+
     def execute(self) -> dict[str, int]:
-        """One row per parent with facts, written to people.csv, replaced whole each run; the counts say what each row carried."""
+        """One row per parent with facts, written to people.csv and the families table, both replaced whole
+        each run; the counts say what each row carried."""
         rows, counts = self.build()
         CsvIO.write_dict_rows(self.people_csv(), PEOPLE_SCHEMA_COLUMNS, rows)
+        families = self.family_rows(rows)
+        queries_realize.replace_families(self.conn, families)
+        counts["families"] = len(families)
         return counts
+
+    def fill(self) -> int:
+        """The families table from the store as it is: for a store that predates the table (schema 8), filled
+        once by the page server. No people.csv, no manifest. Returns how many families were written."""
+        rows, _counts = self.build()
+        families = self.family_rows(rows)
+        queries_realize.replace_families(self.conn, families)
+        self.conn.commit()
+        return len(families)
 
 
 def index_command(people_csv: Path, data_root: Path) -> str:

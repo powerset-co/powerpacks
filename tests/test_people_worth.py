@@ -82,6 +82,7 @@ class LookupTests(StoreTests):
 class PeopleWorthTests(StoreTests):
     def setUp(self) -> None:
         super().setUp()
+        from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         from packs.ingestion.primitives.share.web.model import SharePeople
         from packs.ingestion.primitives.share.web.server import ShareRoutes
@@ -97,6 +98,7 @@ class PeopleWorthTests(StoreTests):
         self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
                           "VALUES ('c1', 'maybe', 'machine', 'uncertain', 'v1', ?)", (NOW,))
         self.conn.commit()
+        Realize(self.conn, self.root).run()
         PersonLabels(self.conn, self.root).run()
         queries_share.write_tags(self.conn, [("c1", "is_recruiter", "keep note", NOW)])
         self.people = SharePeople(self.conn, self.root)
@@ -129,11 +131,10 @@ class PeopleWorthTests(StoreTests):
             self.assertEqual({tuple(row) for row in human}, {(c, choice, "human", None, None) for c in ("c1", "c2")})
         self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")], labels)
         self.assertEqual(queries_share.current_tags(self.conn)["p:a"].note, "keep note")
-        # The write answers from the export the page already has: no rebuild of every family for one call.
-        self.assertIs(self.people.export_rows(), self.people.export_rows())
-        before = self.people.export_rows()
+        # The write touches worth only: the families row realize wrote stands.
+        before = [tuple(row) for row in self.conn.execute("SELECT * FROM families")]
         self.post("/api/people/worth", {"ids": ["p:a"], "worth": "yes"})
-        self.assertIs(self.people.export_rows(), before)
+        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM families")], before)
 
     def test_tags_keep_their_route_and_cannot_write_retired_decisions(self) -> None:
         code, payload = self.post("/api/people/tags", {"people": [{"parent_id": "p:a", "tags": ["is_family"]}]})
@@ -211,11 +212,16 @@ class PeopleWorthTests(StoreTests):
 
     def test_changed_profile_keeps_in_progress_until_labels_refresh(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.db import queries_review
+        from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         queries_review.insert_linkedin(self.conn, "c1", "https://www.linkedin.com/in/jordan-bravo",
                                        "4242", "human_override", "confirmed", "f1", NOW)
         self._parent("li:4242", "c1", "c2")
         self.conn.commit()
+        # The page shows the family under its new key once realize has written it; the labels still name
+        # the old profile until their pass runs, and the row says so.
+        self.assertEqual(self.people.load(), ())
+        Realize(self.conn, self.root).run()
         self.assertTrue(self.people.load()[0].in_progress)
         PersonLabels(self.conn, self.root).run()
         self.assertFalse(self.people.load()[0].in_progress)
@@ -287,6 +293,7 @@ class PeopleWorthTests(StoreTests):
         self.conn.commit()
 
     def test_delete_hides_one_family_and_keeps_every_row(self) -> None:
+        from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         queries.upsert_candidates(self.conn, [("c3", "Riley Echo", 0, "{}", NOW), ("c4", "Riley E", 0, "{}", NOW)])
         self._parent("p:b", "c3", "c4")
@@ -297,6 +304,7 @@ class PeopleWorthTests(StoreTests):
         self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
                           "VALUES ('c3', 'yes', 'machine', 'close', 'v1', ?)", (NOW,))
         self.conn.commit()
+        Realize(self.conn, self.root).run()
         PersonLabels(self.conn, self.root).run()
         queries_share.write_tags(self.conn, [("c3", "is_family", "", NOW)])
         self._seed_every_table(("c1", "c2"), "p:a")

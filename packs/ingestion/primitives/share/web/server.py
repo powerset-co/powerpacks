@@ -148,7 +148,6 @@ def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChang
         for candidate_id in members.get(parent_id, ()):
             tag_rows.append((candidate_id, join_tags(tags), prior.note if prior else "", updated_at))
     queries_share.write_tags(conn, tag_rows)
-    people.written()
 
 
 def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, ...], worth: str) -> None:
@@ -159,7 +158,6 @@ def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, 
         for parent_id in ids:
             for candidate_id in members.get(parent_id, ()):
                 queries_review.insert_worth(conn, candidate_id, worth, "human", now)
-    people.written()
 
 
 def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id: str, kind: str) -> None:
@@ -173,7 +171,6 @@ def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id
             "relationship_kind = excluded.relationship_kind, note = excluded.note, updated_at = excluded.updated_at",
             [(candidate_id, join_tags(prior.tags) if prior else "", prior.note if prior else "", now, kind)
              for candidate_id in _members(conn).get(parent_id, ())])
-    people.written()
 
 
 class ShareRoutes:

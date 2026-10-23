@@ -16,6 +16,7 @@ from packs.ingestion.primitives.deep_context_v2.collect.bundle import Collection
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DECISIONS_CACHE_DIR, DEFAULT_LIMIT, Worth
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.ingestion.primitives.share.web.signals import PeopleSignals, RefreshSignals, SignalsPlan
 from packs.ingestion.primitives.share.web.server import share_routes
@@ -64,6 +65,7 @@ class SignalsRefreshTests(StoreTests):
         for family in self.families:
             self._judged(family.members[0], family.fingerprint)
         self.conn.commit()
+        Realize(self.conn, self.root).run()
         PersonLabels(self.conn, self.root).run()
         self.signals = PeopleSignals(self.root / "store.sqlite", self.root)
 

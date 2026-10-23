@@ -18,7 +18,7 @@ from packs.ingestion.primitives.share.models import label_payload
 class PersonLabels(Node):
     name = "labels"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
-             "candidate_sources", "bundles", "facts", "research", "deleted_parents")
+             "candidate_sources", "bundles", "facts", "research", "deleted_parents", "families")
     writes = ("person_labels",)
 
     def execute(self) -> dict[str, int]:
