@@ -1,42 +1,62 @@
-import { useState } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 
-import { DetailsSection } from "@/components/shared"
-import { Badge } from "@/components/ui/badge"
+import { DetailsSection, Select } from "@/components/shared"
+import { writeWorth } from "@/lib/api/people"
 import { label } from "@/lib/people/copy"
 import type { Person, PersonDetail, Worth } from "@/types/people"
 
 import type { SectionProps } from "./sections"
+import { patchRows } from "../hooks/useDecisions"
+import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
 
-const BADGE: Record<Worth, "ok" | "warn" | "muted"> = { yes: "ok", maybe: "warn", no: "muted", "": "muted" }
+const CALLS = [
+  { value: "yes", label: label("worth", "yes") },
+  { value: "no", label: label("worth", "no") },
+]
 
-// The worth call as the badge; under it whose call it was and the reason, a flag that keeps the
-// family off the upload, and any notes. The badge rises in when a write changes the call, not
-// when the drawer opens.
+// The worth call as a selector beside the heading, so it changes without opening the section; under it
+// whose call it was and the reason, a flag that keeps the family off the upload, and any notes.
 export function DecisionSection({
   row,
   detail,
+  onRefresh,
   ...section
-}: SectionProps & { row: Person; detail: PersonDetail | null }) {
-  const [opened] = useState(row.worth)
+}: SectionProps & { row: Person; detail: PersonDetail | null; onRefresh: () => void }) {
+  const client = useQueryClient()
+  const save = useMutation({
+    mutationFn: (worth: Worth) => writeWorth([row.parent_id], worth),
+    onSuccess: (results) => {
+      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) => patchRows(current, results))
+      onRefresh()
+    },
+  })
   const why = [row.worth_source === "human" ? "Your call" : "", detail?.worth_reason ?? ""]
     .filter(Boolean)
     .join(": ")
+  const human = row.worth === "yes" || row.worth === "no" ? row.worth : ""
   return (
     <DetailsSection
       sectionKey="decision"
       title="Decision"
       badge={
-        <Badge
-          key={row.worth}
-          variant={BADGE[row.worth]}
-          className={row.worth === opened ? undefined : "rise-in"}
-        >
-          {label("worth", row.worth || "unjudged")}
-        </Badge>
+        <Select
+          aria-label="Edit decision"
+          value={human}
+          placeholder={label("worth", row.worth || "unjudged")}
+          onChange={(worth) => save.mutate(worth === "yes" ? "yes" : "no")}
+          disabled={save.isPending || row.in_progress}
+          options={CALLS}
+          className="h-7"
+        />
       }
       {...section}
     >
-      {why ? <p>{why}</p> : null}
+      {save.isPending ? <p>Saving…</p> : why ? <p>{why}</p> : null}
+      {save.error ? (
+        <p role="alert" className="text-destructive">
+          {save.error.message}
+        </p>
+      ) : null}
       {row.flag ? (
         <p className="dim">
           {row.worth_source === "human" && row.worth === "yes"

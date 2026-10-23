@@ -851,6 +851,30 @@ describe("PeoplePage logbook", () => {
   })
 })
 
+it("changes the call from the Decision heading without opening the section", async () => {
+  let sent: unknown = null
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/worth")) {
+        if (typeof init?.body !== "string") throw new Error("Expected JSON body")
+        sent = JSON.parse(init.body)
+      }
+      return serve(url, init)
+    }),
+  )
+  const { container } = renderPage("/people?person=p1&sections=")
+  await screen.findByRole("combobox", { name: "Edit decision" })
+  pick("Edit decision", "Keep")
+  await waitFor(() => expect(sent).toEqual({ ids: ["p1"], worth: "yes" }))
+  await waitFor(() => expect(picked("Edit decision")).toBe("Keep"))
+  const section = must(container.querySelector<HTMLElement>('[data-section="decision"]'))
+  expect(section.getAttribute("data-open")).toBe("false")
+  expect(within(section).getByRole("button", { name: "Decision" }).getAttribute("aria-expanded")).toBe(
+    "false",
+  )
+})
+
 it("saves a human relationship from the profile and refreshes its source", async () => {
   let changed = false
   vi.stubGlobal(
@@ -860,7 +884,11 @@ it("saves a human relationship from the profile and refreshes its source", async
         if (typeof init?.body !== "string") throw new Error("Expected JSON body")
         expect(JSON.parse(init.body)).toEqual({ parent_id: "p1", relationship_kind: "friend" })
         changed = true
-        return Promise.resolve(respond({ parent_id: "p1", relationship_kind: "friend" }))
+        return Promise.resolve(
+          respond({
+            rows: [{ parent_id: "p1", relationship_kind: "friend", flag: "", reason: "worth_yes" }],
+          }),
+        )
       }
       if (url.includes("/person?"))
         return Promise.resolve(

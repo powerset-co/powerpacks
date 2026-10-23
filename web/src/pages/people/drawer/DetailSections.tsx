@@ -20,7 +20,7 @@ interface DetailSectionsProps {
 export function DetailSections({ row, detail, section, onRefresh }: DetailSectionsProps) {
   return (
     <>
-      <DecisionSection row={row} detail={detail} {...section("decision")} />
+      <DecisionSection row={row} detail={detail} onRefresh={onRefresh} {...section("decision")} />
       <FactsSection detail={detail} {...section("facts")} />
       {detail.events.length ? (
         <DetailsSection

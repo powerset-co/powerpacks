@@ -9,7 +9,7 @@ interface DetailsSectionProps {
   sectionKey: string
   title: string
   count?: number
-  // Beside the title in the toggle (a badge, a note).
+  // Beside the title, outside the toggle: a badge, a note, or a control (its clicks never fold the section).
   badge?: ReactNode
   open: boolean
   onToggle: (open: boolean) => void
@@ -44,8 +44,8 @@ export function DetailsSection({
             {title}
             {count ? <small>{count.toLocaleString()}</small> : null}
           </span>
-          {badge}
         </button>
+        {badge}
       </h3>
       <Fold open={open}>
         <div className={styles.body}>{children}</div>

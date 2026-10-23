@@ -34,26 +34,46 @@ export function RelationshipSection({ row, detail, onRefresh, ...section }: Rela
   const client = useQueryClient()
   const save = useMutation({
     mutationFn: (kind: string) => writeRelationship(row.parent_id, kind),
-    onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: PEOPLE_QUERY_KEY })
+    onSuccess: (results) => {
+      const byId = new Map(results.map((result) => [result.parent_id, result]))
+      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) =>
+        current?.map((person) => {
+          const patch = byId.get(person.parent_id)
+          return patch
+            ? {
+                ...person,
+                relationship_kind: patch.relationship_kind,
+                flag: patch.flag,
+                reason: patch.reason,
+              }
+            : person
+        }),
+      )
       onRefresh()
     },
   })
   const labelled = Object.keys(detail.probabilities).length > 0
   return (
-    <DetailsSection sectionKey="relationship" title="Relationship" {...section}>
+    <DetailsSection
+      sectionKey="relationship"
+      title="Relationship"
+      badge={
+        <Select
+          aria-label="Edit relationship"
+          value={row.relationship_kind || "unknown"}
+          onChange={(kind) => save.mutate(kind)}
+          disabled={save.isPending || row.in_progress}
+          options={RELATIONSHIPS.map((value) => ({
+            value,
+            label: facetText(facetOf("relationship_kind"), value),
+          }))}
+          className="h-7"
+        />
+      }
+      {...section}
+    >
       <dl className="kv">
         <Pair term="Relationship">
-          <Select
-            aria-label="Edit relationship"
-            value={row.relationship_kind || "unknown"}
-            onChange={(kind) => save.mutate(kind)}
-            disabled={save.isPending}
-            options={RELATIONSHIPS.map((value) => ({
-              value,
-              label: facetText(facetOf("relationship_kind"), value),
-            }))}
-          />
           {save.isPending ? (
             <small>Saving…</small>
           ) : detail.relationship_kind_source === "human" ? (
