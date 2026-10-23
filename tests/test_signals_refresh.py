@@ -366,12 +366,11 @@ class SignalsRefreshTests(StoreTests):
         routes.signals._thread.join(5)
         self.assertEqual(routes.signals.status()["plan"]["people"], 2)
 
-    def test_routes_reject_unknown_selection_and_other_origins(self) -> None:
+    def test_routes_reject_a_malformed_selection_and_other_origins(self) -> None:
         routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
-        for people in ([7], ["missing"]):
-            handler = Handler(body=json.dumps({"people": people}).encode())
-            routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
-            self.assertEqual(handler.response_status, 409)
+        handler = Handler(body=json.dumps({"people": [7]}).encode())
+        routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
+        self.assertEqual(handler.response_status, 409)
         handler = Handler(origin="http://attacker.example", body=b'{"people":["p:a"]}')
         routes.post(handler, urllib.parse.urlparse("/api/people/signals"))
         self.assertEqual(handler.response_status, 403)

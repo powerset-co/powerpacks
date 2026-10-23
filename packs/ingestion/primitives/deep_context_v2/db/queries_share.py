@@ -37,13 +37,19 @@ class Labels:
     relationship_kind_source: str
 
 
-def current_tags(conn: sqlite3.Connection) -> dict[str, Tags]:
+def _only(parents: tuple[str, ...]) -> str:
+    """A WHERE clause on the families named, or none for every family."""
+    return "WHERE p.parent_id IN (" + ",".join("?" * len(parents)) + ") " if parents else ""
+
+
+def current_tags(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, Tags]:
     """parent_id -> the family's tags: the union of every member's tags, so a human's word on any
-    member survives the families merging; the note and time are the latest."""
+    member survives the families merging; the note and time are the latest. `parents` narrows to those families."""
     found: dict[str, Tags] = {}
     for row in conn.execute(
         "SELECT p.parent_id, t.candidate_id, t.tags, t.note, t.updated_at FROM current_parent p "
-        "JOIN person_tags t USING (candidate_id) ORDER BY p.parent_id, t.updated_at DESC, t.candidate_id"
+        "JOIN person_tags t USING (candidate_id) " + _only(parents) + "ORDER BY p.parent_id, t.updated_at DESC, t.candidate_id",
+        parents,
     ):
         held: Tags | None = found.get(row["parent_id"])
         if held is None:
@@ -54,19 +60,23 @@ def current_tags(conn: sqlite3.Connection) -> dict[str, Tags]:
     return found
 
 
-def labels_by_parent(conn: sqlite3.Connection) -> dict[str, Labels]:
-    """The family's exported labels with the human's latest relationship choice applied."""
+def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, Labels]:
+    """The family's exported labels with the human's latest relationship choice applied. `parents` narrows
+    to those families."""
     relationships: dict[str, str] = {}
     for row in conn.execute(
         "SELECT p.parent_id, t.relationship_kind FROM current_parent p JOIN person_tags t USING (candidate_id) "
-        "WHERE t.relationship_kind IS NOT NULL ORDER BY t.updated_at DESC, t.candidate_id"
+        + (_only(parents) + "AND" if parents else "WHERE") + " t.relationship_kind IS NOT NULL "
+        "ORDER BY t.updated_at DESC, t.candidate_id",
+        parents,
     ):
         relationships.setdefault(row["parent_id"], row["relationship_kind"])
     found: dict[str, Labels] = {}
     for row in conn.execute(
         "SELECT p.parent_id, l.*, json_extract(l.labels_json, '$.relationship_kind') AS relationship_kind "
-        "FROM current_parent p JOIN person_labels l USING (candidate_id) "
-        "ORDER BY p.parent_id, l.updated_at DESC, l.candidate_id"
+        "FROM current_parent p JOIN person_labels l USING (candidate_id) " + _only(parents) +
+        "ORDER BY p.parent_id, l.updated_at DESC, l.candidate_id",
+        parents,
     ):
         parent_id = row["parent_id"]
         if parent_id in found:

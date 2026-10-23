@@ -64,7 +64,7 @@ GZIP_MIN_BYTES = 8 * 1024
 TagChanges = dict[str, frozenset[str]]
 
 
-def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
+def parse_tag_request(body: bytes) -> TagChanges:
     """The one write the UI makes: the tags each selected parent should hold."""
     try:
         request = json.loads(body.decode("utf-8"))
@@ -83,13 +83,10 @@ def parse_tag_request(body: bytes, known_ids: set[str]) -> TagChanges:
         if bad:
             raise ValueError(f"unknown tags: {', '.join(bad)}")
         changes[entry["parent_id"]] = frozenset(entry["tags"])
-    unknown = sorted(set(changes) - known_ids)
-    if unknown:
-        raise ValueError(f"{len(unknown)} person ids are not on the People page")
     return changes
 
 
-def parse_worth_request(body: bytes, known_ids: set[str]) -> tuple[tuple[str, ...], str]:
+def parse_worth_request(body: bytes) -> tuple[tuple[str, ...], str]:
     """Validate the parent ids and the human's yes/no choice at the HTTP boundary."""
     try:
         request = json.loads(body)
@@ -101,20 +98,18 @@ def parse_worth_request(body: bytes, known_ids: set[str]) -> tuple[tuple[str, ..
     worth = request.get("worth")
     if worth not in ("yes", "no"):
         raise ValueError("worth must be yes or no")
-    if not set(ids) <= known_ids:
-        raise ValueError("Some selected people no longer exist. Reload People and try again.")
     return tuple(dict.fromkeys(ids)), worth
 
 
-def parse_relationship_request(body: bytes, known_ids: set[str]) -> tuple[str, str]:
+def parse_relationship_request(body: bytes) -> tuple[str, str]:
     """Validate the human's relationship choice at the HTTP boundary."""
     try:
         request = json.loads(body)
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"invalid JSON body: {exc}") from exc
     parent_id = request.get("parent_id") if isinstance(request, dict) else None
-    if not isinstance(parent_id, str) or parent_id not in known_ids:
-        raise ValueError("parent_id must be on the People page")
+    if not isinstance(parent_id, str) or not parent_id:
+        raise ValueError("parent_id must be a person on the People page")
     kind = request.get("relationship_kind")
     if not isinstance(kind, str) or kind not in CHOICE_QUESTIONS["relationship_kind"][1]:
         raise ValueError("unknown relationship_kind")
@@ -140,40 +135,35 @@ def _members(conn: sqlite3.Connection) -> dict[str, list[str]]:
     return members
 
 
-def _check_updates(people: SharePeople, parent_ids: set[str]) -> None:
-    for row in people.load():
-        if row.parent_id in parent_ids and row.in_progress:
-            raise ValueError(f"{row.name} is being updated; finish the run first")
 
 
 def decide_tags(conn: sqlite3.Connection, people: SharePeople, changes: TagChanges) -> None:
     """Write tags to every member of each selected family."""
-    _check_updates(people, set(changes))
     held = TagStore(conn).load()
     members = _members(conn)
     updated_at = now_iso()
     tag_rows: list[TagRow] = []
     for parent_id, tags in changes.items():
         prior = held.get(parent_id)
-        for candidate_id in members[parent_id]:
+        for candidate_id in members.get(parent_id, ()):
             tag_rows.append((candidate_id, join_tags(tags), prior.note if prior else "", updated_at))
     queries_share.write_tags(conn, tag_rows)
+    people.written()
 
 
 def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, ...], worth: str) -> None:
     """Record the human's worth for every member, without changing tags or labels."""
-    _check_updates(people, set(ids))
     members = _members(conn)
     now = now_iso()
     with conn:
         for parent_id in ids:
-            for candidate_id in members[parent_id]:
+            for candidate_id in members.get(parent_id, ()):
                 queries_review.insert_worth(conn, candidate_id, worth, "human", now)
+    people.written()
 
 
 def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id: str, kind: str) -> None:
     """Write the human's choice to each member; machine label refreshes never touch it."""
-    _check_updates(people, {parent_id})
     prior = TagStore(conn).load().get(parent_id)
     now = now_iso()
     with conn:
@@ -182,7 +172,8 @@ def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id
             "VALUES (?, ?, ?, ?, ?) ON CONFLICT (candidate_id) DO UPDATE SET "
             "relationship_kind = excluded.relationship_kind, note = excluded.note, updated_at = excluded.updated_at",
             [(candidate_id, join_tags(prior.tags) if prior else "", prior.note if prior else "", now, kind)
-             for candidate_id in _members(conn)[parent_id]])
+             for candidate_id in _members(conn).get(parent_id, ())])
+    people.written()
 
 
 class ShareRoutes:
@@ -287,20 +278,19 @@ class ShareRoutes:
             status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE if length > 0 else HTTPStatus.BAD_REQUEST
             self._send_json(handler, {"error": "request body must be 1 byte to 4 MiB"}, status=status)
             return True
-        known = {row.parent_id for row in self.load()}
         body = handler.rfile.read(length)
         if parsed.path == f"{API_PREFIX}delete":
-            self._delete(handler, body, known)
+            self._delete(handler, body)
             return True
         ids: tuple[str, ...]
         try:
             if parsed.path == f"{API_PREFIX}relationship":
-                parent_id, kind = parse_relationship_request(body, known)
+                parent_id, kind = parse_relationship_request(body)
                 ids = (parent_id,)
             elif parsed.path == f"{API_PREFIX}worth":
-                ids, worth = parse_worth_request(body, known)
+                ids, worth = parse_worth_request(body)
             else:
-                changes = parse_tag_request(body, known)
+                changes = parse_tag_request(body)
                 ids = tuple(changes)
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -315,18 +305,14 @@ class ShareRoutes:
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
             return True
-        self._send_json(handler, {"rows": [asdict(row) for row in self.load() if row.parent_id in ids]})
+        self._send_json(handler, {"rows": [asdict(row) for row in self.people.load(ids)]})
         return True
 
-    def _delete(self, handler: BaseHTTPRequestHandler, body: bytes, known: set[str]) -> None:
+    def _delete(self, handler: BaseHTTPRequestHandler, body: bytes) -> None:
         try:
             ids = parse_delete_request(body)
         except ValueError as exc:
             self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
-            return
-        if not set(ids) <= known:
-            self._send_json(handler, {"error": "Some selected people no longer exist. Reload People and try again."},
-                            status=HTTPStatus.CONFLICT)
             return
         self.people.delete(ids)
         self._send_json(handler, {"deleted": len(ids)})
@@ -342,9 +328,6 @@ class ShareRoutes:
             # No one selected: refresh whoever needs it. A selection is asked again as well.
             if not isinstance(people, list) or not all(isinstance(value, str) for value in people):
                 raise ValueError("people must be a list of parent ids")
-            known = {row.parent_id for row in self.load()}
-            if not set(people) <= known:
-                raise ValueError("Some selected people no longer exist. Reload People and try again.")
             ids = tuple(sorted(set(people)))
             if check:
                 payload = self.signals.check(ids)
