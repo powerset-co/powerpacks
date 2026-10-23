@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
-from packs.ingestion.primitives.common.jsonio import short_hash
 from packs.memory.models import ImportReport
 from packs.memory.progress import Progress, Step, retry_first
 from packs.memory.sources import V2
@@ -68,28 +67,3 @@ def import_progress(store: Store, adapter: V2, *, first: tuple[str, ...] = ()) -
         store.conn.rollback()
         raise
     return report
-
-
-def has_changes(store: Store, adapter: V2) -> bool:
-    """Compare current inputs with saved import checkpoints without changing either store."""
-    conn, namespace = store.conn, adapter.namespace
-    context = conn.execute("SELECT content FROM context").fetchone()
-    if context is None or context[0] != adapter.owner_context():
-        return True
-    count = 0
-    for identity in adapter.identities():
-        count += 1
-        row = conn.execute("SELECT parent,name FROM identities WHERE namespace=? AND member=? AND present=1",
-                           (namespace, identity.member)).fetchone()
-        if row is None or tuple(row) != (namespace + '#' + identity.parent, identity.name):
-            return True
-    if count != conn.execute("SELECT count(*) FROM identities WHERE present=1 AND namespace=?", (namespace,)).fetchone()[0]:
-        return True
-    count = 0
-    for source in adapter.sources():
-        count += 1
-        row = conn.execute("SELECT hash,error FROM sources WHERE namespace=? AND key=? AND present=1",
-                           (namespace, source.key)).fetchone()
-        if row is None or source.error or row['error'] or row['hash'] != short_hash(source.content, n=64):
-            return True
-    return count != int(conn.execute("SELECT count(*) FROM sources WHERE present=1 AND namespace=?", (namespace,)).fetchone()[0])

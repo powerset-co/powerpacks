@@ -22,7 +22,6 @@ from packs.memory.cost import Usage
 from packs.memory.discovery import Discover
 from packs.memory.discovery_run import DiscoveryReport
 from packs.memory.generate import Generate, parse_response
-from packs.memory.import_stage import has_changes
 from packs.memory.job import Counts, Failure, Job, Status
 from packs.memory.progress import Progress, Step
 from packs.memory.sources import V2
@@ -39,22 +38,6 @@ class BackendFixTests(unittest.TestCase):
         with patch("packs.shared.web.memory._send_json") as send:
             self.assertTrue(api.get(Mock(), urlparse(path)))
             return send.call_args.args[1]
-
-    def test_update_availability_tracks_saved_inputs_without_writes(self):
-        adapter = V2(self.root / '.powerpacks')
-        with closing(Store(job.database(self.root), create=True)) as store:
-            store.import_source(adapter)
-        with closing(Store(job.database(self.root), read_only=True)) as store:
-            self.assertFalse(has_changes(store, adapter))
-            with sqlite3.connect(adapter.database) as source:
-                source.execute("UPDATE candidates SET display_name=display_name || ' changed' WHERE candidate_id=(SELECT min(candidate_id) FROM candidates)")
-            self.assertTrue(has_changes(store, adapter))
-        with closing(Store(job.database(self.root))) as store:
-            store.import_source(adapter)
-            self.assertFalse(has_changes(store, adapter))
-            with sqlite3.connect(adapter.database) as source:
-                source.execute("DELETE FROM facts WHERE candidate_id=(SELECT min(candidate_id) FROM facts)")
-            self.assertTrue(has_changes(store, adapter))
 
     def test_index_precedes_discovery_with_embeddings_available(self):
         order = []
