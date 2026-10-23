@@ -108,7 +108,7 @@ class MemoryApi:
         return self._preview
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: ParseResult) -> bool:
-        if parsed.path not in ("/api/memory/enable", "/api/memory/update", "/api/memory/settings"):
+        if parsed.path not in ("/api/memory/enable", "/api/memory/update", "/api/memory/settings", "/api/memory/stop"):
             return False
         origin = handler.headers.get("Origin")
         if origin and urlparse(origin).netloc != handler.headers.get("Host"):
@@ -130,6 +130,11 @@ class MemoryApi:
                         raise ValueError("approved_spend_usd must be a number")
                     record = (runner.start(self.root, float(amount)) if parsed.path.endswith("/enable")
                               else runner.update(self.root, float(amount)))
+            elif parsed.path.endswith("/stop"):
+                with job.LOCK:
+                    record = job.read(self.root)
+                    record.approved_spend_usd = record.spent_usd
+                    job.write(self.root, record)
             else:
                 if not isinstance(body.get("keep_updated"), bool):
                     raise ValueError("keep_updated must be a boolean")

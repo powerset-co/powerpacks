@@ -184,16 +184,21 @@ class Query:
         missing = 0
         if tokens and self.provider.embedding_key:
             wanted = embedded(self.store, self.provider, text)
+            distinct: dict[tuple[str, str], tuple[float, int]] = {}
             for row in self.store.conn.execute(
-                    "SELECT c.id,e.vector FROM active_claims c LEFT JOIN embeddings e ON e.model=? AND e.hash=c.document_hash "
-                    "WHERE c.id=" + _first("c"), (self.provider.embedding_key,)):
+                    "SELECT c.id,c.parent,c.document_hash,e.vector FROM active_claims c "
+                    "LEFT JOIN embeddings e ON e.model=? AND e.hash=c.document_hash",
+                    (self.provider.embedding_key,)):
                 if row["vector"] is None:
                     missing += 1
                     continue
-                similarity = math.sumprod(wanted, cached_vector(row["vector"]))
-                if similarity < VECTOR_FLOOR:
+                claim_key = (row["parent"], row["document_hash"])
+                previous = distinct.get(claim_key)
+                if previous is None or row["id"] < -previous[1]:
+                    distinct[claim_key] = (math.sumprod(wanted, cached_vector(row["vector"])), -row["id"])
+            for entry in distinct.values():
+                if entry[0] < VECTOR_FLOOR:
                     continue
-                entry = (similarity, -row["id"])
                 if len(nearest) < SHORTLIST:
                     heapq.heappush(nearest, entry)
                 elif entry > nearest[0]:

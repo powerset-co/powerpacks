@@ -28,10 +28,11 @@ _READ_ERRORS = (ModalConnectionError, ServiceError, ModalTimeoutError, OSError, 
 
 
 class Remote:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, operator_id: str) -> None:
         self.root = root
+        self.operator_id = operator_id
         self.volume = pipeline.get_volume()
-        self.prefix = pipeline.operator_volume_prefix()
+        self.prefix = f"operators/{operator_id}"
         self.directory = f"{self.prefix}/.powerpacks/memory"
         self.name = "memory-" + self.prefix.rsplit("/", 1)[-1]
 
@@ -71,7 +72,7 @@ class Remote:
         with self.volume.batch_upload(force=True) as batch:
             batch.put_file(job.database(self.root), f"{self.directory}/memory.sqlite")
             batch.put_file(io.BytesIO(json.dumps(asdict(record)).encode()), f"{self.directory}/job.json")
-        sandbox = pipeline.memory_sandbox(self.name, f"/data/{self.prefix}", discover=discover)
+        sandbox = pipeline.memory_sandbox(self.name, self.operator_id, discover=discover)
         self._watch(sandbox)
 
     def _watch(self, sandbox: Sandbox | None) -> None:
@@ -118,6 +119,6 @@ def _mirror(root: Path, status: Job) -> None:
     with job.LOCK:
         record = job.read(root)
         for name in ("step", "steps", "current_item", "people_indexed", "started_at",
-                     "tokens", "spent_usd", "approved_spend_usd", "stopped", "error"):
+                     "tokens", "spent_usd", "stopped", "error"):
             setattr(record, name, getattr(status, name))
         job.write(root, record)

@@ -193,6 +193,17 @@ it("while running lists the four steps with counts and the bar without internal 
   expect(within(running).getByText(/\$0\.40 of \$2\.35 approved/)).toBeTruthy()
 })
 
+it("stops from the running page and keeps the progress until the run finishes", async () => {
+  const fetch = serve(RUNNING, {
+    "POST /api/memory/stop": () => ({ ...RUNNING, approved_spend_usd: RUNNING.spent_usd }),
+  })
+  fireEvent.click(await screen.findByRole("button", { name: "Stop" }))
+  await waitFor(() => expect(posted(fetch, "/api/memory/stop")).toEqual({}))
+  const running = screen.getByRole("region", { name: "Building your memory" })
+  expect(await within(running).findByText(/\$0\.40 of \$0\.40 approved/)).toBeTruthy()
+  expect(screen.getByRole("progressbar")).toBeTruthy()
+})
+
 it("shows completed discovery batches when its total is unknown", async () => {
   serve({ ...RUNNING, step: "discover", steps: { ...RUNNING.steps, discover: { done: 7, total: 0 } } })
   expect(await screen.findByText("7 batches completed")).toBeTruthy()
@@ -206,6 +217,7 @@ it("shows status above the graph and offers updates only when inputs changed", a
   const fetch = serve({ ...ENABLED, update_available: true }, { "POST /api/memory/update": () => RUNNING })
   const status = await screen.findByRole("heading", { name: "Ready" })
   const viewer = screen.getByRole("region", { name: "Explore memory" })
+  expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
   expect(status.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(screen.queryByRole("checkbox", { name: "Keep memory updated" })).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "Update now" }))

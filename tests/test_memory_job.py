@@ -220,6 +220,53 @@ class MemoryJobTests(unittest.TestCase):
         self.assertEqual(request("GET", "/api/memory/people?origin=topic&value=iam&limit=0")[0], 400)
         self.assertEqual(request("POST", "/api/memory/enable", {"approved_spend_usd": -1})[0], 400)
 
+    def test_stop_route_lowers_budget_and_next_request_stops_local_run(self) -> None:
+        routes = MemoryApi(self.root)
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+
+        def respond(request):
+            calls.append(request)
+            entered.set()
+            release.wait(5)
+            return httpx.Response(200, json={"usage": {"input_tokens": 100, "output_tokens": 20},
+                                            "status": "completed", "output": []})
+
+        transport = httpx.Client(base_url="https://example.com/", transport=httpx.MockTransport(respond))
+        client = OpenAIProvider("gpt-6-luna", "text-embedding-3-small", client=transport, approve_spend=True)
+        self.addCleanup(client.close)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                routes.post(self, urlparse(self.path))
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        connection = http.client.HTTPConnection(*server.server_address)
+        self.addCleanup(connection.close)
+        with patch.object(runner, "provider", return_value=client), \
+                patch("packs.memory.generate.concurrency_limit", return_value=1):
+            runner.start(self.root, 0.50)
+            self.assertTrue(entered.wait(5))
+            try:
+                before = job.read(self.root)
+                connection.request("POST", "/api/memory/stop", "{}")
+                reply = connection.getresponse()
+                payload = json.loads(reply.read())
+                self.assertEqual(reply.status, 202)
+                self.assertEqual(payload["approved_spend_usd"], before.spent_usd)
+                self.assertEqual(payload["status"], "running")
+            finally:
+                release.set()
+            after = self.wait()
+        self.assertEqual(after.status, Status.DONE)
+        self.assertEqual(after.stopped, "approved spend reached")
+        self.assertEqual(after.approved_spend_usd, before.spent_usd)
+        self.assertEqual(len(calls), 1)  # The in-flight call drains; no new request starts.
+        self.assertEqual(after.tokens, {"input": 100, "output": 20, "embedding": 0})
+
     def test_deep_context_completion_triggers_incremental_update(self) -> None:
         from packs.ingestion.primitives.deep_context_v2 import run as deep_context
         runner.start(self.root, 1)
