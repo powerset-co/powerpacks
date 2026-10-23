@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.36.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.1...powerpacks-v3.36.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **people:** a decision stays on the person and leaves the list where it is ([#902](https://github.com/powerset-co/powerpacks/issues/902)) ([71d493d](https://github.com/powerset-co/powerpacks/commit/71d493d54a7e81483841b11e2c7f54971f90f745))
+
 ## [3.36.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.0...powerpacks-v3.36.1) (2026-10-23)
 
 
