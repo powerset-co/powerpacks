@@ -30,7 +30,7 @@ function stubLayout() {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 600 })
   Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 1200 })
   HTMLElement.prototype.animate = vi.fn()
-  // The virtualizer scrolls the viewport to the row the drawer moves to.
+  // The virtualizer scrolls the viewport (a new tab, filter or search starts at the top).
   Element.prototype.scrollTo = vi.fn()
   HTMLElement.prototype.getAnimations = () => []
   vi.stubGlobal("matchMedia", (media: string) => ({
@@ -441,33 +441,29 @@ describe("PeoplePage", () => {
     expect(drawer.getAttribute("data-open")).toBe("false")
   })
 
-  it("shows the bar for an open person and moves on to the next one after a label", async () => {
+  it("shows the bar for an open person and stays on them after a label", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
     const names = () => [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     const heading = () => container.querySelector("[data-drawer] h2")?.textContent
+    const drawer = () => must(container.querySelector<HTMLElement>("[data-drawer]"))
     const bar = () => must(container.querySelector<HTMLElement>("[data-action-bar]"))
-    const share = () => fireEvent.click(within(bar()).getByRole("button", { name: "Keep Y" }))
     const [first, second, third] = names()
     // Open the middle person: the bar names them, and Use worth is gone.
     fireEvent.click(must(container.querySelectorAll(".row")[1]))
     expect(within(bar()).getByText(second ?? "")).toBeTruthy()
     expect(within(bar()).queryByText(/Use worth/)).toBeNull()
-    // Keep moves them out of the tab; the drawer opens whoever took their place.
-    share()
+    // Keep moves them out of the tab; the drawer stays on them, the list does not move or advance.
+    scrollTo.mockClear()
+    fireEvent.click(within(bar()).getByRole("button", { name: "Keep Y" }))
     await waitFor(() => expect(names()).toEqual([first, third]))
-    await waitFor(() => expect(heading()).toBe(third))
-    // At the end of the list it walks backwards.
-    share()
-    await waitFor(() => expect(names()).toEqual([first]))
-    await waitFor(() => expect(heading()).toBe(first))
-    // The last one: nobody is left, so the drawer closes.
-    share()
-    await waitFor(() => expect(names()).toEqual([]))
-    await waitFor(() =>
-      expect(must(container.querySelector("[data-drawer]")).getAttribute("data-open")).toBe("false"),
-    )
+    expect(heading()).toBe(second)
+    expect(drawer().getAttribute("data-open")).toBe("true")
+    expect(within(drawer()).getAllByText("Keep").length).toBeGreaterThan(0)
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 })
 

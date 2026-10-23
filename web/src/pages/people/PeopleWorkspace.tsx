@@ -5,9 +5,8 @@ import { useSearchParams } from "react-router-dom"
 import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
-import { nextOpenIndex } from "@/lib/advance"
 import { useFeatures } from "@/lib/features"
-import type { FacetSet, WorthAction } from "@/lib/people/facets"
+import type { FacetSet } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
@@ -91,37 +90,10 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   )
   const decisions = useDecisions(byId, onWritten, onDeleted)
 
-  // Quick labeling: a label on the open person moves the drawer to whoever is next
-  // (lib/advance.ts) once the list reflects the write; nothing cycles.
-  const advanceFrom = useRef<{ id: string; index: number } | null>(null)
-  const { open: openPerson, close: closeDrawer } = drawer
-  const { apply } = decisions
-  const label = useCallback(
-    async (action: WorthAction, targets: readonly string[]) => {
-      if (openId && targets.includes(openId)) {
-        advanceFrom.current = { id: openId, index: matching.findIndex((row) => row.parent_id === openId) }
-      }
-      // The list re-renders after a successful write and the effect below consumes this;
-      // a skipped or failed write leaves the list alone, so drop it here.
-      if (!(await apply(action, targets))) advanceFrom.current = null
-    },
-    [apply, openId, matching],
-  )
-  useEffect(() => {
-    const from = advanceFrom.current
-    if (!from) return
-    advanceFrom.current = null
-    const next = nextOpenIndex(matching, personKey, from.id, from.index)
-    if (next === null) {
-      if (!matching.length) closeDrawer()
-      return
-    }
-    const person = matching[next]
-    if (!person) return
-    setFocus(next)
-    openPerson(person.parent_id)
-    table.current?.scrollToIndex(next, { align: "auto" })
-  }, [matching, openPerson, closeDrawer])
+  // A decision leaves the drawer on the person it judged and the list where it was: the row
+  // takes its new decision in place (or leaves a filtered tab) and nothing scrolls or advances.
+  const { close: closeDrawer } = drawer
+  const { apply: label } = decisions
 
   // The bar and the s / p keys act on the selection, else on the open person.
   const targets = selection.selected.size ? [...selection.selected] : openId ? [openId] : []

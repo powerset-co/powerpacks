@@ -20,7 +20,7 @@ interface ShortcutTargets {
   setTab: (tab: Tab) => void
   selection: ReturnType<typeof useSelection>
   drawer: ReturnType<typeof useDrawer>
-  label: (action: WorthAction, targets: readonly string[]) => Promise<void>
+  label: (action: WorthAction, targets: readonly string[]) => Promise<boolean>
   // The delete question and its answer (useDecisions).
   askDelete: (targets: readonly string[]) => void
   confirmDelete: () => void
