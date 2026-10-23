@@ -72,12 +72,67 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(Query(self.store, self.provider).people("", layer="past coworker").people[0].name, "Casey Delta")
 
     def test_other_words_filter_the_layer_and_rank_by_evidence(self) -> None:
-        answer = Query(self.store, self.provider).people("IAM coworkers")
+        answer = Query(self.store, self.provider).people("my coworkers with IAM")
         self.assertTrue(answer.filtered)
         # Only labels someone holds are layers: nobody in the fixture is a current coworker.
         self.assertEqual(answer.layers, ("past coworker",))
         self.assertEqual([person.name for person in answer.people], ["Casey Delta"])
         self.assertIn("IAM", answer.people[0].evidence[0].claim.text)
+
+    def test_layer_words_in_other_groups_are_plain_words_without_boost(self) -> None:
+        provider = OpenAIProvider("", "")
+        self.addCleanup(provider.close)
+        query = Query(self.store, provider)
+        for text in ("IAM family", "IAM coworkers", "royal family", "the hunt family", "family office"):
+            with self.subTest(text=text):
+                answer = query.people(text)
+                self.assertFalse(answer.filtered)
+                self.assertEqual(answer.layers, ())
+                for person in answer.people:
+                    self.assertAlmostEqual(person.score, sum(hit.score for hit in person.evidence) * (1 + person.warmth / 10))
+                    self.assertTrue(all(hit.lexical_rank is not None for hit in person.evidence))
+        for text in ("family", "who is family", "my family", "who is in our family"):
+            self.assertEqual(query.people(text).layers, ("family",))
+
+    def test_royal_family_and_family_office_do_not_list_owner_family(self) -> None:
+        source = self.store.conn.execute("SELECT id,hash FROM sources WHERE key='facts:c1'").fetchone()
+        self.store.add_claim(source['id'], source['hash'], None,
+                             Claim("Jordan belongs to the royal family and runs a family office.", Kind.STATEMENT,
+                                   "family office", "", "", "", "", ""), human=False)
+        provider = OpenAIProvider("", "")
+        self.addCleanup(provider.close)
+        query = Query(self.store, provider)
+        for text in ("who is in the royal family", "who runs a family office"):
+            with self.subTest(text=text):
+                answer = query.people(text)
+                self.assertEqual(answer.layers, ())
+                self.assertFalse(answer.filtered)
+                self.assertIn('p:1', [person.parent for person in answer.people])
+
+    def test_possessive_layer_allows_up_to_two_intervening_words(self) -> None:
+        provider = OpenAIProvider("", "")
+        self.addCleanup(provider.close)
+        query = Query(self.store, provider)
+        for text in ("my IAM coworkers", "my past IAM coworkers", "our past coworkers with IAM"):
+            with self.subTest(text=text):
+                answer = query.people(text)
+                self.assertEqual(answer.layers, ('past coworker',))
+                self.assertTrue(answer.filtered)
+                self.assertEqual([person.parent for person in answer.people], ['p:2'])
+        self.assertEqual(query.people("my former past IAM coworkers").layers, ())
+
+    def test_lp_layer_selects_claim_holders_and_supplies_lp_evidence(self) -> None:
+        query = Query(self.store, self.provider)
+        for text in ("lp", "LPs", "limited partner", "limited partners", "who are my LPs", "our limited partners"):
+            with self.subTest(text=text):
+                answer = query.people(text)
+                self.assertEqual(answer.layers, ("lp",))
+                self.assertEqual({person.parent for person in answer.people}, {'p:2', 'p:3'})
+                for person in answer.people:
+                    self.assertTrue(any(hit.claim.kind == Kind.LP for hit in person.evidence))
+        filtered = query.people('which of my LPs work on IAM')
+        self.assertTrue(filtered.filtered)
+        self.assertEqual([person.parent for person in filtered.people], ['p:2'])
 
     def test_ranking_dedupes_merged_duplicates_and_warmth_breaks_ties(self) -> None:
         answer = Query(self.store, self.provider).people("Bravo owner")

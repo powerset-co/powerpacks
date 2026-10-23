@@ -339,9 +339,7 @@ class ProviderAndCliTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(requests[0]["max_output_tokens"], 6000)
         instructions = requests[3]['instructions']
-        self.assertIn('Upstream saved dossiers, profile facts and human tags are valid evidence', instructions)
-        self.assertIn('Do not require raw messages or event records', instructions)
-        self.assertIn('Original-message verification remains unverified', instructions)
+        self.assertIn('Give the group one specific label and a one-line explanation, citing one exact saved quote per tagged person.', instructions)
         self.assertFalse(requests[3]['store'])
         self.assertEqual(requests[3]['text']['format']['name'], 'memory_discovery')
         with patch.object(discovery_provider, 'SYSTEM', instructions + '\nChanged wording.'):

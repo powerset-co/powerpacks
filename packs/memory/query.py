@@ -39,6 +39,7 @@ LAYER_WORDS = {
     "investor": ("investor",), "investors": ("investor",), "recruiter": ("recruiter",), "recruiters": ("recruiter",),
     "founder": ("founder",), "founders": ("founder",), "mentor": ("mentor or advisor",), "mentors": ("mentor or advisor",),
     "advisor": ("mentor or advisor",), "advisors": ("mentor or advisor",),
+    "lp": ("lp",), "lps": ("lp",), "limited partner": ("lp",), "limited partners": ("lp",),
 }
 
 
@@ -143,9 +144,10 @@ class Query:
     def people(self, text: str, *, layer: str = "", limit: int = 50) -> People:
         """Everyone the words name, warmest first, with the claims that matched.
 
-        Words that name an owner label (family, wife, coworkers …) select that layer. Alone, a layer lists every
+        Owner labels and LP claims select a layer. Alone, a layer lists every
         person holding it, the words still ordering them ("mother" puts Mother first among family). With other
-        words, it filters: "roblox coworkers" is coworkers ranked by Roblox evidence. Otherwise a person ranks on a
+        words, "my"/"our" within two preceding words filters to holders; elsewhere layer words are plain words.
+        "my coworkers at roblox" is coworkers ranked by Roblox evidence. Otherwise a person ranks on a
         lexical hit or a cosine hit above VECTOR_FLOOR; nothing matching is an empty answer."""
         if not 1 <= limit <= 500 or len(text) > 9000:
             raise ValueError("search exceeds bounded result/input limits")
@@ -153,12 +155,19 @@ class Query:
         layers = set(filter(None, (normalized(layer),)))
         held = {row[0] for row in self.store.conn.execute(
             "SELECT DISTINCT topic FROM active_claims WHERE kind='tag' AND scope='owner' AND chunk_id IS NULL "
-            "AND (source_key LIKE 'labels:%' OR source_key LIKE 'facts:%')")}
+            "AND (source_key LIKE 'labels:%' OR source_key LIKE 'facts:%') "
+            "UNION SELECT 'lp' WHERE EXISTS(SELECT 1 FROM active_claims WHERE kind='lp')")}
         rest = words
         for phrase, targets in sorted({**{name: (name,) for name in held}, **LAYER_WORDS}.items(), key=lambda item: -len(item[0])):
-            if re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", rest):
-                layers.update(target for target in targets if target in held)
-                rest = re.sub(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", " ", rest)
+            pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+            selected = set(targets) & held
+            if not selected or not re.search(pattern, rest):
+                continue
+            surrounding = re.findall(r"\w+", re.sub(pattern, " ", words))
+            if all(token in STOP_WORDS for token in surrounding) or re.search(
+                    r"(?<!\w)(?:my|our)(?:\W+\w+){0,2}\W+" + pattern, words):
+                layers.update(selected)
+                rest = re.sub(pattern, " ", rest)
         meaningful = [token for token in re.findall(r"\w+", rest, re.UNICODE) if token not in STOP_WORDS]
         filtered = bool(layers) and bool(meaningful)
         tokens = meaningful if filtered else [token for token in re.findall(r"\w+", words, re.UNICODE) if token not in STOP_WORDS]
@@ -169,6 +178,9 @@ class Query:
                     "SELECT DISTINCT parent,topic FROM active_claims WHERE kind='tag' AND scope='owner' AND chunk_id IS NULL "
                     "AND topic IN (" + marks + ")", tuple(sorted(layers))):
                 by_layer.setdefault(row["parent"], set()).add(row["topic"])
+        if 'lp' in layers:
+            for row in self.store.conn.execute("SELECT DISTINCT parent FROM active_claims WHERE kind='lp'"):
+                by_layer.setdefault(row['parent'], set()).add('lp')
         lexical: dict[int, int] = {}
         if tokens:
             # What was said and what it is about; never the scope or object columns ("owner" is not a word someone typed).
@@ -216,12 +228,9 @@ class Query:
             key = normalized(row["text"])
             if key not in texts or score > texts[key][0]:
                 texts[key] = (score, claim_id)
-        if filtered:
-            parents = set(best) & set(by_layer)
-        elif layers:
-            parents = set(by_layer)
-        else:
-            parents = set(best)
+        parents = set(best)
+        if layers:
+            parents = parents & set(by_layer) if filtered else set(by_layer)
         warmth = {row[0]: float(row[1]) for row in self.store.conn.execute(
             "SELECT i.parent,max(json_extract(r.content,'$.warmth')) FROM sources s "
             "JOIN revisions r ON r.source_id=s.id AND r.hash=s.hash JOIN identities i USING(namespace,member) "
@@ -242,9 +251,10 @@ class Query:
                 row = self.store.conn.execute("SELECT * FROM active_claims WHERE id=?", (claim_id,)).fetchone()
                 evidence[claim_id] = self._hit(row, claim_score, lexical.get(claim_id), vectors.get(claim_id))
             for label in sorted(by_layer.get(parent, ())):
+                where = "kind='lp'" if label == 'lp' else "kind='tag' AND scope='owner' AND chunk_id IS NULL AND topic=?"
+                params = (parent,) if label == 'lp' else (parent, label)
                 row = self.store.conn.execute(
-                    "SELECT * FROM active_claims WHERE parent=? AND kind='tag' AND scope='owner' AND chunk_id IS NULL AND topic=? "
-                    "ORDER BY id LIMIT 1", (parent, label)).fetchone()
+                    "SELECT * FROM active_claims WHERE parent=? AND " + where + " ORDER BY id LIMIT 1", params).fetchone()
                 evidence.setdefault(row["id"], self._hit(row, LAYER_SCORE, None, None))
             name = self.store.conn.execute("SELECT min(name) FROM identities WHERE parent=? AND present=1", (parent,)).fetchone()[0]
             members = tuple(row[0] for row in self.store.conn.execute(

@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     generate.add_argument("--dry-run", action="store_true", help="token and cache estimate; no provider requests")
     discovery = commands.add_parser("discover")
     discovery.add_argument("--model", required=True)
-    discovery.add_argument("--embedding-model", default="", help="existing cache only; no embedding requests")
+    discovery.add_argument("--embedding-model", default="", help="use cached neighbors and embed written tags; omit for no embeddings")
     discovery.add_argument("--limit", type=int, required=True)
     discovery.add_argument("--min-people", type=int, default=3)
     discovery.add_argument("--phrase", default="")
