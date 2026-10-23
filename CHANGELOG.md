@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.36.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.0...powerpacks-v3.36.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **memory:** the skill answers who, not how many ([#897](https://github.com/powerset-co/powerpacks/issues/897)) ([9d2cc77](https://github.com/powerset-co/powerpacks/commit/9d2cc77b435b3fd4f7dbb82f1978e509ee150951))
+
 ## [3.36.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.2...powerpacks-v3.36.0) (2026-10-23)
 
 
