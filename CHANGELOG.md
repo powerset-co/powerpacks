@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.38.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.38.0...powerpacks-v3.38.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **people:** a delete removes the family's row from the families table ([#910](https://github.com/powerset-co/powerpacks/issues/910)) ([3261c01](https://github.com/powerset-co/powerpacks/commit/3261c01ac195cbeeb75bdbd4b3fd2d803e20b01a))
+
+
+### Documentation
+
+* **deep-context:** acting on a person from chat ([#906](https://github.com/powerset-co/powerpacks/issues/906)) ([6e3d6b5](https://github.com/powerset-co/powerpacks/commit/6e3d6b5ba626df1337868be35fab3c8f184e4ac5))
+
 ## [3.38.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.37.0...powerpacks-v3.38.0) (2026-10-23)
 
 
