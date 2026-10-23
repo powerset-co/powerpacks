@@ -189,7 +189,14 @@ class SharePeople:
         """Hide each family from the page for good; `load` leaves deleted families out, so the cached rows
         stand. A checkpoint on the write can move the store file's mtime, so the stamp is taken again after."""
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
-        self._stamp = self._store_stamp()
+        self.written()
+
+    def written(self) -> None:
+        """After this page's own write of worth, tags or a relationship: none of those is in the export rows,
+        so the cached rows stand. A checkpoint on the write can move the store file's mtime, so the stamp is
+        taken again after. Before the first load there is nothing to keep."""
+        if self._stamp:
+            self._stamp = self._store_stamp()
 
     def _store_stamp(self) -> tuple[int, int]:
         return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
@@ -204,12 +211,15 @@ class SharePeople:
             members.setdefault(member.family_key, []).append(member)
         return {parent_id: family_facts(family).to_payload() for parent_id, family in members.items()}
 
-    def load(self) -> tuple[SharePerson, ...]:
+    def load(self, parents: tuple[str, ...] = ()) -> tuple[SharePerson, ...]:
+        """Every family's row, or with `parents` only those families' rows: what a write answers with."""
         rows = self.export_rows()
-        labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn)
-        tags: dict[str, Tags] = queries_share.current_tags(self.conn)
+        labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn, parents)
+        tags: dict[str, Tags] = queries_share.current_tags(self.conn, parents)
         worth: dict[str, sqlite3.Row] = {}
-        for row in self.conn.execute("SELECT parent_id, worth, decided_by, reason FROM current_worth"):
+        for row in self.conn.execute(
+                "SELECT parent_id, worth, decided_by, reason FROM current_worth "
+                + ("WHERE parent_id IN (" + ",".join("?" * len(parents)) + ")" if parents else ""), parents):
             worth[row["parent_id"]] = row
         deleted: set[str] = queries_share.deleted_parents(self.conn)
         people: list[SharePerson] = []

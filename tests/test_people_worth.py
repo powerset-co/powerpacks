@@ -129,6 +129,11 @@ class PeopleWorthTests(StoreTests):
             self.assertEqual({tuple(row) for row in human}, {(c, choice, "human", None, None) for c in ("c1", "c2")})
         self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")], labels)
         self.assertEqual(queries_share.current_tags(self.conn)["p:a"].note, "keep note")
+        # The write answers from the export the page already has: no rebuild of every family for one call.
+        self.assertIs(self.people.export_rows(), self.people.export_rows())
+        before = self.people.export_rows()
+        self.post("/api/people/worth", {"ids": ["p:a"], "worth": "yes"})
+        self.assertIs(self.people.export_rows(), before)
 
     def test_tags_keep_their_route_and_cannot_write_retired_decisions(self) -> None:
         code, payload = self.post("/api/people/tags", {"people": [{"parent_id": "p:a", "tags": ["is_family"]}]})
@@ -140,9 +145,10 @@ class PeopleWorthTests(StoreTests):
 
     def test_invalid_worth_requests_do_not_write(self) -> None:
         count = self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0]
-        for request in ({"ids": [], "worth": "yes"}, {"ids": ["missing"], "worth": "yes"},
-                        {"ids": ["p:a"], "worth": "maybe"}, {"ids": [1], "worth": "no"}, []):
+        for request in ({"ids": [], "worth": "yes"}, {"ids": ["p:a"], "worth": "maybe"}, {"ids": [1], "worth": "no"}, []):
             self.assertEqual(self.post("/api/people/worth", request)[0], 400)
+        # An id that is no family on this machine writes nothing and comes back with no row.
+        self.assertEqual(self.post("/api/people/worth", {"ids": ["missing"], "worth": "yes"}), (200, {"rows": []}))
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM worth").fetchone()[0], count)
 
     def test_human_relationship_survives_label_refresh_and_tag_edits(self) -> None:
@@ -194,7 +200,6 @@ class PeopleWorthTests(StoreTests):
 
     def test_relationship_validation_does_not_write(self) -> None:
         for request in ({"parent_id": "p:a", "relationship_kind": "invalid"},
-                        {"parent_id": "missing", "relationship_kind": "family"},
                         {"parent_id": "p:a"}, [], {"parent_id": 1, "relationship_kind": "family"}):
             self.assertEqual(self.post("/api/people/relationship", request)[0], 400)
 
@@ -204,7 +209,7 @@ class PeopleWorthTests(StoreTests):
         row, = self.people.load()
         self.assertEqual((row.worth, row.worth_source, row.reason), ("", "", "unjudged"))
 
-    def test_changed_profile_keeps_in_progress_and_blocks_writes_until_labels_refresh(self) -> None:
+    def test_changed_profile_keeps_in_progress_until_labels_refresh(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.db import queries_review
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         queries_review.insert_linkedin(self.conn, "c1", "https://www.linkedin.com/in/jordan-bravo",
@@ -212,7 +217,6 @@ class PeopleWorthTests(StoreTests):
         self._parent("li:4242", "c1", "c2")
         self.conn.commit()
         self.assertTrue(self.people.load()[0].in_progress)
-        self.assertEqual(self.post("/api/people/worth", {"ids": ["li:4242"], "worth": "yes"})[0], 409)
         PersonLabels(self.conn, self.root).run()
         self.assertFalse(self.people.load()[0].in_progress)
         self.assertEqual(self.post("/api/people/worth", {"ids": ["li:4242"], "worth": "yes"})[0], 200)
@@ -317,12 +321,13 @@ class PeopleWorthTests(StoreTests):
         self.assertNotIn("p:a", {member.family_key for member in queries_worth.members_with_facts(self.conn)})
         self.assertNotIn("p:a", {member.parent_id for member in queries_realize.members_of_talked_to_parents(self.conn)})
 
-    def test_delete_of_an_unknown_id_is_a_conflict_and_deletes_nothing(self) -> None:
+    def test_delete_takes_the_families_named_and_rejects_a_malformed_request(self) -> None:
         before = self._family_rows(("c1", "c2"), "p:a")
-        self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a", "p:missing"]})[0], 409)
         for request in ({"ids": []}, {"ids": [1]}, []):
             self.assertEqual(self.post("/api/people/delete", request)[0], 400)
         self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), before)
+        self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a", "p:missing"]})[0], 200)
+        self.assertEqual([row.parent_id for row in self.people.load()], [])
 
 
 class DeletedImportTests(StoreTests):
