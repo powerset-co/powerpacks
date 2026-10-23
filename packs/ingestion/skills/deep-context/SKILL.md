@@ -148,6 +148,26 @@ Uploading to Powerset is the page's own button, shown only with the Share networ
 
 "Show me my network", "who do I know", "my people": the same page.
 
+## Acting on a person from chat
+
+When the user asks for the change in chat ("skip Jordan", "mark Casey a close friend", "those two are the same
+person", "that LinkedIn is the wrong Jordan"), do it, then say what changed in one line. Every write is one
+family: never load or walk the page to do it. The page server is the app's (port 8765, or
+`bin/deep-context-v2 review`); the family is its `parent_id`, read with `lookup` or from `/api/people/rows`.
+
+| Ask | Write |
+|---|---|
+| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. Answers the family's row; the page patches it in place. |
+| Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
+| Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. |
+| Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good; its rows stay. |
+| Merge two people | The family table is `candidate_parent`, append-only, newest row per member wins (`current_parent`). Move every member of the second family onto the first: `INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, '<kept parent_id>', 'human', NULL, <now iso>)` once per member. |
+| Split a person out | The same insert with a new `parent_id` for that member (`p:<new id>`). |
+| Wrong LinkedIn | On the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
+
+A merge or split is a human verdict: the dedupe stage never undoes a `human` row. Worth, labels and tags stay
+with each member, so the merged family shows the union. Memory picks the change up on its next update.
+
 For a named person's saved dossier or questions about existing personal knowledge,
 follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
 
