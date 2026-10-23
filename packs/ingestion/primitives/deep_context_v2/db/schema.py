@@ -50,7 +50,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -147,6 +147,27 @@ WHEN (SELECT parent_id FROM candidate_parent WHERE candidate_id = NEW.candidate_
 BEGIN
   SELECT RAISE(IGNORE);
 END;
+"""
+
+# Schema 8: one row per family the owner has talked to, written whole by realize beside people.csv. The People
+# page and the labels pass read it instead of rebuilding every row from the profile cache per request (29 s on a
+# 6k-family store). The profile columns come from the family's confirmed LinkedIn cache or research; name, title,
+# company and location fall back to the family's facts. A family deleted on the People page is not written.
+FAMILIES_DDL = """
+CREATE TABLE IF NOT EXISTS families (
+  parent_id TEXT NOT NULL PRIMARY KEY,
+  public_identifier TEXT NOT NULL,
+  linkedin_url TEXT NOT NULL,
+  name TEXT NOT NULL,
+  headline TEXT NOT NULL,
+  title TEXT NOT NULL,
+  company TEXT NOT NULL,
+  location TEXT NOT NULL,
+  profile_picture_url TEXT NOT NULL,
+  source_channels TEXT NOT NULL,     -- ','-joined people.csv channel names
+  interaction_counts TEXT NOT NULL CHECK (json_valid(interaction_counts)),  -- channel -> messages, as imported
+  last_interaction TEXT NOT NULL
+);
 """
 
 # Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page
@@ -329,6 +350,7 @@ CREATE INDEX research_by_parent ON research(parent_id);
 {REVIEW_QUEUE_DDL}
 {SETS_DDL}
 {DELETED_DDL}
+{FAMILIES_DDL}
 CREATE VIEW current_parent AS
   SELECT candidate_id, parent_id, reason, seq FROM (
     SELECT m.*, row_number() OVER (PARTITION BY candidate_id ORDER BY seq DESC) AS rn
@@ -364,7 +386,7 @@ CREATE VIEW current_profile AS
 TABLES: tuple[str, ...] = (
     "meta", "owner", "candidates", "candidate_names", "candidate_identifiers", "candidate_sources", "connections",
     "bundles", "facts", "candidate_parent", "pair_verdicts", "worth", "candidate_linkedins", "research",
-    "person_tags", "person_labels", "deleted_parents",
+    "person_tags", "person_labels", "deleted_parents", "families",
 )
 VIEWS: tuple[str, ...] = ("current_parent", "current_worth", "current_linkedins", "current_profile", "current_tags")
 # A view is a saved query over these tables (and views); a node that declares the view reads them all.

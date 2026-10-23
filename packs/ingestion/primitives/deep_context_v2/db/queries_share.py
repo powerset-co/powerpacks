@@ -148,3 +148,10 @@ def update_set_members(conn: sqlite3.Connection, set_id: str, members_json: str)
 def delete_set(conn: sqlite3.Connection, set_id: str) -> None:
     with conn:
         conn.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))
+
+
+def families(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, sqlite3.Row]:
+    """parent_id -> its families row as realize wrote it; `parents` narrows to those families."""
+    return {row["parent_id"]: row for row in conn.execute(
+        "SELECT * FROM families" + (" WHERE parent_id IN (" + ",".join("?" * len(parents)) + ")" if parents else "")
+        + " ORDER BY parent_id", parents)}

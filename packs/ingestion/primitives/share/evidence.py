@@ -18,9 +18,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import ChannelCount, MemberFacts
-from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.deep_context_v2.worth.luna import REQUEST_VERSION
 from packs.ingestion.primitives.share.models import NO_MESSAGES, MessageStats, PersonEvidence
@@ -61,7 +60,7 @@ class ShareEvidence:
         self.data_root = data_root
 
     def load(self) -> list[PersonEvidence]:
-        rows, _counts = Realize(self.conn, self.data_root).build()
+        rows = queries_share.families(self.conn)
         members: dict[str, list[MemberFacts]] = {}
         for member in queries_worth.members_with_facts(self.conn):
             members.setdefault(member.family_key, []).append(member)
@@ -78,8 +77,7 @@ class ShareEvidence:
             by_candidate.setdefault(count.candidate_id, []).append(count)
 
         people: list[PersonEvidence] = []
-        for row in rows:
-            parent_id: str = row["id"]
+        for parent_id, row in rows.items():
             family: list[MemberFacts] = members[parent_id]
             facts: dict[str, Any] = family_facts(family).to_payload()
             channel_counts: list[ChannelCount] = []
@@ -101,7 +99,7 @@ class ShareEvidence:
                 person_id=parent_id,
                 candidate_ids=tuple(candidates[parent_id]),
                 public_identifier=row["public_identifier"],
-                full_name=row["full_name"],
+                full_name=row["name"],
                 source_channels=tuple(channel for channel in row["source_channels"].split(",") if channel),
                 interaction_counts=parse_interaction_counts(row["interaction_counts"]),
                 last_interaction=row["last_interaction"] or None,

@@ -1,8 +1,7 @@
 """The People page's read boundary: one typed row per family, joined once from the v2 store.
 
-Flow: realize's export rows (one per family: name, profile fields, channels, counts) + the store's
-`person_labels`, `current_tags`, `current_worth` and the members' facts ->
-`SharePerson` rows -> one JSON payload for the page. `detail(id)` adds what only the drawer
+Flow: the store's `families` table (realize's row per family: name, profile fields, channels, counts) +
+its `person_labels`, `current_tags` and `current_worth` -> `SharePerson` rows -> one JSON payload for the page. `detail(id)` adds what only the drawer
 shows: the dossier (the review card's fragment), every label cell, the worth reason, the contact
 identifiers.
 
@@ -10,6 +9,7 @@ The page filters client-side, so the list row carries only what a facet or a col
 27 probabilities and the dossier stay per-person.
 
 Changelog:
+  2026-10-23: the roster is the families table realize writes; no in-memory rows, no rebuild per request.
   2026-10-07: v2. A row is a family on its parent id; the roster is realize's rows.
   2026-09-26: created.
 """
@@ -21,14 +21,12 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
-from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
 from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
-from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
@@ -157,63 +155,26 @@ def _family_counts(counts: dict[str, int]) -> dict[str, int]:
     return families
 
 
-def _facts_title(facts: dict[str, Any]) -> tuple[str, str]:
-    """The dossier's title and employer when the profile has none: the current employer first."""
-    employers = [row for row in facts.get("employers") or [] if isinstance(row, dict)]
-    current = next((row for row in employers if row.get("status") == "current"), employers[0] if employers else {})
-    return str(facts.get("title") or current.get("role") or ""), str(current.get("name") or "")
-
-
 class SharePeople:
-    """The families joined to the store. Construct once; `load()` re-reads the store (it changes as the
-    human tags); export rows and family facts are rebuilt when the store file changes."""
+    """The families joined to the store: realize's `families` table (the roster: one row per family the owner has
+    talked to, as the last realize wrote it) with `person_labels`, `current_tags` and `current_worth`. Construct
+    once; `load()` re-reads the store, which changes as the human decides and tags."""
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path) -> None:
         self.conn = conn
         self.data_root = data_root
-        self._rows: dict[str, dict[str, str]] = {}
-        self._family_facts: dict[str, dict[str, Any]] = {}
-        self._stamp: int | tuple[int, int] = 0
-
-    def export_rows(self) -> dict[str, dict[str, str]]:
-        """parent_id -> its export row, rebuilt when the store changed."""
-        stamp = self._store_stamp()
-        if stamp != self._stamp:
-            rows, _counts = Realize(self.conn, self.data_root).build()
-            self._rows = {row["id"]: row for row in rows}
-            self._family_facts = self._facts()
-            self._stamp = stamp
-        return self._rows
+        # A store from before the table (schema 8) has it empty: realize fills it once from what the store holds.
+        if conn.execute("SELECT 1 FROM families LIMIT 1").fetchone() is None:
+            Realize(conn, data_root).fill()
 
     def delete(self, parent_ids: tuple[str, ...]) -> None:
-        """Hide each family from the page for good; `load` leaves deleted families out, so the cached rows
-        stand. A checkpoint on the write can move the store file's mtime, so the stamp is taken again after."""
+        """Hide each family from the page for good; `load` leaves deleted families out."""
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
-        self.written()
-
-    def written(self) -> None:
-        """After this page's own write of worth, tags or a relationship: none of those is in the export rows,
-        so the cached rows stand. A checkpoint on the write can move the store file's mtime, so the stamp is
-        taken again after. Before the first load there is nothing to keep."""
-        if self._stamp:
-            self._stamp = self._store_stamp()
-
-    def _store_stamp(self) -> tuple[int, int]:
-        return self.conn.execute("PRAGMA data_version").fetchone()[0], self._store_mtime()
-
-    def _store_mtime(self) -> int:
-        path = self.conn.execute("PRAGMA database_list").fetchone()[2]
-        return Path(path).stat().st_mtime_ns if path else 0
-
-    def _facts(self) -> dict[str, dict[str, Any]]:
-        members: dict[str, list[MemberFacts]] = {}
-        for member in queries_worth.members_with_facts(self.conn):
-            members.setdefault(member.family_key, []).append(member)
-        return {parent_id: family_facts(family).to_payload() for parent_id, family in members.items()}
 
     def load(self, parents: tuple[str, ...] = ()) -> tuple[SharePerson, ...]:
-        """Every family's row, or with `parents` only those families' rows: what a write answers with."""
-        rows = self.export_rows()
+        """Every family's row, or with `parents` only those families' rows: what a write answers with. A family
+        realize wrote that the labels pass has not reached yet is not shown."""
+        rows: dict[str, sqlite3.Row] = queries_share.families(self.conn, parents)
         labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn, parents)
         tags: dict[str, Tags] = queries_share.current_tags(self.conn, parents)
         worth: dict[str, sqlite3.Row] = {}
@@ -223,24 +184,22 @@ class SharePeople:
             worth[row["parent_id"]] = row
         deleted: set[str] = queries_share.deleted_parents(self.conn)
         people: list[SharePerson] = []
-        for parent_id, label in labels.items():
-            if parent_id in deleted:
+        for parent_id, row in rows.items():
+            label = labels.get(parent_id)
+            if label is None or parent_id in deleted:
                 continue
-            row = rows[parent_id]
             cells = parse_json_object(label.labels_json)
-            fact = self._family_facts[parent_id]
-            fact_title, fact_company = _facts_title(fact)
             held = tags.get(parent_id)
             decision = worth.get(parent_id)
             people.append(SharePerson(
                 parent_id=parent_id,
                 public_identifier=row["public_identifier"],
                 in_progress=row["public_identifier"] != label.public_identifier,
-                name=str(fact.get("canonical_name") or "") or row["full_name"],
+                name=row["name"],
                 avatar_url=row["profile_picture_url"],
-                title=row["current_title"] or fact_title,
-                company=row["current_company"] or fact_company,
-                location=row["location_raw"] or str(fact.get("location") or ""),
+                title=row["title"],
+                company=row["company"],
+                location=row["location"],
                 channels=_families(tuple(row["source_channels"].split(","))),
                 interactions=sum(parse_interaction_counts(row["interaction_counts"]).values()),
                 last_interaction=row["last_interaction"],
@@ -270,7 +229,7 @@ class SharePeople:
         return tuple(people)
 
     def detail(self, parent_id: str) -> PersonDetail | None:
-        row = self.export_rows().get(parent_id)
+        row = queries_share.families(self.conn, (parent_id,)).get(parent_id)
         if row is None or parent_id in queries_share.deleted_parents(self.conn):
             return None
         card = load_card(self.conn, self.data_root, parent_id)
@@ -279,7 +238,7 @@ class SharePeople:
         cells = parse_json_object(label.labels_json)
         held = queries_share.current_tags(self.conn).get(parent_id)
         worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
-        name = str(facts.get("canonical_name") or "") or row["full_name"]
+        name = str(facts.get("canonical_name") or "") or row["name"]
         known_as = (*(member.display_name for member in card.members), *(str(alias) for alias in facts.get("aliases") or []))
         emails: list[str] = []
         phones: list[str] = []
@@ -305,7 +264,7 @@ class SharePeople:
                 " · ".join(part for part in (str(item.get("role") or ""), str(item.get("name") or "")) if part)
                 for item in facts.get("employers") or [] if isinstance(item, dict)),
             school=str(facts.get("school") or ""),
-            location=row["location_raw"] or str(facts.get("location") or ""),
+            location=row["location"],
             aliases=tuple(dict.fromkeys(alias for alias in known_as if alias and alias != name)),
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),

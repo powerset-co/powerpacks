@@ -1,12 +1,15 @@
-"""Reads for block 09 Realize. Realize writes nothing to the store.
+"""Reads for block 09 Realize, and its one write: the families table.
 
 Created: 2026-10-07
+Changelog:
+  2026-10-23: `replace_families`: realize writes one row per family beside people.csv.
 """
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
 
+from packs.ingestion.primitives.deep_context_v2.db.queries import _batches
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, Worth
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
@@ -80,3 +83,18 @@ def worth_by_parent(conn: sqlite3.Connection) -> dict[str, Worth]:
     for row in conn.execute("SELECT parent_id, worth FROM current_worth"):
         worth[row["parent_id"]] = Worth(row["worth"])
     return worth
+
+
+# One families row, in column order.
+FamilyRow = tuple[str, str, str, str, str, str, str, str, str, str, str, str]
+FAMILY_COLUMNS = ("parent_id", "public_identifier", "linkedin_url", "name", "headline", "title", "company",
+                  "location", "profile_picture_url", "source_channels", "interaction_counts", "last_interaction")
+
+
+def replace_families(conn: sqlite3.Connection, rows: list[FamilyRow]) -> None:
+    """The families table, replaced whole: every family the owner has talked to, as realize built it."""
+    conn.execute("DELETE FROM families")
+    for batch in _batches(rows, 500):
+        conn.executemany(
+            f"INSERT INTO families ({', '.join(FAMILY_COLUMNS)}) VALUES ({', '.join('?' * len(FAMILY_COLUMNS))})",
+            batch)
