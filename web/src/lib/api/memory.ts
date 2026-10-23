@@ -30,6 +30,10 @@ export function updateMemory(): Promise<MemoryJob> {
   return post("/api/memory/update", {}, "Couldn't update Memory.")
 }
 
+export function stopMemory(): Promise<MemoryJob> {
+  return post("/api/memory/stop", {}, "Couldn't stop Memory.")
+}
+
 export function setKeepUpdated(keepUpdated: boolean): Promise<MemoryJob> {
   return post("/api/memory/settings", { keep_updated: keepUpdated }, "Couldn't change the setting.")
 }

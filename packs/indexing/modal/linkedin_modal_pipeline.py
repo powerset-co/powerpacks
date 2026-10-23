@@ -197,9 +197,9 @@ def make_sandbox(cpu: float, memory_mib: int, timeout: int) -> modal.Sandbox:
     )
 
 
-def memory_sandbox(name: str, root: str, *, discover: bool) -> modal.Sandbox:
+def memory_sandbox(name: str, operator_id: str, *, discover: bool) -> modal.Sandbox:
     return modal.Sandbox.create(
-        "python", "-m", "packs.memory.modal_entrypoint", root, str(int(discover)),
+        "python", "-m", "packs.memory.modal_entrypoint", f"/data/operators/{operator_id}", str(int(discover)),
         app=modal.App.lookup(APP_NAME, create_if_missing=True),
         name=name,
         image=build_image("parallel-web==1.1.0", "jinja2==3.1.6", "nameparser==2.3.0", "modal==1.5.0"),

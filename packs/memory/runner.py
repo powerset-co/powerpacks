@@ -42,6 +42,7 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
         raise ValueError("approved_spend_usd must be a finite nonnegative number")
     root = root.resolve()
     load_dotenv(root / ".env", override=False)
+    operator_id = os.getenv("POWERPACKS_OPERATOR_ID", "")
     remote = os.getenv("POWERPACKS_MEMORY_REMOTE") == "1"
     with job.LOCK:
         directory = job.database(root).parent
@@ -56,7 +57,10 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
         client = provider()
         record.error = ""
         missing = [name for name in ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET") if not os.getenv(name)]
-        if remote and missing:
+        if remote and (not operator_id or operator_id.startswith("00000000-")):
+            record.error = ("memory: no operator id. Run `$powerset login` (it writes POWERPACKS_OPERATOR_ID "
+                            "to .env).")
+        elif remote and missing:
             record.error = "Missing Modal token: " + ", ".join(missing)
         elif not remote and not os.getenv("OPENAI_API_KEY"):
             record.error = "OPENAI_API_KEY is not set"
@@ -82,7 +86,7 @@ def start(root: Path, approved_spend: float, *, discover: bool = True) -> Job:
         record.status = Status.RUNNING
         job.write(root, record)
         thread = threading.Thread(target=_run, args=(root, resume, handle, client, discover),
-                                  kwargs={"remote": remote}, daemon=True, name="memory")
+                                  kwargs={"remote": remote, "operator_id": operator_id}, daemon=True, name="memory")
         _threads[root] = thread
         thread.start()
         return record
@@ -122,11 +126,11 @@ def keep_updated(root: Path) -> None:
 
 
 def _run(root: Path, resume: bool, handle: int | None, client: OpenAIProvider, discover: bool, *,
-         remote: bool = False, steps: tuple[Step, ...] = job.STEPS) -> None:
+         remote: bool = False, operator_id: str = "", steps: tuple[Step, ...] = job.STEPS) -> None:
     store: Store | None = None
     try:
         if remote:
-            remote_run = Remote(root)
+            remote_run = Remote(root, operator_id)
             if remote_run.reattach(resume=resume):
                 return
         record = job.read(root)
@@ -206,6 +210,7 @@ def _record(root: Path, events: Generator[Progress, None, R], client: OpenAIProv
             return result
         with job.LOCK:
             record = job.read(root)
+            client.approved_spend_usd = record.approved_spend_usd
             record.steps[event.step] = Counts(before.done + event.done, before.total + event.total)
             record.current_item = event.key
             record.tokens = asdict(client.usage)

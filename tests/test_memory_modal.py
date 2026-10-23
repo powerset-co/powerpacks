@@ -27,6 +27,8 @@ from packs.memory.provider import SpendReached
 from packs.memory.query import Query
 from packs.memory.sources import V2
 from packs.memory.store import Store
+from packs.shared.web.memory import MemoryApi
+from urllib.parse import urlparse
 
 
 class Volume:
@@ -57,16 +59,15 @@ class MemoryModalTests(unittest.TestCase):
         self.client = JobProvider()
         self.addCleanup(self.client.close)
         for target, value in (("packs.indexing.modal.linkedin_modal_pipeline.get_volume", self.volume),
-                              ("packs.indexing.modal.linkedin_modal_pipeline.operator_volume_prefix", "operators/synthetic"),
                               ("packs.memory.runner.provider", self.client)):
             patched = patch(target, return_value=value)
             patched.start()
             self.addCleanup(patched.stop)
-        environment = patch.dict(os.environ, {"POWERPACKS_MEMORY_REMOTE": "1", "MODAL_TOKEN_ID": "synthetic",
+        environment = patch.dict(os.environ, {"POWERPACKS_MEMORY_REMOTE": "1", "POWERPACKS_OPERATOR_ID": "synthetic", "MODAL_TOKEN_ID": "synthetic",
                                              "MODAL_TOKEN_SECRET": "synthetic", "OPENAI_API_KEY": "synthetic"})
         environment.start()
         self.addCleanup(environment.stop)
-        self.remote = modal_run.Remote(self.root)
+        self.remote = modal_run.Remote(self.root, "synthetic")
         self.status_path = f"{self.remote.directory}/job.json"
         self.database_path = f"{self.remote.directory}/memory.sqlite"
 
@@ -165,9 +166,9 @@ class MemoryModalTests(unittest.TestCase):
         source_db(V2(self.root / ".powerpacks").database, STORIES)
         sandbox = Mock(object_id="sb-new-synthetic")
 
-        def execute(name, root, *, discover):
+        def execute(name, operator_id, *, discover):
             self.assertEqual(name, "memory-synthetic")
-            self.assertEqual(root, "/data/operators/synthetic")
+            self.assertEqual(operator_id, "synthetic")
             with tempfile.TemporaryDirectory() as remote_dir:
                 remote_root = Path(remote_dir)
                 database = job.database(remote_root)
@@ -192,6 +193,49 @@ class MemoryModalTests(unittest.TestCase):
         store = Store(job.database(self.root))
         self.addCleanup(store.close)
         self.assertTrue(Query(store, self.client).run("IAM").hits)
+
+    def test_operator_id_is_resolved_from_env_at_start_and_missing_id_fails(self) -> None:
+        error = ("memory: no operator id. Run `$powerset login` (it writes POWERPACKS_OPERATOR_ID "
+                 "to .env).")
+        for value in ("", "00000000-0000-0000-0000-000000000000"):
+            with self.subTest(operator_id=value), patch.dict(os.environ, {"POWERPACKS_OPERATOR_ID": value}), \
+                    patch.object(pipeline, "get_volume") as volume:
+                result = runner.start(self.root, 0.50)
+                self.assertEqual(result.status, Status.FAILED)
+                self.assertEqual(result.error, error)
+                self.assertEqual(job.read(self.root).error, error)
+                volume.assert_not_called()
+        (self.root / ".env").write_text("POWERPACKS_OPERATOR_ID=synthetic-account\n")
+        with patch.dict(os.environ), patch.object(runner, "_run") as run:
+            os.environ.pop("POWERPACKS_OPERATOR_ID", None)
+            result = runner.start(self.root, 0.50)
+            self.wait()
+        self.assertEqual(result.status, Status.RUNNING)
+        self.assertEqual(run.call_args.kwargs["operator_id"], "synthetic-account")
+        os.close(run.call_args.args[2])
+
+    def test_runtime_operator_owns_volume_directory_and_sandbox_root(self) -> None:
+        remote = modal_run.Remote(self.root, "synthetic-account")
+        self.assertEqual(remote.directory, "operators/synthetic-account/.powerpacks/memory")
+        with patch.object(pipeline.modal.App, "lookup"), \
+                patch.object(pipeline, "build_image"), \
+                patch.object(pipeline.modal.Secret, "from_name"), \
+                patch.object(pipeline.modal.Sandbox, "create") as create:
+            pipeline.memory_sandbox(remote.name, "synthetic-account", discover=False)
+        self.assertEqual(create.call_args.args[3], "/data/operators/synthetic-account")
+
+    def test_remote_stop_lowers_only_local_budget_and_mirror_preserves_it(self) -> None:
+        job.write(self.root, Job(enabled=True, status=Status.RUNNING, step=Step.GENERATE,
+                                 approved_spend_usd=0.50, spent_usd=0.03))
+        handler = Mock(headers={}, rfile=io.BytesIO(b"{}"))
+        with patch("packs.shared.web.memory._send_json") as send:
+            self.assertTrue(MemoryApi(self.root).post(handler, urlparse("/api/memory/stop")))
+        self.assertEqual(send.call_args.args[1]["approved_spend_usd"], 0.03)
+        modal_run._mirror(self.root, Job(status=Status.RUNNING, step=Step.GENERATE,
+                                        approved_spend_usd=0.50, spent_usd=0.04))
+        self.assertEqual(job.read(self.root).approved_spend_usd, 0.03)
+        self.assertEqual(job.read(self.root).spent_usd, 0.04)
+        self.assertEqual(self.volume.uploads, 0)
 
     def test_missing_modal_token_fails_before_upload(self) -> None:
         (self.root / ".env").write_text("POWERPACKS_MEMORY_REMOTE=1\n")

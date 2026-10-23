@@ -87,6 +87,25 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(answer.people[0].name, "Jordan Bravo")
         self.assertGreater(answer.people[0].score, answer.people[-1].score)
 
+    def test_vector_shortlist_dedupes_before_ranking_and_keeps_lowest_id(self) -> None:
+        query = Query(self.store, self.provider)
+        before = query.people("permission architecture")
+        source_db(self.adapter.database, [
+            {"member": f"duplicate-{index}", "parent": "p:1", "name": "Jordan Bravo",
+             "claims": [STORIES[0]["claims"][1]]} for index in range(101)
+        ])
+        self.store.import_source(self.adapter)
+        Generate(self.store, self.provider).run(limit=200)
+        expected = [(person.parent, person.score, [hit.claim_id for hit in person.evidence]) for person in before.people]
+        for reverse in (0, 1):
+            with self.subTest(reverse=reverse):
+                self.store.conn.execute(f"PRAGMA reverse_unordered_selects={reverse}")
+                after = query.people("permission architecture")
+                self.assertEqual(after.vector_candidates, before.vector_candidates)
+                self.assertEqual(
+                    [(person.parent, person.score, [hit.claim_id for hit in person.evidence]) for person in after.people],
+                    expected)
+
     def test_nothing_matching_is_an_empty_answer(self) -> None:
         lexical = OpenAIProvider("", "")
         self.addCleanup(lexical.close)
