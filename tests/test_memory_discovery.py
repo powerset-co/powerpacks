@@ -76,11 +76,11 @@ def discovery_response(payload: dict) -> str:
         {'type': 'output_text', 'text': json.dumps(payload)}]}]})
 
 
-class DiscoveryFixture:
+class DiscoveryFixture(FixtureProvider):
     discovery_key = 'synthetic-discovery-v1'
-    embedding_key = ''
 
     def __init__(self) -> None:
+        super().__init__()
         self.inputs: list[dict] = []
         self.fail_call = 0
 
@@ -93,7 +93,7 @@ class DiscoveryFixture:
         for item in evidence:
             if any(word in item['quote'] for word in ('visited France', 'visited San Francisco', 'owner’s cousin')):
                 matches.append({key: item[key] for key in ('parent', 'source_id', 'quote')})
-        label = 'French Riviera visitors' if self.inputs[-1]['candidate'] == 'sof' else 'San Francisco association'
+        label = 'French Riviera visitors' if self.inputs[-1]['candidate'].split()[0] == 'sof' else 'San Francisco association'
         if any('owner’s cousin' in item['quote'] for item in evidence):
             label = 'family'
         payload = {'decision': 'supported' if matches else 'ambiguous', 'reason': 'Checked individual saved evidence',
@@ -131,6 +131,73 @@ class DiscoveryTests(unittest.TestCase):
         lexical.embedding_key = ''
         return tuple(hit for row in store.conn.execute('SELECT DISTINCT parent FROM active_claims')
                      for hit in Query(store, lexical).run('', filters=Filters(parents=(row[0],), kind=Kind.TAG), limit=100).hits)
+
+    def test_discovery_embeds_tags_once_across_batches_and_cached_reruns(self) -> None:
+        from packs.memory.discovery import Discover
+        people = [self.person(f'c{i:02d}', f'Synthetic West{i} SF') for i in range(40)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        report = Discover(store, self.provider).run(limit=5, phrase='sf')
+        self.assertEqual((report.calls, report.tags, report.failures), (3, 40, ()))
+        self.assertEqual(self.provider.embeddings, 1)
+        self.assertEqual(store.conn.execute(
+            "SELECT count(*) FROM active_claims WHERE kind='tag' AND chunk_id IS NOT NULL").fetchone()[0], 40)
+        self.assertEqual(store.conn.execute(
+            "SELECT count(*) FROM active_claims c LEFT JOIN embeddings e ON e.hash=c.document_hash AND e.model=? "
+            "WHERE c.kind='tag' AND c.chunk_id IS NOT NULL AND e.hash IS NULL",
+            (self.provider.embedding_key,)).fetchone()[0], 0)
+        report = Discover(store, self.provider).run(limit=5, phrase='sf')
+        self.assertEqual((report.calls, report.reused, report.failures), (0, 3, ()))
+        self.assertEqual(self.provider.embeddings, 1)
+
+    def test_embedding_failure_retries_saved_discovery_without_rebuying_response(self) -> None:
+        from packs.memory.discovery import Discover
+        people = [self.person(f'c{i}', f'Synthetic West{i} SF') for i in range(3)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        with patch.object(self.provider, 'embed', side_effect=OSError('synthetic embedding outage')):
+            report = Discover(store, self.provider).run(limit=1, phrase='sf')
+        self.assertEqual(len(report.failures), 1)
+        self.assertIn('synthetic embedding outage', report.failures[0][1])
+        report = Discover(store, self.provider).run(limit=1, phrase='sf')
+        self.assertEqual((report.calls, report.reused, report.tags, report.failures), (0, 1, 3, ()))
+        self.assertEqual(len(self.provider.inputs), 1)
+        self.assertEqual(self.provider.embeddings, 1)
+        self.assertEqual(store.conn.execute(
+            "SELECT count(*) FROM active_claims c JOIN embeddings e ON e.hash=c.document_hash AND e.model=? "
+            "WHERE c.kind='tag' AND c.chunk_id IS NOT NULL", (self.provider.embedding_key,)).fetchone()[0], 3)
+
+    def test_discovery_without_embedding_model_writes_tags_and_reuses_response(self) -> None:
+        from packs.memory.discovery import Discover
+        self.provider.embedding_key = ''
+        people = [self.person(f'c{i}', f'Synthetic West{i} SF') for i in range(3)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        with patch.object(self.provider, 'embed', side_effect=AssertionError('no embedding model')) as embed:
+            report = Discover(store, self.provider).run(limit=1, phrase='sf')
+            self.assertEqual((report.calls, report.tags, report.failures), (1, 3, ()))
+            report = Discover(store, self.provider).run(limit=1, phrase='sf')
+            self.assertEqual((report.calls, report.reused, report.tags, report.failures), (0, 1, 3, ()))
+            embed.assert_not_called()
+        self.assertEqual(len(self.tags(store)), 3)
+        self.assertEqual(store.conn.execute('SELECT count(*) FROM embeddings').fetchone()[0], 0)
+
+    def test_embedding_spend_cap_stops_fresh_and_cached_discovery(self) -> None:
+        from packs.memory.discovery import Discover
+        from packs.memory.provider import SpendReached
+        people = [self.person(f'c{i}', f'Synthetic West{i} SF') for i in range(3)]
+        store = self.imported(people, {person['member']: {'location': 'The person visited San Francisco.'}
+                                      for person in people})
+        with patch.object(self.provider, 'embed', side_effect=SpendReached('synthetic spend cap')):
+            for response in ('fresh', 'cached'):
+                with self.subTest(response=response):
+                    with self.assertRaisesRegex(SpendReached, 'synthetic spend cap'):
+                        Discover(store, self.provider).run(limit=1, phrase='sf')
+                    self.assertEqual(store.conn.execute('SELECT error FROM chunks WHERE position=-1').fetchone()[0], '')
+        report = Discover(store, self.provider).run(limit=1, phrase='sf')
+        self.assertEqual((report.calls, report.reused, report.tags, report.failures), (0, 1, 3, ()))
+        self.assertEqual(len(self.provider.inputs), 1)
+        self.assertEqual(self.provider.embeddings, 1)
 
     def test_concurrent_calls_match_serial_rows_and_keep_fresh_call_limit(self) -> None:
         from packs.memory.discovery import Discover
@@ -239,7 +306,65 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(preview.insights[0].members), 3)
         self.assertEqual(Discover(store, self.provider).run(limit=1, phrase='sof').calls, 0)
 
-    def test_per_person_checks_unsampled_exclusion_and_independent_abbreviations(self) -> None:
+    def test_name_batch_has_full_names_count_and_relationships_before_matching_claims(self) -> None:
+        from packs.memory.discovery import Discover
+        people = [self.person(f'c{i}', f'Synthetic Name{i} ' + 'Long ' * 50 + 'SoF') for i in range(14)]
+        fields = {person['member']: {'topics': ['SoF first topic', 'SoF second topic'],
+                                    'relationship_to_owner': 'Joined the owner at university.'} for person in people}
+        store = self.imported(people, fields)
+        discover = Discover(store, self.provider)
+        group = next(discover.groups(phrase='sof'))
+        content, _, evidence = discover._batch(group, list(discover._parents(group)))
+        self.assertEqual(json.loads(content)['candidate'], 'sof (14 members)')
+        for person in people:
+            parent = store.lookup(person['name'])[0].parent
+            quotes = [item.quote for item in evidence if item.parent == parent]
+            self.assertEqual(quotes[0], person['name'])
+            self.assertIn('Joined the owner at university.', quotes[1])
+            self.assertLessEqual(len(quotes), 3)
+
+    def test_naming_vocabulary_uses_distinct_people_without_changing_fingerprint(self) -> None:
+        from packs.memory.discovery import Discover
+        people = [self.person(f'c{i}', f'Synthetic Name{i} Cohort') for i in range(3)]
+        store = self.imported(people)
+        discover = Discover(store, self.provider)
+        group = next(discover.groups(phrase='cohort'))
+        parents = list(discover._parents(group))
+        _, before, evidence = discover._batch(group, parents)
+        for item in evidence:
+            store.conn.execute("INSERT INTO chunks(source_id,source_hash,position,fingerprint,response,error) VALUES(?,?,-1,?,'','')",
+                               (item.source_id, item.source_hash, item.parent))
+            chunk = store.conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            store.add_claim(item.source_id, item.source_hash, chunk,
+                            Claim('Shared cohort', Kind.TAG, 'cohort', 'association', '', '', '', item.quote), human=False)
+            for topic in ('degree', 'fieldofstudy', 'location'):
+                store.add_claim(item.source_id, item.source_hash, chunk,
+                                Claim('Extraction field', Kind.TAG, topic, 'association', '', '', '', item.quote), human=False)
+        for i in range(70):
+            store.add_claim(item.source_id, item.source_hash, chunk,
+                            Claim(f'New label {i}', Kind.TAG, f'label {i:02d}', 'association', '', '', '', item.quote), human=False)
+            store.add_claim(item.source_id, item.source_hash, chunk,
+                            Claim(f'Duplicate person {i}', Kind.TAG, 'one person', 'association', '', '', '', f'quote {i}'), human=False)
+        content, after, _ = discover._batch(group, parents)
+        labels = json.loads(content)['inferred_labels_for_naming_only']
+        self.assertEqual(len(labels), 64)
+        self.assertEqual(labels[0], 'cohort')
+        self.assertTrue({'degree', 'fieldofstudy', 'location'}.isdisjoint(labels))
+        self.assertEqual(before, after)
+
+    def test_large_name_group_candidates_show_batch_and_total_counts(self) -> None:
+        from packs.memory.discovery import Discover
+        from packs.memory.discovery_run import batches
+        people = [self.person(f'c{i:02d}', f'Synthetic Name{i} Cohort') for i in range(35)]
+        store = self.imported(people)
+        discover = Discover(store, self.provider)
+        payloads = [json.loads(discover._batch(group, parents)[0])
+                    for group, parents in batches(discover, min_people=3, phrase='cohort', after='')]
+        self.assertEqual([payload['candidate'] for payload in payloads],
+                         ['cohort (16 of 35 members)', 'cohort (16 of 35 members)', 'cohort (3 of 35 members)'])
+        self.assertEqual([len(payload['evidence']) for payload in payloads], [16, 16, 3])
+
+    def test_per_person_citations_and_unsampled_exclusion(self) -> None:
         from packs.memory.discovery import Discover
         people = [self.person(f'c{i:02d}', f'Synthetic West{i} SF') for i in range(17)]
         fields = {person['member']: {'location': 'The person visited San Francisco with the owner.'} for person in people[:-1]}
@@ -259,7 +384,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertLessEqual(max(len(json.dumps(value, ensure_ascii=False)) for value in self.provider.inputs), 24000)
         self.assertEqual(Discover(store, self.provider).run(limit=3, phrase='sf').calls, 0)
 
-    def test_family_needs_relationship_and_common_surname_abstains(self) -> None:
+    def test_supported_relationship_tags_and_ambiguous_response(self) -> None:
         from packs.memory.discovery import Discover
         people = [self.person(f'f{i}', f'Synthetic Relative{i} Zeller') for i in range(3)]
         people += [self.person(f'n{i}', f'Synthetic Stranger{i} Chen') for i in range(3)]

@@ -79,9 +79,9 @@ every 250 identities / 100 sources and reconcile absence only after complete enu
 Failed reads preserve prior evidence.
 
 ```sh
-python -m packs.memory --db /tmp/memory.sqlite search 'roblox coworkers' \
+python -m packs.memory --db /tmp/memory.sqlite search 'my roblox coworkers' \
   --embedding-model APPROVED_EMBEDDING_MODEL --approve-spend
-python -m packs.memory --db /tmp/memory.sqlite search 'family'
+python -m packs.memory --db /tmp/memory.sqlite search 'who is family'
 python -m packs.memory --db /tmp/memory.sqlite query 'permission architecture' \
   --embedding-model APPROVED_EMBEDDING_MODEL --approve-spend --kind work --person 'Jordan Bravo'
 python -m packs.memory --db /tmp/memory.sqlite query --embedding-model APPROVED_EMBEDDING_MODEL \
@@ -140,7 +140,8 @@ python -m packs.memory --db /tmp/memory.sqlite discover --model APPROVED_MODEL \
 Each request contains at most 16 people and 24,000 characters, owner context,
 relevant original vocabulary, and original source excerpts. Saved embeddings
 can add approximate semantic neighbors with `--embedding-model`; discovery
-never requests embeddings. A temporary SQLite sign index shortlists at most
+also embeds written tags when that model is supplied, reusing cached embeddings.
+A temporary SQLite sign index shortlists at most
 100 cached candidates by shared bands before cosine ranking. Retrieval is
 approximate and has no measured recall guarantee.
 

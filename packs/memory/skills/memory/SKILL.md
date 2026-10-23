@@ -21,7 +21,7 @@ enrich, upload or rebuild embeddings as a side effect of answering.
 
 | Intent, including conversational context | Primitive sequence |
 | --- | --- |
-| Any “who” question: “who is family”, “my Roblox coworkers”, “who helped me buy a house”, “friends in LA” | `search` with the user's words. It is the same call the Memory page makes, so the user can replay it there. People come back warmest first with the claims that matched; a word that names an owner label (family, wife, coworkers, classmates, investors, recruiters, founders) lists everyone holding it, and with other words filters them. `--layer` names a label directly. An empty answer means nothing saved matches: say so. |
+| Any “who” question: “who is family”, “my Roblox coworkers”, “who helped me buy a house”, “my friends in LA” | `search` with the user's words. It is the same call the Memory page makes, so the user can replay it there. People come back warmest first with the claims that matched. A layer word lists its holders when surrounded only by stop words, or filters when it follows “my”/“our” with up to two words between. Elsewhere it is a plain search word. `--layer` names a label directly. An empty answer means nothing saved matches: say so. |
 | “All my SoF people”; a label the user named exactly; an action on that group | Follow `packs/memory/skills/memory/memory-directory.md`: `resolve` → inspect meanings → `enumerate` every page. Retain exact IDs and corpus for actions. |
 | “What do I know about this topic?”; evidence behind a search answer | `query` with the user's meaning and hard filters → `open` the useful claims. This is a ranked shortlist of claims, not people. |
 | “Tell me everything about Jordan”; “open Jordan’s original dossier” | Follow `packs/memory/skills/memory/person-lookup.md`: use the free native dossier lookup; no memory generation or ranked search. |
@@ -33,8 +33,8 @@ enrich, upload or rebuild embeddings as a side effect of answering.
 Replace the example database path and identifiers with observed values:
 
 ```sh
-.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'roblox coworkers' --embedding-model KNOWN_MODEL --approve-spend
-.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'family'
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'my roblox coworkers' --embedding-model KNOWN_MODEL --approve-spend
+.venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'who is family'
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite search 'los angeles' --layer 'close friend' --embedding-model KNOWN_MODEL --approve-spend
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite lookup 'Jordan Bravo'
 .venv/bin/python -m packs.memory --db /path/to/memory.sqlite query 'permission architecture' --kind work

@@ -80,7 +80,7 @@ class Preview:
     next_after: str
     has_more: bool
     insights: tuple[Insight, ...] = ()
-    semantic_retrieval: str = 'cached approximate neighbors; no new embeddings'
+    semantic_retrieval: str = 'cached approximate neighbors; written tags embedded when an embedding model is supplied'
 
 
 def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str = '', after: str = '',
@@ -119,6 +119,8 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
                     if len(report.insights) < 4:
                         report.insights += (discover._insight(group, parents, decision),)
                     conn.execute('UPDATE chunks SET error=\'\' WHERE id=?', (chunk_id,))
+                except SpendReached:
+                    raise
                 except (ValueError, KeyError, TypeError):
                     report.exclusions += 1
                     conn.execute("UPDATE chunks SET error=? WHERE id=?",
@@ -194,6 +196,8 @@ def progress(discover: Discover, *, limit: int, min_people: int = 3, phrase: str
                                                  (source.source_id, source.source_hash, fingerprint, response))
                                 chunk_id = int(conn.execute('SELECT last_insert_rowid()').fetchone()[0])
                                 events.append((key, save(group, parents, key, evidence, chunk_id, response)))
+                            except SpendReached as exc:
+                                terminal = terminal or exc
                             except Exception as exc:
                                 events.append((key, str(exc)))
                         pending.pop(future)

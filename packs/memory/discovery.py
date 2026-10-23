@@ -6,8 +6,9 @@ import re
 from collections.abc import Generator, Iterator
 
 from packs.ingestion.primitives.common.jsonio import short_hash
-from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS
+from packs.memory.discovery_provider import Decision, DiscoveryProvider, INPUT_CHARS, PEOPLE
 from packs.memory.discovery_run import Group, Person, Evidence, Insight, DiscoveryReport, Preview, preview, progress
+from packs.memory.generate import embedded
 from packs.memory.models import Claim, Kind, IdentityMatch, cached_vector, document, normalized
 from packs.memory.store import Store
 from packs.memory.progress import Progress, consume
@@ -183,12 +184,12 @@ class Discover:
             'SELECT s.id,s.hash,r.content FROM sources s JOIN identities i USING(namespace,member) '
             'JOIN revisions r ON r.source_id=s.id AND r.hash=s.hash '
             "WHERE i.parent=? AND i.present=1 AND s.present=1 AND s.key LIKE 'name:%' ORDER BY EXISTS(SELECT 1 FROM phrases p WHERE p.source_id=s.id AND p.phrase=?) DESC,s.id LIMIT 1", (parent, phrase)):
-            result.append(Evidence(parent, row['id'], row['hash'], row['content'][-240:]))
+            result.append(Evidence(parent, row['id'], row['hash'], row['content'][-240:] if person.claim_id else row['content']))
         tokens = re.findall(r'\w+', phrase)[:32]
         match = ' OR '.join('"' + token + '"' for token in tokens)
         rows = list(conn.execute(
             'SELECT c.id,c.source_id,c.source_hash,c.payload FROM discovery_lexical JOIN active_claims c ON c.id=discovery_lexical.rowid '
-            'WHERE discovery_lexical MATCH ? AND c.parent=? AND ' + _ORIGINAL + ' ORDER BY bm25(discovery_lexical),c.id LIMIT 2', (match, parent))) if match else []
+            'WHERE discovery_lexical MATCH ? AND c.parent=? AND ' + _ORIGINAL + ' ORDER BY bm25(discovery_lexical),c.id LIMIT 2', (match, parent))) if match and person.claim_id else []
         if not rows:
             rows = list(conn.execute('SELECT c.id,c.source_id,c.source_hash,c.payload FROM active_claims c WHERE c.parent=? AND '
                                     + _ORIGINAL + " ORDER BY (c.kind='relationship') DESC,c.id LIMIT 2", (parent,)))
@@ -227,12 +228,17 @@ class Discover:
         aliases = [tuple(row) for row in conn.execute('SELECT alias,topic FROM aliases WHERE confirmed=1 ORDER BY alias,topic')
                    if row['alias'] in labels or row['topic'] in labels or row['alias'] == group.phrase]
         owner = conn.execute('SELECT content FROM context').fetchone()[0]
-        payload: dict[str, object] = {'candidate': group.phrase, 'owner': owner[:2000], 'existing_labels': sorted(labels)[:32],
+        candidate = group.phrase
+        if not group.seed:
+            count = f'{len(parents)} of {group.people}' if group.people > PEOPLE else str(group.people)
+            candidate = f'{group.phrase} ({count} members)'
+        payload: dict[str, object] = {'candidate': candidate, 'owner': owner[:2000],
                                       'confirmed_aliases': aliases[:32], 'evidence': [{'parent': item.parent, 'source_id': item.source_id, 'quote': item.quote} for item in evidence]}
         content = json.dumps(payload, ensure_ascii=False)
         fingerprint = short_hash(self.provider.discovery_key + content + json.dumps((dependencies, owner, aliases)), n=64)
         # Inferred labels are naming context only; they never change the evidence fingerprint.
-        inferred = [row[0] for row in conn.execute("SELECT topic FROM active_claims WHERE kind='tag' AND chunk_id IS NOT NULL GROUP BY topic ORDER BY max(id) DESC LIMIT 32")]
+        inferred = [row[0] for row in conn.execute("SELECT topic FROM active_claims WHERE kind='tag' AND chunk_id IS NOT NULL "
+                                                 "AND topic NOT IN (" + _SEED_TOPICS + ") GROUP BY topic ORDER BY count(DISTINCT parent) DESC,topic LIMIT 64")]
         payload['inferred_labels_for_naming_only'] = inferred
         content = json.dumps(payload, ensure_ascii=False)
         if len(content) > INPUT_CHARS:
@@ -266,4 +272,8 @@ class Discover:
                 validated.append((source, claim))
         for source, claim in validated:
             self.store.add_claim(source.source_id, source.source_hash, chunk_id, claim, human=False)
+        if self.provider.embedding_key:
+            for row in self.store.conn.execute(
+                'SELECT payload FROM active_claims WHERE chunk_id=? GROUP BY document_hash', (chunk_id,)):
+                embedded(self.store, self.provider, document(Claim.parse(json.loads(row['payload']))))
         return len(validated)
