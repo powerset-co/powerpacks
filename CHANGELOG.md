@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.37.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.2...powerpacks-v3.37.0) (2026-10-23)
+
+
+### Features
+
+* **people:** keep/skip and relationship selectors beside their headings ([#903](https://github.com/powerset-co/powerpacks/issues/903)) ([2cecf70](https://github.com/powerset-co/powerpacks/commit/2cecf7077a934e02e6874443e0daf9c70825590e))
+
+
+### Bug Fixes
+
+* **desktop:** stop a Codex left by an earlier run ([#900](https://github.com/powerset-co/powerpacks/issues/900)) ([05eb968](https://github.com/powerset-co/powerpacks/commit/05eb9687fd9fe5447c9aeb17bb24a4d54d710913))
+* **memory:** the status route stops scanning the store ([#899](https://github.com/powerset-co/powerpacks/issues/899)) ([e6626ff](https://github.com/powerset-co/powerpacks/commit/e6626ff3d99d876c8faf5caef52dd08b18f5820e))
+* **people:** a decision writes one family, not the page ([#901](https://github.com/powerset-co/powerpacks/issues/901)) ([c98213d](https://github.com/powerset-co/powerpacks/commit/c98213d17fe2f8b68c97f27cd3e36cb98df71920))
+
 ## [3.36.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.1...powerpacks-v3.36.2) (2026-10-23)
 
 
