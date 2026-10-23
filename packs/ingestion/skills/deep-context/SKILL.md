@@ -148,6 +148,32 @@ Uploading to Powerset is the page's own button, shown only with the Share networ
 
 "Show me my network", "who do I know", "my people": the same page.
 
+## Acting on a person from chat
+
+When the user asks for the change in chat ("skip Jordan", "mark Casey a close friend", "those two are the same
+person", "that LinkedIn is the wrong Jordan"), do it, then say what changed in one line. Every write is one
+family: never load or walk the page to do it. The page server is the app's (port 8765, or
+`bin/deep-context-v2 review`); the family is its `parent_id`, printed by `bin/deep-context-v2 lookup --name "<name>" --json`.
+Every write below answers `{"rows": [...]}`, the family's row as the page shows it.
+
+| Ask | Write |
+|---|---|
+| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. |
+| Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
+| Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. |
+| Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good; its rows stay. |
+| Merge two people | The family table is `candidate_parent`, append-only, newest row per member wins (`current_parent`). Move every member of the second family onto the first: `INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, '<kept parent_id>', 'human', NULL, <now iso>)` once per member. That insert is the whole merge: never edit `facts`, `person_labels` or `candidate_names` to make the row read a certain way. |
+| Split a person out | The same insert, with the member's own earlier `parent_id` when it had one, else a new `p:<new id>`. |
+| Wrong LinkedIn | On the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
+
+What a merged family shows: its keep/skip is the newest human call among its members (else the newest machine
+one); tags are the union; the name is the members' majority `canonical_name`, so two members tie and the row
+may read as either until the next run refreshes facts; the row says in progress until the next run relabels
+the family. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families and
+never splits one, and it never re-judges a pair on evidence it has a verdict for, so a human merge or split
+stands. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
+its next update.
+
 For a named person's saved dossier or questions about existing personal knowledge,
 follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
 
