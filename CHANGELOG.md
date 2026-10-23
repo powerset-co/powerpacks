@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.38.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.37.0...powerpacks-v3.38.0) (2026-10-23)
+
+
+### Features
+
+* **people:** a families table realize writes and the page reads ([#907](https://github.com/powerset-co/powerpacks/issues/907)) ([fa37866](https://github.com/powerset-co/powerpacks/commit/fa37866b8197d8b6d53444fb25cb43bc3d2deabc))
+
 ## [3.37.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.36.2...powerpacks-v3.37.0) (2026-10-23)
 
 
