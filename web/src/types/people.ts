@@ -162,3 +162,11 @@ export interface WorthResult {
   reason: string
   tags: string[]
 }
+
+/** What a relationship write changes on the row: the kind, and the flag and reason that follow it. */
+export interface RelationshipResult {
+  parent_id: string
+  relationship_kind: string
+  flag: string
+  reason: string
+}

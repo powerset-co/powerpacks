@@ -7,19 +7,25 @@ import {
   type PeoplePayload,
   type Person,
   type PersonDetail,
+  type RelationshipResult,
   type Worth,
   type WorthResult,
 } from "@/types/people"
 
 const API = "/api/people/"
 
-export async function writeRelationship(parent_id: string, relationship_kind: string): Promise<void> {
+/** Writes the human's relationship choice; returns the family's row as the server now holds it. */
+export async function writeRelationship(
+  parent_id: string,
+  relationship_kind: string,
+): Promise<RelationshipResult[]> {
   const response = await fetch(`${API}relationship`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ parent_id, relationship_kind }),
   })
   if (!response.ok) throw await failure(response, "Couldn't save relationship.")
+  return (await body<{ rows: RelationshipResult[] }>(response)).rows
 }
 
 type PersonCells = Omit<Person, "last" | "warmthBucket" | "search" | "logbook">

@@ -17,7 +17,7 @@ const DONE: Record<WorthAction, (count: number) => string> = {
   no: (count) => `Skipped ${plural(count, "person")}.`,
 }
 
-function patchRows(rows: Person[] | undefined, results: readonly WorthResult[]): Person[] | undefined {
+export function patchRows(rows: Person[] | undefined, results: readonly WorthResult[]): Person[] | undefined {
   if (!rows) return rows
   const byId = new Map(results.map((result) => [result.parent_id, result]))
   return rows.map((row) => {

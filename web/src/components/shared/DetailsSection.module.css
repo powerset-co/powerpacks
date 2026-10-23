@@ -1,5 +1,8 @@
 /* people.css details.dsec: a toggle (title, count, badge, chevron) over its folding body. */
 .heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   font: inherit;
 }
@@ -7,7 +10,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -20,9 +24,6 @@
   color: var(--faint);
   font-weight: 600;
   letter-spacing: 0;
-}
-.title + * {
-  margin-left: 2px;
 }
 .toggle:hover .title {
   color: var(--foreground);
