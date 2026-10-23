@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.39.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.38.1...powerpacks-v3.39.0) (2026-10-23)
+
+
+### Features
+
+* **desktop:** closing the window keeps Powerpacks running ([#911](https://github.com/powerset-co/powerpacks/issues/911)) ([2067a03](https://github.com/powerset-co/powerpacks/commit/2067a034d2bd7afdf2a177965d61f482e2e8d9a3))
+
 ## [3.38.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.38.0...powerpacks-v3.38.1) (2026-10-23)
 
 
