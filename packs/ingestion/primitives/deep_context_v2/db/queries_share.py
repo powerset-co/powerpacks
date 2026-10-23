@@ -116,10 +116,12 @@ def write_tags(conn: sqlite3.Connection, tags: list[TagRow]) -> None:
 
 
 def delete_parents(conn: sqlite3.Connection, parent_ids: tuple[str, ...], now: str) -> None:
-    """Hide the families from the People page for good; their rows stay."""
+    """Hide the families from the People page for good: their members and decisions stay, their
+    `families` rows go, so the labels pass and the page see the same families."""
     with conn:
         conn.executemany("INSERT OR IGNORE INTO deleted_parents (parent_id, deleted_at) VALUES (?, ?)",
                          [(parent_id, now) for parent_id in parent_ids])
+        conn.executemany("DELETE FROM families WHERE parent_id = ?", [(parent_id,) for parent_id in parent_ids])
 
 
 def deleted_parents(conn: sqlite3.Connection) -> set[str]:

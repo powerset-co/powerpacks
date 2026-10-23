@@ -282,7 +282,7 @@ class PeopleWorthTests(StoreTests):
     def _seed_every_table(self, candidates: tuple[str, str], parent_id: str) -> None:
         first, second = candidates
         self.conn.executemany("INSERT INTO candidate_names VALUES (?, ?)", [(c, f"name {c}") for c in candidates])
-        self.conn.executemany("INSERT INTO bundles VALUES (?, '{}', 'f', ?)", [(c, NOW) for c in candidates])
+        self.conn.executemany("INSERT INTO bundles VALUES (?, '{\"groups\": [], \"messages\": []}', 'f', ?)", [(c, NOW) for c in candidates])
         self.conn.execute("INSERT INTO pair_verdicts VALUES (?, ?, 's', 1, 0.9, 'same', ?)", (first, second, NOW))
         self.conn.execute("INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, decided_by, "
                           "judgment_fingerprint, confidence, reason, created_at) VALUES "
@@ -321,9 +321,12 @@ class PeopleWorthTests(StoreTests):
 
         self.assertEqual(self.post("/api/people/delete", {"ids": ["p:a"]}), (200, {"deleted": 1}))
 
-        self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), {**deleted, "deleted_parents": 1})
+        self.assertEqual(self._family_rows(("c1", "c2"), "p:a"), {**deleted, "deleted_parents": 1, "families": 0})
         self.assertEqual(self._family_rows(("c3", "c4"), "p:b"), kept)
         self.assertIsNone(self.people.detail("p:a"))
+        self.assertEqual([row.parent_id for row in self.people.load()], ["p:b"])
+        # The labels pass (Refresh signals) walks the families table: the deleted family is not there.
+        PersonLabels(self.conn, self.root).run()
         self.assertEqual([row.parent_id for row in self.people.load()], ["p:b"])
         from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
         self.assertNotIn("p:a", {member.family_key for member in queries_worth.members_with_facts(self.conn)})
