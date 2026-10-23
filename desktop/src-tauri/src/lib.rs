@@ -64,8 +64,15 @@ async fn codex_login(
 /// Bring the window forward, after a sign-in that had to happen in the browser.
 #[tauri::command]
 fn app_focus(app: AppHandle) {
+    show_main(&app);
+}
+
+/// The window, shown and in front: after a sign-in in the browser, a second launch, or a Dock
+/// click while the window is closed.
+fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.unminimize();
+        let _ = window.show();
         let _ = window.set_focus();
     }
 }
@@ -388,12 +395,7 @@ pub fn run() {
         crash::note_panics(root);
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -426,6 +428,17 @@ pub fn run() {
             setup_import,
             report_crash,
         ])
+        // On a Mac, closing the window keeps Powerpacks running in the Dock (setup, the page server
+        // and Codex carry on); a Dock click brings the window back. Quit is the Powerpacks menu or Cmd-Q.
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (window, event);
+        })
         .setup(|app| {
             quit_on_signal(app.handle().clone());
             main_window(app.handle())?;
@@ -437,6 +450,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Powerpacks failed to start")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+                show_main(app);
+                return;
+            }
             // Quitting mid-setup pauses the import until the next launch; ask first.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
                 let mid_setup = code.is_none()
