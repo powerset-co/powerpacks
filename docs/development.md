@@ -379,6 +379,10 @@ inherits the shape.
 
 ### Working the repo
 
+- For isolated deep context v2 unit tests, run `scripts/test-deep-context-v2`.
+  The command does not run the general suite. See
+  [the test contract and later verification checks](deep-context-v2-tests.md).
+
 - Fan mechanical work out to sub-agents with disjoint file ownership; each
   agent reads this section first; the parent verifies the combined tree,
   runs the affected suites, and commits. Serialize agents whose scopes touch
