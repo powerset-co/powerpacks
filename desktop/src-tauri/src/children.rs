@@ -59,3 +59,35 @@ pub fn is_alive(pid: u32) -> bool {
             .unwrap_or(false)
     }
 }
+
+/// Stop every process whose command line matches `pattern`: what an earlier run of this app
+/// started and never got to stop (a crash, a force quit, an update mid-request). A Codex
+/// app-server left this way keeps the chats' writer locks, and the next run cannot open them.
+pub fn stop_matching(pattern: &str) {
+    #[cfg(unix)]
+    {
+        let Ok(found) = std::process::Command::new("pgrep").args(["-f", pattern]).output() else {
+            return;
+        };
+        let me = std::process::id();
+        let pids: Vec<u32> = String::from_utf8_lossy(&found.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse().ok())
+            .filter(|pid| *pid != me)
+            .collect();
+        for pid in &pids {
+            stop_pid(*pid);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline && pids.iter().any(|pid| is_alive(*pid)) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        for pid in pids.iter().filter(|pid| is_alive(**pid)) {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+    #[cfg(windows)]
+    let _ = pattern;
+}
