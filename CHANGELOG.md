@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.35.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.1...powerpacks-v3.35.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **memory:** 3x faster people search, Stop button, operator id at run time ([c2ec650](https://github.com/powerset-co/powerpacks/commit/c2ec650b74a3796f433c1e1090e14c5a87bd7e40))
+* **memory:** 3x faster people search, Stop button, operator id at run time ([9cf22c4](https://github.com/powerset-co/powerpacks/commit/9cf22c41f268b60227fa3ff829ec2959dd0b91ac))
+
 ## [3.35.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.35.0...powerpacks-v3.35.1) (2026-10-22)
 
 
