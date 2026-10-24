@@ -45,7 +45,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
-from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize, with_connections
 from packs.ingestion.primitives.deep_context_v2.review.commit import commit_review
 from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
@@ -168,14 +168,17 @@ def pending_reviews(port: int) -> int:
 
 
 def realize(data_root: Path) -> Path:
-    """people.csv from everything decided so far; returns its path."""
+    """people.csv from everything decided so far, then the index's people file (families plus the LinkedIn
+    connections no family holds); returns the index file's path."""
     conn: sqlite3.Connection = open_store(store_path(data_root))
     node = Realize(conn, data_root)
     _stage("realize", node)
     _stage("labels", PersonLabels(conn, data_root))
     conn.close()
     print(f"people.csv: {node.people_csv()}", flush=True)
-    return node.people_csv()
+    indexed, families, added = with_connections(data_root)
+    print(f"index people: {families} families + {added} LinkedIn connections no family holds -> {indexed}", flush=True)
+    return indexed
 
 
 def index_command(data_root: Path, people_csv: Path) -> list[str]:

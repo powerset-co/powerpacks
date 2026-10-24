@@ -34,6 +34,34 @@ export function connectSource(source: ConnectSource, emails?: string[]): Promise
   return installAction("connect", { source, emails })
 }
 
+/** One person of the first look: from the index's people file (controller.first_look). */
+export interface FirstLookPerson {
+  public_identifier: string
+  name: string
+  title: string
+  company: string
+  headline: string
+  avatar_url: string
+}
+
+export interface FirstLook {
+  people: FirstLookPerson[]
+  total: number
+}
+
+/** The first people to show once the index is built, and how many there are in all. */
+export async function fetchFirstLook(signal?: AbortSignal): Promise<FirstLook> {
+  const response = await fetch("/api/install/first-look", { signal, cache: "no-store" })
+  if (!response.ok) throw await failure(response, "Couldn't read your people")
+  return body<FirstLook>(response)
+}
+
+/** Move the LinkedIn sign-in and the connections it read aside (each to a `.bkup-<time>`), so the
+ *  onboarding's LinkedIn steps run again from the sign-in. For trying the onboarding over. */
+export function forgetLinkedin(): Promise<void> {
+  return installAction("linkedin-forget")
+}
+
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */
 export interface SetupAnswer {
   linkedinUrl?: string

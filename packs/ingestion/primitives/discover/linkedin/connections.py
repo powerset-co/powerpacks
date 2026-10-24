@@ -21,6 +21,7 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-10-24: the scroll run saves one picture of the connections page (PAGE_SHOT) for the setup screen.
   2026-10-05: the read reports its count as it scrolls and returns an `outcome`
       instead of a message; the install page words it (install/status_prose.py).
   2026-10-05: a stalled read asks LinkedIn for its data export (the larger
@@ -52,6 +53,8 @@ from packs.shared.csv_io import CsvIO
 
 CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections.csv")
 SCRAPE_RECORD = CONNECTIONS_CSV.with_name("connections.json")
+# One picture of the connections page, taken as the read starts; the setup screen shows it.
+PAGE_SHOT = CONNECTIONS_CSV.with_name("connections-page.png")
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("connections_browser.js")
 EXPORT_COLUMNS = ["First Name", "Last Name", "URL", "Email Address", "Company", "Position", "Connected On"]
@@ -166,10 +169,12 @@ class LinkedInConnections:
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(sorted(known), handle)
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             payload = self._browser(
                 "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
-                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
+                "--max-loads", str(max_loads), "--screenshot", str(self.csv_path.with_name(PAGE_SHOT.name)),
+                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
                 on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
         finally:
             os.unlink(handle.name)

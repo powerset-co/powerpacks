@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from packs.powerset.primitives.install import controller
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
@@ -163,6 +164,66 @@ class InstallStatusTests(unittest.TestCase):
     def test_an_event_without_its_own_step_lands_on_the_current_one(self) -> None:
         self.status.write("gmail.syncing", pid=os.getpid())
         self.assertEqual(self.status.write("step.failed", pid=os.getpid())["step"], "gmail_sync")
+
+
+class ForgetLinkedInTests(unittest.TestCase):
+    """`forget_linkedin` moves the sign-in profile, the connections file and its record aside."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "root"
+        self.profile = Path(self.tmp.name) / "browser-profiles" / "linkedin"
+        self.profile.mkdir(parents=True)
+        (self.profile / "Default").mkdir()
+        csv = self.root / controller.CONNECTIONS_CSV
+        csv.parent.mkdir(parents=True)
+        csv.write_text("First Name,Last Name\n", encoding="utf-8")
+        (self.root / controller.SCRAPE_RECORD).write_text("{}", encoding="utf-8")
+
+    def test_moves_each_path_to_a_backup_and_deletes_nothing(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile):
+            payload = InstallController(self.root).forget_linkedin()
+        self.assertEqual(payload["status"], "forgotten")
+        self.assertEqual(len(payload["moved"]), 3)
+        self.assertFalse(self.profile.exists())
+        self.assertFalse((self.root / controller.CONNECTIONS_CSV).exists())
+        self.assertFalse((self.root / controller.SCRAPE_RECORD).exists())
+        for moved in payload["moved"]:
+            self.assertIn(".bkup-", moved)
+            self.assertTrue(Path(moved).exists())
+        self.assertTrue((Path(payload["moved"][0]) / "Default").is_dir())
+
+    def test_page_image_is_served_once_the_read_took_one(self) -> None:
+        install = InstallController(self.root)
+        self.assertIsNone(install.linkedin_page_image())
+        (self.root / controller.PAGE_SHOT).write_bytes(b"PNG")
+        self.assertEqual(install.linkedin_page_image(), b"PNG")
+        with patch.object(controller, "BROWSER_PROFILE", self.profile):
+            payload = install.forget_linkedin()
+        self.assertEqual(len(payload["moved"]), 4)
+        self.assertIsNone(install.linkedin_page_image())
+
+    def test_first_look_reads_the_indexed_people_then_the_linkedin_import(self) -> None:
+        install = InstallController(self.root)
+        self.assertEqual(install.first_look(), {"people": [], "total": 0})
+        header = "public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
+        linkedin = self.root / controller.LINKEDIN_PEOPLE
+        linkedin.parent.mkdir(parents=True, exist_ok=True)
+        linkedin.write_text(header + "a-b,A B,CTO,Acme,,http://p/a\nc-d,C D,,,,\ne-f,E F,Founder,Beta,,\n", encoding="utf-8")
+        look = install.first_look(limit=1)
+        self.assertEqual(look["total"], 3)
+        self.assertEqual([person["name"] for person in look["people"]], ["A B"])
+        self.assertEqual(look["people"][0]["avatar_url"], "http://p/a")
+        indexed = self.root / controller.INDEXED_PEOPLE
+        indexed.parent.mkdir(parents=True, exist_ok=True)
+        indexed.write_text(header + "g-h,G H,VP,Gamma,,\n", encoding="utf-8")
+        self.assertEqual([person["name"] for person in install.first_look()["people"]], ["G H"])
+
+    def test_nothing_to_move_is_fine(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile / "absent"):
+            payload = InstallController(Path(self.tmp.name) / "empty").forget_linkedin()
+        self.assertEqual(payload, {"status": "forgotten", "moved": []})
 
 
 class ConnectTests(unittest.TestCase):

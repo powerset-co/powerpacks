@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
+      connections file and its record aside (`.bkup-<time>`), so the onboarding page's LinkedIn
+      steps can be run again from the sign-in.
   2026-10-13: `POST /api/install/connect` answers once the run has written its own status, so the
       Connect screen never reads the previous run's record after a click.
   2026-10-13: `/api/install/skip` is gone: setup under the desktop app takes only connected sources,
@@ -14,6 +17,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import subprocess
@@ -25,11 +29,16 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, SCRAPE_RECORD
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
 
 PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+# The enriched LinkedIn import (the Modal import-linkedin step's output) and the index's own people
+# file when deep context ran (families plus the connections no family holds); the first look reads them.
+LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
@@ -99,6 +108,44 @@ class InstallController:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
         return record
 
+    def first_look(self, limit: int = 3) -> dict:
+        """The first people to show once the index is built: from the index's own people file (families
+        plus connections), else the enriched LinkedIn import; the first `limit` with a title and a company,
+        and how many people there are in all. Empty before either file exists."""
+        path = next((self.root / relative for relative in (INDEXED_PEOPLE, LINKEDIN_PEOPLE)
+                     if (self.root / relative).is_file()), None)
+        if path is None:
+            return {"people": [], "total": 0}
+        people: list[dict] = []
+        total = 0
+        with path.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                total += 1
+                if len(people) < limit and row.get("current_title") and row.get("current_company"):
+                    people.append({"public_identifier": row.get("public_identifier", ""),
+                                   "name": row.get("full_name", ""), "title": row["current_title"],
+                                   "company": row["current_company"], "headline": row.get("headline", ""),
+                                   "avatar_url": row.get("profile_picture_url", "")})
+        return {"people": people, "total": total}
+
+    def linkedin_page_image(self) -> bytes | None:
+        """The picture of the connections page the last read took, or None before one."""
+        path = self.root / PAGE_SHOT
+        return path.read_bytes() if path.is_file() else None
+
+    def forget_linkedin(self) -> dict:
+        """Move the LinkedIn sign-in and the connections it read aside, so the next connect signs in
+        and the next setup reads them again. Nothing is deleted: each path gets a `.bkup-<time>`."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        moved = []
+        for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD,
+                     self.root / PAGE_SHOT):
+            if path.exists():
+                target = path.with_name(f"{path.name}.bkup-{stamp}")
+                path.rename(target)
+                moved.append(str(target))
+        return {"status": "forgotten", "moved": moved}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -151,6 +198,8 @@ class InstallController:
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
             elif path == "/api/install/preflight":
                 response = self.install(self._body(handler).get("item"))
+            elif path == "/api/install/linkedin-forget":
+                response = self.forget_linkedin()
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))
