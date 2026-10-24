@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
-import { continueSetup, fetchInstall } from "@/lib/api/install"
-import { fetchPeople } from "@/lib/api/people"
+import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
@@ -104,15 +103,15 @@ export function SetUp() {
     continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
   }, [data, running, failed, ready])
 
-  // People appear during processing; once there are some the first look takes the right column.
-  const people = useQuery({
-    queryKey: ["people"],
-    queryFn: fetchPeople,
+  // People appear as the index is built; once there are some the first look takes the right column.
+  const look = useQuery({
+    queryKey: ["onboarding", "first-look"],
+    queryFn: ({ signal }) => fetchFirstLook(signal),
     enabled: processing || ready,
     refetchInterval: processing ? PEOPLE_POLL_MS : false,
     retry: false,
   })
-  const known = people.data?.length ?? 0
+  const known = look.data?.total ?? 0
 
   const retry = () => {
     setRetrying(true)
@@ -244,7 +243,7 @@ export function SetUp() {
         // The right column fills in as the stages finish: the page picture while the connections
         // are read, then the first look the moment people are in.
         known > 0 || ready ? (
-          <FirstLookPanel people={people.data ?? []} ready={ready} />
+          <FirstLookPanel look={look.data ?? { people: [], total: 0 }} ready={ready} />
         ) : data && (count !== null || processing || data.step === "linkedin") ? (
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>

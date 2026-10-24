@@ -34,7 +34,7 @@ Changelog:
 """
 from __future__ import annotations
 
-import csv
+import hashlib
 import json
 import os
 import shlex
@@ -52,7 +52,6 @@ from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CS
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
-from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
 from packs.ingestion.primitives.deep_context_v2.run import (archive_v1, index_command, index_env, realize,
                                                             resolve_operator_id, stages)
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
@@ -60,9 +59,10 @@ from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
+from packs.powerset.primitives.install.controller import INDEXED_PEOPLE, LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
-_LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+_LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
 # The message imports deep context reads people from; without any, LinkedIn goes straight to search.
 _MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
@@ -213,50 +213,22 @@ class ProcessingOnboarding:
 
     def _index(self) -> None:
         self.step = InstallStep.INDEX
-        people = self.data_root / PEOPLE_CSV_RELATIVE_PATH
         self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
                   "index.preparing")
-        indexed = self.index / "people.csv"
-        before = indexed.read_bytes() if indexed.is_file() else b""
-        self._run("people-with-connections", lambda: {"status": "completed", "people_csv": str(indexed),
-                                                      **self._with_connections(people, indexed)}, "index.preparing")
-        self._build_index(indexed, changed=indexed.read_bytes() != before)
-
-    def _with_connections(self, people: Path, indexed: Path) -> dict[str, int]:
-        """The index's people file: realize's families, then every LinkedIn connection the enriched
-        import has that no family holds, so the whole network stays searchable as families form."""
-        rows = list(csv.DictReader(people.open(encoding="utf-8"))) if people.is_file() else []
-        columns = list(rows[0].keys()) if rows else []
-        known = {row.get("public_identifier", "") for row in rows} - {""}
-        connections = self.root / _LINKEDIN_PEOPLE
-        added = 0
-        if connections.is_file():
-            for row in csv.DictReader(connections.open(encoding="utf-8")):
-                if row.get("public_identifier", "") in known or not row.get("public_identifier"):
-                    continue
-                for column in row:
-                    if column not in columns:
-                        columns.append(column)
-                rows.append(row)
-                added += 1
-        indexed.parent.mkdir(parents=True, exist_ok=True)
-        with indexed.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
-            writer.writeheader()
-            for row in rows:
-                writer.writerow({column: row.get(column, "") for column in columns})
-        return {"families": len(rows) - added, "connections_added": added}
+        self._build_index(self.root / INDEXED_PEOPLE)
 
     def _index_linkedin(self) -> None:
         """LinkedIn only: the enriched import is the people file, no deep context in between."""
         self.step = InstallStep.INDEX
-        people = self.root / _LINKEDIN_PEOPLE
-        manifest = self.index / "manifest.json"
-        self._build_index(people, changed=not manifest.is_file() or people.stat().st_mtime_ns > manifest.stat().st_mtime_ns)
+        self._build_index(self.root / _LINKEDIN_PEOPLE)
 
-    def _build_index(self, people: Path, *, changed: bool) -> None:
-        """The Modal index of `people` when it changed (or there is none), then the search check."""
-        if changed or not (self.index / "manifest.json").is_file():
+    def _build_index(self, people: Path) -> None:
+        """The Modal index of `people` unless the index on disk was built from this very file (the
+        fingerprint the download wrote beside it), then the search check."""
+        fingerprint = hashlib.sha256(people.read_bytes()).hexdigest()
+        built = self.index / "people.sha256"
+        if (not (self.index / "manifest.json").is_file() or not (self.index / "local-search.duckdb").is_file()
+                or not built.is_file() or built.read_text(encoding="utf-8").strip() != fingerprint):
             command = index_command(self.data_root, people)
             env = index_env(resolve_operator_id(""))
             self._run(shlex.join(command), lambda: self._modal(command, env), "index.building")

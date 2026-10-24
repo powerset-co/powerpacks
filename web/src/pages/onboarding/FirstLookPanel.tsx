@@ -2,8 +2,8 @@ import { useNavigate } from "react-router-dom"
 
 import { Avatar } from "@/components/shared"
 import { Button } from "@/components/ui/button"
+import type { FirstLook, FirstLookPerson } from "@/lib/api/install"
 import { HOME } from "@/lib/nav"
-import type { Person } from "@/types/people"
 
 import { Note } from "./Frame"
 import { STEPS } from "./steps"
@@ -18,15 +18,15 @@ const CHIP =
   "w-full cursor-pointer rounded-full border border-line-strong bg-surface-2 px-4 py-2 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
 
 /** The first few people with a title and a company: the person recognizes them at a glance. */
-function recognizable(people: readonly Person[]): Person[] {
-  return people.filter((person) => !person.is_owner && person.title && person.company).slice(0, SHOWN)
+function recognizable(people: readonly FirstLookPerson[]): FirstLookPerson[] {
+  return people.filter((person) => person.title && person.company).slice(0, SHOWN)
 }
 
 /** The first look, in the Set up screen's right column once people are in: a few people the
  *  person knows, three questions to try, and where to go next. Rises in over the page picture. */
-export function FirstLookPanel({ people, ready }: { people: readonly Person[]; ready: boolean }) {
+export function FirstLookPanel({ look, ready }: { look: FirstLook; ready: boolean }) {
   const navigate = useNavigate()
-  const shown = recognizable(people)
+  const shown = recognizable(look.people)
   const sources = STEPS.find((step) => step.key === "sources")
   return (
     <div className="rise-in flex flex-col gap-5" data-first-look>
@@ -36,7 +36,7 @@ export function FirstLookPanel({ people, ready }: { people: readonly Person[]; r
         <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {shown.map((person) => (
             <li
-              key={person.parent_id}
+              key={person.public_identifier || person.name}
               className="rise-in flex items-center gap-3 rounded-[var(--radius-m)] border border-line-strong bg-background px-3 py-2.5"
             >
               <Avatar name={person.name} src={person.avatar_url || null} className="size-8 text-xs" />
@@ -50,7 +50,7 @@ export function FirstLookPanel({ people, ready }: { people: readonly Person[]; r
           ))}
         </ul>
         <Note>
-          {people.length.toLocaleString()} people{" "}
+          {look.total.toLocaleString()} people{" "}
           {ready ? "searchable" : "so far · the rest is still being built"}
         </Note>
       </div>

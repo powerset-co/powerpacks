@@ -279,6 +279,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
                 self._json(record)
                 return
+            if parsed.path == "/api/install/first-look":
+                self._json(install.first_look())
+                return
             if parsed.path == "/api/install/preflight":
                 self._json(install.preflight())
                 return

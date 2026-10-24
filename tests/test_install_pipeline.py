@@ -7,6 +7,7 @@ Changelog:
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
 import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -134,6 +135,7 @@ class InstallPipelineTests(unittest.TestCase):
                 self.lines.append(self.status.read()["message"])
         elif command == "realize":
             self.write(self.people, self.csv)
+            self.write(self.index / "people.csv", self.csv)
         elif command == "operator-id":
             if not self.operator_id:
                 raise SystemExit("deep-context: no operator id.")
@@ -144,6 +146,10 @@ class InstallPipelineTests(unittest.TestCase):
             self.paid_commands.append("index")
             self.write(self.index / "local-search.duckdb", "synthetic index")
             self.write(self.index / "manifest.json", '{"status":"ok"}')
+            # The download writes the indexed file's fingerprint beside the index (linkedin_modal_pipeline).
+            argv = kwargs["argv"]
+            people = Path(argv[argv.index("--people-csv") + 1])
+            self.write(self.index / "people.sha256", hashlib.sha256(people.read_bytes()).hexdigest())
         elif command == "search-validate":
             payload = {"status": self.validation_status, "total_people": 1,
                        "summary": "Search index ready: 1 people searchable."}
@@ -413,19 +419,35 @@ class InstallPipelineTests(unittest.TestCase):
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
         self.assertTrue(any("index-people" in command and str(linkedin) in command for command in commands), commands)
 
-    def test_connections_no_family_holds_stay_in_the_index(self):
-        # Messages and LinkedIn: realize's families come first, then every connection the enriched
-        # LinkedIn import has that no family holds; the index builds from that file.
-        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
-        self.write(linkedin, "id,full_name,public_identifier\nsynthetic-jordan,Jordan Bravo,jordan-bravo\nli-sam,Sam Li,sam-li\n")
-        self.csv = "id,full_name,public_identifier\nsynthetic-jordan,Jordan Bravo,jordan-bravo\n"
+    def test_the_index_builds_from_the_file_realize_hands_back(self):
+        # With messages, realize hands back the index's people file (families plus the LinkedIn
+        # connections no family holds; realize.with_connections, tested on its own) and the index
+        # builds from it.
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
         indexed = self.index / "people.csv"
-        rows = list(csv.DictReader(indexed.open()))
-        self.assertEqual([row["public_identifier"] for row in rows], ["jordan-bravo", "sam-li"])
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
         self.assertTrue(any("index-people" in command and str(indexed) in command for command in commands), commands)
+
+    def test_a_failed_rebuild_over_an_old_index_is_tried_again(self):
+        # An index exists; the people file changes; Modal fails. The next run must build again, not
+        # take the index on disk for the new file (the fingerprint is written only after a build).
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.csv = "id,full_name\nsynthetic-jordan,Jordan Bravo\nsynthetic-sam,Sam Li\n"
+        with patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "")):
+            self.assertEqual(self.run_pipeline()["status"], "failed")
+        self.calls.clear()
+        self.paid_commands.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertEqual(self.paid_commands, ["index"])
+
+    def test_a_missing_duckdb_rebuilds_even_with_a_manifest(self):
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        (self.index / "local-search.duckdb").unlink()
+        self.calls.clear()
+        self.paid_commands.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertEqual(self.paid_commands, ["index"])
 
     def test_index_without_an_operator_id_stops_before_modal(self):
         self.operator_id = ""

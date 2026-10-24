@@ -17,6 +17,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import subprocess
@@ -34,6 +35,10 @@ from packs.powerset.primitives.install.status import InstallStatus
 
 
 PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+# The enriched LinkedIn import (the Modal import-linkedin step's output) and the index's own people
+# file when deep context ran (families plus the connections no family holds); the first look reads them.
+LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
@@ -102,6 +107,26 @@ class InstallController:
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
         return record
+
+    def first_look(self, limit: int = 3) -> dict:
+        """The first people to show once the index is built: from the index's own people file (families
+        plus connections), else the enriched LinkedIn import; the first `limit` with a title and a company,
+        and how many people there are in all. Empty before either file exists."""
+        path = next((self.root / relative for relative in (INDEXED_PEOPLE, LINKEDIN_PEOPLE)
+                     if (self.root / relative).is_file()), None)
+        if path is None:
+            return {"people": [], "total": 0}
+        people: list[dict] = []
+        total = 0
+        with path.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                total += 1
+                if len(people) < limit and row.get("current_title") and row.get("current_company"):
+                    people.append({"public_identifier": row.get("public_identifier", ""),
+                                   "name": row.get("full_name", ""), "title": row["current_title"],
+                                   "company": row["current_company"], "headline": row.get("headline", ""),
+                                   "avatar_url": row.get("profile_picture_url", "")})
+        return {"people": people, "total": total}
 
     def linkedin_page_image(self) -> bytes | None:
         """The picture of the connections page the last read took, or None before one."""

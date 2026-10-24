@@ -204,6 +204,22 @@ class ForgetLinkedInTests(unittest.TestCase):
         self.assertEqual(len(payload["moved"]), 4)
         self.assertIsNone(install.linkedin_page_image())
 
+    def test_first_look_reads_the_indexed_people_then_the_linkedin_import(self) -> None:
+        install = InstallController(self.root)
+        self.assertEqual(install.first_look(), {"people": [], "total": 0})
+        header = "public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
+        linkedin = self.root / controller.LINKEDIN_PEOPLE
+        linkedin.parent.mkdir(parents=True, exist_ok=True)
+        linkedin.write_text(header + "a-b,A B,CTO,Acme,,http://p/a\nc-d,C D,,,,\ne-f,E F,Founder,Beta,,\n", encoding="utf-8")
+        look = install.first_look(limit=1)
+        self.assertEqual(look["total"], 3)
+        self.assertEqual([person["name"] for person in look["people"]], ["A B"])
+        self.assertEqual(look["people"][0]["avatar_url"], "http://p/a")
+        indexed = self.root / controller.INDEXED_PEOPLE
+        indexed.parent.mkdir(parents=True, exist_ok=True)
+        indexed.write_text(header + "g-h,G H,VP,Gamma,,\n", encoding="utf-8")
+        self.assertEqual([person["name"] for person in install.first_look()["people"]], ["G H"])
+
     def test_nothing_to_move_is_fine(self) -> None:
         with patch.object(controller, "BROWSER_PROFILE", self.profile / "absent"):
             payload = InstallController(Path(self.tmp.name) / "empty").forget_linkedin()

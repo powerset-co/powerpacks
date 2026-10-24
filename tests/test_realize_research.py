@@ -30,6 +30,7 @@ class FillResearchTests(unittest.TestCase):
         self.assertEqual(experiences[1]["title_hash"], generate_title_hash("Advisor", ""))
         self.assertTrue(all(exp["title_hash"] for exp in experiences))
         self.assertEqual(experiences[0]["company"], "Acme")
+        self.assertEqual([exp["company_domain"] for exp in experiences], ["acme.io", ""])
         self.assertTrue(experiences[0]["is_current_position"])
         self.assertEqual((row["current_title"], row["current_company"]), ("Co-Founder", "Acme"))
         self.assertEqual(row["location_raw"], "Berlin, Germany")

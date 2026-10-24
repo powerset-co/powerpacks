@@ -17,6 +17,7 @@ Created: 2026-10-07
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,10 @@ from packs.ingestion.schemas.company_identity import rapidapi_experience_to_powe
 
 # The file the index builder reads and hashes to decide on a re-index; replaced whole each run.
 PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
+# The enriched LinkedIn import (the Modal import-linkedin step's output) and the people file the index
+# builds from: realize's families, then every connection the import has that no family holds.
+LINKEDIN_IMPORT_RELATIVE_PATH = Path("network-import") / "import" / "linkedin" / "people.csv"
+INDEX_PEOPLE_RELATIVE_PATH = Path("search-index") / "people.csv"
 # The people columns a LinkedIn profile fills.
 PROFILE_COLUMNS: tuple[str, ...] = (
     "first_name", "last_name", "full_name", "headline", "summary", "city", "state", "country",
@@ -55,6 +60,37 @@ def message_total(member: Member) -> int:
 def by_most_messages(members: list[Member]) -> list[Member]:
     """The family's members, most messages first; ties by candidate id so the order is stable."""
     return sorted(members, key=lambda member: (-message_total(member), member.candidate_id))
+
+
+def with_connections(data_root: Path) -> tuple[Path, int, int]:
+    """The index's people file: realize's families, then every LinkedIn connection the enriched import
+    has that no family holds, so the whole network is searchable as families form. Returns the path,
+    how many families, how many connections were added."""
+    people = data_root / PEOPLE_CSV_RELATIVE_PATH
+    connections = data_root / LINKEDIN_IMPORT_RELATIVE_PATH
+    indexed = data_root / INDEX_PEOPLE_RELATIVE_PATH
+    with people.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    columns = list(rows[0].keys()) if rows else list(PEOPLE_SCHEMA_COLUMNS)
+    known = {row.get("public_identifier", "") for row in rows} - {""}
+    added = 0
+    if connections.is_file():
+        with connections.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if not row.get("public_identifier") or row["public_identifier"] in known:
+                    continue
+                for column in row:
+                    if column not in columns:
+                        columns.append(column)
+                rows.append(row)
+                added += 1
+    indexed.parent.mkdir(parents=True, exist_ok=True)
+    with indexed.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in columns})
+    return indexed, len(rows) - added, added
 
 
 def fill_profile(row: dict[str, str], record: dict[str, Any]) -> None:
@@ -76,8 +112,14 @@ def fill_research(row: dict[str, str], content: dict[str, Any]) -> None:
     row["location_raw"] = ", ".join(value for value in (row["city"], row["country"]) if value)
     # The same shape as a fetched profile's experiences (title hash included): the index refuses
     # a role without its upstream hash.
-    experiences = [rapidapi_experience_to_powerpacks(exp) for exp in content.get("work_experience") or []
-                   if isinstance(exp, dict)]
+    experiences = []
+    for exp in content.get("work_experience") or []:
+        if not isinstance(exp, dict):
+            continue
+        built = rapidapi_experience_to_powerpacks(exp)
+        # The research names the company's domain; the index reads it for company matching.
+        built["company_domain"] = str(exp.get("company_domain") or "")
+        experiences.append(built)
     row["work_experiences"] = json.dumps(experiences, ensure_ascii=False)
     row["education"] = json.dumps(content.get("education") or [], ensure_ascii=False)
     row["current_title"], row["current_company"], _ = current_position(experiences)

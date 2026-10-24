@@ -624,6 +624,9 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     if code != 0:
         progress.event("indexing", "Download failed", status="failed")
         return code
+    # The fingerprint of the people file this index was built from, beside it: setup rebuilds only
+    # when the file differs (install/pipeline.py _build_index).
+    (dest / "people.sha256").write_text(hashlib.sha256(people_path.read_bytes()).hexdigest(), encoding="utf-8")
     result = {"people_csv": str(people_path), "contacts": rows,
               "duckdb": str(dest / "local-search.duckdb")}
     progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
