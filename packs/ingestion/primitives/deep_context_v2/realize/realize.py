@@ -33,6 +33,7 @@ from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, 
 from packs.ingestion.primitives.enrich.profile_transforms import current_position, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
 from packs.shared.csv_io import CsvIO
+from packs.ingestion.schemas.company_identity import rapidapi_experience_to_powerpacks
 
 # The file the index builder reads and hashes to decide on a re-index; replaced whole each run.
 PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
@@ -73,7 +74,10 @@ def fill_research(row: dict[str, str], content: dict[str, Any]) -> None:
     row["city"] = content.get("location_city") or ""
     row["country"] = content.get("location_country") or ""
     row["location_raw"] = ", ".join(value for value in (row["city"], row["country"]) if value)
-    experiences = content.get("work_experience") or []
+    # The same shape as a fetched profile's experiences (title hash included): the index refuses
+    # a role without its upstream hash.
+    experiences = [rapidapi_experience_to_powerpacks(exp) for exp in content.get("work_experience") or []
+                   if isinstance(exp, dict)]
     row["work_experiences"] = json.dumps(experiences, ensure_ascii=False)
     row["education"] = json.dumps(content.get("education") or [], ensure_ascii=False)
     row["current_title"], row["current_company"], _ = current_position(experiences)
