@@ -60,6 +60,7 @@ export function SetUp() {
   })
   const data = install.data?.data
   const running = data?.status === "running" || (data?.status === "waiting" && (data.installer_pid ?? 0) > 0)
+  const failed = data?.status === "failed"
   const processing = data !== undefined && PROCESSING.has(data.step)
   const ready = data?.event === "search.ready"
   // Setup can be started when nothing runs: before it (setup.ready), paused, or stopped.
@@ -83,21 +84,25 @@ export function SetUp() {
     if (ready && next) void navigate(next.href)
   }, [ready, next, navigate])
 
+  // The spinner stays after the call answers: the button leaves once the record shows the run.
   const start = () => {
     setStarting(true)
     setError(null)
-    continueSetup({})
-      .catch((caught: unknown) => setError(errorText(caught)))
-      .finally(() => setStarting(false))
+    continueSetup({}).catch((caught: unknown) => {
+      setError(errorText(caught))
+      setStarting(false)
+    })
   }
 
-  const title = count
-    ? "Reading your connections"
-    : processing
-      ? "Building your network"
-      : running
-        ? "Setting up"
-        : "Ready to set up"
+  const title = failed
+    ? "Setup stopped"
+    : count
+      ? "Reading your connections"
+      : processing
+        ? "Building your network"
+        : running
+          ? "Setting up"
+          : "Ready to set up"
   return (
     <Frame
       step="setup"
@@ -105,12 +110,28 @@ export function SetUp() {
         <>
           <Heading
             title={title}
-            line={startable ? "Read your LinkedIn connections and build your network from them." : undefined}
+            line={
+              failed
+                ? data.message
+                : startable
+                  ? starting
+                    ? "Starting the read of your LinkedIn connections…"
+                    : "Read your LinkedIn connections and build your network from them."
+                  : undefined
+            }
           />
           {install.error ? <Note bad>{errorText(install.error)}</Note> : null}
           {startable ? (
             <Button variant="primary" size="lg" disabled={starting} onClick={start}>
-              {starting ? "Starting…" : "Set up"}
+              {starting ? (
+                <>
+                  <Spinner /> Starting…
+                </>
+              ) : failed ? (
+                "Try again"
+              ) : (
+                "Set up"
+              )}
             </Button>
           ) : null}
           {count ? (
@@ -131,14 +152,14 @@ export function SetUp() {
               </span>
             </Note>
           ) : null}
-          {data?.note && !startable ? <Note>{data.note}</Note> : null}
+          {data?.note && (!startable || failed) ? <Note>{data.note}</Note> : null}
+          {failed ? <Note>The log has the details: {data.log_path}</Note> : null}
           {known > 0 && next ? (
             <Button variant="primary" size="lg" onClick={() => void navigate(next.href)}>
               See your first look ({known.toLocaleString()} people so far)
             </Button>
           ) : null}
           {error ? <Note bad>{error}</Note> : null}
-          {running ? <Note>You can close this window. I keep going in the Dock.</Note> : null}
           {count ? <Note>Estimate from the pace so far; it updates as LinkedIn answers.</Note> : null}
         </>
       }

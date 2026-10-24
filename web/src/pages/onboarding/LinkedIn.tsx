@@ -6,7 +6,7 @@ import { CheckIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { fetchSignedIn } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
-import { connectSource, fetchConnection, forgetLinkedin } from "@/lib/api/install"
+import { connectSource, continueSetup, fetchConnection, forgetLinkedin } from "@/lib/api/install"
 import { live, POLL_MS, prepare, standing } from "@/pages/install/sources"
 
 import { Frame, Heading, Info, Note } from "./Frame"
@@ -22,6 +22,8 @@ export function LinkedIn() {
   const client = useQueryClient()
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
+  // Continue starts setup; the spinner stays until the Set up screen takes over.
+  const [starting, setStarting] = useState(false)
   // The sign-in a click started, until its outcome is known (Connect.tsx keeps the same rule).
   const [queued, setQueued] = useState<{ launched: boolean } | null>(null)
   const connection = useQuery({
@@ -62,11 +64,25 @@ export function LinkedIn() {
       setQueued(null)
     }
   }
+  // Setup starts here, so the next screen opens on its progress, not on another button.
+  const start = () => {
+    setError(null)
+    setStarting(true)
+    continueSetup({})
+      .then(() => next && void navigate(next.href))
+      .catch((caught: unknown) => {
+        setError(errorText(caught))
+        setStarting(false)
+      })
+  }
+  const [forgetting, setForgetting] = useState(false)
   const forget = () => {
     setError(null)
+    setForgetting(true)
     void forgetLinkedin()
       .then(() => client.refetchQueries({ queryKey: SIGNED_IN }))
       .catch((caught: unknown) => setError(errorText(caught)))
+      .finally(() => setForgetting(false))
   }
 
   return (
@@ -82,8 +98,14 @@ export function LinkedIn() {
                   <CheckIcon className="size-4" /> LinkedIn is connected.
                 </span>
               </Note>
-              <Button variant="primary" size="lg" onClick={() => next && void navigate(next.href)}>
-                Continue
+              <Button variant="primary" size="lg" disabled={starting} onClick={start}>
+                {starting ? (
+                  <>
+                    <Spinner /> Starting setup…
+                  </>
+                ) : (
+                  "Continue"
+                )}
               </Button>
             </>
           ) : (
@@ -113,8 +135,15 @@ export function LinkedIn() {
           {error ? <Note bad>{error}</Note> : null}
           <div className="mt-6 flex flex-col gap-2">
             <Note>Messages, Gmail and WhatsApp come after your first look.</Note>
-            <button type="button" className={LINK} onClick={forget} disabled={at.state === "working"}>
-              Start LinkedIn over (forget the sign-in and the connections read)
+            <button
+              type="button"
+              className={LINK}
+              onClick={forget}
+              disabled={at.state === "working" || forgetting}
+            >
+              {forgetting
+                ? "Forgetting…"
+                : "Start LinkedIn over (forget the sign-in and the connections read)"}
             </button>
           </div>
         </>

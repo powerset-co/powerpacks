@@ -271,7 +271,15 @@ async function main() {
     }
     log(`reading your connections (LinkedIn shows ${total})`);
     // One picture of the page as it stands, for the setup screen (--screenshot <png path>).
-    if (args.screenshot) await page.screenshot({ path: args.screenshot, type: "png" }).catch(() => {});
+    if (args.screenshot) {
+      // The first cards' pictures first, so the page looks the way the person knows it.
+      await page.waitForFunction(() => {
+        const pictures = Array.from(document.querySelectorAll("main img")).slice(0, 12);
+        return pictures.length > 0 && pictures.every((picture) => picture.complete);
+      }, { timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: args.screenshot, type: "png" }).catch(() => {});
+    }
     await page.exposeFunction("powerpacksRead", (read) => progress({ read, total }));
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
     const connections = await readCards(page);
