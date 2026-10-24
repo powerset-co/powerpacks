@@ -151,17 +151,25 @@ Uploading to Powerset is the page's own button, shown only with the Share networ
 ## Acting on a person from chat
 
 When the user asks for the change in chat ("skip Jordan", "mark Casey a close friend", "those two are the same
-person", "that LinkedIn is the wrong Jordan"), do it, then say what changed in one line. Every write is one
-family: never load or walk the page to do it. The page server is the app's (port 8765, or
-`bin/deep-context-v2 review`); the family is its `parent_id`, printed by `bin/deep-context-v2 lookup --name "<name>" --json`.
-Every write below answers `{"rows": [...]}`, the family's row as the page shows it.
+person", "that LinkedIn is the wrong Jordan"), do it, then say what changed in one line. The page server is
+the app's (port 8765, or `bin/deep-context-v2 review`); a person is their family's `parent_id`, printed by
+`bin/deep-context-v2 lookup --name "<name>" --json`. Every write below answers `{"rows": [...]}`, the rows as
+the page shows them.
+
+A set ("skip everyone named Chen", "delete everyone tagged test", "tag everyone at Apple"): `GET /api/people/rows`
+once and pick the rows in Python; it answers `{"counts", "columns", "rows"}`, each row a list in `columns`
+order; the columns include `parent_id`, `name`, `company`, `worth`, `tags` (human) and `labels` (machine).
+Then one POST with every `parent_id`: worth and delete take `ids`, tags takes one entry per person; only
+relationship is one person per request. Never walk the store's tables for names: the row's `name` is what
+the user sees. Before a bulk delete,
+tell the user the count and the names and wait for yes; the other writes just happen.
 
 | Ask | Write |
 |---|---|
 | Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. |
 | Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
-| Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. |
-| Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good; its rows stay. |
+| Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. The list replaces the person's tags. Only the label names are tags: is_family, is_close_friend, is_personal, is_professional, is_classmate, is_coworker_current, is_coworker_past, is_client, is_vendor_or_partner, is_investor, is_founder, is_recruiter, is_mentor_or_advisor, is_mentee_or_report, is_service_provider, is_healthcare_legal_or_financial_provider, is_hr_benefits_or_payroll, is_support_billing_or_landlord, is_neighbor_or_local, is_automated_sender, is_transactional, is_stranger, is_minor, met_in_person, notable, owner_would_intro, they_would_take_owner_call, confidential_dealings. Any other word is refused; pick the closest and tell the user. |
+| Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good: a `deleted_parents` row, and its `families` row goes. Members and decisions stay. Undo on request: delete the `deleted_parents` row and run `bin/deep-context-v2 realize` (free). |
 | Merge two people | The family table is `candidate_parent`, append-only, newest row per member wins (`current_parent`). Move every member of the second family onto the first: `INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, '<kept parent_id>', 'human', NULL, <now iso>)` once per member. That insert is the whole merge: never edit `facts`, `person_labels` or `candidate_names` to make the row read a certain way. |
 | Split a person out | The same insert, with the member's own earlier `parent_id` when it had one, else a new `p:<new id>`. |
 | Wrong LinkedIn | On the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
