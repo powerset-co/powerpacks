@@ -28,7 +28,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
-from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, SCRAPE_RECORD
+from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, SCRAPE_RECORD
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
@@ -103,12 +103,18 @@ class InstallController:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
         return record
 
+    def linkedin_page_image(self) -> bytes | None:
+        """The picture of the connections page the last read took, or None before one."""
+        path = self.root / PAGE_SHOT
+        return path.read_bytes() if path.is_file() else None
+
     def forget_linkedin(self) -> dict:
         """Move the LinkedIn sign-in and the connections it read aside, so the next connect signs in
         and the next setup reads them again. Nothing is deleted: each path gets a `.bkup-<time>`."""
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         moved = []
-        for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD):
+        for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD,
+                     self.root / PAGE_SHOT):
             if path.exists():
                 target = path.with_name(f"{path.name}.bkup-{stamp}")
                 path.rename(target)

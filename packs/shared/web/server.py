@@ -285,10 +285,11 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/install/connect":
                 self._json(install.connection())
                 return
-            if parsed.path == "/api/install/qr":
-                body = install.qr_image(connect="connect=1" in parsed.query.split("&"))
+            if parsed.path in ("/api/install/qr", "/api/install/linkedin-page"):
+                body = (install.linkedin_page_image() if parsed.path.endswith("linkedin-page")
+                        else install.qr_image(connect="connect=1" in parsed.query.split("&")))
                 if body is None:
-                    self._json({"error": "Waiting for a fresh QR code"}, HTTPStatus.NOT_FOUND)
+                    self._json({"error": "No picture yet"}, HTTPStatus.NOT_FOUND)
                     return
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "image/png")

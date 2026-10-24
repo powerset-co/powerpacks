@@ -12,6 +12,7 @@ import type { InstallStatus } from "@/types/install"
 
 import { Frame, Heading, Info, Note } from "./Frame"
 import { leftText, secondsLeft, type Sample } from "./pace"
+import { PageShot } from "./PageShot"
 import { after } from "./steps"
 
 const POLL_MS = 1_500
@@ -142,14 +143,30 @@ export function SetUp() {
         </>
       }
       right={
-        <Info
-          title="While you wait"
-          lines={[
-            "Your first look: a few people you know and three questions to try",
-            "Closing the window does not stop anything",
-            "The whole network takes a few hours; you can use Powerpacks meanwhile",
-          ]}
-        />
+        // Once the LinkedIn read is under way the page it reads takes the column; before it,
+        // and once setup is over, what to expect.
+        data && (count !== null || processing || data.step === "linkedin") && !ready ? (
+          <>
+            <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>
+            <PageShot
+              reading={count !== null}
+              caption={
+                count
+                  ? `${count.read.toLocaleString()} of ${count.total.toLocaleString()} read so far`
+                  : "Read. Building your network from it now."
+              }
+            />
+          </>
+        ) : (
+          <Info
+            title="While you wait"
+            lines={[
+              "Your first look: a few people you know and three questions to try",
+              "Closing the window does not stop anything",
+              "The whole network takes a few hours; you can use Powerpacks meanwhile",
+            ]}
+          />
+        )
       }
     />
   )
