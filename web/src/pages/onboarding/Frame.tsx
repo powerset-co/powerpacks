@@ -32,12 +32,19 @@ export function Frame({
           className="m-0 flex list-none items-center gap-3 p-0 text-[11px] font-semibold uppercase tracking-[.1em]"
         >
           {STEPS.map((item, at) => (
-            <li
-              key={item.key}
-              aria-current={at === index ? "step" : undefined}
-              className={cn("flex items-center gap-3", at === index ? "text-foreground" : "text-faint")}
-            >
-              {item.label}
+            <li key={item.key} className="flex items-center gap-3">
+              {/* Each step is a link to its screen, so any screen is a click away. */}
+              <button
+                type="button"
+                aria-current={at === index ? "step" : undefined}
+                className={cn(
+                  "cursor-pointer border-0 bg-transparent p-0 font-semibold uppercase tracking-[.1em] hover:text-foreground",
+                  at === index ? "text-foreground" : "text-faint",
+                )}
+                onClick={() => void navigate(item.href)}
+              >
+                {item.label}
+              </button>
               {at < STEPS.length - 1 ? <ChevronRight className="size-3.5 text-faint" aria-hidden /> : null}
             </li>
           ))}
