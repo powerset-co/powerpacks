@@ -1,6 +1,7 @@
-// The onboarding's steps, in order: the window's top bar shows them, each screen is one.
+// The onboarding's steps, in order: the window's top bar shows them, each screen is one. The first
+// look is the Set up screen's right column once people are in, not a step of its own.
 
-export type StepKey = "signup" | "linkedin" | "setup" | "first-look" | "sources"
+export type StepKey = "signup" | "linkedin" | "setup" | "sources"
 
 export interface Step {
   key: StepKey
@@ -14,7 +15,6 @@ export const STEPS: readonly Step[] = [
   SIGNUP,
   { key: "linkedin", label: "LinkedIn", href: "/onboarding/linkedin" },
   { key: "setup", label: "Set up", href: "/onboarding/setup" },
-  { key: "first-look", label: "First look", href: "/onboarding/first-look" },
   { key: "sources", label: "Sources", href: "/onboarding/sources" },
 ]
 

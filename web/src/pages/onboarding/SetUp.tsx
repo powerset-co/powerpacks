@@ -1,6 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
-import { useNavigate } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -12,8 +11,8 @@ import type { InstallStatus } from "@/types/install"
 
 import { Frame, Info, Note } from "./Frame"
 import { leftText, secondsLeft, type Sample } from "./pace"
+import { FirstLookPanel } from "./FirstLookPanel"
 import { PageShot } from "./PageShot"
-import { after } from "./steps"
 
 const POLL_MS = 1_500
 const PEOPLE_POLL_MS = 5_000
@@ -60,7 +59,6 @@ function standingOf(data: InstallStatus, stage: (typeof STAGES)[number]): Standi
  *  show as they go, the LinkedIn count with the time left, the index with Modal's progress. The
  *  first look opens once people are in. */
 export function SetUp() {
-  const navigate = useNavigate()
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
@@ -98,19 +96,15 @@ export function SetUp() {
     continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
   }, [data, running, failed, ready])
 
-  // People appear during processing; once there are some the first look is ready.
+  // People appear during processing; once there are some the first look takes the right column.
   const people = useQuery({
     queryKey: ["people"],
     queryFn: fetchPeople,
-    enabled: processing,
+    enabled: processing || ready,
     refetchInterval: processing ? PEOPLE_POLL_MS : false,
     retry: false,
   })
   const known = people.data?.length ?? 0
-  const next = after("setup")
-  useEffect(() => {
-    if (ready && next) void navigate(next.href)
-  }, [ready, next, navigate])
 
   const retry = () => {
     setRetrying(true)
@@ -227,16 +221,15 @@ export function SetUp() {
               </span>
             </Note>
           )}
-          {known > 0 && next && !ready ? (
-            <Button variant="primary" size="lg" className="rise-in" onClick={() => void navigate(next.href)}>
-              See your first look ({known.toLocaleString()} people so far)
-            </Button>
-          ) : null}
           {error ? <Note bad>{error}</Note> : null}
         </>
       }
       right={
-        data && !ready && (count !== null || processing || data.step === "linkedin") ? (
+        // The right column fills in as the stages finish: the page picture while the connections
+        // are read, then the first look the moment people are in.
+        known > 0 || ready ? (
+          <FirstLookPanel people={people.data ?? []} ready={ready} />
+        ) : data && (count !== null || processing || data.step === "linkedin") ? (
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>
             <PageShot
