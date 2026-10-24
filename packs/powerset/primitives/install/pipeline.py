@@ -8,6 +8,10 @@ is built on Modal unless realize left people.csv as it was and an index is alrea
 validation marks search ready.
 
 Changelog:
+  2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
+      the Modal index; deep context and enrichment are marked as nothing to do, the follow-up names what
+      to connect for more. With messages, the index's people file (search-index/people.csv) is realize's
+      families plus every LinkedIn connection no family holds, so connections stay searchable.
   2026-10-09: synthesize and enrich report their counts to the page as their paid calls come back
       (Node.on_progress), so a long stage is never a static line.
   2026-10-07: the stage order, realize (with the share list) and the index command come from
@@ -30,6 +34,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shlex
@@ -43,6 +48,7 @@ from typing import Callable
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
@@ -57,6 +63,8 @@ from packs.powerset.primitives.install.steps import InstallState, InstallStep
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+# The message imports deep context reads people from; without any, LinkedIn goes straight to search.
+_MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
@@ -206,10 +214,49 @@ class ProcessingOnboarding:
     def _index(self) -> None:
         self.step = InstallStep.INDEX
         people = self.data_root / PEOPLE_CSV_RELATIVE_PATH
-        before = people.read_bytes() if people.is_file() else b""
         self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
                   "index.preparing")
-        if people.read_bytes() != before or not (self.index / "manifest.json").is_file():
+        indexed = self.index / "people.csv"
+        before = indexed.read_bytes() if indexed.is_file() else b""
+        self._run("people-with-connections", lambda: {"status": "completed", "people_csv": str(indexed),
+                                                      **self._with_connections(people, indexed)}, "index.preparing")
+        self._build_index(indexed, changed=indexed.read_bytes() != before)
+
+    def _with_connections(self, people: Path, indexed: Path) -> dict[str, int]:
+        """The index's people file: realize's families, then every LinkedIn connection the enriched
+        import has that no family holds, so the whole network stays searchable as families form."""
+        rows = list(csv.DictReader(people.open(encoding="utf-8"))) if people.is_file() else []
+        columns = list(rows[0].keys()) if rows else []
+        known = {row.get("public_identifier", "") for row in rows} - {""}
+        connections = self.root / _LINKEDIN_PEOPLE
+        added = 0
+        if connections.is_file():
+            for row in csv.DictReader(connections.open(encoding="utf-8")):
+                if row.get("public_identifier", "") in known or not row.get("public_identifier"):
+                    continue
+                for column in row:
+                    if column not in columns:
+                        columns.append(column)
+                rows.append(row)
+                added += 1
+        indexed.parent.mkdir(parents=True, exist_ok=True)
+        with indexed.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({column: row.get(column, "") for column in columns})
+        return {"families": len(rows) - added, "connections_added": added}
+
+    def _index_linkedin(self) -> None:
+        """LinkedIn only: the enriched import is the people file, no deep context in between."""
+        self.step = InstallStep.INDEX
+        people = self.root / _LINKEDIN_PEOPLE
+        manifest = self.index / "manifest.json"
+        self._build_index(people, changed=not manifest.is_file() or people.stat().st_mtime_ns > manifest.stat().st_mtime_ns)
+
+    def _build_index(self, people: Path, *, changed: bool) -> None:
+        """The Modal index of `people` when it changed (or there is none), then the search check."""
+        if changed or not (self.index / "manifest.json").is_file():
             command = index_command(self.data_root, people)
             env = index_env(resolve_operator_id(""))
             self._run(shlex.join(command), lambda: self._modal(command, env), "index.building")
@@ -230,15 +277,22 @@ class ProcessingOnboarding:
             load_env()
             try:
                 self._linkedin()
-                archive_v1(self.data_root)
-                with closing(open_store(store_path(self.data_root))) as conn:
-                    self._owner()
-                    *discover, (_, enrich) = stages(conn, self.data_root)
-                    for name, build in discover:
-                        self._stage(name, build())
-                    self._write("discover.done")
-                    self._enrich(enrich)
-                self._index()
+                if not any((self.data_root / relative).is_file() for relative in _MESSAGE_IMPORTS):
+                    # LinkedIn only: deep context has no messages to read, so the enriched import goes
+                    # straight to the index; the follow-up names what to connect for more.
+                    self._write("discover.linkedin_only")
+                    self._write("enrich.linkedin_only")
+                    self._index_linkedin()
+                else:
+                    archive_v1(self.data_root)
+                    with closing(open_store(store_path(self.data_root))) as conn:
+                        self._owner()
+                        *discover, (_, enrich) = stages(conn, self.data_root)
+                        for name, build in discover:
+                            self._stage(name, build())
+                        self._write("discover.done")
+                        self._enrich(enrich)
+                    self._index()
                 keep_updated(self.root)
             except _Stopped:
                 pass

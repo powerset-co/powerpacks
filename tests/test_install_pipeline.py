@@ -6,6 +6,7 @@ Changelog:
 - 2026-10-07: v2 stages (load, collect, synthesize, dedupe, worth, enrich, realize); the v1 seed,
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
+import csv
 import json
 import os
 import subprocess
@@ -78,6 +79,11 @@ class InstallPipelineTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
+        # A Gmail import is on disk: deep context has messages to read (without any, LinkedIn goes
+        # straight to the index; see test_linkedin_only_goes_straight_to_the_modal_index).
+        gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
+        gmail.parent.mkdir(parents=True, exist_ok=True)
+        gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
         owner = self.root / ".powerpacks/deep-context/owner.json"
         owner.parent.mkdir(parents=True)
         owner.write_text("{}")
@@ -389,6 +395,37 @@ class InstallPipelineTests(unittest.TestCase):
         self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["index"])
+
+    def test_linkedin_only_goes_straight_to_the_modal_index(self):
+        # No Gmail or Messages import: nothing for deep context to read, so the enriched LinkedIn
+        # import is the people file the Modal index builds from; the stages are never run.
+        (self.root / ".powerpacks/network-import/import/gmail/people.csv").unlink()
+        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
+        self.write(linkedin, self.csv)
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"], result["event"]), ("ready", "completed", "search.ready"))
+        self.assertTrue(self.indexed())
+        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "realize", "owner"):
+            self.assertFalse(self.did(stage), stage)
+        self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
+        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
+        self.assertIn("Connect Messages or Gmail", result["note"])
+        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
+        self.assertTrue(any("index-people" in command and str(linkedin) in command for command in commands), commands)
+
+    def test_connections_no_family_holds_stay_in_the_index(self):
+        # Messages and LinkedIn: realize's families come first, then every connection the enriched
+        # LinkedIn import has that no family holds; the index builds from that file.
+        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
+        self.write(linkedin, "id,full_name,public_identifier\nsynthetic-jordan,Jordan Bravo,jordan-bravo\nli-sam,Sam Li,sam-li\n")
+        self.csv = "id,full_name,public_identifier\nsynthetic-jordan,Jordan Bravo,jordan-bravo\n"
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        indexed = self.index / "people.csv"
+        rows = list(csv.DictReader(indexed.open()))
+        self.assertEqual([row["public_identifier"] for row in rows], ["jordan-bravo", "sam-li"])
+        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
+        self.assertTrue(any("index-people" in command and str(indexed) in command for command in commands), commands)
 
     def test_index_without_an_operator_id_stops_before_modal(self):
         self.operator_id = ""

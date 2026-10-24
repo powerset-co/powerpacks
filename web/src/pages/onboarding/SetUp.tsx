@@ -41,7 +41,7 @@ function counts(data: InstallStatus | undefined): { read: number; total: number 
   return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
-type Standing = "done" | "current" | "stopped" | "next"
+type Standing = "done" | "skipped" | "current" | "stopped" | "next"
 
 /** Where one stage stands: done, the one under way, stopped there, or still to come. */
 function standingOf(data: InstallStatus, stage: (typeof STAGES)[number]): Standing {
@@ -52,7 +52,15 @@ function standingOf(data: InstallStatus, stage: (typeof STAGES)[number]): Standi
     return "current"
   }
   const states = stage.steps.map((step) => data.steps[step]?.status)
-  return states.every((state) => DONE.has(state ?? "")) ? "done" : "next"
+  if (!states.every((state) => DONE.has(state ?? ""))) return "next"
+  return states.every((state) => state === "skipped") ? "skipped" : "done"
+}
+
+/** What a finished stage says: the record's own line for its last step (e.g. "Your LinkedIn
+ *  connections are in; nothing to learn from messages yet."), else the stage's done words. */
+function finishedLine(data: InstallStatus, stage: (typeof STAGES)[number]): string {
+  const last = [...stage.steps].reverse().find((step) => data.steps[step]?.message)
+  return last ? (data.steps[last]?.message ?? stage.done) : stage.done
 }
 
 /** Set up: setup runs in the background (bin/onboard) from the moment this opens; the stages
@@ -136,12 +144,18 @@ export function SetUp() {
                     <div
                       className={cn(
                         "flex items-center gap-3 text-[13px] transition-colors duration-med",
-                        standing === "next" ? "text-faint" : "text-foreground",
+                        standing === "next"
+                          ? "text-faint"
+                          : standing === "skipped"
+                            ? "text-muted-foreground"
+                            : "text-foreground",
                       )}
                     >
                       <span className="grid size-5 shrink-0 place-items-center" aria-hidden>
                         {standing === "done" ? (
                           <CheckIcon className="size-4 text-ok" />
+                        ) : standing === "skipped" ? (
+                          <CheckIcon className="size-4 text-faint" />
                         ) : standing === "current" ? (
                           <Spinner className="size-3.5 text-primary" />
                         ) : (
@@ -154,7 +168,9 @@ export function SetUp() {
                         )}
                       </span>
                       <span className={cn(live && "font-semibold")}>
-                        {standing === "done" ? stage.done : stage.label}
+                        {standing === "done" || standing === "skipped"
+                          ? finishedLine(data, stage)
+                          : stage.label}
                       </span>
                     </div>
                     {live ? (
