@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.39.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.0...powerpacks-v3.39.1) (2026-10-24)
+
+
+### Documentation
+
+* **deep-context:** acting on a set of people from chat, the tag vocabulary, what delete removes ([#914](https://github.com/powerset-co/powerpacks/issues/914)) ([f593b7f](https://github.com/powerset-co/powerpacks/commit/f593b7f12f97a33968bbe5dd828e5db52ac38273))
+
 ## [3.39.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.38.1...powerpacks-v3.39.0) (2026-10-23)
 
 
