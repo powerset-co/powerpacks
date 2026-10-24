@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
+      connections file and its record aside (`.bkup-<time>`), so the onboarding page's LinkedIn
+      steps can be run again from the sign-in.
   2026-10-13: `POST /api/install/connect` answers once the run has written its own status, so the
       Connect screen never reads the previous run's record after a click.
   2026-10-13: `/api/install/skip` is gone: setup under the desktop app takes only connected sources,
@@ -25,6 +28,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
@@ -99,6 +103,18 @@ class InstallController:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
         return record
 
+    def forget_linkedin(self) -> dict:
+        """Move the LinkedIn sign-in and the connections it read aside, so the next connect signs in
+        and the next setup reads them again. Nothing is deleted: each path gets a `.bkup-<time>`."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        moved = []
+        for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD):
+            if path.exists():
+                target = path.with_name(f"{path.name}.bkup-{stamp}")
+                path.rename(target)
+                moved.append(str(target))
+        return {"status": "forgotten", "moved": moved}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -151,6 +167,8 @@ class InstallController:
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
             elif path == "/api/install/preflight":
                 response = self.install(self._body(handler).get("item"))
+            elif path == "/api/install/linkedin-forget":
+                response = self.forget_linkedin()
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))

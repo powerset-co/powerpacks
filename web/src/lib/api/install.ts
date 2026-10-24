@@ -34,6 +34,12 @@ export function connectSource(source: ConnectSource, emails?: string[]): Promise
   return installAction("connect", { source, emails })
 }
 
+/** Move the LinkedIn sign-in and the connections it read aside (each to a `.bkup-<time>`), so the
+ *  onboarding's LinkedIn steps run again from the sign-in. For trying the onboarding over. */
+export function forgetLinkedin(): Promise<void> {
+  return installAction("linkedin-forget")
+}
+
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */
 export interface SetupAnswer {
   linkedinUrl?: string

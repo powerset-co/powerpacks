@@ -6,23 +6,20 @@ import { ConnectionRow as Row, type ConnectionState as State } from "@/component
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
-import { fetchSignedIn, type SignedIn } from "@/lib/api/accounts"
+import { fetchSignedIn } from "@/lib/api/accounts"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
 import {
   connectSource,
   continueSetup,
   fetchConnection,
-  fetchPreflight,
   installAction,
-  installPreflight,
   type ConnectSource,
-  type Preflight,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
 import { CodexDetails } from "@/pages/settings/CodexDetails"
 import { cn } from "@/lib/utils"
-import type { InstallStatus, InstallStep } from "@/types/install"
+import { live, POLL_MS, prepare, standing } from "./sources"
 
 const {
   gmail: GmailIcon,
@@ -31,26 +28,7 @@ const {
   whatsapp: WhatsAppIcon,
 } = CHANNEL_ICON
 
-// While a sign-in or an install is still running, ask again this often.
-const POLL_MS = 2_000
 const SIGNED_IN = ["signed-in"]
-
-// Each source's steps in the Connect screen's run, the last its login (status_prose.py).
-const STEPS: Record<ConnectSource, readonly InstallStep[]> = {
-  linkedin: ["linkedin_login"],
-  gmail: ["gmail_tools", "gmail_login"],
-  whatsapp: ["whatsapp_tools", "whatsapp_login"],
-}
-
-// What a source's sign-in needs on this Mac first (preflight.py): a browser for LinkedIn's and
-// Google's sign-in pages, and Google's command-line tools for the Gmail app.
-type Tool = "chromium" | "gcloud"
-const NEEDS: Record<ConnectSource, readonly Tool[]> = {
-  linkedin: ["chromium"],
-  gmail: ["chromium", "gcloud"],
-  whatsapp: [],
-}
-const TOOL = { chromium: "browser", gcloud: "gcloud" } as const
 
 /** The one line a row adds: what to do now, or the command a stopped sign-in needs. */
 function Line({ children, bad = false }: { children: ReactNode; bad?: boolean }) {
@@ -71,25 +49,6 @@ function CodeBox({ url }: { url?: string }) {
       {url ? <img src={url} alt="WhatsApp code to scan" className="size-full" /> : <Spinner />}
     </span>
   )
-}
-
-/** Whether the connect record is a sign-in still under way: each write carries its run's pid until
- *  the run hands back (0) or fails, and a read reports a run whose process is gone as stopped. */
-function live(record: InstallStatus): boolean {
-  return (record.installer_pid ?? 0) > 0 && record.status !== "failed"
-}
-
-/** Where one source stands: its sign-in under way (the connect record), else whether it is signed
- *  in (accounts.signed_in, the answer setup takes), else whether its last sign-in stopped. */
-function standing(record: InstallStatus | undefined, signed: SignedIn | undefined, source: ConnectSource) {
-  const own = record && STEPS[source].includes(record.step) ? record : undefined
-  if (own && live(own)) return { state: "working" as const, qr: own.action?.qr_url }
-  // Stopped: failed, or waiting with nothing left running (a password, a closed window). It comes
-  // before the sign-in answer: a Gmail mailbox added to a signed-in one can stop.
-  if (own && (own.status === "failed" || own.status === "waiting"))
-    return { state: "needed" as const, stopped: true, line: own.message, command: own.action?.command }
-  if (signed === undefined) return { state: "checking" as const }
-  return { state: signed[source] ? ("ready" as const) : ("needed" as const) }
 }
 
 const LINK =
@@ -304,14 +263,7 @@ export function Connect({
     setError(null)
     setQueued({ source, launched: false })
     try {
-      const needed = (checks: Preflight) => NEEDS[source].map((tool) => checks[TOOL[tool]])
-      const checks = await fetchPreflight()
-      for (const tool of NEEDS[source]) if (!checks[TOOL[tool]].ok) await installPreflight(tool)
-      for (let now = checks; !needed(now).every((check) => check.ok); now = await fetchPreflight()) {
-        const broken = needed(now).find((check) => check.install?.status === "failed")
-        if (broken) throw new Error(broken.install?.message ?? "Could not install what this sign-in needs")
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS))
-      }
+      await prepare(source)
       // Answers once the run has written to the connect record, so the record read next is its own.
       await connectSource(source, emails)
       await client.refetchQueries({ queryKey: ["install", "connect"] })

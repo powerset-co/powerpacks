@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from packs.powerset.primitives.install import controller
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
@@ -163,6 +164,40 @@ class InstallStatusTests(unittest.TestCase):
     def test_an_event_without_its_own_step_lands_on_the_current_one(self) -> None:
         self.status.write("gmail.syncing", pid=os.getpid())
         self.assertEqual(self.status.write("step.failed", pid=os.getpid())["step"], "gmail_sync")
+
+
+class ForgetLinkedInTests(unittest.TestCase):
+    """`forget_linkedin` moves the sign-in profile, the connections file and its record aside."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "root"
+        self.profile = Path(self.tmp.name) / "browser-profiles" / "linkedin"
+        self.profile.mkdir(parents=True)
+        (self.profile / "Default").mkdir()
+        csv = self.root / controller.CONNECTIONS_CSV
+        csv.parent.mkdir(parents=True)
+        csv.write_text("First Name,Last Name\n", encoding="utf-8")
+        (self.root / controller.SCRAPE_RECORD).write_text("{}", encoding="utf-8")
+
+    def test_moves_each_path_to_a_backup_and_deletes_nothing(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile):
+            payload = InstallController(self.root).forget_linkedin()
+        self.assertEqual(payload["status"], "forgotten")
+        self.assertEqual(len(payload["moved"]), 3)
+        self.assertFalse(self.profile.exists())
+        self.assertFalse((self.root / controller.CONNECTIONS_CSV).exists())
+        self.assertFalse((self.root / controller.SCRAPE_RECORD).exists())
+        for moved in payload["moved"]:
+            self.assertIn(".bkup-", moved)
+            self.assertTrue(Path(moved).exists())
+        self.assertTrue((Path(payload["moved"][0]) / "Default").is_dir())
+
+    def test_nothing_to_move_is_fine(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile / "absent"):
+            payload = InstallController(Path(self.tmp.name) / "empty").forget_linkedin()
+        self.assertEqual(payload, {"status": "forgotten", "moved": []})
 
 
 class ConnectTests(unittest.TestCase):

@@ -15,6 +15,7 @@ const DEBUG_KEY = ["desktop-debug"] as const
 const PAGES = [
   { label: "Home", href: "/home" },
   { label: "Setup", href: "/install" },
+  { label: "Onboarding", href: "/onboarding" },
   { label: "LinkedIn review", href: "/" },
   { label: "Chat", href: "/agent" },
   { label: "Searches", href: "/searches" },
