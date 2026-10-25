@@ -53,6 +53,8 @@ const STAGES = [
 ] as const
 type Stage = (typeof STAGES)[number]
 const DONE = new Set(["completed", "skipped"])
+// The stages that read messages: only a run with a message source lists them.
+const MESSAGE_STAGES = new Set<string>(["deep_context", "enrich"])
 
 interface Progress {
   data: InstallStatus
@@ -180,16 +182,19 @@ export function SetUp() {
   // selection starts them over: the list shows once the run is on a stage.
   const underway =
     data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
-  // A stage with nothing to do (deep context and enrichment on a LinkedIn-only run) is not listed.
+  // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
+  const long = data !== undefined && STAGES.some((stage) => stage.source && present(data, stage))
+  // With LinkedIn alone there is nothing to learn from messages: those stages are not listed.
   const stages =
     data && underway
       ? STAGES.filter(
-          (stage) => (!stage.source || present(data, stage)) && standingOf(data, stage) !== "skipped",
+          (stage) =>
+            (!stage.source || present(data, stage)) &&
+            (long || !MESSAGE_STAGES.has(stage.steps[0])) &&
+            standingOf(data, stage) !== "skipped",
         )
       : []
   const current = data ? stages.find((stage) => standingOf(data, stage) === "current") : undefined
-  // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
-  const long = data !== undefined && stages.some((stage) => stage.source)
   const indexProgress = data?.step === "index" ? data.index_progress : null
   return (
     <Frame
