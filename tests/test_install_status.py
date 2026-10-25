@@ -235,6 +235,15 @@ class ConnectTests(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.controller = InstallController(self.root)
 
+    def test_permission_opens_settings_without_covering_it_with_finder(self) -> None:
+        handler = MagicMock()
+        handler.headers = {}
+        with patch.object(controller, "permission_app", return_value="/tmp/Powerpacks.app"), \
+                patch.object(controller.subprocess, "run") as run:
+            self.assertTrue(self.controller.post(handler, "/api/install/permissions"))
+        run.assert_called_once_with(["open", controller.PERMISSION_URL], check=True)
+        self.assertEqual(handler._json.call_args.args[0]["app_path"], "/tmp/Powerpacks.app")
+
     def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
         with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
             self.assertEqual(self.controller.connect("gmail", [" owner@gmail.com ", "work@example.com", "owner@gmail.com"]),

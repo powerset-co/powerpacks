@@ -13,6 +13,7 @@ mod codex;
 mod crash;
 mod onboard;
 mod paths;
+mod permission;
 mod restart;
 mod source;
 mod update;
@@ -395,13 +396,16 @@ pub fn run() {
         crash::note_panics(root);
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app)
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Boot::default()))
         .manage(Codex::default())
         .manage(children::Children::default())
+        .manage(permission::Permission::default())
         .invoke_handler(tauri::generate_handler![
             boot_state,
             boot_retry,
@@ -415,6 +419,9 @@ pub fn run() {
             codex_call,
             codex_respond,
             app_focus,
+            permission::permission_begin,
+            permission::permission_end,
+            permission::permission_drag,
             open_external,
             update_check,
             update_install,
@@ -433,8 +440,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == MAIN_WINDOW {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (window, event);
@@ -451,7 +460,11 @@ pub fn run() {
         .expect("Powerpacks failed to start")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
                 show_main(app);
                 return;
             }

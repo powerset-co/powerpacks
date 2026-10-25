@@ -35,6 +35,8 @@
     "allow-setup-import-source",
     "allow-setup-import",
     "allow-app-focus",
+    "allow-permission-begin",
+    "allow-permission-end",
     "allow-open-external",
     "allow-update-check",
     "allow-update-install",

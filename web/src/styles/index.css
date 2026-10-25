@@ -82,6 +82,11 @@
     text-rendering: optimizeLegibility;
   }
 
+  html[data-permission],
+  html[data-permission] body {
+    background: transparent;
+  }
+
   button,
   textarea,
   input,

@@ -191,8 +191,6 @@ class InstallController:
                 # Asked for before setup starts (the desktop app's first screen) or when it waits.
                 subprocess.run(["open", PERMISSION_URL], check=True)
                 app = permission_app()
-                if app:
-                    subprocess.run(["open", "-R", app], check=True)
                 response["app_path"] = app
             elif path == "/api/install/review":
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
