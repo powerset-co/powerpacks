@@ -6,15 +6,13 @@ import { CheckIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { fetchSignedIn } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
-import { connectSource, continueSetup, fetchConnection, forgetLinkedin } from "@/lib/api/install"
+import { connectSource, continueSetup, fetchConnection } from "@/lib/api/install"
 import { live, POLL_MS, prepare, standing } from "@/pages/install/sources"
 
 import { Frame, Heading, Info, Note } from "./Frame"
 import { after } from "./steps"
 
 const SIGNED_IN = ["signed-in"]
-const LINK =
-  "cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground underline hover:text-foreground"
 
 /** Connect LinkedIn: the one sign-in the first look needs. The sign-in page opens in the Chrome
  *  window Powerpacks drives; once the connections list shows, the window closes and this moves on. */
@@ -75,15 +73,6 @@ export function LinkedIn() {
         setStarting(false)
       })
   }
-  const [forgetting, setForgetting] = useState(false)
-  const forget = () => {
-    setError(null)
-    setForgetting(true)
-    void forgetLinkedin()
-      .then(() => client.refetchQueries({ queryKey: SIGNED_IN }))
-      .catch((caught: unknown) => setError(errorText(caught)))
-      .finally(() => setForgetting(false))
-  }
 
   return (
     <Frame
@@ -133,19 +122,6 @@ export function LinkedIn() {
             </>
           )}
           {error ? <Note bad>{error}</Note> : null}
-          <div className="mt-6 flex flex-col gap-2">
-            <Note>Messages, Gmail and WhatsApp come after your first look.</Note>
-            <button
-              type="button"
-              className={LINK}
-              onClick={forget}
-              disabled={at.state === "working" || forgetting}
-            >
-              {forgetting
-                ? "Forgetting…"
-                : "Start LinkedIn over (forget the sign-in and the connections read)"}
-            </button>
-          </div>
         </>
       }
       right={

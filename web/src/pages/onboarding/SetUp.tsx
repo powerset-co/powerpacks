@@ -60,13 +60,22 @@ interface Progress {
 }
 
 /** The running step's count, from the event's details (workflow.py linkedin.reading.count writes
- *  read/total; pipeline.py's stage counters write done/total). */
-function counts(data: InstallStatus | undefined): { read: number; total: number } | null {
+ *  read/total; pipeline.py's stage counters write done/total), or the index's share done out of
+ *  100 (Modal's progress): either way, a pace for the time left. */
+function counts(data: InstallStatus | undefined): { read: number; total: number; percent: boolean } | null {
+  if (data?.step === "index") {
+    const progress = data.index_progress?.progress
+    return typeof progress === "number"
+      ? { read: Math.round(progress * 100), total: 100, percent: true }
+      : null
+  }
   const details = data?.action?.details
   if (!isRecord(details)) return null
   const read = details.read ?? details.done
   const { total } = details
-  return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
+  return typeof read === "number" && typeof total === "number" && total > 0
+    ? { read, total, percent: false }
+    : null
 }
 
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"
@@ -171,7 +180,13 @@ export function SetUp() {
   // selection starts them over: the list shows once the run is on a stage.
   const underway =
     data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
-  const stages = data && underway ? STAGES.filter((stage) => !stage.source || present(data, stage)) : []
+  // A stage with nothing to do (deep context and enrichment on a LinkedIn-only run) is not listed.
+  const stages =
+    data && underway
+      ? STAGES.filter(
+          (stage) => (!stage.source || present(data, stage)) && standingOf(data, stage) !== "skipped",
+        )
+      : []
   const current = data ? stages.find((stage) => standingOf(data, stage) === "current") : undefined
   // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
   const long = data !== undefined && stages.some((stage) => stage.source)
@@ -231,20 +246,15 @@ export function SetUp() {
                             <ProgressBar label={stage.label} done={count.read} total={count.total} />
                             <div className="flex justify-between text-xs text-muted-foreground">
                               <span>
-                                {count.read.toLocaleString()} of {count.total.toLocaleString()}
+                                {count.percent
+                                  ? `${count.read}% · ${indexProgress?.message ?? ""}`
+                                  : `${count.read.toLocaleString()} of ${count.total.toLocaleString()}`}
                               </span>
                               <span>{left !== null ? leftText(left) : ""}</span>
                             </div>
                           </>
                         ) : indexProgress ? (
-                          <>
-                            <ProgressBar
-                              label="Search index"
-                              done={Math.round((indexProgress.progress ?? 0) * 100)}
-                              total={indexProgress.progress === undefined ? 0 : 100}
-                            />
-                            <span className="text-xs text-muted-foreground">{indexProgress.message}</span>
-                          </>
+                          <span className="text-xs text-muted-foreground">{indexProgress.message}</span>
                         ) : (
                           <span
                             className={cn(

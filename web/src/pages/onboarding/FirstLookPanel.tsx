@@ -88,7 +88,7 @@ function People({
 
 /** The first look, in the Set up screen's right column once people are in: a few people the
  *  person knows and the questions the index can answer, answered right here. Nothing leaves the
- *  onboarding: the one way on is Add more sources. Rises in over the page picture. */
+ *  onboarding: the one way on is Add more sources, once search is ready. Rises in over the page picture. */
 export function FirstLookPanel({ look, ready }: { look: FirstLook; ready: boolean }) {
   const navigate = useNavigate()
   const [asked, setAsked] = useState<string | null>(null)
@@ -149,11 +149,13 @@ export function FirstLookPanel({ look, ready }: { look: FirstLook; ready: boolea
           </ul>
         </div>
       ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="primary" onClick={() => sources && void navigate(sources.href)}>
-          Add more sources
-        </Button>
-      </div>
+      {ready ? (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="primary" onClick={() => sources && void navigate(sources.href)}>
+            Add more sources
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

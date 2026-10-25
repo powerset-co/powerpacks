@@ -26,7 +26,6 @@ export function Sources() {
   return (
     <Frame
       step="sources"
-      skip={false}
       left={
         <>
           <Heading title="Add more sources" line="Each one adds people; nothing already done is redone." />

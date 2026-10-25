@@ -6,24 +6,12 @@ import { cn } from "@/lib/utils"
 
 import { STEPS, type StepKey } from "./steps"
 
-/** The onboarding window: the steps across the top with a line under the ones reached, Back and
- *  Skip, then two columns: what to do on the left, what it is about on the right. */
-export function Frame({
-  step,
-  left,
-  right,
-  skip = true,
-}: {
-  step: StepKey
-  left: ReactNode
-  right: ReactNode
-  // Whether this step can be skipped (the last one cannot).
-  skip?: boolean
-}) {
+/** The onboarding window: the steps across the top with a line under the ones reached, then two
+ *  columns: what to do on the left, what it is about on the right. No Back and no Skip: each
+ *  screen moves on by its own action, and the step bar is the way around. */
+export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; right: ReactNode }) {
   const navigate = useNavigate()
   const index = STEPS.findIndex((item) => item.key === step)
-  const previous = STEPS[index - 1]
-  const next = STEPS[index + 1]
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground" data-onboarding={step}>
       <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-line">
@@ -57,27 +45,9 @@ export function Frame({
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-2 max-[720px]:grid-cols-1">
         <section className="relative flex min-h-0 flex-col overflow-y-auto px-10 py-8">
-          {previous ? (
-            <button
-              type="button"
-              className="absolute left-10 top-6 cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => void navigate(previous.href)}
-            >
-              ← Back
-            </button>
-          ) : null}
           <div className="mx-auto mt-[12vh] flex w-full max-w-[380px] flex-col gap-5 pb-12">{left}</div>
         </section>
         <aside className="relative flex min-h-0 flex-col overflow-y-auto border-l border-line bg-card px-10 py-8">
-          {skip && next ? (
-            <button
-              type="button"
-              className="absolute right-10 top-6 cursor-pointer border-0 bg-transparent p-0 text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => void navigate(next.href)}
-            >
-              Skip
-            </button>
-          ) : null}
           <div className="mx-auto mt-[12vh] flex min-h-0 w-full max-w-[380px] flex-1 flex-col gap-5 pb-12">
             {right}
           </div>
