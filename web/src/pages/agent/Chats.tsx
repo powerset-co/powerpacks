@@ -3,6 +3,7 @@ import { useEffect } from "react"
 import { useMatch, useNavigate } from "react-router-dom"
 
 import { CLOSE_MARK } from "@/components/shared/icons/actions"
+import { SearchesIcon } from "@/components/shared/icons/nav"
 import { groupThreads } from "@/lib/agent/groups"
 import { newChat, openChat, openSearch, useAgent } from "@/lib/agent/store"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
@@ -17,8 +18,9 @@ import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { useSharedSearches } from "./collaboration/useCollaboration"
 import { ComposeIcon } from "./icons"
 
-/** The side nav's chats once Codex is signed in (the Searches page's own gate): New chat, the past
- *  chats by date and the saved searches; picking one opens it on Searches. The rail keeps New chat. */
+/** The side nav's chats once Codex is signed in (the Searches page's own gate), headed Searches:
+ *  New chat, the past chats by date and the saved searches; picking one opens it on Searches. The
+ *  heading is not a link. The rail keeps New chat. */
 export function Chats({ rail }: { rail: boolean }) {
   const codex = useCodexAccount()
   if (!codex.status?.installed || !codex.status.account) return null
@@ -65,8 +67,12 @@ function ChatList({ rail }: { rail: boolean }) {
     )
   }
   return (
-    <section aria-label="Chats" className="flex min-h-0 flex-1 flex-col border-t border-line">
+    <section aria-label="Searches" className="flex min-h-0 flex-1 flex-col border-t border-line">
       <div className="p-2">
+        <h2 className="m-0 flex h-9 items-center gap-2.5 px-2.5 text-[13px] font-semibold text-foreground">
+          <SearchesIcon className="size-[18px] shrink-0" />
+          Searches
+        </h2>
         <button
           type="button"
           onClick={() => pick(newChat)}
