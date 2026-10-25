@@ -29,6 +29,8 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+import duckdb
+
 from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, SCRAPE_RECORD
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
@@ -39,6 +41,27 @@ PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privac
 # file when deep context ran (families plus the connections no family holds); the first look reads them.
 LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
 INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
+# The search index itself; the first look's questions are minted from it and answered by it.
+SEARCH_DB = ".powerpacks/search-index/local-search.duckdb"
+_PERSON = ("p.public_identifier, p.full_name, coalesce(p.current_title, ''), coalesce(p.current_company, ''), "
+           "coalesce(p.headline, ''), coalesce(p.profile_picture_url, '')")
+# The three questions the first look offers, each over one column, so each always answers with
+# real names: the company with the most current people, the city with the most people, the founders.
+_QUESTIONS = {
+    "company": ("Who do I know at {}?",
+                "select company_name, count(distinct person_id) from local_people_positions "
+                "where is_current and company_name <> '' group by 1 order by 2 desc, 1 limit 1",
+                "select distinct " + _PERSON + " from local_person_profiles p join local_people_positions s "
+                "on s.person_id = p.person_id where s.is_current and s.company_name = ? order by p.full_name"),
+    "city": ("Who do I know in {}?",
+             "select city, count(*) from local_person_profiles where city <> '' group by 1 order by 2 desc, 1 limit 1",
+             "select " + _PERSON + " from local_person_profiles p where p.city = ? order by p.full_name"),
+    "founders": ("Which of my connections are founders?",
+                 "select 'founder', count(distinct person_id) from local_people_positions "
+                 "where is_current and lower(raw_title) like '%founder%'",
+                 "select distinct " + _PERSON + " from local_person_profiles p join local_people_positions s "
+                 "on s.person_id = p.person_id where s.is_current and lower(s.raw_title) like ? order by p.full_name"),
+}
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
@@ -111,11 +134,11 @@ class InstallController:
     def first_look(self, limit: int = 3) -> dict:
         """The first people to show once the index is built: from the index's own people file (families
         plus connections), else the enriched LinkedIn import; the first `limit` with a title and a company,
-        and how many people there are in all. Empty before either file exists."""
+        how many people there are in all, and the questions the index answers. Empty before either file exists."""
         path = next((self.root / relative for relative in (INDEXED_PEOPLE, LINKEDIN_PEOPLE)
                      if (self.root / relative).is_file()), None)
         if path is None:
-            return {"people": [], "total": 0}
+            return {"people": [], "total": 0, "questions": self.questions()}
         people: list[dict] = []
         total = 0
         with path.open(encoding="utf-8") as handle:
@@ -126,7 +149,31 @@ class InstallController:
                                    "name": row.get("full_name", ""), "title": row["current_title"],
                                    "company": row["current_company"], "headline": row.get("headline", ""),
                                    "avatar_url": row.get("profile_picture_url", "")})
-        return {"people": people, "total": total}
+        return {"people": people, "total": total, "questions": self.questions()}
+
+    def questions(self) -> list[dict]:
+        """The first look's questions, minted from the index: each names what the index holds most of,
+        and is offered only when it has at least two people to show. None before the index exists."""
+        db = self.root / SEARCH_DB
+        if not db.is_file():
+            return []
+        questions = []
+        with duckdb.connect(str(db), read_only=True) as conn:
+            for key, (text, mint, _) in _QUESTIONS.items():
+                row = conn.execute(mint).fetchone()
+                if row and row[1] >= 2:
+                    questions.append({"key": key, "text": text.format(row[0]), "count": row[1]})
+        return questions
+
+    def ask(self, key: str, limit: int = 8) -> dict:
+        """One question's answer from the index: the first `limit` people and how many there are."""
+        text, mint, answer = _QUESTIONS[key]
+        with duckdb.connect(str(self.root / SEARCH_DB), read_only=True) as conn:
+            value, total = conn.execute(mint).fetchone()
+            rows = conn.execute(answer, [f"%{value}%" if key == "founders" else value]).fetchall()
+        people = [{"public_identifier": row[0], "name": row[1], "title": row[2], "company": row[3],
+                   "headline": row[4], "avatar_url": row[5]} for row in rows[:limit]]
+        return {"question": text.format(value), "people": people, "total": total}
 
     def linkedin_page_image(self) -> bytes | None:
         """The picture of the connections page the last read took, or None before one."""

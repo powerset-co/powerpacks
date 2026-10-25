@@ -157,7 +157,7 @@ class ProcessingOnboarding:
             if done < total and now - written_at < _COUNT_SECONDS:
                 return
             written_at = now
-            self._write(event, done=done, total=total)
+            self._write(event, done=done, total=total, details={"done": done, "total": total})
 
         return count
 

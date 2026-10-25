@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+import duckdb
 from unittest.mock import MagicMock, patch
 
 from packs.powerset.primitives.install import controller
@@ -206,7 +208,7 @@ class ForgetLinkedInTests(unittest.TestCase):
 
     def test_first_look_reads_the_indexed_people_then_the_linkedin_import(self) -> None:
         install = InstallController(self.root)
-        self.assertEqual(install.first_look(), {"people": [], "total": 0})
+        self.assertEqual(install.first_look(), {"people": [], "total": 0, "questions": []})
         header = "public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
         linkedin = self.root / controller.LINKEDIN_PEOPLE
         linkedin.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +221,34 @@ class ForgetLinkedInTests(unittest.TestCase):
         indexed.parent.mkdir(parents=True, exist_ok=True)
         indexed.write_text(header + "g-h,G H,VP,Gamma,,\n", encoding="utf-8")
         self.assertEqual([person["name"] for person in install.first_look()["people"]], ["G H"])
+
+    def test_questions_are_minted_from_the_index_and_answered_by_it(self) -> None:
+        install = InstallController(self.root)
+        self.assertEqual(install.questions(), [])
+        db = self.root / controller.SEARCH_DB
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with duckdb.connect(str(db)) as conn:
+            conn.execute("create table local_person_profiles (person_id text, public_identifier text, full_name text, "
+                         "current_title text, current_company text, headline text, profile_picture_url text, city text)")
+            conn.execute("create table local_people_positions (person_id text, company_name text, raw_title text, "
+                         "is_current boolean)")
+            conn.execute("insert into local_person_profiles values "
+                         "('1', 'a', 'Ann', 'CTO', 'Acme', '', 'http://p/a', 'Berlin'), "
+                         "('2', 'b', 'Bob', 'Founder', 'Beta', '', '', 'Berlin'), "
+                         "('3', 'c', 'Cy', 'VP', 'Acme', '', '', 'Paris')")
+            conn.execute("insert into local_people_positions values "
+                         "('1', 'Acme', 'CTO', true), ('1', 'Old', 'Engineer', false), "
+                         "('2', 'Beta', 'Founder', true), ('3', 'Acme', 'VP', true)")
+        questions = install.questions()
+        self.assertEqual([(q["key"], q["text"], q["count"]) for q in questions],
+                         [("company", "Who do I know at Acme?", 2), ("city", "Who do I know in Berlin?", 2)])
+        answer = install.ask("company")
+        self.assertEqual(answer["question"], "Who do I know at Acme?")
+        self.assertEqual(answer["total"], 2)
+        self.assertEqual([(p["name"], p["title"], p["avatar_url"]) for p in answer["people"]],
+                         [("Ann", "CTO", "http://p/a"), ("Cy", "VP", "")])
+        self.assertEqual([p["name"] for p in install.ask("city", limit=1)["people"]], ["Ann"])
+        self.assertEqual(install.first_look()["questions"], questions)
 
     def test_nothing_to_move_is_fine(self) -> None:
         with patch.object(controller, "BROWSER_PROFILE", self.profile / "absent"):
@@ -234,6 +264,16 @@ class ConnectTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.controller = InstallController(self.root)
+
+    def test_a_run_starts_its_sources_over(self) -> None:
+        status = InstallStatus(self.root)
+        write = lambda event, **values: status.write(event, pid=0, retry_command="bin/onboard", **values)  # noqa: E731
+        write("gmail.imported")
+        write("discover.done")
+        self.assertIn("gmail_import", status.read()["steps"])
+        write("sources.selected")
+        self.assertNotIn("gmail_import", status.read()["steps"])
+        self.assertNotIn("deep_context", status.read()["steps"])
 
     def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
         with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:

@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
+import { HOME } from "@/lib/nav"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
@@ -17,14 +19,39 @@ const POLL_MS = 1_500
 const PEOPLE_POLL_MS = 5_000
 const KEY = ["onboarding", "install"] as const
 
-// The stages setup goes through after LinkedIn is connected (steps.py), as the person sees them.
+// The stages setup goes through (steps.py), as the person sees them. The source stages show only
+// once their source is connected: the first run is LinkedIn alone, the next adds what Sources linked.
 const STAGES = [
-  { steps: ["linkedin"], label: "Reading your connections", done: "Connections read" },
-  { steps: ["deep_context"], label: "Learning who they are", done: "Learned who they are" },
-  { steps: ["enrich"], label: "Enriching people", done: "People enriched" },
-  { steps: ["index", "validate"], label: "Building your search index", done: "Search index built" },
-  { steps: ["ready"], label: "Search is ready", done: "Search is ready" },
+  { steps: ["linkedin"], label: "Reading your connections", done: "Connections read", source: false },
+  {
+    steps: ["gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
+    label: "Syncing your Gmail",
+    done: "Gmail contacts added",
+    source: true,
+  },
+  {
+    steps: ["imessage_access", "imessage_import"],
+    label: "Reading your Messages",
+    done: "iMessage contacts added",
+    source: true,
+  },
+  {
+    steps: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"],
+    label: "Syncing WhatsApp",
+    done: "WhatsApp contacts added",
+    source: true,
+  },
+  { steps: ["deep_context"], label: "Learning who they are", done: "Learned who they are", source: false },
+  { steps: ["enrich"], label: "Enriching people", done: "People enriched", source: false },
+  {
+    steps: ["index", "validate"],
+    label: "Building your search index",
+    done: "Search index built",
+    source: false,
+  },
+  { steps: ["ready"], label: "Search is ready", done: "Search is ready", source: false },
 ] as const
+type Stage = (typeof STAGES)[number]
 const DONE = new Set(["completed", "skipped"])
 
 interface Progress {
@@ -32,32 +59,43 @@ interface Progress {
   samples: Sample[]
 }
 
-/** The LinkedIn count's numbers, from the event's details (workflow.py linkedin.reading.count). */
+/** The running step's count, from the event's details (workflow.py linkedin.reading.count writes
+ *  read/total; pipeline.py's stage counters write done/total). */
 function counts(data: InstallStatus | undefined): { read: number; total: number } | null {
   const details = data?.action?.details
-  if (data?.step !== "linkedin" || !isRecord(details)) return null
-  const { read, total } = details
+  if (!isRecord(details)) return null
+  const read = details.read ?? details.done
+  const { total } = details
   return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"
 
-/** Where one stage stands: done, the one under way, stopped there, or still to come. */
-function standingOf(data: InstallStatus, stage: (typeof STAGES)[number]): Standing {
+/** Whether a stage has anything in the record: its step is running or has run. */
+function present(data: InstallStatus, stage: Stage): boolean {
+  return stage.steps.some((step) => step === data.step || step in data.steps)
+}
+
+/** Where one stage stands: done, the one under way, stopped there, or still to come. A source stage
+ *  runs only the steps it needs (a tool already installed writes none), so its present steps decide. */
+function standingOf(data: InstallStatus, stage: Stage): Standing {
   const current = stage.steps.some((step) => step === data.step)
   if (current) {
     if (data.status === "failed") return "stopped"
     if (data.event === "search.ready" || (stage.steps[0] === "ready" && DONE.has(data.status))) return "done"
     return "current"
   }
-  const states = stage.steps.map((step) => data.steps[step]?.status)
-  if (!states.every((state) => DONE.has(state ?? ""))) return "next"
+  const steps = stage.source ? stage.steps.filter((step) => step in data.steps) : stage.steps
+  const states = steps.map((step) => data.steps[step]?.status)
+  if (states.length === 0 || !states.every((state) => DONE.has(state ?? ""))) return "next"
   return states.every((state) => state === "skipped") ? "skipped" : "done"
 }
 
-/** What a finished stage says: the record's own line for its last step (e.g. "Your LinkedIn
- *  connections are in; nothing to learn from messages yet."), else the stage's done words. */
-function finishedLine(data: InstallStatus, stage: (typeof STAGES)[number]): string {
+/** What a finished stage says: the record's own line for its last step (e.g. "293 LinkedIn
+ *  connections", "Your LinkedIn connections are in; nothing to learn from messages yet."). The index
+ *  and ready stages say their own words: the record's line for both is the ready line. */
+function finishedLine(data: InstallStatus, stage: Stage): string {
+  if (stage.steps[0] === "index" || stage.steps[0] === "ready") return stage.done
   const last = [...stage.steps].reverse().find((step) => data.steps[step]?.message)
   return last ? (data.steps[last]?.message ?? stage.done) : stage.done
 }
@@ -67,6 +105,7 @@ function finishedLine(data: InstallStatus, stage: (typeof STAGES)[number]): stri
  *  first look opens once people are in. */
 export function SetUp() {
   const client = useQueryClient()
+  const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
   const [retrying, setRetrying] = useState(false)
@@ -87,7 +126,12 @@ export function SetUp() {
     refetchInterval: POLL_MS,
     retry: false,
   })
-  const data = install.data?.data
+  // Opened by Continue: the record is the last run's until the new one writes, so a record from
+  // before the click is not shown (the moment the run starts, it replaces it).
+  const startedAt = (useLocation().state as { startedAt?: number } | null)?.startedAt
+  const record = install.data?.data
+  const data =
+    record && startedAt !== undefined && Date.parse(record.updated_at) < startedAt ? undefined : record
   const running = data?.status === "running" || (data?.status === "waiting" && (data.installer_pid ?? 0) > 0)
   const failed = data?.status === "failed"
   const ready = data?.event === "search.ready"
@@ -122,7 +166,10 @@ export function SetUp() {
     })
   }
 
-  const current = data ? STAGES.find((stage) => standingOf(data, stage) === "current") : undefined
+  const stages = data ? STAGES.filter((stage) => !stage.source || present(data, stage)) : []
+  const current = data ? stages.find((stage) => standingOf(data, stage) === "current") : undefined
+  // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
+  const long = data !== undefined && stages.some((stage) => stage.source)
   const indexProgress = data?.step === "index" ? data.index_progress : null
   return (
     <Frame
@@ -130,12 +177,12 @@ export function SetUp() {
       left={
         <>
           <h1 className="m-0 text-[22px] font-bold leading-tight">
-            {failed ? "Setup stopped" : (current?.label ?? "Setting up")}
+            {failed ? "Setup stopped" : ready ? "Search is ready" : (current?.label ?? "Setting up")}
           </h1>
           {install.error ? <Note bad>{errorText(install.error)}</Note> : null}
           {data ? (
             <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Setup stages">
-              {STAGES.map((stage) => {
+              {stages.map((stage) => {
                 const standing = standingOf(data, stage)
                 const live = standing === "current" || standing === "stopped"
                 return (
@@ -176,10 +223,10 @@ export function SetUp() {
                       <div className="flex flex-col gap-2 pl-8">
                         {count ? (
                           <>
-                            <ProgressBar label="Connections read" done={count.read} total={count.total} />
+                            <ProgressBar label={stage.label} done={count.read} total={count.total} />
                             <div className="flex justify-between text-xs text-muted-foreground">
                               <span>
-                                {count.read.toLocaleString()} of {count.total.toLocaleString()} connections
+                                {count.read.toLocaleString()} of {count.total.toLocaleString()}
                               </span>
                               <span>{left !== null ? leftText(left) : ""}</span>
                             </div>
@@ -232,18 +279,30 @@ export function SetUp() {
           ) : (
             <Note>
               <span className="inline-flex items-center gap-2">
-                <Spinner /> Reading your progress…
+                <Spinner /> {startedAt === undefined ? "Reading your progress…" : "Starting…"}
               </span>
             </Note>
           )}
           {error ? <Note bad>{error}</Note> : null}
+          {long && (processing || ready) ? (
+            <div className="mt-2 flex flex-col gap-2">
+              <Button variant="primary" className="self-start" onClick={() => void navigate(HOME.href)}>
+                Open Powerpacks
+              </Button>
+              {ready ? null : (
+                <Note>
+                  This keeps going while you use Powerpacks; Setup in the sidebar shows where it is.
+                </Note>
+              )}
+            </div>
+          ) : null}
         </>
       }
       right={
         // The right column fills in as the stages finish: the page picture while the connections
         // are read, then the first look the moment people are in.
         known > 0 || ready ? (
-          <FirstLookPanel look={look.data ?? { people: [], total: 0 }} ready={ready} />
+          <FirstLookPanel look={look.data ?? { people: [], total: 0, questions: [] }} ready={ready} />
         ) : data && (count !== null || processing || data.step === "linkedin") ? (
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>

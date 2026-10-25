@@ -282,6 +282,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/install/first-look":
                 self._json(install.first_look())
                 return
+            if parsed.path == "/api/install/first-look/ask":
+                self._json(install.ask(urllib.parse.parse_qs(parsed.query)["key"][0]))
+                return
             if parsed.path == "/api/install/preflight":
                 self._json(install.preflight())
                 return

@@ -44,9 +44,34 @@ export interface FirstLookPerson {
   avatar_url: string
 }
 
+/** One question the first look offers, minted from the index (controller.questions): what the
+ *  index holds most of, so it always answers with real names. */
+export interface FirstLookQuestion {
+  key: string
+  text: string
+  count: number
+}
+
 export interface FirstLook {
   people: FirstLookPerson[]
   total: number
+  questions: FirstLookQuestion[]
+}
+
+/** A question's answer from the index: the first people and how many there are. */
+export interface FirstLookAnswer {
+  question: string
+  people: FirstLookPerson[]
+  total: number
+}
+
+export async function fetchFirstLookAnswer(key: string, signal?: AbortSignal): Promise<FirstLookAnswer> {
+  const response = await fetch(`/api/install/first-look/ask?${new URLSearchParams({ key }).toString()}`, {
+    signal,
+    cache: "no-store",
+  })
+  if (!response.ok) throw await failure(response, "Couldn't answer that")
+  return body<FirstLookAnswer>(response)
 }
 
 /** The first people to show once the index is built, and how many there are in all. */

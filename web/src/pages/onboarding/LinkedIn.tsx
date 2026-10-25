@@ -69,7 +69,7 @@ export function LinkedIn() {
     setError(null)
     setStarting(true)
     continueSetup({})
-      .then(() => next && void navigate(next.href))
+      .then(() => next && void navigate(next.href, { state: { startedAt: Date.now() } }))
       .catch((caught: unknown) => {
         setError(errorText(caught))
         setStarting(false)
