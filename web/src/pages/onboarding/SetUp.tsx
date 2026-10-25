@@ -285,11 +285,7 @@ export function SetUp() {
             <Note>
               <span className="inline-flex items-center gap-2">
                 <Spinner />{" "}
-                {data
-                  ? (data.message ?? "Starting…")
-                  : startedAt === undefined
-                    ? "Reading your progress…"
-                    : "Starting…"}
+                {data ? data.message : startedAt === undefined ? "Reading your progress…" : "Starting…"}
               </span>
             </Note>
           )}
