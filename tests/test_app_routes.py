@@ -70,7 +70,7 @@ class AppRoutesTests(unittest.TestCase):
         self.assertIn(b'"type":"city"', handler.wfile.write.call_args.args[0])
 
     def test_pages_are_the_shell_with_absolute_asset_urls(self) -> None:
-        for path in ("/", "/install", "/?stage=worth", "/people", "/team", "/searches", "/searches/run?run_id=jordan-role"):
+        for path in ("/", "/install", "/permission", "/?stage=worth", "/people", "/team", "/searches", "/searches/run?run_id=jordan-role"):
             status, headers, body = self._get(path)
             self.assertEqual((status, headers["Content-Type"]), (HTTPStatus.OK, "text/html; charset=utf-8"), path)
             self.assertIn(b"src='/app/assets/app.js'", body)

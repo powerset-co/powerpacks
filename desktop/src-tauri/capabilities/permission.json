@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "permission",
+  "description": "The Full Disk Access helper can position the windows, drag this app and end the step.",
+  "windows": ["permission"],
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1:8765/permission", "http://localhost:8765/permission"]
+  },
+  "permissions": ["allow-permission-begin", "allow-permission-end", "allow-permission-drag"]
+}

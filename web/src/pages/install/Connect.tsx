@@ -9,6 +9,7 @@ import { fetchAccount } from "@/lib/api/account"
 import { fetchSignedIn } from "@/lib/api/accounts"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
+import { desktopPlatform, invoke, listen } from "@/lib/desktop"
 import {
   connectSource,
   continueSetup,
@@ -209,7 +210,6 @@ export function Connect({
   const [queued, setQueued] = useState<{ source: ConnectSource; launched: boolean } | null>(null)
   // Powerset's sign-in in the browser, until the account is read again.
   const [signingIn, setSigningIn] = useState(false)
-  // Full Disk Access is turned on in System Settings: Working until the window comes back.
   const [asking, setAsking] = useState(false)
 
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
@@ -229,13 +229,39 @@ export function Connect({
   const record = connection.data
   // What is signed in, from where each sign-in lives; asked again on coming back to the window
   // (from System Settings or a browser) and once a sign-in here ends.
-  const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
+  const signed = useQuery({
+    queryKey: SIGNED_IN,
+    queryFn: ({ signal }) => fetchSignedIn(signal),
+    refetchInterval: asking ? POLL_MS : false,
+    refetchIntervalInBackground: true,
+  })
   const ready = signed.data
   useEffect(() => {
-    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN }).finally(() => setAsking(false))
+    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN })
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [client])
+  useEffect(() => {
+    if (desktopPlatform() !== "mac") return
+    return listen("permission-ended", () => {
+      setAsking(false)
+      void client.invalidateQueries({ queryKey: SIGNED_IN })
+    })
+  }, [client])
+  useEffect(() => {
+    if (!asking || ready?.imessage !== false) return
+    let active = true
+    const mac = desktopPlatform() === "mac"
+    void installAction("permissions")
+      .then(() => (active && mac ? invoke("permission_begin") : undefined))
+      .catch((caught: unknown) => {
+        if (active) setError(errorText(caught))
+      })
+    return () => {
+      active = false
+      if (mac) void invoke("permission_end").catch((caught: unknown) => setError(errorText(caught)))
+    }
+  }, [asking, ready?.imessage])
   const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
   const busy = queued !== null || running
@@ -387,15 +413,17 @@ export function Connect({
               label: "Connect",
               onClick: () => {
                 setAsking(true)
-                void installAction("permissions").catch((caught: unknown) => {
-                  fail(caught)
-                  setAsking(false)
-                })
+                setError(null)
               },
             }}
           >
             {asking && ready?.imessage === false ? (
-              <Line>Turn on Powerpacks in System Settings, then come back here.</Line>
+              <Line>
+                Drag Powerpacks into Full Disk Access, then turn it on. We'll check automatically.{" "}
+                <button type="button" className={LINK} onClick={() => setAsking(false)}>
+                  Skip
+                </button>
+              </Line>
             ) : null}
           </Row>
         ) : null}

@@ -128,7 +128,8 @@ export function SetUp() {
   })
   // Opened by Continue: the record is the last run's until the new one writes, so a record from
   // before the click is not shown (the moment the run starts, it replaces it).
-  const startedAt = (useLocation().state as { startedAt?: number } | null)?.startedAt
+  const state: unknown = useLocation().state
+  const startedAt = isRecord(state) && typeof state.startedAt === "number" ? state.startedAt : undefined
   const record = install.data?.data
   const data =
     record && startedAt !== undefined && Date.parse(record.updated_at) < startedAt ? undefined : record
