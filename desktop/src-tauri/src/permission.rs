@@ -227,16 +227,18 @@ mod tests {
     }
 
     /// The helper is a second window on the page server's URL: its capability must let it call
-    /// the three permission commands, as the main window's does.
+    /// the three permission commands, as the main window's does. Tauri resolves a call against
+    /// the page's origin alone (the IPC request's Origin header, no path), so the origin is
+    /// what the capability has to match.
     #[test]
     fn the_helper_window_may_call_the_permission_commands() {
         let mut context = crate::context();
         let authority = context.runtime_authority_mut();
         let helper = tauri::ipc::Origin::Remote {
-            url: tauri::Url::parse("http://127.0.0.1:8765/permission").unwrap(),
+            url: tauri::Url::parse("http://127.0.0.1:8765/").unwrap(),
         };
         let main = tauri::ipc::Origin::Remote {
-            url: tauri::Url::parse("http://127.0.0.1:8765/onboarding/sources").unwrap(),
+            url: tauri::Url::parse("http://127.0.0.1:8765/").unwrap(),
         };
         for command in ["permission_begin", "permission_end", "permission_drag"] {
             let allowed = authority.resolve_access(command, "permission", "permission", &helper);
