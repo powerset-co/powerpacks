@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.39.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.1...powerpacks-v3.39.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** trust bundle after the emSign CA compromise ([#916](https://github.com/powerset-co/powerpacks/issues/916)) ([af5bb12](https://github.com/powerset-co/powerpacks/commit/af5bb1274710ea1379a97656283b5b832e1cc0ab))
+
 ## [3.39.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.0...powerpacks-v3.39.1) (2026-10-24)
 
 
