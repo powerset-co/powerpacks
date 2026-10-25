@@ -78,7 +78,9 @@ export function Frame({
               Skip
             </button>
           ) : null}
-          <div className="mx-auto mt-[12vh] flex w-full max-w-[380px] flex-col gap-5 pb-12">{right}</div>
+          <div className="mx-auto mt-[12vh] flex min-h-0 w-full max-w-[380px] flex-1 flex-col gap-5 pb-12">
+            {right}
+          </div>
         </aside>
       </div>
     </div>

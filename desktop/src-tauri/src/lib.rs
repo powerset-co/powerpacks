@@ -29,6 +29,11 @@ use boot::{Boot, BootState};
 use codex::Codex;
 
 const MAIN_WINDOW: &str = "main";
+
+/// The app's build-time context (its config, capabilities and icons); minted once per crate.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
 const SPLASH_PAGE: &str = "index.html";
 const WINDOW_SIZE: (f64, f64) = (1360.0, 860.0);
 const WINDOW_MIN_SIZE: (f64, f64) = (960.0, 640.0);
@@ -456,7 +461,7 @@ pub fn run() {
             restart::launch(app.handle().clone());
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("Powerpacks failed to start")
         .run(|app, event| {
             #[cfg(target_os = "macos")]

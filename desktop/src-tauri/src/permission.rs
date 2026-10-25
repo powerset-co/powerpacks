@@ -78,10 +78,10 @@ pub async fn permission_begin(
         url.set_fragment(None);
         let helper = WebviewWindowBuilder::new(&app, "permission", WebviewUrl::External(url))
             .title("Messages permission")
-            .inner_size(360.0, 224.0)
+            .inner_size(HELPER.0, HELPER.1)
             .position(
-                position.x + size.width * 0.75 - 180.0,
-                position.y + size.height - 236.0,
+                position.x + size.width - HELPER.0 - 16.0,
+                position.y + size.height - HELPER.1 - 16.0,
             )
             .decorations(false)
             .transparent(true)
@@ -104,7 +104,7 @@ pub async fn permission_begin(
             .map_err(|error| error.to_string())?;
     }
     let right = LogicalPosition::new(position.x + size.width / 2.0, position.y);
-    tauri::async_runtime::spawn_blocking(move || {
+    let settings = tauri::async_runtime::spawn_blocking(move || {
         let script = format!(r#"
 tell application "System Events"
     repeat 30 times
@@ -113,7 +113,7 @@ tell application "System Events"
                 if exists window 1 then
                     set position of window 1 to {{{x}, {y}}}
                     set size of window 1 to {{{width}, {height}}}
-                    return
+                    return (position of window 1) & (size of window 1)
                 end if
             end tell
         end if
@@ -124,10 +124,39 @@ end tell
 "#, x = right.x.round(), y = right.y.round(), width = (size.width / 2.0).round(), height = size.height.round());
         let output = std::process::Command::new("osascript").args(["-e", &script]).output()
             .map_err(|error| error.to_string())?;
-        if output.status.success() { Ok(()) } else {
+        if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).into_owned()) } else {
             Err(format!("Could not position System Settings. Allow Powerpacks in Accessibility and Automation, or move Settings to the right yourself. {}", String::from_utf8_lossy(&output.stderr).trim()))
         }
-    }).await.map_err(|error| error.to_string())?
+    }).await.map_err(|error| error.to_string())??;
+    // The helper sits in the Settings window's lower right corner, over the list it is dragged into.
+    if let (Some(helper), Some((x, y, width, height))) =
+        (app.get_webview_window("permission"), frame(&settings))
+    {
+        helper
+            .set_position(LogicalPosition::new(
+                x + width - HELPER.0 - 16.0,
+                y + height - HELPER.1 - 16.0,
+            ))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// The helper window's logical size.
+const HELPER: (f64, f64) = (360.0, 224.0);
+
+/// A window frame as osascript prints it: `x, y, width, height`.
+fn frame(text: &str) -> Option<(f64, f64, f64, f64)> {
+    let mut parts = text
+        .trim()
+        .split(',')
+        .map(|part| part.trim().parse::<f64>().ok());
+    Some((
+        parts.next()??,
+        parts.next()??,
+        parts.next()??,
+        parts.next()??,
+    ))
 }
 
 #[tauri::command]
@@ -185,8 +214,45 @@ pub async fn permission_drag(window: WebviewWindow) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::bundle;
+    use super::{bundle, frame};
     use std::path::Path;
+
+    #[test]
+    fn a_frame_is_read_from_what_osascript_prints() {
+        assert_eq!(
+            frame("960, 25, 960, 1055\n"),
+            Some((960.0, 25.0, 960.0, 1055.0))
+        );
+        assert_eq!(frame(""), None);
+    }
+
+    /// The helper is a second window on the page server's URL: its capability must let it call
+    /// the three permission commands, as the main window's does.
+    #[test]
+    fn the_helper_window_may_call_the_permission_commands() {
+        let mut context = crate::context();
+        let authority = context.runtime_authority_mut();
+        let helper = tauri::ipc::Origin::Remote {
+            url: tauri::Url::parse("http://127.0.0.1:8765/permission").unwrap(),
+        };
+        let main = tauri::ipc::Origin::Remote {
+            url: tauri::Url::parse("http://127.0.0.1:8765/onboarding/sources").unwrap(),
+        };
+        for command in ["permission_begin", "permission_end", "permission_drag"] {
+            let allowed = authority.resolve_access(command, "permission", "permission", &helper);
+            assert!(
+                allowed.is_some_and(|resolved| !resolved.is_empty()),
+                "{command} from the helper"
+            );
+        }
+        for command in ["permission_begin", "permission_end"] {
+            let allowed = authority.resolve_access(command, "main", "main", &main);
+            assert!(
+                allowed.is_some_and(|resolved| !resolved.is_empty()),
+                "{command} from the page"
+            );
+        }
+    }
 
     #[test]
     fn drags_the_running_bundle_not_an_installed_copy() {

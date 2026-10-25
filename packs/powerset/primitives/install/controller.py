@@ -24,6 +24,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -31,7 +32,8 @@ from urllib.parse import urlparse
 
 import duckdb
 
-from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, SCRAPE_RECORD
+from packs.ingestion.primitives.discover.linkedin.connections import (BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, PICTURES,
+                                                                     SCRAPE_RECORD, picture_path)
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
@@ -148,7 +150,8 @@ class InstallController:
                     people.append({"public_identifier": row.get("public_identifier", ""),
                                    "name": row.get("full_name", ""), "title": row["current_title"],
                                    "company": row["current_company"], "headline": row.get("headline", ""),
-                                   "avatar_url": row.get("profile_picture_url", "")})
+                                   "avatar_url": self._avatar(row.get("public_identifier", ""),
+                                                               row.get("profile_picture_url", ""))})
         return {"people": people, "total": total, "questions": self.questions()}
 
     def questions(self) -> list[dict]:
@@ -172,8 +175,19 @@ class InstallController:
             value, total = conn.execute(mint).fetchone()
             rows = conn.execute(answer, [f"%{value}%" if key == "founders" else value]).fetchall()
         people = [{"public_identifier": row[0], "name": row[1], "title": row[2], "company": row[3],
-                   "headline": row[4], "avatar_url": row[5]} for row in rows[:limit]]
+                   "headline": row[4], "avatar_url": self._avatar(row[0], row[5])} for row in rows[:limit]]
         return {"question": text.format(value), "people": people, "total": total}
+
+    def _avatar(self, public_identifier: str, url: str) -> str:
+        """The picture the LinkedIn read saved, served by this server, else LinkedIn's own link."""
+        if picture_path(self.root / PICTURES, public_identifier).is_file():
+            return f"/api/install/picture?id={urllib.parse.quote(public_identifier)}"
+        return url
+
+    def picture(self, public_identifier: str) -> bytes | None:
+        """A saved connection picture, or None without one."""
+        path = picture_path(self.root / PICTURES, public_identifier)
+        return path.read_bytes() if path.is_file() else None
 
     def linkedin_page_image(self) -> bytes | None:
         """The picture of the connections page the last read took, or None before one."""
@@ -186,7 +200,7 @@ class InstallController:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         moved = []
         for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD,
-                     self.root / PAGE_SHOT):
+                     self.root / PAGE_SHOT, self.root / PICTURES):
             if path.exists():
                 target = path.with_name(f"{path.name}.bkup-{stamp}")
                 path.rename(target)

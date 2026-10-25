@@ -23,9 +23,17 @@ export function Permission() {
   }, [signed.data?.imessage])
   return (
     <section
-      className="m-2 flex flex-col items-center gap-2 rounded-[var(--radius-l)] border border-line-strong bg-card p-3 text-center shadow-2"
+      className="relative m-2 flex flex-col items-center gap-2 rounded-[var(--radius-l)] border border-line-strong bg-card p-3 text-center shadow-2"
       aria-label="Messages permission"
     >
+      <button
+        type="button"
+        className="absolute right-4 top-4 cursor-pointer border-0 bg-transparent p-0 text-sm leading-none text-muted-foreground hover:text-foreground"
+        aria-label="Close"
+        onClick={() => void invoke("permission_end").catch(fail)}
+      >
+        ×
+      </button>
       {signed.data?.imessage === false ? (
         <>
           <button

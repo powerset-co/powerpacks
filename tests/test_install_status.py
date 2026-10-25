@@ -10,10 +10,15 @@ from pathlib import Path
 import duckdb
 from unittest.mock import MagicMock, patch
 
+from packs.ingestion.primitives.discover.linkedin.connections import PICTURES, save_pictures
 from packs.powerset.primitives.install import controller
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
+
+
+def _raise(error: BaseException) -> bytes:
+    raise error
 
 
 class InstallStatusTests(unittest.TestCase):
@@ -221,6 +226,27 @@ class ForgetLinkedInTests(unittest.TestCase):
         indexed.parent.mkdir(parents=True, exist_ok=True)
         indexed.write_text(header + "g-h,G H,VP,Gamma,,\n", encoding="utf-8")
         self.assertEqual([person["name"] for person in install.first_look()["people"]], ["G H"])
+
+    def test_the_first_look_shows_the_pictures_the_read_saved(self) -> None:
+        root = Path(self.tmp.name)
+        people = root / controller.LINKEDIN_PEOPLE
+        people.parent.mkdir(parents=True, exist_ok=True)
+        people.write_text("public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
+                          "ann-a,Ann A,CTO,Acme,,https://media.licdn.com/ann\n"
+                          "bob-b,Bob B,CEO,Bolt,,https://media.licdn.com/bob\n", encoding="utf-8")
+        saved = save_pictures([{"slug": "ann-a", "picture": "https://media.licdn.com/ann"},
+                               {"slug": "bob-b", "picture": "https://media.licdn.com/bob"},
+                               {"slug": "cat-c", "picture": ""}],
+                              root / PICTURES, fetch=lambda url: b"jpeg" if url.endswith("ann") else _raise(OSError(url)))
+        self.assertEqual(saved, 1)
+        control = InstallController(root)
+        self.assertEqual([person["avatar_url"] for person in control.first_look()["people"]],
+                         ["/api/install/picture?id=ann-a", "https://media.licdn.com/bob"])
+        self.assertEqual(control.picture("ann-a"), b"jpeg")
+        self.assertIsNone(control.picture("bob-b"))
+        # A later read saves only what is missing, and never fetches what is on disk.
+        self.assertEqual(save_pictures([{"slug": "ann-a", "picture": "https://media.licdn.com/ann"}], root / PICTURES,
+                                       fetch=lambda url: _raise(AssertionError(url))), 0)
 
     def test_questions_are_minted_from_the_index_and_answered_by_it(self) -> None:
         install = InstallController(self.root)
