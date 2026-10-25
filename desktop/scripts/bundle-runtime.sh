@@ -7,7 +7,7 @@
 # Writes src-tauri/binaries/{uv,node,codex,codex-code-mode-host,rg}-<triple> and src-tauri/resources/powerpacks.tar.gz.
 set -euo pipefail
 
-UV_VERSION="0.11.32"
+UV_VERSION="0.13.5"
 CODEX_VERSION="0.161.0"
 NODE_VERSION="22.16.0"
 PLAYWRIGHT_VERSION="1.60.0"
