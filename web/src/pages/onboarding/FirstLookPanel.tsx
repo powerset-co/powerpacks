@@ -45,7 +45,12 @@ function People({
     if (!element || !column || !panel) return
     const measure = () => {
       const row = element.firstElementChild
-      if (!(row instanceof HTMLElement)) return
+      // No row to measure yet (the people arrived after an empty first render): show them all,
+      // and the next pass measures.
+      if (!(row instanceof HTMLElement)) {
+        setFit(people.length)
+        return
+      }
       const foot = column.getBoundingClientRect().bottom - parseFloat(getComputedStyle(column).paddingBottom)
       const last = panel.lastElementChild
       if (!last) return
