@@ -167,7 +167,11 @@ export function SetUp() {
     })
   }
 
-  const stages = data ? STAGES.filter((stage) => !stage.source || present(data, stage)) : []
+  // The run's first steps (account, keys, sources) carry the last run's stage entries until the
+  // selection starts them over: the list shows once the run is on a stage.
+  const underway =
+    data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
+  const stages = data && underway ? STAGES.filter((stage) => !stage.source || present(data, stage)) : []
   const current = data ? stages.find((stage) => standingOf(data, stage) === "current") : undefined
   // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
   const long = data !== undefined && stages.some((stage) => stage.source)
@@ -181,7 +185,7 @@ export function SetUp() {
             {failed ? "Setup stopped" : ready ? "Search is ready" : (current?.label ?? "Setting up")}
           </h1>
           {install.error ? <Note bad>{errorText(install.error)}</Note> : null}
-          {data ? (
+          {data && underway ? (
             <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Setup stages">
               {stages.map((stage) => {
                 const standing = standingOf(data, stage)
@@ -280,7 +284,12 @@ export function SetUp() {
           ) : (
             <Note>
               <span className="inline-flex items-center gap-2">
-                <Spinner /> {startedAt === undefined ? "Reading your progress…" : "Starting…"}
+                <Spinner />{" "}
+                {data
+                  ? (data.message ?? "Starting…")
+                  : startedAt === undefined
+                    ? "Reading your progress…"
+                    : "Starting…"}
               </span>
             </Note>
           )}
