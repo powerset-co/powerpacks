@@ -99,11 +99,17 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 /// The latest Powerpacks release against this app's version, for the side nav's update pane.
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<update::Update, String> {
+    if DEBUG_MENU {
+        return Ok(update::current(&app));
+    }
     update::check(&app).await
 }
 
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
+    if DEBUG_MENU {
+        return Err("A test build does not update itself.".into());
+    }
     update::install(&app).await
 }
 

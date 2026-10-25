@@ -20,6 +20,17 @@ struct Progress {
     total: Option<u64>,
 }
 
+/// This build, with no update on offer: what a test build answers, since the release would
+/// replace it (and lose what it is testing).
+pub fn current(app: &AppHandle) -> Update {
+    let current = app.package_info().version.to_string();
+    Update {
+        latest: current.clone(),
+        available: false,
+        current,
+    }
+}
+
 pub async fn check(app: &AppHandle) -> Result<Update, String> {
     let current = app.package_info().version.to_string();
     let update = app
