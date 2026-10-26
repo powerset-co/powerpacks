@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.39.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.2...powerpacks-v3.39.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** let both Codex runners write uv's cache; support runs get an hour ([#920](https://github.com/powerset-co/powerpacks/issues/920)) ([4fa153f](https://github.com/powerset-co/powerpacks/commit/4fa153ff714bba90e759dbee9246702d1e273480))
+
+
+### Documentation
+
+* **deep-context:** worth undo row + venv fallback when uv's cache is unwritable ([#918](https://github.com/powerset-co/powerpacks/issues/918)) ([2986b42](https://github.com/powerset-co/powerpacks/commit/2986b426e58a1e7352f236858bbf5cb00bb21d81))
+
 ## [3.39.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.1...powerpacks-v3.39.2) (2026-10-25)
 
 
