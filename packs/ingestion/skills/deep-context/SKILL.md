@@ -154,7 +154,9 @@ When the user asks for the change in chat ("skip Jordan", "mark Casey a close fr
 person", "that LinkedIn is the wrong Jordan"), do it, then say what changed in one line. The page server is
 the app's (port 8765, or `bin/deep-context-v2 review`); a person is their family's `parent_id`, printed by
 `bin/deep-context-v2 lookup --name "<name>" --json`. Every write below answers `{"rows": [...]}`, the rows as
-the page shows them.
+the page shows them. If `uv` cannot write its cache in your sandbox ("Failed to initialize cache"), call the
+checkout's venv instead: `.venv/bin/python -m packs.ingestion.primitives.deep_context_v2.lookup ...` and
+`.venv/bin/python -m packs.ingestion.primitives.deep_context_v2.realize.realize`.
 
 A set ("skip everyone named Chen", "delete everyone tagged test", "tag everyone at Apple"): `GET /api/people/rows`
 once and pick the rows in Python; it answers `{"counts", "columns", "rows"}`, each row a list in `columns`
@@ -166,7 +168,7 @@ tell the user the count and the names and wait for yes; the other writes just ha
 
 | Ask | Write |
 |---|---|
-| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. |
+| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. |
 | Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
 | Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. The list replaces the person's tags. Only the label names are tags: is_family, is_close_friend, is_personal, is_professional, is_classmate, is_coworker_current, is_coworker_past, is_client, is_vendor_or_partner, is_investor, is_founder, is_recruiter, is_mentor_or_advisor, is_mentee_or_report, is_service_provider, is_healthcare_legal_or_financial_provider, is_hr_benefits_or_payroll, is_support_billing_or_landlord, is_neighbor_or_local, is_automated_sender, is_transactional, is_stranger, is_minor, met_in_person, notable, owner_would_intro, they_would_take_owner_call, confidential_dealings. Any other word is refused; pick the closest and tell the user. |
 | Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good: a `deleted_parents` row, and its `families` row goes. Members and decisions stay. Undo on request: delete the `deleted_parents` row and run `bin/deep-context-v2 realize` (free). |
