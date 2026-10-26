@@ -659,13 +659,10 @@
 }
 .guide .qr {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(11, 1fr);
-  gap: 2px;
+  display: block;
   width: 112px;
   height: 112px;
   background: #fff;
-  padding: 6px;
 }
 .guide .qr i.ink {
   background: #30483c;
