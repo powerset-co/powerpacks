@@ -77,7 +77,8 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         assert args[:-2] == ["-c", "cli_auth_credentials_store=file", "-c",
                             "sandbox_workspace_write.network_access=true", "exec", "--skip-git-repo-check",
                             "--sandbox", "workspace-write",
-                            "--add-dir", str((root / ".powerpacks").resolve()), "--output-last-message"]
+                            "--add-dir", str((root / ".powerpacks").resolve()),
+                            "--add-dir", str(Path.home() / ".cache/uv"), "--output-last-message"]
         assert record["cwd"] == str(root)
         assert record["home"] == str(root / support.CODEX_HOME)
         assert args[-2] == str(root / support.REPORTS / f"{current['id']}.md")

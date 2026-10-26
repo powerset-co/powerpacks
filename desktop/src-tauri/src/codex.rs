@@ -318,13 +318,15 @@ impl Codex {
         .await
     }
 
-    /// Writes stay in the Powerpacks folder; network is on, since every search calls Powerset.
+    /// Writes stay in the Powerpacks folder plus uv's cache (every `bin/*` command runs through
+    /// `uv run`, which dies without it); network is on, since every search calls Powerset.
     fn thread_settings(cwd: &Path) -> Value {
+        let uv_cache = dirs::home_dir().unwrap_or_default().join(".cache/uv");
         json!({
             "cwd": cwd,
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
-            "config": { "sandbox_workspace_write": { "network_access": true } },
+            "config": { "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] } },
             "developerInstructions": DEVELOPER_INSTRUCTIONS,
         })
     }
