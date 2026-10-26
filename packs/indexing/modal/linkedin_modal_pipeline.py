@@ -168,6 +168,9 @@ def build_image(*extra_packages: str) -> modal.Image:
             "tiktoken==0.13.0",
             *extra_packages,
         )
+        # The repo is mounted at /repo at container start; the deployed app's functions (app.py)
+        # import `packs` from there, so the path is set here, before the local files.
+        .env({"PYTHONPATH": "/repo"})
         .add_local_dir(REPO / "packs", "/repo/packs")
         .add_local_dir(REPO / "scripts", "/repo/scripts")
     )

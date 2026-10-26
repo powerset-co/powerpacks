@@ -18,7 +18,6 @@ Created: 2026-10-26
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -43,7 +42,7 @@ def _run(label: str, operator_id: str, command: list[str]) -> None:
     run_vol = Path(f"/data/operators/{operator_id}/runs/{label}")
     write_status(run_vol, {"status": "running", "phase": "queued"})
     volume.commit()
-    process = subprocess.Popen(command, env={**os.environ, "PYTHONPATH": "/repo"})
+    process = subprocess.Popen(command)
     while process.poll() is None:
         time.sleep(5)
         volume.commit()
