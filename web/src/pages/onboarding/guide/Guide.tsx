@@ -32,7 +32,8 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
     const element = stage.current
     if (!element) return
     const demo = mountDemo(element, source, { person: { name: person.name, email: person.email } })
-    elapsed.current = 0
+    // Beat 0 (the first sixth) is a still frame: start where the motion starts.
+    elapsed.current = flow.duration / 6
     let last = performance.now()
     let handle = 0
     const tick = (now: number) => {
