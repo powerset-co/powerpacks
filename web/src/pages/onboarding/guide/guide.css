@@ -856,3 +856,6 @@
 
 /* The computer's code is a real code for powerset.co; the label says it is not the one to scan. */
 .guide .code-example{position:relative;display:block}.guide .code-example>b{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-18deg);background:#e8582a;color:#fff;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 9px;border-radius:4px;box-shadow:0 2px 8px #0003}
+
+/* The Link a device tap waits so the scanner follows it after 1.5 s, as the Linked devices tap does, instead of hanging 4 s. */
+.guide .whatsapp[data-phase="1"] .tap{transition-delay:2.5s,2.5s,0s}
