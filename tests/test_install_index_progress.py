@@ -129,23 +129,19 @@ class InstallIndexProgressTests(unittest.TestCase):
         other_checkout = self.root / "other-checkout/.powerpacks"
         expected_dest = self.root / ".powerpacks/search-index"
 
-        def download(args):
-            self.assertEqual(Path(args.dest), expected_dest)
-            expected_dest.mkdir(parents=True)
-            (expected_dest / "local-search.duckdb").write_bytes(b"offline downloaded artifact")
-            return 0
+        def download(label, name, target):
+            self.assertEqual((label, target.parent), ("index", expected_dest))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"offline downloaded artifact")
+            return len(b"offline downloaded artifact")
 
         with (
             chdir(self.root),
             patch.object(modal_pipeline, "LOCAL_POWERPACKS", other_checkout),
-            patch.object(modal_pipeline, "get_volume"),
-            patch.object(modal_pipeline.modal.App, "lookup"),
-            patch.object(modal_pipeline.modal.Sandbox, "create", return_value=argparse.Namespace(object_id="offline-sandbox")),
-            patch.object(modal_pipeline, "build_image"),
-            patch.object(modal_pipeline, "powerset_api_secret"),
-            patch.object(modal_pipeline.modal.Secret, "from_name"),
+            patch.object(modal_pipeline.api_runs, "upload", return_value="powerpacks-modal-input/op/people.csv"),
+            patch.object(modal_pipeline.api_runs, "start", return_value="index"),
             patch.object(modal_pipeline, "watch_run", return_value={"status": "completed", "phase": "done"}),
-            patch.object(modal_pipeline, "cmd_download", side_effect=download),
+            patch.object(modal_pipeline.api_runs, "download", side_effect=download),
         ):
             code = modal_pipeline.cmd_index_people(argparse.Namespace(
                 people_csv=str(people_csv), dest=None, max_usd=0, timeout=1))
@@ -181,11 +177,8 @@ class InstallIndexProgressTests(unittest.TestCase):
                 remote[-1]["status"] = terminal_status
                 if terminal_status == "failed":
                     remote[-1]["exit_code"] = 1
-                with (
-                    patch.object(modal_pipeline, "read_run_status", side_effect=remote),
-                    patch.object(modal_pipeline.time, "sleep"),
-                ):
-                    result = modal_pipeline.watch_run("offline-index", producer, "indexing", "Indexing")
+                with patch.object(modal_pipeline.time, "sleep"):
+                    result = modal_pipeline.watch_run(iter(remote).__next__, producer, "indexing", "Indexing")
 
                 self.assertEqual(result, remote[-1])
                 events = [json.loads(line) for line in producer.events_path.read_text().splitlines()]
