@@ -187,12 +187,15 @@ export function Connect({
   onDone,
   details,
   rows = ALL_ROWS,
+  onGuide,
 }: {
   onBack?: () => void
   onDone?: () => void
   details?: Record<AccountSource, ReactNode>
   /** Which rows to show, in this order's subset; the onboarding's Sources shows the message sources alone. */
   rows?: readonly ConnectRow[]
+  /** The onboarding's guide: told which source to show on its icon's click and on its Connect. */
+  onGuide?: (source: "imessage" | "gmail" | "whatsapp") => void
 }) {
   const shown = new Set(rows)
   const client = useQueryClient()
@@ -318,6 +321,7 @@ export function Connect({
     const run = standing(record, ready, name)
     const at = queued?.source === name && run.state !== "working" ? { state: "working" as const } : run
     const command = "command" in at ? at.command : undefined
+    const guide = name === "linkedin" || !onGuide ? undefined : () => onGuide(name)
     return (
       <Row
         key={name}
@@ -326,12 +330,14 @@ export function Connect({
         details={details?.[name]}
         why={why}
         state={at.state}
+        onIcon={guide}
         action={{
           label: "stopped" in at ? "Try again" : "Connect",
-          onClick: () =>
-            name === "gmail"
-              ? connectGmail(asked ?? (known.length ? [...known] : [email]))
-              : void connect(name),
+          onClick: () => {
+            guide?.()
+            if (name === "gmail") connectGmail(asked ?? (known.length ? [...known] : [email]))
+            else void connect(name)
+          },
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
@@ -409,9 +415,11 @@ export function Connect({
             state={
               ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed"
             }
+            onIcon={onGuide ? () => onGuide("imessage") : undefined}
             action={{
               label: "Connect",
               onClick: () => {
+                onGuide?.("imessage")
                 setAsking(true)
                 setError(null)
               },
