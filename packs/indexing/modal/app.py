@@ -18,6 +18,7 @@ Created: 2026-10-26
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -33,7 +34,7 @@ TIMEOUT = 7200
 
 app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
-image = build_image().env({"PYTHONPATH": "/repo"})
+image = build_image()
 
 
 def _run(label: str, operator_id: str, command: list[str]) -> None:
@@ -42,7 +43,7 @@ def _run(label: str, operator_id: str, command: list[str]) -> None:
     run_vol = Path(f"/data/operators/{operator_id}/runs/{label}")
     write_status(run_vol, {"status": "running", "phase": "queued"})
     volume.commit()
-    process = subprocess.Popen(command)
+    process = subprocess.Popen(command, env={**os.environ, "PYTHONPATH": "/repo"})
     while process.poll() is None:
         time.sleep(5)
         volume.commit()
