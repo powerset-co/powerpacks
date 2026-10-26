@@ -47,8 +47,7 @@ from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
 from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
-from packs.ingestion.primitives.deep_context_v2.run import (archive_v1, index_command, index_env, realize,
-                                                            resolve_operator_id, stages)
+from packs.ingestion.primitives.deep_context_v2.run import archive_v1, index_command, realize, stages
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
@@ -211,8 +210,7 @@ class ProcessingOnboarding:
                   "index.preparing")
         if people.read_bytes() != before or not (self.index / "manifest.json").is_file():
             command = index_command(self.data_root, people)
-            env = index_env(resolve_operator_id(""))
-            self._run(shlex.join(command), lambda: self._modal(command, env), "index.building")
+            self._run(shlex.join(command), lambda: self._modal(command), "index.building")
         self._write("index.done")
         validation = self._run("validate-search-index", lambda: validate_search_index(
                                self.index / "local-search.duckdb", people), "validate.checking")
