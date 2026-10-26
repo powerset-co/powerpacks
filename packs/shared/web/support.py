@@ -18,7 +18,7 @@ from packs.shared.web import account, features
 GUIDE = Path("packs/shared/skills/remote-assist.md")
 REPORTS = Path(".powerpacks/desktop/support")
 CODEX_HOME = Path(".powerpacks/desktop/codex")
-RUN_TIMEOUT_SECONDS = 15 * 60
+RUN_TIMEOUT_SECONDS = 60 * 60
 _LOG = logging.getLogger(__name__)
 
 
@@ -61,6 +61,8 @@ def _run(message: dict, repo_root: Path) -> str:
                  "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
                  # .powerpacks is often a link to a folder outside the checkout: name its real path.
                  "--add-dir", str((repo_root / ".powerpacks").resolve()),
+                 # uv keeps its cache here; without it every bin/* command dies on "Failed to initialize cache".
+                 "--add-dir", str(Path.home() / ".cache/uv"),
                  "--output-last-message", str(report), prompt],
                 cwd=repo_root, env={**os.environ, "CODEX_HOME": str(home)},
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, timeout=RUN_TIMEOUT_SECONDS,
