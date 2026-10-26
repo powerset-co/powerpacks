@@ -49,15 +49,15 @@ export function Sources() {
         guide ? (
           <Guide key={guide} source={guide} person={person} />
         ) : (
-        <Info
-          title="What each one adds, and how long"
-          lines={[
-            "Messages: the people you text. One macOS switch; a few minutes to read.",
-            "Gmail: everyone you email. Sign in once; the first sync takes minutes to an hour, by mailbox size.",
-            "WhatsApp: scan a code with your phone. The first sync takes 30 minutes to a few hours.",
-          ]}
-          note="Done starts them together, then learns who everyone is. It runs in the background; you can use Powerpacks meanwhile."
-        />
+          <Info
+            title="What each one adds, and how long"
+            lines={[
+              "Messages: the people you text. One macOS switch; a few minutes to read.",
+              "Gmail: everyone you email. Sign in once; the first sync takes minutes to an hour, by mailbox size.",
+              "WhatsApp: scan a code with your phone. The first sync takes 30 minutes to a few hours.",
+            ]}
+            note="Done starts them together, then learns who everyone is. It runs in the background; you can use Powerpacks meanwhile."
+          />
         )
       }
     />

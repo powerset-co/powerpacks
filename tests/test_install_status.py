@@ -11,7 +11,7 @@ import duckdb
 from unittest.mock import MagicMock, patch
 
 from packs.ingestion.primitives.discover.linkedin.connections import PICTURES, save_pictures
-from packs.powerset.primitives.install import controller
+from packs.powerset.primitives.install import controller, first_look
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
@@ -251,7 +251,7 @@ class ForgetLinkedInTests(unittest.TestCase):
     def test_questions_are_minted_from_the_index_and_answered_by_it(self) -> None:
         install = InstallController(self.root)
         self.assertEqual(install.questions(), [])
-        db = self.root / controller.SEARCH_DB
+        db = self.root / first_look.SEARCH_DB
         db.parent.mkdir(parents=True, exist_ok=True)
         with duckdb.connect(str(db)) as conn:
             conn.execute("create table local_person_profiles (person_id text, public_identifier text, full_name text, "

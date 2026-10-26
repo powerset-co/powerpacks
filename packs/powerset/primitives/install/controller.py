@@ -30,8 +30,6 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
-import duckdb
-
 from packs.ingestion.primitives.discover.linkedin.connections import (BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, PICTURES,
                                                                      SCRAPE_RECORD, picture_path)
 from packs.powerset.primitives.install import preflight
@@ -44,26 +42,6 @@ PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privac
 LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
 INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
 # The search index itself; the first look's questions are minted from it and answered by it.
-SEARCH_DB = ".powerpacks/search-index/local-search.duckdb"
-_PERSON = ("p.public_identifier, p.full_name, coalesce(p.current_title, ''), coalesce(p.current_company, ''), "
-           "coalesce(p.headline, ''), coalesce(p.profile_picture_url, '')")
-# The three questions the first look offers, each over one column, so each always answers with
-# real names: the company with the most current people, the city with the most people, the founders.
-_QUESTIONS = {
-    "company": ("Who do I know at {}?",
-                "select company_name, count(distinct person_id) from local_people_positions "
-                "where is_current and company_name <> '' group by 1 order by 2 desc, 1 limit 1",
-                "select distinct " + _PERSON + " from local_person_profiles p join local_people_positions s "
-                "on s.person_id = p.person_id where s.is_current and s.company_name = ? order by p.full_name"),
-    "city": ("Who do I know in {}?",
-             "select city, count(*) from local_person_profiles where city <> '' group by 1 order by 2 desc, 1 limit 1",
-             "select " + _PERSON + " from local_person_profiles p where p.city = ? order by p.full_name"),
-    "founders": ("Which of my connections are founders?",
-                 "select 'founder', count(distinct person_id) from local_people_positions "
-                 "where is_current and lower(raw_title) like '%founder%'",
-                 "select distinct " + _PERSON + " from local_person_profiles p join local_people_positions s "
-                 "on s.person_id = p.person_id where s.is_current and lower(s.raw_title) like ? order by p.full_name"),
-}
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
@@ -155,28 +133,14 @@ class InstallController:
         return {"people": people, "total": total, "questions": self.questions()}
 
     def questions(self) -> list[dict]:
-        """The first look's questions, minted from the index: each names what the index holds most of,
-        and is offered only when it has at least two people to show. None before the index exists."""
-        db = self.root / SEARCH_DB
-        if not db.is_file():
-            return []
-        questions = []
-        with duckdb.connect(str(db), read_only=True) as conn:
-            for key, (text, mint, _) in _QUESTIONS.items():
-                row = conn.execute(mint).fetchone()
-                if row and row[1] >= 2:
-                    questions.append({"key": key, "text": text.format(row[0]), "count": row[1]})
-        return questions
+        """The first look's questions (first_look.py; imported here so the page server starts on the
+        standard library alone)."""
+        from packs.powerset.primitives.install import first_look
+        return first_look.questions(self.root)
 
     def ask(self, key: str, limit: int = 8) -> dict:
-        """One question's answer from the index: the first `limit` people and how many there are."""
-        text, mint, answer = _QUESTIONS[key]
-        with duckdb.connect(str(self.root / SEARCH_DB), read_only=True) as conn:
-            value, total = conn.execute(mint).fetchone()
-            rows = conn.execute(answer, [f"%{value}%" if key == "founders" else value]).fetchall()
-        people = [{"public_identifier": row[0], "name": row[1], "title": row[2], "company": row[3],
-                   "headline": row[4], "avatar_url": self._avatar(row[0], row[5])} for row in rows[:limit]]
-        return {"question": text.format(value), "people": people, "total": total}
+        from packs.powerset.primitives.install import first_look
+        return first_look.ask(self.root, key, limit, self._avatar)
 
     def _avatar(self, public_identifier: str, url: str) -> str:
         """The picture the LinkedIn read saved, served by this server, else LinkedIn's own link."""

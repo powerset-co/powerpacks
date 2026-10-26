@@ -33,7 +33,8 @@ export function ConnectionRow({
   /** With this, the icon is a button: the onboarding shows how this one connects. */
   onIcon?: () => void
 }) {
-  const badge = "grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground"
+  const badge =
+    "grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground"
   const row = (
     <>
       {onIcon ? (

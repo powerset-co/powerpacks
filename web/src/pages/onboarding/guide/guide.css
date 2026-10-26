@@ -747,104 +747,554 @@
   opacity: 0;
 }
 
-.guide .wa-home h2{font-size:20px;letter-spacing:-.6px;margin:10px 0 20px}.guide .wa-profile{display:flex;gap:10px;align-items:center;margin-bottom:24px}.guide .wa-profile small{display:block;color:#777;font-size:11px}.guide .wa-profile .avatar{width:38px;height:38px}.guide .wa-row{background:white;display:flex;gap:10px;align-items:center;padding:12px 8px;margin-bottom:1px;font-size:11px}.guide .wa-row>span{flex:1}.guide .linked-choice{background:#e8f1ec}.guide .phone-tabs{position:absolute;bottom:17px;left:0;width:100%;display:flex;justify-content:space-around;padding:15px 4px 5px;border-top:1px solid #e6e6e6;font-size:8px;color:#999}.guide .phone-tabs b{color:#188958}.guide .whatsapp[data-phase="0"] .tap{opacity:1}.guide .whatsapp[data-beat="1"] .tap{top:261px}
-
+.guide .wa-home h2 {
+  font-size: 20px;
+  letter-spacing: -0.6px;
+  margin: 10px 0 20px;
+}
+.guide .wa-profile {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.guide .wa-profile small {
+  display: block;
+  color: #777;
+  font-size: 11px;
+}
+.guide .wa-profile .avatar {
+  width: 38px;
+  height: 38px;
+}
+.guide .wa-row {
+  background: white;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 8px;
+  margin-bottom: 1px;
+  font-size: 11px;
+}
+.guide .wa-row > span {
+  flex: 1;
+}
+.guide .linked-choice {
+  background: #e8f1ec;
+}
+.guide .phone-tabs {
+  position: absolute;
+  bottom: 17px;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: space-around;
+  padding: 15px 4px 5px;
+  border-top: 1px solid #e6e6e6;
+  font-size: 8px;
+  color: #999;
+}
+.guide .phone-tabs b {
+  color: #188958;
+}
+.guide .whatsapp[data-phase="0"] .tap {
+  opacity: 1;
+}
+.guide .whatsapp[data-beat="1"] .tap {
+  top: 261px;
+}
 
 /* Product fidelity pass (2026-10-25): macOS System Settings, Google sign-in, WhatsApp on iOS. */
-.guide .tile{width:20px;height:20px;border-radius:5px;display:inline-grid;place-items:center;flex:none}
-.guide .tile svg{width:13px;height:13px}
-.guide .mac-window{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;background:#f5f5f7;border-color:#c9c9cc}
-.guide .mac-window aside{background:#e9e9eb;width:33%;padding:12px 8px}
-.guide .search{background:#dcdcde;border-radius:6px;color:#8a8a8e;margin:16px 0 10px;font-size:10px}
-.guide .side-row{font-size:10.5px;color:#1d1d1f;padding:5px 6px;gap:7px;border-radius:6px}
-.guide .side-row.selected{background:#2f6fde;color:#fff}
-.guide .side-row .tile{background:inherit}
-.guide .mac-main{padding:12px 16px}
-.guide .mac-title{align-items:center;gap:10px;font-size:14px;color:#1d1d1f}
-.guide .mac-title .back{width:20px;height:20px;border-radius:5px;background:#e5e5e7;display:grid;place-items:center;color:#555}
-.guide .mac-title .back svg{width:7px;height:12px}
-.guide .mac-main>p{font-size:9.5px;color:#6e6e73;margin:14px 0 10px;line-height:1.45}
-.guide .permission-list{border-color:#d9d9de;border-radius:8px}
-.guide .app-row{padding:8px 10px;font-size:11.5px;color:#1d1d1f}
-.guide .app-icon.terminal{background:#1e1e1e;font-family:Menlo,monospace;font-size:10px}
-.guide .switch{background:#d1d1d6;border:none}
-.guide .permission-list>.app-row .switch,.guide .stage[data-beat="3"] .power-row .switch,.guide .stage[data-phase="2"] .power-row .switch{background:#2f6fde}
-.guide .restart-dialog{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;background:#ececee;border-color:#d0d0d4;border-radius:12px;padding:20px 20px 16px;width:62%;left:25%}
-.guide .restart-dialog .mark{width:52px;height:52px;font-size:28px;border-radius:12px}
-.guide .restart-dialog strong{font-size:12px;margin:12px 0 6px;line-height:1.35}
-.guide .restart-dialog p{font-size:10.5px;color:#4a4a4e;margin:0 0 14px}
-.guide .restart-dialog>div:last-child>*{background:#fff;border:1px solid #d6d6da;border-radius:6px;font-size:11px;padding:5px}
-.guide .restart-dialog>div:last-child>b{background:#2f6fde;border-color:#2f6fde;color:#fff}
-.guide .browser{font-family:"Google Sans",Roboto,Arial,sans-serif;color:#1f1f1f}
-.guide .browser-bar>span{font-size:10px}
-.guide .google-g{width:40px;height:40px;display:block}
-.guide .google-page h2{font-size:22px;font-weight:400;letter-spacing:0;margin:18px 0 6px;color:#1f1f1f}
-.guide .google-page p{font-size:12.5px;color:#444746;margin:0 0 14px}
-.guide .google-page p b{font-weight:500;color:#1f1f1f}
-.guide .account{border:none;border-top:1px solid #e3e3e3;border-bottom:1px solid #e3e3e3;border-radius:0;padding:12px 6px;margin:12px 0 0;font-size:13px;gap:14px}
-.guide .account small{color:#444746;font-size:11.5px}
-.guide .avatar{width:30px;height:30px;border-radius:50%;background:#7b1fa2;color:#fff;display:grid;place-items:center;font-weight:500;font-size:13px}
-.guide .avatar.plain{background:transparent;color:#444746;font-size:18px}
-.guide .other-account{display:flex;align-items:center;gap:14px;padding:12px 6px;border-bottom:1px solid #e3e3e3;font-size:13px}
-.guide .google-foot{font-size:10.5px;color:#444746;margin-top:18px;line-height:1.5}
-.guide .verify-phone{display:flex;gap:12px;align-items:center;border:1px solid #c4c7c5;border-radius:8px;padding:12px;font-size:12px;margin-top:6px}
-.guide .verify-icon{font-size:22px}
-.guide .scope{display:flex;gap:12px;align-items:flex-start;font-size:12.5px;line-height:1.4;margin:6px 0 10px}
-.guide .checkbox{width:18px;height:18px;border-radius:3px;background:#0b57d0;color:#fff;display:grid;place-items:center;font-size:12px;flex:none;margin-top:1px}
-.guide .scope-note{font-size:10.5px;color:#444746}
-.guide .google-actions{display:flex;justify-content:flex-end;gap:18px;align-items:center;margin-top:14px;font-size:13px;color:#0b57d0;font-weight:500}
-.guide .google-button{margin:0;background:#0b57d0;font-size:13px;font-weight:500;padding:8px 22px}
-.guide .phone{background:#f2f2f7;border-color:#1c1c1e;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
-.guide .wa-home h2{font-size:26px;font-weight:700;letter-spacing:-.4px;margin:6px 0 12px;color:#000}
-.guide .wa-group{background:#fff;border-radius:10px;overflow:hidden;margin-bottom:12px}
-.guide .wa-profile{padding:10px 10px;margin:0;gap:10px}
-.guide .wa-profile .avatar{background:#1dab61;width:36px;height:36px}
-.guide .wa-profile>div{flex:1;font-size:13px;color:#000}
-.guide .wa-profile small{font-size:10.5px}
-.guide .wa-row{padding:7px 10px;margin:0;gap:10px;font-size:12px;color:#000;border-top:.5px solid #e5e5ea}
-.guide .wa-group .wa-row:first-child{border-top:none}
-.guide .wa-row .tile{width:26px;height:26px;border-radius:7px}
-.guide .wa-row .tile svg{width:15px;height:15px}
-.guide .chev{width:7px;height:12px;flex:none}
-.guide .linked-choice{background:#e6f5ee}
-.guide .phone-tabs{font-size:7.5px;color:#8e8e93;padding:8px 2px 4px;border-top:.5px solid #d1d1d6;background:#f9f9f9;bottom:14px}
-.guide .phone-tabs>*{display:grid;justify-items:center;gap:2px}
-.guide .phone-tabs i{font-style:normal;font-size:14px;line-height:1}
-.guide .phone-tabs b{color:#1dab61;font-weight:600}
-.guide .wa-back{display:flex;align-items:center;gap:4px;color:#1dab61;font-size:12px;margin-bottom:18px}
-.guide .wa-back svg{width:8px;height:13px}
-.guide .wa-linked h2{font-size:22px;font-weight:700;color:#000}
-.guide .devices-art{height:96px;color:#1dab61}
-.guide .devices-art svg{width:72px;height:72px;stroke:#1dab61}
-.guide .wa-linked p{font-size:12px;color:#000;margin:0 0 6px}
-.guide .wa-linked p.device-note{font-size:10px!important;color:#8e8e93;margin-bottom:16px}
-.guide .link-button{background:#1dab61;border-radius:20px;padding:10px;text-align:center;font-size:13px}
+.guide .tile {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.guide .tile svg {
+  width: 13px;
+  height: 13px;
+}
+.guide .mac-window {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  background: #f5f5f7;
+  border-color: #c9c9cc;
+}
+.guide .mac-window aside {
+  background: #e9e9eb;
+  width: 33%;
+  padding: 12px 8px;
+}
+.guide .search {
+  background: #dcdcde;
+  border-radius: 6px;
+  color: #8a8a8e;
+  margin: 16px 0 10px;
+  font-size: 10px;
+}
+.guide .side-row {
+  font-size: 10.5px;
+  color: #1d1d1f;
+  padding: 5px 6px;
+  gap: 7px;
+  border-radius: 6px;
+}
+.guide .side-row.selected {
+  background: #2f6fde;
+  color: #fff;
+}
+.guide .side-row .tile {
+  background: inherit;
+}
+.guide .mac-main {
+  padding: 12px 16px;
+}
+.guide .mac-title {
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #1d1d1f;
+}
+.guide .mac-title .back {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: #e5e5e7;
+  display: grid;
+  place-items: center;
+  color: #555;
+}
+.guide .mac-title .back svg {
+  width: 7px;
+  height: 12px;
+}
+.guide .mac-main > p {
+  font-size: 9.5px;
+  color: #6e6e73;
+  margin: 14px 0 10px;
+  line-height: 1.45;
+}
+.guide .permission-list {
+  border-color: #d9d9de;
+  border-radius: 8px;
+}
+.guide .app-row {
+  padding: 8px 10px;
+  font-size: 11.5px;
+  color: #1d1d1f;
+}
+.guide .app-icon.terminal {
+  background: #1e1e1e;
+  font-family: Menlo, monospace;
+  font-size: 10px;
+}
+.guide .switch {
+  background: #d1d1d6;
+  border: none;
+}
+.guide .permission-list > .app-row .switch,
+.guide .stage[data-beat="3"] .power-row .switch,
+.guide .stage[data-phase="2"] .power-row .switch {
+  background: #2f6fde;
+}
+.guide .restart-dialog {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  background: #ececee;
+  border-color: #d0d0d4;
+  border-radius: 12px;
+  padding: 20px 20px 16px;
+  width: 62%;
+  left: 25%;
+}
+.guide .restart-dialog .mark {
+  width: 52px;
+  height: 52px;
+  font-size: 28px;
+  border-radius: 12px;
+}
+.guide .restart-dialog strong {
+  font-size: 12px;
+  margin: 12px 0 6px;
+  line-height: 1.35;
+}
+.guide .restart-dialog p {
+  font-size: 10.5px;
+  color: #4a4a4e;
+  margin: 0 0 14px;
+}
+.guide .restart-dialog > div:last-child > * {
+  background: #fff;
+  border: 1px solid #d6d6da;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 5px;
+}
+.guide .restart-dialog > div:last-child > b {
+  background: #2f6fde;
+  border-color: #2f6fde;
+  color: #fff;
+}
+.guide .browser {
+  font-family: "Google Sans", Roboto, Arial, sans-serif;
+  color: #1f1f1f;
+}
+.guide .browser-bar > span {
+  font-size: 10px;
+}
+.guide .google-g {
+  width: 40px;
+  height: 40px;
+  display: block;
+}
+.guide .google-page h2 {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0;
+  margin: 18px 0 6px;
+  color: #1f1f1f;
+}
+.guide .google-page p {
+  font-size: 12.5px;
+  color: #444746;
+  margin: 0 0 14px;
+}
+.guide .google-page p b {
+  font-weight: 500;
+  color: #1f1f1f;
+}
+.guide .account {
+  border: none;
+  border-top: 1px solid #e3e3e3;
+  border-bottom: 1px solid #e3e3e3;
+  border-radius: 0;
+  padding: 12px 6px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  gap: 14px;
+}
+.guide .account small {
+  color: #444746;
+  font-size: 11.5px;
+}
+.guide .avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #7b1fa2;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 500;
+  font-size: 13px;
+}
+.guide .avatar.plain {
+  background: transparent;
+  color: #444746;
+  font-size: 18px;
+}
+.guide .other-account {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 6px;
+  border-bottom: 1px solid #e3e3e3;
+  font-size: 13px;
+}
+.guide .google-foot {
+  font-size: 10.5px;
+  color: #444746;
+  margin-top: 18px;
+  line-height: 1.5;
+}
+.guide .verify-phone {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #c4c7c5;
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.guide .verify-icon {
+  font-size: 22px;
+}
+.guide .scope {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  line-height: 1.4;
+  margin: 6px 0 10px;
+}
+.guide .checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: #0b57d0;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  flex: none;
+  margin-top: 1px;
+}
+.guide .scope-note {
+  font-size: 10.5px;
+  color: #444746;
+}
+.guide .google-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 13px;
+  color: #0b57d0;
+  font-weight: 500;
+}
+.guide .google-button {
+  margin: 0;
+  background: #0b57d0;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 22px;
+}
+.guide .phone {
+  background: #f2f2f7;
+  border-color: #1c1c1e;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+.guide .wa-home h2 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
+  margin: 6px 0 12px;
+  color: #000;
+}
+.guide .wa-group {
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+.guide .wa-profile {
+  padding: 10px 10px;
+  margin: 0;
+  gap: 10px;
+}
+.guide .wa-profile .avatar {
+  background: #1dab61;
+  width: 36px;
+  height: 36px;
+}
+.guide .wa-profile > div {
+  flex: 1;
+  font-size: 13px;
+  color: #000;
+}
+.guide .wa-profile small {
+  font-size: 10.5px;
+}
+.guide .wa-row {
+  padding: 7px 10px;
+  margin: 0;
+  gap: 10px;
+  font-size: 12px;
+  color: #000;
+  border-top: 0.5px solid #e5e5ea;
+}
+.guide .wa-group .wa-row:first-child {
+  border-top: none;
+}
+.guide .wa-row .tile {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+.guide .wa-row .tile svg {
+  width: 15px;
+  height: 15px;
+}
+.guide .chev {
+  width: 7px;
+  height: 12px;
+  flex: none;
+}
+.guide .linked-choice {
+  background: #e6f5ee;
+}
+.guide .phone-tabs {
+  font-size: 7.5px;
+  color: #8e8e93;
+  padding: 8px 2px 4px;
+  border-top: 0.5px solid #d1d1d6;
+  background: #f9f9f9;
+  bottom: 14px;
+}
+.guide .phone-tabs > * {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+.guide .phone-tabs i {
+  font-style: normal;
+  font-size: 14px;
+  line-height: 1;
+}
+.guide .phone-tabs b {
+  color: #1dab61;
+  font-weight: 600;
+}
+.guide .wa-back {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #1dab61;
+  font-size: 12px;
+  margin-bottom: 18px;
+}
+.guide .wa-back svg {
+  width: 8px;
+  height: 13px;
+}
+.guide .wa-linked h2 {
+  font-size: 22px;
+  font-weight: 700;
+  color: #000;
+}
+.guide .devices-art {
+  height: 96px;
+  color: #1dab61;
+}
+.guide .devices-art svg {
+  width: 72px;
+  height: 72px;
+  stroke: #1dab61;
+}
+.guide .wa-linked p {
+  font-size: 12px;
+  color: #000;
+  margin: 0 0 6px;
+}
+.guide .wa-linked p.device-note {
+  font-size: 10px !important;
+  color: #8e8e93;
+  margin-bottom: 16px;
+}
+.guide .link-button {
+  background: #1dab61;
+  border-radius: 20px;
+  padding: 10px;
+  text-align: center;
+  font-size: 13px;
+}
 
-.guide .account>div{display:grid;gap:1px}
-.guide .account small{display:block}
-.guide .whatsapp[data-beat="1"] .tap{top:262px;left:calc(12% + 150px)}
-.guide .whatsapp[data-phase="1"] .tap{top:388px;left:calc(12% + 110px)}
+.guide .account > div {
+  display: grid;
+  gap: 1px;
+}
+.guide .account small {
+  display: block;
+}
+.guide .whatsapp[data-beat="1"] .tap {
+  top: 262px;
+  left: calc(12% + 150px);
+}
+.guide .whatsapp[data-phase="1"] .tap {
+  top: 388px;
+  left: calc(12% + 110px);
+}
 
-.guide .consent-email{display:flex;align-items:center;gap:8px;font-size:12px;color:#1f1f1f;margin:4px 0 14px}
-.guide .avatar.small{width:20px;height:20px;font-size:10px}
-.guide .consent-lead{font-weight:500;color:#1f1f1f;font-size:13px;margin-bottom:8px}
-.guide .scope{margin:4px 0}
-.guide .scope.select-all{border-bottom:1px solid #e3e3e3;padding-bottom:8px;margin-bottom:8px;font-weight:500}
-.guide .qr>b{display:none}
+.guide .consent-email {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #1f1f1f;
+  margin: 4px 0 14px;
+}
+.guide .avatar.small {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+.guide .consent-lead {
+  font-weight: 500;
+  color: #1f1f1f;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.guide .scope {
+  margin: 4px 0;
+}
+.guide .scope.select-all {
+  border-bottom: 1px solid #e3e3e3;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.guide .qr > b {
+  display: none;
+}
 
-.guide .imessage[data-phase="2"] .cursor{left:38%;top:323px}
-.guide .imessage[data-phase="2"] .restart-dialog .pick{outline:2px solid #e8582a;outline-offset:2px;background:#fff}
-.guide .consent-page{padding-top:16px}
-.guide .consent-page .google-g{width:30px;height:30px}
-.guide .consent-page h2{font-size:17px;margin:10px 0 2px}
-.guide .consent-page .consent-email{margin:2px 0 8px;font-size:11.5px}
-.guide .consent-page .consent-lead{font-size:12px;margin:0 0 4px}
-.guide .consent-page .scope{padding:5px 10px;margin:3px 0;font-size:11.5px;border:1px solid #dadce0;border-radius:8px}
-.guide .consent-page .scope.select-all{padding-bottom:5px;margin-bottom:3px}
-.guide .consent-page .scope-note{font-size:9.5px;margin:6px 0 0}
-.guide .consent-page .google-actions{margin-top:8px;font-size:12px}
-.guide .consent-page .google-button{padding:6px 18px;font-size:12px}
-.guide .gmail.with-consent[data-beat="4"] .cursor{left:78%;top:352px}
+.guide .imessage[data-phase="2"] .cursor {
+  left: 38%;
+  top: 323px;
+}
+.guide .imessage[data-phase="2"] .restart-dialog .pick {
+  outline: 2px solid #e8582a;
+  outline-offset: 2px;
+  background: #fff;
+}
+.guide .consent-page {
+  padding-top: 16px;
+}
+.guide .consent-page .google-g {
+  width: 30px;
+  height: 30px;
+}
+.guide .consent-page h2 {
+  font-size: 17px;
+  margin: 10px 0 2px;
+}
+.guide .consent-page .consent-email {
+  margin: 2px 0 8px;
+  font-size: 11.5px;
+}
+.guide .consent-page .consent-lead {
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+.guide .consent-page .scope {
+  padding: 5px 10px;
+  margin: 3px 0;
+  font-size: 11.5px;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+}
+.guide .consent-page .scope.select-all {
+  padding-bottom: 5px;
+  margin-bottom: 3px;
+}
+.guide .consent-page .scope-note {
+  font-size: 9.5px;
+  margin: 6px 0 0;
+}
+.guide .consent-page .google-actions {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.guide .consent-page .google-button {
+  padding: 6px 18px;
+  font-size: 12px;
+}
+.guide .gmail.with-consent[data-beat="4"] .cursor {
+  left: 78%;
+  top: 352px;
+}
 
 /* In the app: the stage is drawn at its design size and scaled to the column (Guide.tsx). */
 .guide .stage {
@@ -855,7 +1305,26 @@
 }
 
 /* The computer's code is a real code for powerset.co; the label says it is not the one to scan. */
-.guide .code-example{position:relative;display:block}.guide .code-example>b{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-18deg);background:#e8582a;color:#fff;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 9px;border-radius:4px;box-shadow:0 2px 8px #0003}
+.guide .code-example {
+  position: relative;
+  display: block;
+}
+.guide .code-example > b {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  background: #e8582a;
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px #0003;
+}
 
 /* The Link a device tap waits so the scanner follows it after 1.5 s, as the Linked devices tap does, instead of hanging 4 s. */
-.guide .whatsapp[data-phase="1"] .tap{transition-delay:2.5s,2.5s,0s}
+.guide .whatsapp[data-phase="1"] .tap {
+  transition-delay: 2.5s, 2.5s, 0s;
+}

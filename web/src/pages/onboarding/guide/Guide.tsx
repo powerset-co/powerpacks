@@ -59,8 +59,17 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
         <h2 className="m-0 text-[15px] font-semibold">{flow.title}</h2>
         <p className="m-0 text-[13px] text-muted-foreground">{flow.intro}</p>
       </div>
-      <div ref={frame} className="w-full overflow-hidden rounded-[var(--radius-m)]" style={{ height: HEIGHT * scale }}>
-        <div ref={stage} role="img" aria-label={`How ${flow.title}`} style={{ transform: `scale(${scale})` }} />
+      <div
+        ref={frame}
+        className="w-full overflow-hidden rounded-[var(--radius-m)]"
+        style={{ height: HEIGHT * scale }}
+      >
+        <div
+          ref={stage}
+          role="img"
+          aria-label={`How ${flow.title}`}
+          style={{ transform: `scale(${scale})` }}
+        />
       </div>
       <p className="m-0 min-h-9 text-center text-xs text-muted-foreground" aria-live="off">
         {caption}
