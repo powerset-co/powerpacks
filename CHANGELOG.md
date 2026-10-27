@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.43.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.42.0...powerpacks-v3.43.0) (2026-10-27)
+
+
+### Features
+
+* **gmail:** the sync's count on the Set up screen ([#953](https://github.com/powerset-co/powerpacks/issues/953)) ([3047032](https://github.com/powerset-co/powerpacks/commit/3047032c24be248b349035fb8cfda6cf97898219))
+* **nav:** the Setup item turns while setup runs ([#950](https://github.com/powerset-co/powerpacks/issues/950)) ([b9a8635](https://github.com/powerset-co/powerpacks/commit/b9a8635fc10c40e7b2eb2190a3016d0d9ecff783))
+* **onboarding:** Import, the step after Sources ([#952](https://github.com/powerset-co/powerpacks/issues/952)) ([4644aa9](https://github.com/powerset-co/powerpacks/commit/4644aa9eb23f633a1f108aa252d92d7064fe3d3c))
+* **onboarding:** Start using Powerpacks now while a long setup builds ([#948](https://github.com/powerset-co/powerpacks/issues/948)) ([ab0b562](https://github.com/powerset-co/powerpacks/commit/ab0b562fe31ab141b81924e5019324984cee6001))
+
+
+### Bug Fixes
+
+* **onboarding:** a shimmer where the page picture will be; the live line is the record's sentence ([#954](https://github.com/powerset-co/powerpacks/issues/954)) ([9a21ca0](https://github.com/powerset-co/powerpacks/commit/9a21ca07af9f25662c96771c620fd90a0e4695a9))
+* **onboarding:** the LinkedIn step's run is LinkedIn alone ([#951](https://github.com/powerset-co/powerpacks/issues/951)) ([eba2c9d](https://github.com/powerset-co/powerpacks/commit/eba2c9d05653963818f4192639e19c204ad94814))
+
 ## [3.42.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.2...powerpacks-v3.42.0) (2026-10-27)
 
 
