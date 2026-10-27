@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.41.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.1...powerpacks-v3.41.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **nav:** Memory leaves the side nav ([#943](https://github.com/powerset-co/powerpacks/issues/943)) ([7172bd9](https://github.com/powerset-co/powerpacks/commit/7172bd9014fe44e7e60cd76e38bb8f5193b48c43))
+
 ## [3.41.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.0...powerpacks-v3.41.1) (2026-10-27)
 
 
