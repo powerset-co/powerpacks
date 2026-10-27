@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "permission",
+  "description": "The Full Disk Access helper can position the windows, drag this app and end the step. Tauri checks a call against the page's origin alone (no path), so the URL is the origin; the window label is what keeps this to the helper.",
+  "windows": ["permission"],
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1:8765/*", "http://localhost:8765/*"]
+  },
+  "permissions": ["allow-permission-begin", "allow-permission-end", "allow-permission-drag"]
+}

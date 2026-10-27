@@ -90,7 +90,11 @@ mod tests {
         assert!(!allowed(&root));
         fs::write(&features, r#"{"sets":true,"auto_reply":true}"#).unwrap();
         assert!(allowed(&root));
-        fs::write(&features, r#"{"sets":true,"auto_reply":true,"share":false,"support":true}"#).unwrap();
+        fs::write(
+            &features,
+            r#"{"sets":true,"auto_reply":true,"share":false,"support":true}"#,
+        )
+        .unwrap();
         assert!(allowed(&root));
         save(&root, false).unwrap();
         assert!(!allowed(&root));

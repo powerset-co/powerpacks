@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
+      connections file and its record aside (`.bkup-<time>`), so the onboarding page's LinkedIn
+      steps can be run again from the sign-in.
   2026-10-13: `POST /api/install/connect` answers once the run has written its own status, so the
       Connect screen never reads the previous run's record after a click.
   2026-10-13: `/api/install/skip` is gone: setup under the desktop app takes only connected sources,
@@ -14,22 +17,31 @@ Changelog:
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.ingestion.primitives.discover.linkedin.connections import (BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, PICTURES,
+                                                                     SCRAPE_RECORD, picture_path)
 from packs.powerset.primitives.install import preflight
 from packs.powerset.primitives.install.status import InstallStatus
 
 
 PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+# The enriched LinkedIn import (the Modal import-linkedin step's output) and the index's own people
+# file when deep context ran (families plus the connections no family holds); the first look reads them.
+LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
+# The search index itself; the first look's questions are minted from it and answered by it.
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
@@ -99,6 +111,66 @@ class InstallController:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
         return record
 
+    def first_look(self, limit: int = 3) -> dict:
+        """The first people to show once the index is built: from the index's own people file (families
+        plus connections), else the enriched LinkedIn import; the first `limit` with a title and a company,
+        how many people there are in all, and the questions the index answers. Empty before either file exists."""
+        path = next((self.root / relative for relative in (INDEXED_PEOPLE, LINKEDIN_PEOPLE)
+                     if (self.root / relative).is_file()), None)
+        if path is None:
+            return {"people": [], "total": 0, "questions": self.questions()}
+        people: list[dict] = []
+        total = 0
+        with path.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                total += 1
+                if len(people) < limit and row.get("current_title") and row.get("current_company"):
+                    people.append({"public_identifier": row.get("public_identifier", ""),
+                                   "name": row.get("full_name", ""), "title": row["current_title"],
+                                   "company": row["current_company"], "headline": row.get("headline", ""),
+                                   "avatar_url": self._avatar(row.get("public_identifier", ""),
+                                                               row.get("profile_picture_url", ""))})
+        return {"people": people, "total": total, "questions": self.questions()}
+
+    def questions(self) -> list[dict]:
+        """The first look's questions (first_look.py; imported here so the page server starts on the
+        standard library alone)."""
+        from packs.powerset.primitives.install import first_look
+        return first_look.questions(self.root)
+
+    def ask(self, key: str, limit: int = 8) -> dict:
+        from packs.powerset.primitives.install import first_look
+        return first_look.ask(self.root, key, limit, self._avatar)
+
+    def _avatar(self, public_identifier: str, url: str) -> str:
+        """The picture the LinkedIn read saved, served by this server, else LinkedIn's own link."""
+        if picture_path(self.root / PICTURES, public_identifier).is_file():
+            return f"/api/install/picture?id={urllib.parse.quote(public_identifier)}"
+        return url
+
+    def picture(self, public_identifier: str) -> bytes | None:
+        """A saved connection picture, or None without one."""
+        path = picture_path(self.root / PICTURES, public_identifier)
+        return path.read_bytes() if path.is_file() else None
+
+    def linkedin_page_image(self) -> bytes | None:
+        """The picture of the connections page the last read took, or None before one."""
+        path = self.root / PAGE_SHOT
+        return path.read_bytes() if path.is_file() else None
+
+    def forget_linkedin(self) -> dict:
+        """Move the LinkedIn sign-in and the connections it read aside, so the next connect signs in
+        and the next setup reads them again. Nothing is deleted: each path gets a `.bkup-<time>`."""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        moved = []
+        for path in (BROWSER_PROFILE.expanduser(), self.root / CONNECTIONS_CSV, self.root / SCRAPE_RECORD,
+                     self.root / PAGE_SHOT, self.root / PICTURES):
+            if path.exists():
+                target = path.with_name(f"{path.name}.bkup-{stamp}")
+                path.rename(target)
+                moved.append(str(target))
+        return {"status": "forgotten", "moved": moved}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -144,13 +216,13 @@ class InstallController:
                 # Asked for before setup starts (the desktop app's first screen) or when it waits.
                 subprocess.run(["open", PERMISSION_URL], check=True)
                 app = permission_app()
-                if app:
-                    subprocess.run(["open", "-R", app], check=True)
                 response["app_path"] = app
             elif path == "/api/install/review":
                 subprocess.run(["open", f"http://{handler.headers['Host']}/?stage=linkedin"], check=True)
             elif path == "/api/install/preflight":
                 response = self.install(self._body(handler).get("item"))
+            elif path == "/api/install/linkedin-forget":
+                response = self.forget_linkedin()
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))

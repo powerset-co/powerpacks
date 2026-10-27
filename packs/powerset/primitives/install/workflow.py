@@ -5,6 +5,8 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-24: the LinkedIn count's read/total go in the event's details too, so the
+      onboarding page can estimate the time left from them.
   2026-10-13: `connect()` runs only the chosen sources' tools and logins, into the connect
       record: the desktop app's Connect screen connects each source this way before setup.
       Under the desktop app, setup leaves out every source not signed in (accounts.signed_in,
@@ -356,7 +358,8 @@ class SourceOnboarding:
             return True
         self._write("linkedin.reading")
         result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
-            on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total))
+            on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total,
+                                                    details={"read": read, "total": total}))
         return self._result(result, f"linkedin.done.{result.get('outcome')}", failed="linkedin.failed",
                             waiting="linkedin.waiting",
                             **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})

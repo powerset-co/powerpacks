@@ -28,6 +28,8 @@ export interface InstallProse {
   page: Record<string, string>
 }
 export interface InstallStatus {
+  /** When the record was last written (ISO). */
+  updated_at: string
   primitive: "powerpacks_install"
   status: InstallState
   installer_pid?: number

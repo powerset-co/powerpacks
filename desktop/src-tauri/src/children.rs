@@ -66,7 +66,10 @@ pub fn is_alive(pid: u32) -> bool {
 pub fn stop_matching(pattern: &str) {
     #[cfg(unix)]
     {
-        let Ok(found) = std::process::Command::new("pgrep").args(["-f", pattern]).output() else {
+        let Ok(found) = std::process::Command::new("pgrep")
+            .args(["-f", pattern])
+            .output()
+        else {
             return;
         };
         let me = std::process::id();

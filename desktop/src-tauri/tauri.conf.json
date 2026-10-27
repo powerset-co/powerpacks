@@ -7,6 +7,7 @@
     "frontendDist": "../splash"
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [],
     "security": {
@@ -36,6 +37,7 @@
       "resources/powerpacks.version": "powerpacks.version"
     },
     "macOS": {
+      "infoPlist": "Info.plist",
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist"

@@ -21,6 +21,8 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-10-24: the scroll run saves one picture of the connections page (PAGE_SHOT) for the setup screen,
+      and each connection's picture (PICTURES) while LinkedIn's link still works.
   2026-10-05: the read reports its count as it scrolls and returns an `outcome`
       instead of a message; the install page words it (install/status_prose.py).
   2026-10-05: a stalled read asks LinkedIn for its data export (the larger
@@ -36,7 +38,9 @@ import argparse
 import json
 import os
 import tempfile
+import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -52,6 +56,13 @@ from packs.shared.csv_io import CsvIO
 
 CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections.csv")
 SCRAPE_RECORD = CONNECTIONS_CSV.with_name("connections.json")
+# One picture of the connections page, taken as the read starts; the setup screen shows it.
+PAGE_SHOT = CONNECTIONS_CSV.with_name("connections-page.png")
+# Each connection's own picture, `<public identifier>.jpg`, saved as the read finds it: LinkedIn's
+# picture links expire within weeks, so the file is what the app shows later.
+PICTURES = CONNECTIONS_CSV.with_name("pictures")
+PICTURE_SECONDS = 10
+PICTURE_WORKERS = 8
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("connections_browser.js")
 EXPORT_COLUMNS = ["First Name", "Last Name", "URL", "Email Address", "Company", "Position", "Connected On"]
@@ -99,6 +110,36 @@ def _export_row(card: dict[str, str]) -> dict[str, str]:
         "Position": card["headline"],
         "Connected On": card["connected_on"],
     }
+
+
+def picture_path(folder: Path, public_identifier: str) -> Path:
+    return folder / f"{public_identifier}.jpg"
+
+
+def save_pictures(cards: list[dict[str, str]], folder: Path,
+                  fetch: Callable[[str], bytes] = lambda url: urllib.request.urlopen(url, timeout=PICTURE_SECONDS).read()) -> int:
+    """Save the picture of every card that has a link and no file yet; how many were saved. A
+    picture that cannot be fetched is left for the next read."""
+    wanted = {picture_path(folder, extract_public_identifier(PROFILE_URL.format(slug=card["slug"]))): card["picture"]
+              for card in cards if card.get("picture")}
+    wanted = {path: url for path, url in wanted.items() if not path.is_file()}
+    if not wanted:
+        return 0
+    folder.mkdir(parents=True, exist_ok=True)
+    saved = 0
+    with ThreadPoolExecutor(max_workers=PICTURE_WORKERS) as pool:
+        for path, result in zip(wanted, pool.map(lambda url: _fetched(fetch, url), wanted.values())):
+            if result:
+                path.write_bytes(result)
+                saved += 1
+    return saved
+
+
+def _fetched(fetch: Callable[[str], bytes], url: str) -> bytes | None:
+    try:
+        return fetch(url)
+    except (OSError, ValueError):
+        return None
 
 
 class LinkedInConnections:
@@ -166,10 +207,12 @@ class LinkedInConnections:
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(sorted(known), handle)
+        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             payload = self._browser(
                 "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
-                "--max-loads", str(max_loads), timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
+                "--max-loads", str(max_loads), "--screenshot", str(self.csv_path.with_name(PAGE_SHOT.name)),
+                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
                 on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
         finally:
             os.unlink(handle.name)
@@ -185,6 +228,7 @@ class LinkedInConnections:
             return {"status": "failed", "message": "LinkedIn showed no connections."}
         if added:
             CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
+        save_pictures(payload["connections"], self.csv_path.with_name(PICTURES.name))
         total, stopped, read = payload["total"], payload["stopped"], len(payload["connections"])
         stalled = stopped == "end" and read < total * STALL_SHARE
         complete = (previous.get("complete", True) if stopped == "known"

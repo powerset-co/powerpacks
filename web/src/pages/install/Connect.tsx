@@ -6,23 +6,21 @@ import { ConnectionRow as Row, type ConnectionState as State } from "@/component
 import { Button } from "@/components/ui/button"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
-import { fetchSignedIn, type SignedIn } from "@/lib/api/accounts"
+import { fetchSignedIn } from "@/lib/api/accounts"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
+import { desktopPlatform, invoke, listen } from "@/lib/desktop"
 import {
   connectSource,
   continueSetup,
   fetchConnection,
-  fetchPreflight,
   installAction,
-  installPreflight,
   type ConnectSource,
-  type Preflight,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
 import { CodexDetails } from "@/pages/settings/CodexDetails"
 import { cn } from "@/lib/utils"
-import type { InstallStatus, InstallStep } from "@/types/install"
+import { live, POLL_MS, prepare, standing } from "./sources"
 
 const {
   gmail: GmailIcon,
@@ -31,26 +29,7 @@ const {
   whatsapp: WhatsAppIcon,
 } = CHANNEL_ICON
 
-// While a sign-in or an install is still running, ask again this often.
-const POLL_MS = 2_000
 const SIGNED_IN = ["signed-in"]
-
-// Each source's steps in the Connect screen's run, the last its login (status_prose.py).
-const STEPS: Record<ConnectSource, readonly InstallStep[]> = {
-  linkedin: ["linkedin_login"],
-  gmail: ["gmail_tools", "gmail_login"],
-  whatsapp: ["whatsapp_tools", "whatsapp_login"],
-}
-
-// What a source's sign-in needs on this Mac first (preflight.py): a browser for LinkedIn's and
-// Google's sign-in pages, and Google's command-line tools for the Gmail app.
-type Tool = "chromium" | "gcloud"
-const NEEDS: Record<ConnectSource, readonly Tool[]> = {
-  linkedin: ["chromium"],
-  gmail: ["chromium", "gcloud"],
-  whatsapp: [],
-}
-const TOOL = { chromium: "browser", gcloud: "gcloud" } as const
 
 /** The one line a row adds: what to do now, or the command a stopped sign-in needs. */
 function Line({ children, bad = false }: { children: ReactNode; bad?: boolean }) {
@@ -71,25 +50,6 @@ function CodeBox({ url }: { url?: string }) {
       {url ? <img src={url} alt="WhatsApp code to scan" className="size-full" /> : <Spinner />}
     </span>
   )
-}
-
-/** Whether the connect record is a sign-in still under way: each write carries its run's pid until
- *  the run hands back (0) or fails, and a read reports a run whose process is gone as stopped. */
-function live(record: InstallStatus): boolean {
-  return (record.installer_pid ?? 0) > 0 && record.status !== "failed"
-}
-
-/** Where one source stands: its sign-in under way (the connect record), else whether it is signed
- *  in (accounts.signed_in, the answer setup takes), else whether its last sign-in stopped. */
-function standing(record: InstallStatus | undefined, signed: SignedIn | undefined, source: ConnectSource) {
-  const own = record && STEPS[source].includes(record.step) ? record : undefined
-  if (own && live(own)) return { state: "working" as const, qr: own.action?.qr_url }
-  // Stopped: failed, or waiting with nothing left running (a password, a closed window). It comes
-  // before the sign-in answer: a Gmail mailbox added to a signed-in one can stop.
-  if (own && (own.status === "failed" || own.status === "waiting"))
-    return { state: "needed" as const, stopped: true, line: own.message, command: own.action?.command }
-  if (signed === undefined) return { state: "checking" as const }
-  return { state: signed[source] ? ("ready" as const) : ("needed" as const) }
 }
 
 const LINK =
@@ -219,15 +179,25 @@ function Mailboxes({
  *  waits on the user. Only Powerset is needed; a source left unconnected is left out of setup.
  *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app.
  *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back. */
+export type ConnectRow = "powerset" | "codex" | "imessage" | "linkedin" | "gmail" | "whatsapp"
+const ALL_ROWS: readonly ConnectRow[] = ["powerset", "codex", "imessage", "linkedin", "gmail", "whatsapp"]
+
 export function Connect({
   onBack,
   onDone,
   details,
+  rows = ALL_ROWS,
+  onGuide,
 }: {
   onBack?: () => void
   onDone?: () => void
   details?: Record<AccountSource, ReactNode>
+  /** Which rows to show, in this order's subset; the onboarding's Sources shows the message sources alone. */
+  rows?: readonly ConnectRow[]
+  /** The onboarding's guide: told which source to show on its icon's click and on its Connect. */
+  onGuide?: (source: "imessage" | "gmail" | "whatsapp") => void
 }) {
+  const shown = new Set(rows)
   const client = useQueryClient()
   const codex = useCodexAccount()
   const [error, setError] = useState<string | null>(null)
@@ -243,7 +213,6 @@ export function Connect({
   const [queued, setQueued] = useState<{ source: ConnectSource; launched: boolean } | null>(null)
   // Powerset's sign-in in the browser, until the account is read again.
   const [signingIn, setSigningIn] = useState(false)
-  // Full Disk Access is turned on in System Settings: Working until the window comes back.
   const [asking, setAsking] = useState(false)
 
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
@@ -263,13 +232,39 @@ export function Connect({
   const record = connection.data
   // What is signed in, from where each sign-in lives; asked again on coming back to the window
   // (from System Settings or a browser) and once a sign-in here ends.
-  const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
+  const signed = useQuery({
+    queryKey: SIGNED_IN,
+    queryFn: ({ signal }) => fetchSignedIn(signal),
+    refetchInterval: asking ? POLL_MS : false,
+    refetchIntervalInBackground: true,
+  })
   const ready = signed.data
   useEffect(() => {
-    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN }).finally(() => setAsking(false))
+    const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN })
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [client])
+  useEffect(() => {
+    if (desktopPlatform() !== "mac") return
+    return listen("permission-ended", () => {
+      setAsking(false)
+      void client.invalidateQueries({ queryKey: SIGNED_IN })
+    })
+  }, [client])
+  useEffect(() => {
+    if (!asking || ready?.imessage !== false) return
+    let active = true
+    const mac = desktopPlatform() === "mac"
+    void installAction("permissions")
+      .then(() => (active && mac ? invoke("permission_begin") : undefined))
+      .catch((caught: unknown) => {
+        if (active) setError(errorText(caught))
+      })
+    return () => {
+      active = false
+      if (mac) void invoke("permission_end").catch((caught: unknown) => setError(errorText(caught)))
+    }
+  }, [asking, ready?.imessage])
   const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
   const busy = queued !== null || running
@@ -304,14 +299,7 @@ export function Connect({
     setError(null)
     setQueued({ source, launched: false })
     try {
-      const needed = (checks: Preflight) => NEEDS[source].map((tool) => checks[TOOL[tool]])
-      const checks = await fetchPreflight()
-      for (const tool of NEEDS[source]) if (!checks[TOOL[tool]].ok) await installPreflight(tool)
-      for (let now = checks; !needed(now).every((check) => check.ok); now = await fetchPreflight()) {
-        const broken = needed(now).find((check) => check.install?.status === "failed")
-        if (broken) throw new Error(broken.install?.message ?? "Could not install what this sign-in needs")
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS))
-      }
+      await prepare(source)
       // Answers once the run has written to the connect record, so the record read next is its own.
       await connectSource(source, emails)
       await client.refetchQueries({ queryKey: ["install", "connect"] })
@@ -333,6 +321,7 @@ export function Connect({
     const run = standing(record, ready, name)
     const at = queued?.source === name && run.state !== "working" ? { state: "working" as const } : run
     const command = "command" in at ? at.command : undefined
+    const guide = name === "linkedin" || !onGuide ? undefined : () => onGuide(name)
     return (
       <Row
         key={name}
@@ -341,12 +330,14 @@ export function Connect({
         details={details?.[name]}
         why={why}
         state={at.state}
+        onIcon={guide}
         action={{
           label: "stopped" in at ? "Try again" : "Connect",
-          onClick: () =>
-            name === "gmail"
-              ? connectGmail(asked ?? (known.length ? [...known] : [email]))
-              : void connect(name),
+          onClick: () => {
+            guide?.()
+            if (name === "gmail") connectGmail(asked ?? (known.length ? [...known] : [email]))
+            else void connect(name)
+          },
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
@@ -370,93 +361,113 @@ export function Connect({
   return (
     <div className="flex w-full flex-col gap-4">
       <ul className="m-0 flex list-none flex-col divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line-strong bg-card p-0 text-left">
-        <Row
-          icon={<PowersetMark className="size-[18px]" />}
-          title="Powerset"
-          why={signedIn ? (account.data?.email ?? "") : "Your account, needed for setup."}
-          state={powerset}
-          action={{
-            label: "Connect",
-            onClick: () => {
-              setError(null)
-              setSigningIn(true)
-              void signIn()
-                .catch(fail)
-                .finally(
-                  () =>
-                    void client.refetchQueries({ queryKey: ["account"] }).finally(() => setSigningIn(false)),
-                )
-            },
-          }}
-        >
-          {powerset === "working" ? <Line>Finish signing in to Powerset in your browser.</Line> : null}
-        </Row>
-        <Row
-          icon={<span className="font-mono text-[12px] font-bold">&gt;_</span>}
-          title="Codex"
-          details={details ? <CodexDetails codex={codex} /> : undefined}
-          why="Chat, on your ChatGPT plan."
-          state={
-            codex.loading
-              ? "checking"
-              : codex.status?.installed && codex.status.account
-                ? "ready"
-                : codex.login
-                  ? "working"
-                  : "needed"
-          }
-          action={{ label: "Connect", onClick: codex.connect, disabled: !codex.status?.installed }}
-        >
-          {codex.login ? <Line>Finish signing in to ChatGPT in your browser.</Line> : null}
-        </Row>
-        <Row
-          icon={<MessagesIcon className="size-[18px]" />}
-          title="Messages"
-          details={details?.imessage}
-          why="iMessage and Contacts, with Full Disk Access."
-          state={ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed"}
-          action={{
-            label: "Connect",
-            onClick: () => {
-              setAsking(true)
-              void installAction("permissions").catch((caught: unknown) => {
-                fail(caught)
-                setAsking(false)
-              })
-            },
-          }}
-        >
-          {asking && ready?.imessage === false ? (
-            <Line>Turn on Powerpacks in System Settings, then come back here.</Line>
-          ) : null}
-        </Row>
-        {source(
-          "linkedin",
-          "LinkedIn",
-          <LinkedInIcon className="size-[18px]" />,
-          "Your LinkedIn connections.",
-          !linkedin && onBack && (processed || profile !== null) ? (
-            <ProfileLink url={profile} onChange={setProfile} />
-          ) : null,
-        )}
-        {source(
-          "gmail",
-          "Gmail",
-          <GmailIcon className="size-[18px]" />,
-          <Mailboxes
-            known={known}
-            email={email}
-            disabled={busy}
-            onChange={setMailbox}
-            onAdd={(added) => connectGmail([...known, added])}
-          />,
-        )}
-        {source(
-          "whatsapp",
-          "WhatsApp",
-          <WhatsAppIcon className="size-[18px]" />,
-          "Your WhatsApp chats, by scanning a code.",
-        )}
+        {shown.has("powerset") ? (
+          <Row
+            icon={<PowersetMark className="size-[18px]" />}
+            title="Powerset"
+            why={signedIn ? (account.data?.email ?? "") : "Your account, needed for setup."}
+            state={powerset}
+            action={{
+              label: "Connect",
+              onClick: () => {
+                setError(null)
+                setSigningIn(true)
+                void signIn()
+                  .catch(fail)
+                  .finally(
+                    () =>
+                      void client
+                        .refetchQueries({ queryKey: ["account"] })
+                        .finally(() => setSigningIn(false)),
+                  )
+              },
+            }}
+          >
+            {powerset === "working" ? <Line>Finish signing in to Powerset in your browser.</Line> : null}
+          </Row>
+        ) : null}
+        {shown.has("codex") ? (
+          <Row
+            icon={<span className="font-mono text-[12px] font-bold">&gt;_</span>}
+            title="Codex"
+            details={details ? <CodexDetails codex={codex} /> : undefined}
+            why="Chat, on your ChatGPT plan."
+            state={
+              codex.loading
+                ? "checking"
+                : codex.status?.installed && codex.status.account
+                  ? "ready"
+                  : codex.login
+                    ? "working"
+                    : "needed"
+            }
+            action={{ label: "Connect", onClick: codex.connect, disabled: !codex.status?.installed }}
+          >
+            {codex.login ? <Line>Finish signing in to ChatGPT in your browser.</Line> : null}
+          </Row>
+        ) : null}
+        {shown.has("imessage") ? (
+          <Row
+            icon={<MessagesIcon className="size-[18px]" />}
+            title="Messages"
+            details={details?.imessage}
+            why="iMessage and Contacts, with Full Disk Access."
+            state={
+              ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed"
+            }
+            onIcon={onGuide ? () => onGuide("imessage") : undefined}
+            action={{
+              label: "Connect",
+              onClick: () => {
+                onGuide?.("imessage")
+                setAsking(true)
+                setError(null)
+              },
+            }}
+          >
+            {asking && ready?.imessage === false ? (
+              <Line>
+                Drag Powerpacks into Full Disk Access, then turn it on. We'll check automatically.{" "}
+                <button type="button" className={LINK} onClick={() => setAsking(false)}>
+                  Skip
+                </button>
+              </Line>
+            ) : null}
+          </Row>
+        ) : null}
+        {shown.has("linkedin")
+          ? source(
+              "linkedin",
+              "LinkedIn",
+              <LinkedInIcon className="size-[18px]" />,
+              "Your LinkedIn connections.",
+              !linkedin && onBack && (processed || profile !== null) ? (
+                <ProfileLink url={profile} onChange={setProfile} />
+              ) : null,
+            )
+          : null}
+        {shown.has("gmail")
+          ? source(
+              "gmail",
+              "Gmail",
+              <GmailIcon className="size-[18px]" />,
+              <Mailboxes
+                known={known}
+                email={email}
+                disabled={busy}
+                onChange={setMailbox}
+                onAdd={(added) => connectGmail([...known, added])}
+              />,
+            )
+          : null}
+        {shown.has("whatsapp")
+          ? source(
+              "whatsapp",
+              "WhatsApp",
+              <WhatsAppIcon className="size-[18px]" />,
+              "Your WhatsApp chats, by scanning a code.",
+            )
+          : null}
       </ul>
       {onDone ? (
         <div className="flex justify-end">

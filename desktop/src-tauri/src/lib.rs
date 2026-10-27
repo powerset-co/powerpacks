@@ -13,6 +13,7 @@ mod codex;
 mod crash;
 mod onboard;
 mod paths;
+mod permission;
 mod restart;
 mod source;
 mod update;
@@ -28,6 +29,11 @@ use boot::{Boot, BootState};
 use codex::Codex;
 
 const MAIN_WINDOW: &str = "main";
+
+/// The app's build-time context (its config, capabilities and icons); minted once per crate.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
 const SPLASH_PAGE: &str = "index.html";
 const WINDOW_SIZE: (f64, f64) = (1360.0, 860.0);
 const WINDOW_MIN_SIZE: (f64, f64) = (960.0, 640.0);
@@ -93,11 +99,17 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
 /// The latest Powerpacks release against this app's version, for the side nav's update pane.
 #[tauri::command]
 async fn update_check(app: AppHandle) -> Result<update::Update, String> {
+    if DEBUG_MENU {
+        return Ok(update::current(&app));
+    }
     update::check(&app).await
 }
 
 #[tauri::command]
 async fn update_install(app: AppHandle) -> Result<(), String> {
+    if DEBUG_MENU {
+        return Err("A test build does not update itself.".into());
+    }
     update::install(&app).await
 }
 
@@ -395,13 +407,16 @@ pub fn run() {
         crash::note_panics(root);
     }
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app)
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Boot::default()))
         .manage(Codex::default())
         .manage(children::Children::default())
+        .manage(permission::Permission::default())
         .invoke_handler(tauri::generate_handler![
             boot_state,
             boot_retry,
@@ -415,6 +430,9 @@ pub fn run() {
             codex_call,
             codex_respond,
             app_focus,
+            permission::permission_begin,
+            permission::permission_end,
+            permission::permission_drag,
             open_external,
             update_check,
             update_install,
@@ -433,8 +451,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == MAIN_WINDOW {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (window, event);
@@ -447,11 +467,15 @@ pub fn run() {
             restart::launch(app.handle().clone());
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("Powerpacks failed to start")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
                 show_main(app);
                 return;
             }

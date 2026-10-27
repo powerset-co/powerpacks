@@ -2802,6 +2802,9 @@ name = "powerpacks-desktop"
 version = "3.40.0"
 dependencies = [
  "dirs 6.0.0",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "reqwest",
  "serde",
  "serde_json",

@@ -44,7 +44,9 @@ PROMPT_VERSION = "contact-research-2026-10-07"  # in every handle: a new prompt 
 # Parallel: the processor tier, its price, the API, and how runs are submitted and read back.
 PARALLEL_PROCESSOR = "core2x"
 PARALLEL_PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
-PARALLEL_BASE_URL = "https://api.parallel.ai"
+# Parallel is reached through the vendor gateway: the Powerset key is the caller, the gateway holds
+# the Parallel key and the caller's dollar budget (vendor-gateway /vendor/parallel).
+PARALLEL_BASE_URL = "https://proxy.powerset.dev/vendor/parallel"
 PARALLEL_BETA_HEADER = "search-extract-2025-10-10,field-basis-2025-11-25"
 PARALLEL_BATCH_SIZE = 500           # runs per add_runs call
 PARALLEL_STREAM_TIMEOUT = 3600      # Parallel's maximum for one event stream
@@ -165,7 +167,7 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
     for subject in todo:
         by_handle[subject.handle] = subject
     load_env()
-    client = Parallel(api_key=os.environ["PARALLEL_API_KEY"], base_url=PARALLEL_BASE_URL,
+    client = Parallel(api_key=os.environ["POWERSET_API_KEY"], base_url=PARALLEL_BASE_URL,
                       default_headers={"parallel-beta": PARALLEL_BETA_HEADER}, max_retries=0)
     # Submit every run, then read the event stream until the group is done.
     group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)

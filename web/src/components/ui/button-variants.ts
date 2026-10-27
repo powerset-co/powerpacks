@@ -21,6 +21,8 @@ export const buttonVariants = cva(
       size: {
         default: "min-h-8 px-3 py-1.5",
         sm: "min-h-7 px-2",
+        // The onboarding's one action per screen.
+        lg: "min-h-10 px-4 text-[13px]",
         icon: "size-8",
       },
       shape: {

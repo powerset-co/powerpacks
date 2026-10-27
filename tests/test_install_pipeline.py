@@ -6,6 +6,8 @@ Changelog:
 - 2026-10-07: v2 stages (load, collect, synthesize, dedupe, worth, enrich, realize); the v1 seed,
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
+import csv
+import hashlib
 import json
 import os
 import subprocess
@@ -77,6 +79,11 @@ class InstallPipelineTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
+        # A Gmail import is on disk: deep context has messages to read (without any, LinkedIn goes
+        # straight to the index; see test_linkedin_only_goes_straight_to_the_modal_index).
+        gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
+        gmail.parent.mkdir(parents=True, exist_ok=True)
+        gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
         owner = self.root / ".powerpacks/deep-context/owner.json"
         owner.parent.mkdir(parents=True)
         owner.write_text("{}")
@@ -126,12 +133,17 @@ class InstallPipelineTests(unittest.TestCase):
                 self.lines.append(self.status.read()["message"])
         elif command == "realize":
             self.write(self.people, self.csv)
+            self.write(self.index / "people.csv", self.csv)
         elif command == "import-linkedin":
             self.write(self.root / ".powerpacks/network-import/import/linkedin/people.csv", self.csv)
         elif command == "index":
             self.paid_commands.append("index")
             self.write(self.index / "local-search.duckdb", "synthetic index")
             self.write(self.index / "manifest.json", '{"status":"ok"}')
+            # The download writes the indexed file's fingerprint beside the index (linkedin_modal_pipeline).
+            argv = kwargs["argv"]
+            people = Path(argv[argv.index("--people-csv") + 1])
+            self.write(self.index / "people.sha256", hashlib.sha256(people.read_bytes()).hexdigest())
         elif command == "search-validate":
             payload = {"status": self.validation_status, "total_people": 1,
                        "summary": "Search index ready: 1 people searchable."}
@@ -381,6 +393,53 @@ class InstallPipelineTests(unittest.TestCase):
         self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["index"])
+
+    def test_linkedin_only_goes_straight_to_the_modal_index(self):
+        # No Gmail or Messages import: nothing for deep context to read, so the enriched LinkedIn
+        # import is the people file the Modal index builds from; the stages are never run.
+        (self.root / ".powerpacks/network-import/import/gmail/people.csv").unlink()
+        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
+        self.write(linkedin, self.csv)
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"], result["event"]), ("ready", "completed", "search.ready"))
+        self.assertTrue(self.indexed())
+        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "realize", "owner"):
+            self.assertFalse(self.did(stage), stage)
+        self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
+        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
+        self.assertIn("Connect Messages or Gmail", result["note"])
+        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
+        self.assertTrue(any("index-people" in command and str(linkedin) in command for command in commands), commands)
+
+    def test_the_index_builds_from_the_file_realize_hands_back(self):
+        # With messages, realize hands back the index's people file (families plus the LinkedIn
+        # connections no family holds; realize.with_connections, tested on its own) and the index
+        # builds from it.
+        result = self.run_pipeline()
+        self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
+        indexed = self.index / "people.csv"
+        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
+        self.assertTrue(any("index-people" in command and str(indexed) in command for command in commands), commands)
+
+    def test_a_failed_rebuild_over_an_old_index_is_tried_again(self):
+        # An index exists; the people file changes; Modal fails. The next run must build again, not
+        # take the index on disk for the new file (the fingerprint is written only after a build).
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.csv = "id,full_name\nsynthetic-jordan,Jordan Bravo\nsynthetic-sam,Sam Li\n"
+        with patch.object(pipeline.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "")):
+            self.assertEqual(self.run_pipeline()["status"], "failed")
+        self.calls.clear()
+        self.paid_commands.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertEqual(self.paid_commands, ["index"])
+
+    def test_a_missing_duckdb_rebuilds_even_with_a_manifest(self):
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        (self.index / "local-search.duckdb").unlink()
+        self.calls.clear()
+        self.paid_commands.clear()
+        self.assertEqual(self.run_pipeline()["status"], "completed")
+        self.assertEqual(self.paid_commands, ["index"])
 
     def test_paid_outputs_completed_before_command_failure_are_reused_on_resume(self):
         matrix_root = self.root

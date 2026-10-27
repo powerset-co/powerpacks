@@ -28,11 +28,12 @@ const BROWSER_PAGES: readonly Page[] = [
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and
- *  the run it opened. It replaces the browser's Searches page there. */
+ *  the run it opened. It replaces the browser's Searches page there, and is not a nav item: the
+ *  side nav's chats section is headed Searches, and New chat and the chats open it. */
 export const AGENT: Page = { key: "agent", label: "Searches", href: "/agent" }
 
 export const PAGES: readonly Page[] = isDesktop()
-  ? [AGENT, ...BROWSER_PAGES.filter(({ key }) => key !== "searches")]
+  ? BROWSER_PAGES.filter(({ key }) => key !== "searches")
   : BROWSER_PAGES
 
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
@@ -41,5 +42,6 @@ export function pageAt(pathname: string): Page {
   if (pathname === "/home") return { key: "home", label: "Home", href: "/home" }
   // Out of the side nav for now; the debug menu opens it.
   if (pathname === "/settings") return { key: "settings", label: "Settings", href: "/settings" }
+  if (pathname === AGENT.href || pathname.startsWith(`${AGENT.href}/`)) return AGENT
   return PAGES.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`)) ?? HOME
 }

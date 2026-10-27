@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import type { SignedIn } from "@/lib/api/accounts"
+import * as install from "@/lib/api/install"
 import { must } from "@/lib/must"
 
 import { Connect } from "./Connect"
@@ -37,6 +38,7 @@ let state: {
   posts: { url: string; body: unknown }[]
 }
 let invoke: ReturnType<typeof vi.fn>
+let permissionEnded: ((event: { payload: null }) => void) | undefined
 
 function reply(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status }))
@@ -74,12 +76,23 @@ beforeEach(() => {
     }),
   )
   invoke = vi.fn(() => Promise.resolve(null))
-  vi.stubGlobal("__TAURI__", { core: { invoke } })
+  permissionEnded = undefined
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh")
+  vi.stubGlobal("__TAURI__", {
+    core: { invoke },
+    event: {
+      listen: vi.fn((_event: string, handler: (event: { payload: null }) => void) => {
+        permissionEnded = handler
+        return Promise.resolve(vi.fn())
+      }),
+    },
+  })
 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 function mount(props: React.ComponentProps<typeof Connect> = { onBack: vi.fn() }) {
@@ -126,6 +139,68 @@ it("asks again what is signed in on coming back to the window (Full Disk Access 
   state.signed = { ...NONE, imessage: true }
   fireEvent.focus(window)
   expect(await within(messages).findByText("Connected")).toBeTruthy()
+})
+
+it("opens the pane before arranging the permission windows", async () => {
+  invoke.mockImplementation(() => {
+    expect(state.posts).toContainEqual({ url: "/api/install/permissions", body: {} })
+    return Promise.resolve(null)
+  })
+  const view = mount()
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_begin", undefined))
+  view.unmount()
+  expect(invoke).toHaveBeenCalledWith("permission_end", undefined)
+})
+
+it("polls for Full Disk Access without a focus event and closes the helper when granted", async () => {
+  mount()
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_begin", undefined))
+  state.signed = { ...NONE, imessage: true }
+  expect(await within(row("Messages")).findByText("Connected", {}, { timeout: 4000 })).toBeTruthy()
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end", undefined))
+})
+
+it("does not reopen the helper after a relaunch with Full Disk Access granted", async () => {
+  state.signed = { ...NONE, imessage: true }
+  mount()
+  await within(row("Messages")).findByText("Connected")
+  expect(invoke).not.toHaveBeenCalledWith("permission_begin", undefined)
+  expect(state.posts).toEqual([])
+})
+
+it("keeps Skip available and returns the Messages row to Connect after helper Skip", async () => {
+  mount()
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
+  await within(row("Messages")).findByRole("button", { name: "Skip" })
+  permissionEnded?.({ payload: null })
+  await within(row("Messages")).findByRole("button", { name: "Messages: Connect" })
+})
+
+it("keeps Skip available when arranging Settings fails", async () => {
+  invoke.mockRejectedValueOnce(new Error("Accessibility is denied"))
+  mount()
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
+  await screen.findByText("Accessibility is denied")
+  fireEvent.click(within(row("Messages")).getByRole("button", { name: "Skip" }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end", undefined))
+})
+
+it("does not open a late helper after Skip while the pane request is pending", async () => {
+  let opened: (() => void) | undefined
+  vi.spyOn(install, "installAction").mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        opened = resolve
+      }),
+  )
+  mount()
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
+  fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Skip" }))
+  opened?.()
+  await within(row("Messages")).findByRole("button", { name: "Messages: Connect" })
+  expect(invoke).not.toHaveBeenCalledWith("permission_begin", undefined)
 })
 
 it("starts setup once Powerset is signed in and LinkedIn is connected", async () => {
@@ -377,20 +452,16 @@ it("shows a sign-in that was under way when the screen opened once its run ends"
   expect(await within(linkedin).findByText("Connected", {}, { timeout: 4_000 })).toBeTruthy()
 })
 
-it("tells you to turn on Full Disk Access, Working until you come back", async () => {
+it("shows instructions while waiting and also checks on window focus", async () => {
   mount()
   const messages = row("Messages")
   fireEvent.click(await within(messages).findByRole("button", { name: "Messages: Connect" }))
   expect(within(messages).getByText("Working")).toBeTruthy()
-  expect(
-    within(messages).getByText("Turn on Powerpacks in System Settings, then come back here."),
-  ).toBeTruthy()
+  expect(within(messages).getByText(/Drag Powerpacks into Full Disk Access/)).toBeTruthy()
   state.signed = { ...NONE, imessage: true }
   fireEvent.focus(window)
   expect(await within(messages).findByText("Connected")).toBeTruthy()
-  expect(
-    within(messages).queryByText("Turn on Powerpacks in System Settings, then come back here."),
-  ).toBeNull()
+  expect(within(messages).queryByText(/Drag Powerpacks into Full Disk Access/)).toBeNull()
 })
 
 it("expands account details in settings without setup navigation", () => {
