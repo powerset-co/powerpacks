@@ -4,15 +4,6 @@ import { useNavigate } from "react-router-dom"
 
 import { Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
@@ -83,7 +74,6 @@ export function SignUp() {
             </>
           )}
           {error ? <Note bad>{error}</Note> : null}
-          <InviteCode />
         </>
       }
       right={
@@ -102,42 +92,3 @@ export function SignUp() {
   )
 }
 
-const LINK =
-  "cursor-pointer self-start border-0 bg-transparent p-0 text-xs text-muted-foreground underline hover:text-foreground"
-
-/** The invite code, for someone without an account yet: a small dialog to type it into. The
- *  Powerset API does not take codes yet, so the dialog says so and the button stays off. */
-function InviteCode() {
-  const [open, setOpen] = useState(false)
-  const [code, setCode] = useState("")
-  return (
-    <>
-      <button type="button" className={LINK} onClick={() => setOpen(true)}>
-        Have an invite code?
-      </button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogTitle>Enter your invite code</DialogTitle>
-          <DialogDescription>
-            The code from your invite message, with the account it is for.
-          </DialogDescription>
-          <DialogBody>
-            <Input
-              value={code}
-              className="focus-visible:ring-0 focus-visible:ring-offset-0"
-              placeholder="e.g. POWER-7F3K"
-              aria-label="Invite code"
-              onChange={(event) => setCode(event.target.value.toUpperCase())}
-            />
-          </DialogBody>
-          <DialogFooter>
-            <Note>Codes are not live yet; the account sign-in is the way in for now.</Note>
-            <Button variant="primary" disabled>
-              Use code
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  )
-}
