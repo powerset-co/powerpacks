@@ -26,14 +26,16 @@
  * "requested" | "pending" | "downloaded", "path"?}.
  *
  * Prints one JSON object on stdout:
- *   {"status": "ok", "connections": [{slug, name, headline, connected_on}],
+ *   {"status": "ok", "connections": [{slug, name, headline, connected_on, picture}],
  *    "total": n, "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
  *   {"status": "needs_user_action", "message": ...}   login not finished in time
  *   {"status": "error", "message": ...}
  *
  * Created: 2026-10-03 (scroll and card parsing adapted from
  * stickerdaniel/linkedin-mcp-server#170).
- * Changelog: 2026-10-05: returns LinkedIn's "N connections" count; --export
+ * Changelog: 2026-10-24: each card's picture link rides its row (LinkedIn's links expire in weeks, so the
+ *   read saves the pictures while they work). --screenshot <path> saves one picture of the connections page before the
+ *   scroll, for the setup screen. 2026-10-05: returns LinkedIn's "N connections" count; --export
  * requests and downloads LinkedIn's data export after a stalled read.
  * 2026-10-13: the signed-in check answers at once without LinkedIn's session
  * cookie, and as soon as LinkedIn sends the browser to sign in, instead of
@@ -216,7 +218,9 @@ async function readCards(page) {
         if (date) connectedOn = date[1];
         else if (line.length > headline.length) headline = line;
       }
-      rows.push({ slug: m[1], name: lines[0] || "", headline, connected_on: connectedOn });
+      const picture = card ? card.querySelector("img") : null;
+      rows.push({ slug: m[1], name: lines[0] || "", headline, connected_on: connectedOn,
+                  picture: picture && /^https:/.test(picture.src) ? picture.src : "" });
     }
     return rows;
   }, CARD_LINK);
@@ -269,6 +273,16 @@ async function main() {
       return;
     }
     log(`reading your connections (LinkedIn shows ${total})`);
+    // One picture of the page as it stands, for the setup screen (--screenshot <png path>).
+    if (args.screenshot) {
+      // The first cards' pictures first, so the page looks the way the person knows it.
+      await page.waitForFunction(() => {
+        const pictures = Array.from(document.querySelectorAll("main img")).slice(0, 12);
+        return pictures.length > 0 && pictures.every((picture) => picture.complete);
+      }, { timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: args.screenshot, type: "png" }).catch(() => {});
+    }
     await page.exposeFunction("powerpacksRead", (read) => progress({ read, total }));
     const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
     const connections = await readCards(page);

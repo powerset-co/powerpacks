@@ -1,6 +1,6 @@
 [package]
 name = "powerpacks-desktop"
-version = "3.39.3"
+version = "3.40.0"
 description = "Powerpacks desktop app"
 edition = "2021"
 publish = false
@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
-tauri = { version = "2.12.1", features = ["unstable"] }
+tauri = { version = "2.12.1", features = ["unstable", "macos-private-api"] }
 tauri-plugin-opener = "2.7.0"
 tauri-plugin-single-instance = "2.5.2"
 tauri-plugin-dialog = "2.8.1"
@@ -25,6 +25,11 @@ tokio = { version = "1", features = ["sync", "time", "signal", "macros"] }
 dirs = "6"
 url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSGeometry"] }
 
 [profile.release]
 lto = true

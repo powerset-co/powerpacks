@@ -193,6 +193,46 @@ class PeopleWorthTests(StoreTests):
         self.assertEqual(self.people.load()[0].flag, "minor")
         self.assertEqual(share_rows(self.root / "store.sqlite"), ())
 
+    def test_rename_shows_everywhere_and_survives_refreshes(self) -> None:
+        from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
+        from packs.ingestion.primitives.share.person_labels import PersonLabels
+        from packs.ingestion.primitives.share.store import share_rows
+
+        self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
+                          "VALUES ('c1', 'yes', 'machine', 'sure', 'v2', ?)", (LATER,))
+        self.conn.commit()
+        self.assertEqual(self.people.load()[0].name, "Jordan Bravo")
+        code, payload = self.post("/api/people/name", {"parent_id": "p:a", "name": "  Jordan  B.  Bravo "})
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["rows"][0]["name"], "Jordan B. Bravo")
+        # Every member carries it; tags, note and relationship are untouched.
+        self.assertEqual([tuple(row) for row in self.conn.execute(
+            "SELECT candidate_id, name, tags, note FROM person_tags ORDER BY candidate_id")],
+            [("c1", "Jordan B. Bravo", "is_recruiter", "keep note"), ("c2", "Jordan B. Bravo", "", "")])
+        self.assertIn("Jordan Bravo", self.people.detail("p:a").aliases)
+        self.assertEqual(share_rows(self.root / "store.sqlite")[0].full_name, "Jordan B. Bravo")
+        self.assertEqual([match.name for match in matches(self.conn, name="B. Bravo")], ["Jordan B. Bravo"])
+        # A labels pass and a realize keep it; the facts never changed.
+        PersonLabels(self.conn, self.root).run()
+        Realize(self.conn, self.root).run()
+        self.assertEqual(self.people.load()[0].name, "Jordan B. Bravo")
+        with (self.root / "network-import/merged/people.csv").open(encoding="utf-8") as handle:
+            self.assertIn("Jordan B. Bravo", handle.read())
+        self.assertEqual(json.loads(self.conn.execute("SELECT facts_json FROM facts").fetchone()[0])["canonical_name"], "Jordan Bravo")
+        for request in ({"parent_id": "p:a", "name": "  "}, {"parent_id": "", "name": "X"}, {"name": "X"}, []):
+            self.assertEqual(self.post("/api/people/name", request)[0], 400)
+
+    def test_a_merged_family_wears_the_newest_name_whatever_was_tagged_since(self) -> None:
+        self.conn.execute(
+            "INSERT INTO person_tags (candidate_id, tags, note, updated_at, name, name_updated_at) VALUES ('c2', '', '', ?, 'Casey Delta', ?)",
+            (NOW, NOW))
+        self.conn.execute("UPDATE person_tags SET name = 'Jordan Bravo', name_updated_at = ? WHERE candidate_id = 'c1'", (LATER,))
+        self.conn.commit()
+        self.assertEqual(queries_share.names_by_parent(self.conn), {"p:a": "Jordan Bravo"})
+        # A later tag edit on the other member moves its updated_at, not the name's time.
+        self.post("/api/people/tags", {"people": [{"parent_id": "p:a", "tags": ["is_family"]}]})
+        self.assertEqual(queries_share.names_by_parent(self.conn), {"p:a": "Jordan Bravo"})
+
     def test_relationship_keeps_the_latest_family_note(self) -> None:
         queries_share.write_tags(self.conn, [("c2", "is_family", "latest note", LATER)])
         self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "friend"})

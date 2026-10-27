@@ -8,6 +8,10 @@ is built on Modal unless realize left people.csv as it was and an index is alrea
 validation marks search ready.
 
 Changelog:
+  2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
+      the Modal index; deep context and enrichment are marked as nothing to do, the follow-up names what
+      to connect for more. With messages, the index's people file (search-index/people.csv) is realize's
+      families plus every LinkedIn connection no family holds, so connections stay searchable.
   2026-10-09: synthesize and enrich report their counts to the page as their paid calls come back
       (Node.on_progress), so a long stage is never a static line.
   2026-10-07: the stage order, realize (with the share list) and the index command come from
@@ -30,6 +34,7 @@ Changelog:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -43,19 +48,22 @@ from typing import Callable
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
-from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
 from packs.ingestion.primitives.deep_context_v2.run import archive_v1, index_command, realize, stages
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
+from packs.powerset.primitives.install.controller import INDEXED_PEOPLE, LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
-_LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+_LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
+# The message imports deep context reads people from; without any, LinkedIn goes straight to search.
+_MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
@@ -148,7 +156,7 @@ class ProcessingOnboarding:
             if done < total and now - written_at < _COUNT_SECONDS:
                 return
             written_at = now
-            self._write(event, done=done, total=total)
+            self._write(event, done=done, total=total, details={"done": done, "total": total})
 
         return count
 
@@ -204,11 +212,22 @@ class ProcessingOnboarding:
 
     def _index(self) -> None:
         self.step = InstallStep.INDEX
-        people = self.data_root / PEOPLE_CSV_RELATIVE_PATH
-        before = people.read_bytes() if people.is_file() else b""
         self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
                   "index.preparing")
-        if people.read_bytes() != before or not (self.index / "manifest.json").is_file():
+        self._build_index(self.root / INDEXED_PEOPLE)
+
+    def _index_linkedin(self) -> None:
+        """LinkedIn only: the enriched import is the people file, no deep context in between."""
+        self.step = InstallStep.INDEX
+        self._build_index(self.root / _LINKEDIN_PEOPLE)
+
+    def _build_index(self, people: Path) -> None:
+        """The Modal index of `people` unless the index on disk was built from this very file (the
+        fingerprint the download wrote beside it), then the search check."""
+        fingerprint = hashlib.sha256(people.read_bytes()).hexdigest()
+        built = self.index / "people.sha256"
+        if (not (self.index / "manifest.json").is_file() or not (self.index / "local-search.duckdb").is_file()
+                or not built.is_file() or built.read_text(encoding="utf-8").strip() != fingerprint):
             command = index_command(self.data_root, people)
             self._run(shlex.join(command), lambda: self._modal(command), "index.building")
         self._write("index.done")
@@ -228,15 +247,22 @@ class ProcessingOnboarding:
             load_env()
             try:
                 self._linkedin()
-                archive_v1(self.data_root)
-                with closing(open_store(store_path(self.data_root))) as conn:
-                    self._owner()
-                    *discover, (_, enrich) = stages(conn, self.data_root)
-                    for name, build in discover:
-                        self._stage(name, build())
-                    self._write("discover.done")
-                    self._enrich(enrich)
-                self._index()
+                if not any((self.data_root / relative).is_file() for relative in _MESSAGE_IMPORTS):
+                    # LinkedIn only: deep context has no messages to read, so the enriched import goes
+                    # straight to the index; the follow-up names what to connect for more.
+                    self._write("discover.linkedin_only")
+                    self._write("enrich.linkedin_only")
+                    self._index_linkedin()
+                else:
+                    archive_v1(self.data_root)
+                    with closing(open_store(store_path(self.data_root))) as conn:
+                        self._owner()
+                        *discover, (_, enrich) = stages(conn, self.data_root)
+                        for name, build in discover:
+                            self._stage(name, build())
+                        self._write("discover.done")
+                        self._enrich(enrich)
+                    self._index()
                 keep_updated(self.root)
             except _Stopped:
                 pass

@@ -17,11 +17,12 @@ Created: 2026-10-07
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_realize import FamilyRow, Identifier, Member
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, IdentifierKind, Worth
@@ -33,9 +34,14 @@ from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, 
 from packs.ingestion.primitives.enrich.profile_transforms import current_position, normalize_rapidapi
 from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
 from packs.shared.csv_io import CsvIO
+from packs.ingestion.schemas.company_identity import rapidapi_experience_to_powerpacks
 
 # The file the index builder reads and hashes to decide on a re-index; replaced whole each run.
 PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
+# The enriched LinkedIn import (the Modal import-linkedin step's output) and the people file the index
+# builds from: realize's families, then every connection the import has that no family holds.
+LINKEDIN_IMPORT_RELATIVE_PATH = Path("network-import") / "import" / "linkedin" / "people.csv"
+INDEX_PEOPLE_RELATIVE_PATH = Path("search-index") / "people.csv"
 # The people columns a LinkedIn profile fills.
 PROFILE_COLUMNS: tuple[str, ...] = (
     "first_name", "last_name", "full_name", "headline", "summary", "city", "state", "country",
@@ -56,6 +62,37 @@ def by_most_messages(members: list[Member]) -> list[Member]:
     return sorted(members, key=lambda member: (-message_total(member), member.candidate_id))
 
 
+def with_connections(data_root: Path) -> tuple[Path, int, int]:
+    """The index's people file: realize's families, then every LinkedIn connection the enriched import
+    has that no family holds, so the whole network is searchable as families form. Returns the path,
+    how many families, how many connections were added."""
+    people = data_root / PEOPLE_CSV_RELATIVE_PATH
+    connections = data_root / LINKEDIN_IMPORT_RELATIVE_PATH
+    indexed = data_root / INDEX_PEOPLE_RELATIVE_PATH
+    with people.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    columns = list(rows[0].keys()) if rows else list(PEOPLE_SCHEMA_COLUMNS)
+    known = {row.get("public_identifier", "") for row in rows} - {""}
+    added = 0
+    if connections.is_file():
+        with connections.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if not row.get("public_identifier") or row["public_identifier"] in known:
+                    continue
+                for column in row:
+                    if column not in columns:
+                        columns.append(column)
+                rows.append(row)
+                added += 1
+    indexed.parent.mkdir(parents=True, exist_ok=True)
+    with indexed.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in columns})
+    return indexed, len(rows) - added, added
+
+
 def fill_profile(row: dict[str, str], record: dict[str, Any]) -> None:
     """Fill the row's profile columns from one cached LinkedIn profile."""
     profile: dict[str, Any] = normalize_rapidapi(record["raw_response"], row["public_identifier"], row["linkedin_url"])
@@ -73,7 +110,16 @@ def fill_research(row: dict[str, str], content: dict[str, Any]) -> None:
     row["city"] = content.get("location_city") or ""
     row["country"] = content.get("location_country") or ""
     row["location_raw"] = ", ".join(value for value in (row["city"], row["country"]) if value)
-    experiences = content.get("work_experience") or []
+    # The same shape as a fetched profile's experiences (title hash included): the index refuses
+    # a role without its upstream hash.
+    experiences = []
+    for exp in content.get("work_experience") or []:
+        if not isinstance(exp, dict):
+            continue
+        built = rapidapi_experience_to_powerpacks(exp)
+        # The research names the company's domain; the index reads it for company matching.
+        built["company_domain"] = str(exp.get("company_domain") or "")
+        experiences.append(built)
     row["work_experiences"] = json.dumps(experiences, ensure_ascii=False)
     row["education"] = json.dumps(content.get("education") or [], ensure_ascii=False)
     row["current_title"], row["current_company"], _ = current_position(experiences)
@@ -89,7 +135,7 @@ def facts_title(facts: dict[str, Any]) -> tuple[str, str]:
 class Realize(Node):
     name = "realize"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
-             "candidate_sources", "facts", "research", "deleted_parents")
+             "candidate_sources", "facts", "research", "deleted_parents", "person_tags")
     writes = ("families",)
 
     def build(self) -> tuple[list[dict[str, str]], dict[str, int]]:
@@ -102,6 +148,7 @@ class Realize(Node):
         channels: dict[str, list[str]] = queries_realize.channels_by_candidate(self.conn)
         profile_keys: dict[str, str] = queries_realize.profile_keys(self.conn)
         worth: dict[str, Worth] = queries_realize.worth_by_parent(self.conn)
+        names: dict[str, str] = queries_share.names_by_parent(self.conn)
         research_profiles = {stored["parent_id"]: json.loads(stored["result_json"])["content"]
                              for stored in self.conn.execute(
             "SELECT p.parent_id, r.result_json FROM current_parent p JOIN current_linkedins l USING (candidate_id) "
@@ -176,9 +223,11 @@ class Realize(Node):
                         if value and len(value) > len(row[column]):
                             row[column] = value
 
-            # The family's one name: the profile's when it has one, else the display name of the
-            # member with the most messages.
-            if not row["full_name"]:
+            # The family's one name: the human's when they gave one, else the profile's when it has one,
+            # else the display name of the member with the most messages.
+            if parent_id in names:
+                row["full_name"] = names[parent_id]
+            elif not row["full_name"]:
                 row["full_name"] = ordered[0].display_name
 
             # Worth is not a people column: a worth-no family is exported like any other and counted.
@@ -196,16 +245,17 @@ class Realize(Node):
 
     def family_rows(self, rows: list[dict[str, str]]) -> list[FamilyRow]:
         """The families table's rows: the export row's profile and message columns, with the family's facts
-        filling what the profile lacks (the page's name, title, company and location)."""
+        filling what the profile lacks (the page's name, title, company and location). The human's name wins."""
         members: dict[str, list[MemberFacts]] = {}
         for member in queries_worth.members_with_facts(self.conn):
             members.setdefault(member.family_key, []).append(member)
+        names: dict[str, str] = queries_share.names_by_parent(self.conn)
         families: list[FamilyRow] = []
         for row in rows:
             facts: dict[str, Any] = family_facts(members[row["id"]]).to_payload()
             title, company = facts_title(facts)
             families.append((row["id"], row["public_identifier"], row["linkedin_url"],
-                             str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],
+                             names.get(row["id"]) or str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],
                              row["current_title"] or title, row["current_company"] or company,
                              row["location_raw"] or str(facts.get("location") or ""), row["profile_picture_url"],
                              row["source_channels"], row["interaction_counts"], row["last_interaction"]))

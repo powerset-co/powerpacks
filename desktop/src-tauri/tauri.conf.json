@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Powerpacks",
-  "version": "3.39.3",
+  "version": "3.40.0",
   "identifier": "co.powerset.powerpacks",
   "build": {
     "frontendDist": "../splash"
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [],
     "security": {
@@ -36,6 +37,7 @@
       "resources/powerpacks.version": "powerpacks.version"
     },
     "macOS": {
+      "infoPlist": "Info.plist",
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist"

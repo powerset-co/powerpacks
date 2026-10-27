@@ -1,7 +1,7 @@
 """The `lookup` command: a person by name, email or phone, with everything the store knows about them.
 
-Matches candidates by written name (every word of the name given appears in the written name or the
-dossier's canonical name) or by a normalized identifier, groups them into families, and prints each
+Matches candidates by written name (every word of the name given appears in the written name, the
+dossier's canonical name or the name the owner gave the person) or by a normalized identifier, groups them into families, and prints each
 family's facts: who they are, how the owner knows them, their employers, topics and events, their
 identifiers and the one LinkedIn the store confirmed. `--json` prints the same as JSON. Nothing is
 written; nothing is spent.
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_phone
-from packs.ingestion.primitives.deep_context_v2.db import queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
@@ -55,13 +55,14 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
     members: dict[str, list[MemberFacts]] = {}
     for member in queries_worth.members_with_facts(conn):
         members.setdefault(member.family_key, []).append(member)
+    given: dict[str, str] = queries_share.names_by_parent(conn)
     if name:
         wanted: set[str] = _words(name)
         names: dict[str, str] = {}
         for row in conn.execute("SELECT candidate_id, display_name FROM candidates"):
             names[row["candidate_id"]] = row["display_name"]
         for parent_id, family in members.items():
-            known: list[str] = []
+            known: list[str] = [given.get(parent_id, "")]
             for member in family:
                 known.append(names.get(member.candidate_id, ""))
                 known.append(json.loads(member.facts_json).get("canonical_name") or "")
@@ -81,7 +82,8 @@ def matches(conn: sqlite3.Connection, *, name: str = "", email: str = "", phone:
             (emails if row["kind"] == "email" else phones).append(row["display_value"])
         profile = conn.execute("SELECT profile_key FROM current_profile WHERE parent_id = ?", (parent_id,)).fetchone()
         url: str = profile["profile_key"] if profile and profile["profile_key"] and not profile["profile_key"].startswith("synthetic:") else ""
-        found.append(Match(parent_id, facts["canonical_name"], facts["relationship_to_owner"], tuple(emails), tuple(phones), url, facts))
+        found.append(Match(parent_id, given.get(parent_id) or facts["canonical_name"], facts["relationship_to_owner"],
+                           tuple(emails), tuple(phones), url, facts))
     return found
 
 

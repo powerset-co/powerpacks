@@ -11,6 +11,7 @@ from functools import cached_property
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import normalize_email, normalize_name_key, normalize_phone
+from packs.ingestion.primitives.deep_context_v2.db import queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_realize import profile_keys
 from packs.ingestion.primitives.deep_context_v2.db.queries_review import identifiers
 from packs.ingestion.primitives.deep_context_v2.db.schema import SCHEMA_VERSION
@@ -83,6 +84,7 @@ class V2:
     def identities(self, members: tuple[str, ...] = ()) -> Iterator[Identity]:
         with closing(readonly(self.database)) as conn:
             profiles = profile_keys(conn)
+            given = queries_share.names_by_parent(conn)
             for row in conn.execute(
                 "SELECT c.candidate_id,c.display_name,p.parent_id,f.facts_json "
                 "FROM candidates c JOIN current_parent p USING(candidate_id) "
@@ -95,6 +97,9 @@ class V2:
                     canonical = string(facts["canonical_name"]) or canonical
                     names.append(canonical)
                     names.extend(strings(facts["aliases"]))
+                if row["parent_id"] in given:
+                    canonical = given[row["parent_id"]]
+                    names.append(canonical)
                 keys = [identity_key(name) for name in names if name]
                 keys.extend(identity_key(item.normalized_value) for item in identifiers(conn, [row["candidate_id"]]))
                 profile = profiles.get(row["parent_id"], "")

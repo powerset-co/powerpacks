@@ -357,7 +357,9 @@ impl Codex {
                 let Some(id) = thread.get("id").and_then(Value::as_str).map(str::to_owned) else {
                     continue;
                 };
-                if let Some(at) = rollout_file(&sessions, &id).and_then(|file| last_message_at(&file)) {
+                if let Some(at) =
+                    rollout_file(&sessions, &id).and_then(|file| last_message_at(&file))
+                {
                     thread["lastMessageAt"] = json!(at);
                 }
             }
@@ -375,7 +377,10 @@ fn rollout_file(sessions: &Path, thread_id: &str) -> Option<PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 pending.push(path);
-            } else if path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(&suffix)) {
+            } else if path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+            {
                 return Some(path);
             }
         }
@@ -392,7 +397,9 @@ fn last_message_at(file: &Path) -> Option<String> {
         if !line.contains("\"response_item\"") {
             continue;
         }
-        let Ok(row) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(row) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let is_message = row.get("type").and_then(Value::as_str) == Some("response_item")
             && row.pointer("/payload/type").and_then(Value::as_str) == Some("message");
         if is_message {
@@ -410,7 +417,8 @@ mod rollout_tests {
 
     #[test]
     fn the_last_message_wins_over_later_settings_lines() {
-        let root = std::env::temp_dir().join(format!("powerpacks-rollout-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("powerpacks-rollout-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let day = root.join("2026").join("10").join("16");
         fs::create_dir_all(&day).expect("day");
@@ -426,7 +434,10 @@ mod rollout_tests {
         .expect("write");
         let found = rollout_file(&root, "abc123").expect("file");
         assert_eq!(found, file);
-        assert_eq!(last_message_at(&found).as_deref(), Some("2026-10-16T09:05:25Z"));
+        assert_eq!(
+            last_message_at(&found).as_deref(),
+            Some("2026-10-16T09:05:25Z")
+        );
         assert!(rollout_file(&root, "nope").is_none());
         let _ = fs::remove_dir_all(&root);
     }

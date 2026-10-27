@@ -60,9 +60,35 @@ def current_tags(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dic
     return found
 
 
+def names_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, str]:
+    """parent_id -> the human's name for the family: the newest named member's. `parents` narrows to those
+    families."""
+    names: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT p.parent_id, t.name FROM current_parent p JOIN person_tags t USING (candidate_id) "
+        + (_only(parents) + "AND" if parents else "WHERE") + " t.name IS NOT NULL "
+        "ORDER BY t.name_updated_at DESC, t.candidate_id",
+        parents,
+    ):
+        names.setdefault(row["parent_id"], row["name"])
+    return names
+
+
+def write_name(conn: sqlite3.Connection, parent_id: str, members: tuple[str, ...], name: str, now: str) -> None:
+    """The human's name for every member of the family, and the page's row with it; tags, relationship and
+    note stay as they are."""
+    with conn:
+        conn.executemany(
+            "INSERT INTO person_tags (candidate_id, tags, note, updated_at, name, name_updated_at) VALUES (?, '', '', ?, ?, ?) "
+            "ON CONFLICT (candidate_id) DO UPDATE SET name = excluded.name, name_updated_at = excluded.name_updated_at",
+            [(candidate_id, now, name, now) for candidate_id in members])
+        conn.execute("UPDATE families SET name = ? WHERE parent_id = ?", (name, parent_id))
+
+
 def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, Labels]:
-    """The family's exported labels with the human's latest relationship choice applied. `parents` narrows
-    to those families."""
+    """The family's exported labels with the human's latest relationship choice and name applied. `parents`
+    narrows to those families."""
+    names: dict[str, str] = names_by_parent(conn, parents)
     relationships: dict[str, str] = {}
     for row in conn.execute(
         "SELECT p.parent_id, t.relationship_kind FROM current_parent p JOIN person_tags t USING (candidate_id) "
@@ -92,8 +118,8 @@ def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) ->
                 MINOR if cells.get("is_minor", 0.0) >= FLAG_P else "")
             labels_json = json.dumps(cells)
         source = "human" if kind is not None else "machine" if row["relationship_kind"] else ""
-        found[parent_id] = Labels(row["candidate_id"], row["public_identifier"], row["full_name"], row["worth"],
-                                  flag, labels_json, row["updated_at"], source)
+        found[parent_id] = Labels(row["candidate_id"], row["public_identifier"], names.get(parent_id, row["full_name"]),
+                                  row["worth"], flag, labels_json, row["updated_at"], source)
     return found
 
 

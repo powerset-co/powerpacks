@@ -65,6 +65,33 @@
 }
 .who .name-row h2 {
   margin: 0;
+  min-width: 0;
+}
+/* The name is a button that turns into a field in place: same type, a field's background on hover
+   and while editing, nothing else. */
+.who .name-row .name-edit {
+  margin: 0 -4px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: text;
+  transition: background var(--t-fast) var(--ease-out);
+}
+.who .name-row button.name-edit:hover:enabled,
+.who .name-row input.name-edit {
+  background: var(--secondary);
+}
+.who .name-row button.name-edit:disabled {
+  cursor: default;
+}
+.who .name-row input.name-edit {
+  width: 100%;
+  outline: none;
 }
 .who .linkedin-label {
   display: inline-flex;

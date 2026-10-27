@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-permission-end"
+description = "Enables the permission_end command without any pre-configured scope."
+commands.allow = ["permission_end"]
+
+[[permission]]
+identifier = "deny-permission-end"
+description = "Denies the permission_end command without any pre-configured scope."
+commands.deny = ["permission_end"]

@@ -12,6 +12,7 @@ import PROSE from "./prose.fixture.json"
 
 const INSTALL: InstallStatus = {
   primitive: "powerpacks_install",
+  updated_at: "2026-10-24T00:00:00Z",
   status: "running",
   step: "dependencies",
   message: "Installing what Powerpacks needs",

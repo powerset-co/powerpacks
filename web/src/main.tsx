@@ -7,6 +7,7 @@ import "@/styles/index.css"
 import { desktopPlatform } from "@/lib/desktop"
 
 import { App } from "./App"
+import { Permission } from "@/pages/install/Permission"
 
 // The tab's icon is the Powerset mark; the bundle inlines it, so the server serves no image.
 const icon = document.createElement("link")
@@ -22,11 +23,11 @@ const platform = desktopPlatform()
 if (platform) document.documentElement.dataset.desktop = platform
 
 const queryClient = new QueryClient()
+const permission = window.location.pathname === "/permission"
+if (permission) document.documentElement.dataset.permission = "true"
 
 createRoot(root).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{permission ? <Permission /> : <App />}</QueryClientProvider>
   </StrictMode>,
 )

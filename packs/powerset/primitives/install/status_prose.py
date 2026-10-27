@@ -246,6 +246,7 @@ PROSE: dict[str, Prose] = {
 
     # Discovering your contacts (pipeline.py, the stages of deep_context_v2/run.py)
     "discover.linkedin": Prose(InstallStep.DEEP_CONTEXT, R, "Adding your LinkedIn connections"),
+    "discover.linkedin_only": Prose(InstallStep.DEEP_CONTEXT, C, "Your LinkedIn connections are in; nothing to learn from messages yet."),
     "discover.people": Prose(InstallStep.DEEP_CONTEXT, R, "Discovering your contacts"),
     "discover.owner_needed": Prose(InstallStep.DEEP_CONTEXT, W, "Add your LinkedIn profile to continue. I'll ask in chat.", action="owner"),
     "discover.owner": Prose(InstallStep.DEEP_CONTEXT, R, "Preparing your profile"),
@@ -263,6 +264,7 @@ PROSE: dict[str, Prose] = {
     "enrich.researching.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} researched"),
     "enrich.judging.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} LinkedIn matches checked"),
     "enrich.done": Prose(InstallStep.ENRICH, C, "Your contacts are enriched"),
+    "enrich.linkedin_only": Prose(InstallStep.ENRICH, S, "Connect Messages or Gmail to learn more about these people."),
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
 
     # Building your search index

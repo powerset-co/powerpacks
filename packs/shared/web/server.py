@@ -280,16 +280,25 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
                 self._json(record)
                 return
+            if parsed.path == "/api/install/first-look":
+                self._json(install.first_look())
+                return
+            if parsed.path == "/api/install/first-look/ask":
+                self._json(install.ask(urllib.parse.parse_qs(parsed.query)["key"][0]))
+                return
             if parsed.path == "/api/install/preflight":
                 self._json(install.preflight())
                 return
             if parsed.path == "/api/install/connect":
                 self._json(install.connection())
                 return
-            if parsed.path == "/api/install/qr":
-                body = install.qr_image(connect="connect=1" in parsed.query.split("&"))
+            if parsed.path in ("/api/install/qr", "/api/install/linkedin-page", "/api/install/picture"):
+                body = (install.linkedin_page_image() if parsed.path.endswith("linkedin-page")
+                        else install.picture(urllib.parse.parse_qs(parsed.query).get("id", [""])[0])
+                        if parsed.path.endswith("picture")
+                        else install.qr_image(connect="connect=1" in parsed.query.split("&")))
                 if body is None:
-                    self._json({"error": "Waiting for a fresh QR code"}, HTTPStatus.NOT_FOUND)
+                    self._json({"error": "No picture yet"}, HTTPStatus.NOT_FOUND)
                     return
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "image/png")

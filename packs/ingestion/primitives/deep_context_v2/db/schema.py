@@ -50,7 +50,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -187,6 +187,9 @@ RELATIONSHIP_KIND_COLUMN_DDL = (
     "relationship_kind TEXT CHECK (relationship_kind IN "
     f"{tuple(CHOICE_QUESTIONS['relationship_kind'][1])})"
 )
+# Schema 9: the human's name for the person. NULL means the facts' name shows. Its own time, so a
+# later tag or relationship edit on another member cannot change which name a merged family wears.
+NAME_COLUMNS_DDL = ("name TEXT", "name_updated_at TEXT")
 
 # Tags and labels are keyed by member candidate; the page reads them per family.
 PEOPLE_TABLES_DDL = f"""
@@ -196,6 +199,7 @@ CREATE TABLE person_tags (
   candidate_id TEXT NOT NULL PRIMARY KEY REFERENCES candidates(candidate_id),
   tags TEXT NOT NULL,          -- '|'-joined, sorted
   {RELATIONSHIP_KIND_COLUMN_DDL},
+  {", ".join(NAME_COLUMNS_DDL)},
   note TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

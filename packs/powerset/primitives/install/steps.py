@@ -43,3 +43,8 @@ class InstallStep(str, Enum):
 DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
 PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.INDEX, InstallStep.VALIDATE,
                     InstallStep.READY)
+# One run's sources: each run's selection starts these over, so the record shows that run's sources.
+SOURCE_STEPS = (InstallStep.LINKEDIN_LOGIN, InstallStep.GMAIL_TOOLS, InstallStep.GMAIL_LOGIN, InstallStep.GMAIL_SYNC,
+                InstallStep.GMAIL_IMPORT, InstallStep.IMESSAGE_ACCESS, InstallStep.IMESSAGE_IMPORT,
+                InstallStep.WHATSAPP_TOOLS, InstallStep.WHATSAPP_LOGIN, InstallStep.WHATSAPP_SYNC,
+                InstallStep.WHATSAPP_IMPORT, InstallStep.LINKEDIN)

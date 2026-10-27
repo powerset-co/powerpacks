@@ -13,6 +13,7 @@ import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { MemoryPage } from "@/pages/memory/MemoryPage"
+import { OnboardingPage } from "@/pages/onboarding/OnboardingPage"
 import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
@@ -52,6 +53,15 @@ export function App() {
       <AccountProvider>
         <Routes>
           {desktop ? null : <Route path="/" element={<ReviewPage />} />}
+          {/* The onboarding is the whole window, as a first run is: no side nav. */}
+          <Route
+            path="/onboarding/:step?"
+            element={
+              <ErrorBoundary at="/onboarding">
+                <OnboardingPage />
+              </ErrorBoundary>
+            }
+          />
           <Route element={<Shell />}>
             {desktop ? (
               <Route

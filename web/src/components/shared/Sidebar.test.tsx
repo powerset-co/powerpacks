@@ -50,13 +50,15 @@ afterEach(() => {
 it("lists Setup until setup is done", async () => {
   mount()
   await waitFor(() => expect(screen.getByRole("link", { name: "Setup" })).toBeTruthy())
-  expect(screen.getByRole("link", { name: "Searches" })).toBeTruthy()
+  expect(screen.getByRole("link", { name: "People" })).toBeTruthy()
+  // Searches heads the chats section instead of being a page link.
+  expect(screen.queryByRole("link", { name: "Searches" })).toBeNull()
 })
 
 it("drops Setup once setup is done; Settings offers Repair setup instead", async () => {
   vi.mocked(useSetupDone).mockReturnValue(true)
   mount()
-  await waitFor(() => expect(screen.getByRole("link", { name: "Searches" })).toBeTruthy())
+  await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
   expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
 })
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from packs.ingestion.primitives.common.jsonio import emit, now_iso
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
 from packs.powerset.primitives.install.status_prose import page_prose, render
-from packs.powerset.primitives.install.steps import DEFAULT_PLAN, PROCESSING_STEPS, InstallState, InstallStep
+from packs.powerset.primitives.install.steps import DEFAULT_PLAN, PROCESSING_STEPS, SOURCE_STEPS, InstallState, InstallStep
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,10 @@ class InstallStatus:
             steps[previous_step] = {"status": InstallState.COMPLETED.value,
                                     "message": previous["message"]}
         if step is InstallStep.SOURCES:
-            steps = {key: value for key, value in steps.items() if key not in PROCESSING_STEPS}
+            # A run's selection starts its sources over too; a Connect run's end (sources.connected)
+            # keeps the sign-in it just made.
+            gone = (*PROCESSING_STEPS, *(SOURCE_STEPS if event == "sources.selected" else ()))
+            steps = {key: value for key, value in steps.items() if key not in gone}
         steps[step.value] = {"status": status.value, "message": message}
         manifest = _InstallManifest(step=step, status=status, event=event, message=message,
                                     installer_pid=pid, log_path=str(self.log_path),

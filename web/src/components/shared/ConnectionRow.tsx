@@ -20,6 +20,7 @@ export function ConnectionRow({
   action,
   children,
   details,
+  onIcon,
 }: {
   icon: ReactNode
   title: ReactNode
@@ -29,12 +30,25 @@ export function ConnectionRow({
   // What the step says while it works or stopped: its line, a code to scan, a command.
   children?: ReactNode
   details?: ReactNode
+  /** With this, the icon is a button: the onboarding shows how this one connects. */
+  onIcon?: () => void
 }) {
+  const badge =
+    "grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground"
   const row = (
     <>
-      <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground">
-        {icon}
-      </span>
+      {onIcon ? (
+        <button
+          type="button"
+          aria-label={typeof title === "string" ? `How ${title} connects` : "How this connects"}
+          className={cn(badge, "cursor-pointer border-0 p-0 hover:bg-secondary")}
+          onClick={onIcon}
+        >
+          {icon}
+        </button>
+      ) : (
+        <span className={badge}>{icon}</span>
+      )}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-[13px] font-bold">{title}</span>
         <span className="text-xs leading-snug text-muted-foreground">{why}</span>

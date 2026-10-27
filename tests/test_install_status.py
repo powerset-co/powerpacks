@@ -6,11 +6,19 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+import duckdb
 from unittest.mock import MagicMock, patch
 
+from packs.ingestion.primitives.discover.linkedin.connections import PICTURES, save_pictures
+from packs.powerset.primitives.install import controller, first_look
 from packs.powerset.primitives.install.controller import InstallController
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
+
+
+def _raise(error: BaseException) -> bytes:
+    raise error
 
 
 class InstallStatusTests(unittest.TestCase):
@@ -165,6 +173,115 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(self.status.write("step.failed", pid=os.getpid())["step"], "gmail_sync")
 
 
+class ForgetLinkedInTests(unittest.TestCase):
+    """`forget_linkedin` moves the sign-in profile, the connections file and its record aside."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "root"
+        self.profile = Path(self.tmp.name) / "browser-profiles" / "linkedin"
+        self.profile.mkdir(parents=True)
+        (self.profile / "Default").mkdir()
+        csv = self.root / controller.CONNECTIONS_CSV
+        csv.parent.mkdir(parents=True)
+        csv.write_text("First Name,Last Name\n", encoding="utf-8")
+        (self.root / controller.SCRAPE_RECORD).write_text("{}", encoding="utf-8")
+
+    def test_moves_each_path_to_a_backup_and_deletes_nothing(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile):
+            payload = InstallController(self.root).forget_linkedin()
+        self.assertEqual(payload["status"], "forgotten")
+        self.assertEqual(len(payload["moved"]), 3)
+        self.assertFalse(self.profile.exists())
+        self.assertFalse((self.root / controller.CONNECTIONS_CSV).exists())
+        self.assertFalse((self.root / controller.SCRAPE_RECORD).exists())
+        for moved in payload["moved"]:
+            self.assertIn(".bkup-", moved)
+            self.assertTrue(Path(moved).exists())
+        self.assertTrue((Path(payload["moved"][0]) / "Default").is_dir())
+
+    def test_page_image_is_served_once_the_read_took_one(self) -> None:
+        install = InstallController(self.root)
+        self.assertIsNone(install.linkedin_page_image())
+        (self.root / controller.PAGE_SHOT).write_bytes(b"PNG")
+        self.assertEqual(install.linkedin_page_image(), b"PNG")
+        with patch.object(controller, "BROWSER_PROFILE", self.profile):
+            payload = install.forget_linkedin()
+        self.assertEqual(len(payload["moved"]), 4)
+        self.assertIsNone(install.linkedin_page_image())
+
+    def test_first_look_reads_the_indexed_people_then_the_linkedin_import(self) -> None:
+        install = InstallController(self.root)
+        self.assertEqual(install.first_look(), {"people": [], "total": 0, "questions": []})
+        header = "public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
+        linkedin = self.root / controller.LINKEDIN_PEOPLE
+        linkedin.parent.mkdir(parents=True, exist_ok=True)
+        linkedin.write_text(header + "a-b,A B,CTO,Acme,,http://p/a\nc-d,C D,,,,\ne-f,E F,Founder,Beta,,\n", encoding="utf-8")
+        look = install.first_look(limit=1)
+        self.assertEqual(look["total"], 3)
+        self.assertEqual([person["name"] for person in look["people"]], ["A B"])
+        self.assertEqual(look["people"][0]["avatar_url"], "http://p/a")
+        indexed = self.root / controller.INDEXED_PEOPLE
+        indexed.parent.mkdir(parents=True, exist_ok=True)
+        indexed.write_text(header + "g-h,G H,VP,Gamma,,\n", encoding="utf-8")
+        self.assertEqual([person["name"] for person in install.first_look()["people"]], ["G H"])
+
+    def test_the_first_look_shows_the_pictures_the_read_saved(self) -> None:
+        root = Path(self.tmp.name)
+        people = root / controller.LINKEDIN_PEOPLE
+        people.parent.mkdir(parents=True, exist_ok=True)
+        people.write_text("public_identifier,full_name,current_title,current_company,headline,profile_picture_url\n"
+                          "ann-a,Ann A,CTO,Acme,,https://media.licdn.com/ann\n"
+                          "bob-b,Bob B,CEO,Bolt,,https://media.licdn.com/bob\n", encoding="utf-8")
+        saved = save_pictures([{"slug": "ann-a", "picture": "https://media.licdn.com/ann"},
+                               {"slug": "bob-b", "picture": "https://media.licdn.com/bob"},
+                               {"slug": "cat-c", "picture": ""}],
+                              root / PICTURES, fetch=lambda url: b"jpeg" if url.endswith("ann") else _raise(OSError(url)))
+        self.assertEqual(saved, 1)
+        control = InstallController(root)
+        self.assertEqual([person["avatar_url"] for person in control.first_look()["people"]],
+                         ["/api/install/picture?id=ann-a", "https://media.licdn.com/bob"])
+        self.assertEqual(control.picture("ann-a"), b"jpeg")
+        self.assertIsNone(control.picture("bob-b"))
+        # A later read saves only what is missing, and never fetches what is on disk.
+        self.assertEqual(save_pictures([{"slug": "ann-a", "picture": "https://media.licdn.com/ann"}], root / PICTURES,
+                                       fetch=lambda url: _raise(AssertionError(url))), 0)
+
+    def test_questions_are_minted_from_the_index_and_answered_by_it(self) -> None:
+        install = InstallController(self.root)
+        self.assertEqual(install.questions(), [])
+        db = self.root / first_look.SEARCH_DB
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with duckdb.connect(str(db)) as conn:
+            conn.execute("create table local_person_profiles (person_id text, public_identifier text, full_name text, "
+                         "current_title text, current_company text, headline text, profile_picture_url text, city text)")
+            conn.execute("create table local_people_positions (person_id text, company_name text, raw_title text, "
+                         "is_current boolean)")
+            conn.execute("insert into local_person_profiles values "
+                         "('1', 'a', 'Ann', 'CTO', 'Acme', '', 'http://p/a', 'Berlin'), "
+                         "('2', 'b', 'Bob', 'Founder', 'Beta', '', '', 'Berlin'), "
+                         "('3', 'c', 'Cy', 'VP', 'Acme', '', '', 'Paris')")
+            conn.execute("insert into local_people_positions values "
+                         "('1', 'Acme', 'CTO', true), ('1', 'Old', 'Engineer', false), "
+                         "('2', 'Beta', 'Founder', true), ('3', 'Acme', 'VP', true)")
+        questions = install.questions()
+        self.assertEqual([(q["key"], q["text"], q["count"]) for q in questions],
+                         [("company", "Who do I know at Acme?", 2), ("city", "Who do I know in Berlin?", 2)])
+        answer = install.ask("company")
+        self.assertEqual(answer["question"], "Who do I know at Acme?")
+        self.assertEqual(answer["total"], 2)
+        self.assertEqual([(p["name"], p["title"], p["avatar_url"]) for p in answer["people"]],
+                         [("Ann", "CTO", "http://p/a"), ("Cy", "VP", "")])
+        self.assertEqual([p["name"] for p in install.ask("city", limit=1)["people"]], ["Ann"])
+        self.assertEqual(install.first_look()["questions"], questions)
+
+    def test_nothing_to_move_is_fine(self) -> None:
+        with patch.object(controller, "BROWSER_PROFILE", self.profile / "absent"):
+            payload = InstallController(Path(self.tmp.name) / "empty").forget_linkedin()
+        self.assertEqual(payload, {"status": "forgotten", "moved": []})
+
+
 class ConnectTests(unittest.TestCase):
     """The Connect screen signs in to one source before setup, in the background, into its own record."""
 
@@ -173,6 +290,25 @@ class ConnectTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
         self.controller = InstallController(self.root)
+
+    def test_a_run_starts_its_sources_over(self) -> None:
+        status = InstallStatus(self.root)
+        write = lambda event, **values: status.write(event, pid=0, retry_command="bin/onboard", **values)  # noqa: E731
+        write("gmail.imported")
+        write("discover.done")
+        self.assertIn("gmail_import", status.read()["steps"])
+        write("sources.selected")
+        self.assertNotIn("gmail_import", status.read()["steps"])
+        self.assertNotIn("deep_context", status.read()["steps"])
+
+    def test_permission_opens_settings_without_covering_it_with_finder(self) -> None:
+        handler = MagicMock()
+        handler.headers = {}
+        with patch.object(controller, "permission_app", return_value="/tmp/Powerpacks.app"), \
+                patch.object(controller.subprocess, "run") as run:
+            self.assertTrue(self.controller.post(handler, "/api/install/permissions"))
+        run.assert_called_once_with(["open", controller.PERMISSION_URL], check=True)
+        self.assertEqual(handler._json.call_args.args[0]["app_path"], "/tmp/Powerpacks.app")
 
     def test_connect_runs_the_sources_logins_only_in_the_background(self) -> None:
         with patch("packs.powerset.primitives.install.controller.subprocess.Popen") as popen:
