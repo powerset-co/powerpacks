@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
 import { Spinner } from "@/components/shared"
@@ -10,16 +10,27 @@ import { Frame, Heading, Info, Note } from "./Frame"
 import { after } from "./steps"
 
 /** Codex: the ChatGPT sign-in the chat runs on, in the browser, the same flow as the Connect
- *  screen's Codex row. Signed in, the screen moves on by itself. */
+ *  screen's Codex row. A sign-in started here moves the screen on by itself once the account is
+ *  read; someone already signed in sees who, Continue, and Switch account. */
 export function Codex() {
   const navigate = useNavigate()
   const codex = useCodexAccount()
   const next = after("codex")
   const account = codex.status?.installed ? codex.status.account : null
   const signedIn = account !== null
+  const [started, setStarted] = useState(false)
   useEffect(() => {
-    if (codex.login === null && signedIn && next) void navigate(next.href)
-  }, [codex.login, signedIn, next, navigate])
+    if (started && codex.login === null && signedIn && next) void navigate(next.href)
+  }, [started, codex.login, signedIn, next, navigate])
+  const start = () => {
+    setStarted(true)
+    codex.connect()
+  }
+  const switchAccount = () => {
+    setStarted(true)
+    codex.signOut()
+    codex.connect()
+  }
   const who = account?.kind === "chatgpt" && account.email ? account.email : "your ChatGPT account"
   return (
     <Frame
@@ -31,7 +42,12 @@ export function Codex() {
             <Note>The sign-in runs in the Powerpacks app; this browser view has no app to run it.</Note>
           ) : signedIn ? (
             <>
-              <Note>Signed in as {who}.</Note>
+              <Note>
+                Signed in as {who}.{" "}
+                <button type="button" className={LINK} onClick={switchAccount}>
+                  Switch account
+                </button>
+              </Note>
               <Button variant="primary" size="lg" onClick={() => next && void navigate(next.href)}>
                 Continue
               </Button>
@@ -42,7 +58,7 @@ export function Codex() {
                 variant="primary"
                 size="lg"
                 disabled={codex.loading || codex.login !== null || codex.status?.installed === false}
-                onClick={codex.connect}
+                onClick={start}
               >
                 {codex.login ? (
                   <>
