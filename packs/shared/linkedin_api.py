@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+
+from packs.powerset.primitives.auth import auth
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -21,7 +23,7 @@ class LinkedInApiConfig:
         """Explicit keys retain gateway semantics; Powerset wins over RapidAPI."""
         if api_key is not None:
             return cls(api_key)
-        gateway_key = os.getenv("POWERSET_API_KEY", "").strip()
+        gateway_key = auth.gateway_token()
         if gateway_key:
             return cls(gateway_key)
         return cls(os.getenv("RAPIDAPI_LINKEDIN_KEY", "").strip(), provider="rapidapi")

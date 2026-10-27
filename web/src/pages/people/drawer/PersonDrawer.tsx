@@ -46,7 +46,13 @@ export function PersonDrawer(props: PersonDrawerProps) {
     >
       {row ? (
         <>
-          <DrawerHeader row={row} detail={ready} action={<PersonFeedback row={row} />} onClose={onClose} />
+          <DrawerHeader
+            row={row}
+            detail={ready}
+            action={<PersonFeedback row={row} />}
+            onClose={onClose}
+            onRefresh={onRetry}
+          />
           {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
           <div className="drawer-actions">
             <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />

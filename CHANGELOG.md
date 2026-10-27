@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.40.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.3...powerpacks-v3.40.0) (2026-10-27)
+
+
+### Features
+
+* **gateway:** the Powerset login stands in for a gateway key ([#923](https://github.com/powerset-co/powerpacks/issues/923)) ([19ef059](https://github.com/powerset-co/powerpacks/commit/19ef0596c37d97f1ecceb7bbb5e8f79df1b518d8))
+* **index:** LinkedIn import and index build on Modal through the Powerset API ([#921](https://github.com/powerset-co/powerpacks/issues/921)) ([044c565](https://github.com/powerset-co/powerpacks/commit/044c5654f3a27be187285107404d5127cbf4e977))
+* **people:** the human's name for a person (rename in the drawer and from chat) ([#924](https://github.com/powerset-co/powerpacks/issues/924)) ([031e6d7](https://github.com/powerset-co/powerpacks/commit/031e6d78a7a50e7772c516ae58051f0cfd698609))
+
+## [3.39.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.2...powerpacks-v3.39.3) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** let both Codex runners write uv's cache; support runs get an hour ([#920](https://github.com/powerset-co/powerpacks/issues/920)) ([4fa153f](https://github.com/powerset-co/powerpacks/commit/4fa153ff714bba90e759dbee9246702d1e273480))
+
+
+### Documentation
+
+* **deep-context:** worth undo row + venv fallback when uv's cache is unwritable ([#918](https://github.com/powerset-co/powerpacks/issues/918)) ([2986b42](https://github.com/powerset-co/powerpacks/commit/2986b426e58a1e7352f236858bbf5cb00bb21d81))
+
+## [3.39.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.1...powerpacks-v3.39.2) (2026-10-25)
+
+
+### Bug Fixes
+
+* **deps:** trust bundle after the emSign CA compromise ([#916](https://github.com/powerset-co/powerpacks/issues/916)) ([af5bb12](https://github.com/powerset-co/powerpacks/commit/af5bb1274710ea1379a97656283b5b832e1cc0ab))
+
+## [3.39.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.0...powerpacks-v3.39.1) (2026-10-24)
+
+
+### Documentation
+
+* **deep-context:** acting on a set of people from chat, the tag vocabulary, what delete removes ([#914](https://github.com/powerset-co/powerpacks/issues/914)) ([f593b7f](https://github.com/powerset-co/powerpacks/commit/f593b7f12f97a33968bbe5dd828e5db52ac38273))
+
 ## [3.39.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.38.1...powerpacks-v3.39.0) (2026-10-23)
 
 

@@ -51,6 +51,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -64,6 +65,7 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 # for the `packs.*` import below.
 sys.path.insert(0, str(_REPO_FOR_ENV))
 
+from packs.indexing.modal import api_runs  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 import modal  # noqa: E402
 
@@ -166,6 +168,9 @@ def build_image(*extra_packages: str) -> modal.Image:
             "tiktoken==0.13.0",
             *extra_packages,
         )
+        # The repo is mounted at /repo at container start; the deployed app's functions (app.py)
+        # import `packs` from there, so the path is set here, before the local files.
+        .env({"PYTHONPATH": "/repo"})
         .add_local_dir(REPO / "packs", "/repo/packs")
         .add_local_dir(REPO / "scripts", "/repo/scripts")
     )
@@ -396,13 +401,14 @@ def read_run_status(label: str) -> dict | None:
         return None
 
 
-def watch_run(label: str, progress: PipelineProgress, stage_id: str, message_prefix: str,
+def watch_run(read: Callable[[], dict | None], progress: PipelineProgress, stage_id: str, message_prefix: str,
               timeout_s: int = 7200) -> dict | None:
-    """Poll a sandbox run's volume status and mirror it into the local stage."""
+    """Poll a run's status (`read`: the volume's status.json, or the API's copy of it) and mirror it
+    into the local stage."""
     deadline = time.time() + timeout_s
     last_phase = None
     while time.time() < deadline:
-        payload = read_run_status(label)
+        payload = read()
         if payload:
             phase = payload.get("phase")
             if phase != last_phase:
@@ -494,7 +500,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     progress.event("importing", "Importing and enriching contacts", payload={"sandbox": sb.object_id})
-    payload = watch_run(IMPORT_LABEL, progress, "importing", "Importing")
+    payload = watch_run(lambda: read_run_status(IMPORT_LABEL), progress, "importing", "Importing")
     if not payload or payload.get("status") != "completed":
         progress.event("importing", f"Import failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
@@ -527,7 +533,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         timeout=args.timeout,
     )
     progress.event("indexing", "Building search records", payload={"sandbox": sb2.object_id})
-    payload = watch_run(INDEX_LABEL, progress, "indexing", "Indexing")
+    payload = watch_run(lambda: read_run_status(INDEX_LABEL), progress, "indexing", "Indexing")
     if not payload or payload.get("status") != "completed":
         progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
@@ -554,7 +560,6 @@ GMAIL_STAGES = [
     {"id": "importing", "label": "Loading enriched contacts"},
     {"id": "indexing", "label": "Building search index"},
 ]
-GMAIL_INDEX_LABEL = "gmail-index"
 
 
 def people_csv_rows(path: Path) -> int:
@@ -571,12 +576,11 @@ def people_csv_rows(path: Path) -> int:
 
 
 def cmd_index_people(args: argparse.Namespace) -> int:
-    """Index an already-enriched people.csv on Modal (no RapidAPI import stage).
+    """Index an already-enriched people.csv on Modal, through the Powerset API (no Modal token here).
 
-    Gmail enriches locally (Parallel.ai email+context); this ships the resulting
-    people.csv to the volume and runs the SAME indexing sandbox the LinkedIn
-    pipeline uses. Use it for any source whose enrichment already happened
-    locally, so Modal only does role/company/age classification + duckdb.
+    Gmail enriches locally (Parallel email+context); this ships the resulting people.csv up and
+    the API runs the SAME indexing entrypoint the LinkedIn pipeline uses, so Modal only does
+    role/company/age classification + duckdb. Downloads local-search.duckdb + manifest.json.
     """
     people_path = Path(args.people_csv).expanduser()
     if not people_path.exists():
@@ -585,45 +589,26 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     progress = PipelineProgress(Path.cwd() / ".powerpacks/runs/setup-gmail-modal", GMAIL_STAGES, GMAIL_VERTICAL)
     # Enrich already happened locally (Parallel) before this command runs.
     progress.event("enriching", "Enriched contacts locally", status="completed", payload={"contacts": rows})
-
-    vol = get_volume()
     progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
-    with vol.batch_upload(force=True) as batch:
-        batch.put_file(people_path, f"{operator_volume_prefix()}/input/people.csv")
+    uploaded = api_runs.upload(people_path, "people.csv")
     progress.event("importing", f"Loaded {rows} contacts", status="completed", payload={"contacts": rows})
 
-    app = modal.App.lookup(APP_NAME, create_if_missing=True)
-    index_vol = run_vol_path(GMAIL_INDEX_LABEL)
-    people_csv, cache_root = dataset_paths("real")
-    reset_run_status(vol, GMAIL_INDEX_LABEL)
-    sb = modal.Sandbox.create(
-        "python", "/repo/packs/indexing/modal/run_indexing.py",
-        "--people-csv", people_csv,
-        "--cache-root", cache_root,
-        "--run-vol", index_vol,
-        "--operator-id", DEFAULT_OPERATOR_ID,
-        "--compute-threads", "16",
-        "--enrich", "--max-usd", str(args.max_usd),
-        app=app,
-        image=build_image(),
-        volumes={"/data": vol},
-        secrets=[modal.Secret.from_name("powerset-openai"), powerset_api_secret()],
-        cpu=16,
-        memory=16384,
-        timeout=args.timeout,
-    )
-    progress.event("indexing", "Building search records", payload={"sandbox": sb.object_id})
-    payload = watch_run(GMAIL_INDEX_LABEL, progress, "indexing", "Indexing")
+    label = api_runs.start("index-people", uploaded, max_usd=args.max_usd)
+    progress.event("indexing", "Building search records", payload={"run": label})
+    payload = watch_run(lambda: api_runs.status(label), progress, "indexing", "Indexing")
     if not payload or payload.get("status") != "completed":
         progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
 
     dest = Path(args.dest).expanduser() if args.dest else Path.cwd() / ".powerpacks/search-index"
-    dl = argparse.Namespace(label=GMAIL_INDEX_LABEL, dest=str(dest), wait=False)
-    code = cmd_download(dl)
-    if code != 0:
-        progress.event("indexing", "Download failed", status="failed")
-        return code
+    started = time.time()
+    for name in ("local-search.duckdb", "manifest.json"):
+        written = api_runs.download(label, name, dest / name)
+        if written < 0:
+            progress.event("indexing", f"{name} missing from the run", status="failed")
+            return 1
+        print(f"downloaded {label}/{name} -> {dest / name} ({written / 1e6:.0f} MB, {written / 1e6 / max(time.time() - started, 0.001):.0f} MB/s)")
+        started = time.time()
     # The fingerprint of the people file this index was built from, beside it: setup rebuilds only
     # when the file differs (install/pipeline.py _build_index).
     (dest / "people.sha256").write_text(hashlib.sha256(people_path.read_bytes()).hexdigest(), encoding="utf-8")
@@ -775,50 +760,26 @@ def cmd_download(args: argparse.Namespace) -> int:
 
 
 def cmd_import_linkedin(args: argparse.Namespace) -> int:
-    """Connections.csv -> enriched people.csv on Modal (import/enrich only).
+    """Connections.csv -> enriched people.csv on Modal, through the Powerset API (no Modal token here).
 
-    Runs the SAME run_linkedin.py RapidAPI enrichment sandbox as `pipeline`'s
-    first stage, but stops before indexing and downloads the enriched people.csv
-    so it can be merged with other sources (e.g. Gmail) ahead of a single
-    `index-people` pass. Default dest is the canonical LinkedIn import path the
-    fan-in merge reads. Enrichment caches on the shared volume keep reruns cheap.
+    The API runs the SAME run_linkedin.py RapidAPI enrichment the `pipeline` command's first stage
+    runs, stops before indexing, and this downloads the enriched people.csv so it can be merged with
+    other sources (e.g. Gmail) ahead of a single `index-people` pass. Default dest is the canonical
+    LinkedIn import path the fan-in merge reads. Enrichment caches on the shared volume keep reruns cheap.
     """
     csv_path = Path(args.csv).expanduser()
     if not csv_path.exists():
         raise SystemExit(f"missing csv: {csv_path}")
     rows = csv_connection_rows(csv_path)
-    vol = get_volume()
-    op_prefix = f"operators/{DEFAULT_OPERATOR_ID}"
     progress = PipelineProgress()
 
     eta = estimate_seconds(rows)
     progress.event("importing", f"Uploading {csv_path.name} ({rows} connections, ~{eta // 60 + 1} min estimated)",
                    payload={"connections": rows, "estimated_seconds": eta})
-    with vol.batch_upload(force=True) as batch:
-        batch.put_file(csv_path, f"{op_prefix}/input/connections.csv")
-
-    app = modal.App.lookup(APP_NAME, create_if_missing=True)
-    import_vol = run_vol_path(IMPORT_LABEL)
-    reset_run_status(vol, IMPORT_LABEL)
-    sb = modal.Sandbox.create(
-        "python", "/repo/packs/indexing/modal/bench_wrapper.py", f"{import_vol}/bench-import.json",
-        "python", "/repo/packs/indexing/modal/run_linkedin.py",
-        "--connections-csv", f"{OPERATOR_ROOT}/input/connections.csv",
-        "--people-out", f"{OPERATOR_ROOT}/input/people.csv",
-        "--cache-root", CACHE_ROOT,
-        "--run-vol", import_vol,
-        "--operator-id", DEFAULT_OPERATOR_ID,
-        "--source-user", args.source_user,
-        app=app,
-        image=build_image(),
-        volumes={"/data": vol},
-        secrets=[powerset_api_secret()],
-        cpu=2,
-        memory=4096,
-        timeout=args.timeout,
-    )
-    progress.event("importing", "Importing and enriching contacts", payload={"sandbox": sb.object_id})
-    payload = watch_run(IMPORT_LABEL, progress, "importing", "Importing")
+    uploaded = api_runs.upload(csv_path, "connections.csv")
+    label = api_runs.start("import-linkedin", uploaded, source_user=args.source_user)
+    progress.event("importing", "Importing and enriching contacts", payload={"run": label})
+    payload = watch_run(lambda: api_runs.status(label), progress, "importing", "Importing")
     if not payload or payload.get("status") != "completed":
         progress.event("importing", f"Import failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
@@ -827,13 +788,12 @@ def cmd_import_linkedin(args: argparse.Namespace) -> int:
                    f"({stats.get('cache_hit_count') or 0} cached, {stats.get('paid_call_count') or 0} fetched)",
                    payload=stats)
 
-    # Pull the enriched people.csv to the canonical LinkedIn import path so the
-    # fan-in merge can pick it up (reuses the shared volume->local file pull).
+    # Pull the enriched people.csv to the canonical LinkedIn import path so the fan-in merge can pick it up.
     dest = Path(args.dest).expanduser() if args.dest else LOCAL_POWERPACKS / "network-import/import/linkedin/people.csv"
-    written = pull_volume_file(vol, f"{op_prefix}/input/people.csv", dest)
+    written = api_runs.download(label, "people.csv", dest)
     if written < 0:
-        progress.event("importing", "Enriched people.csv missing on volume", status="failed")
-        print(json.dumps({"status": "failed", "error": f"people.csv missing on volume for {op_prefix}"}))
+        progress.event("importing", "Enriched people.csv missing from the run", status="failed")
+        print(json.dumps({"status": "failed", "error": "people.csv missing from the run"}))
         return 1
     progress.event("importing", "Enriched people.csv downloaded", status="completed", progress=1.0,
                    payload={"people_csv": str(dest), "bytes": written})
@@ -1084,7 +1044,8 @@ def main() -> int:
     dl.add_argument("--wait", action="store_true", help="poll runs/<label>/status.json until the run finishes")
 
     args = ap.parse_args()
-    require_modal_credentials()
+    if args.cmd not in ("import-linkedin", "index-people"):
+        require_modal_credentials()
     return {"pipeline": cmd_pipeline, "import-linkedin": cmd_import_linkedin, "index-people": cmd_index_people, "preload": cmd_preload, "upload": cmd_upload, "amplify": cmd_amplify, "run": cmd_run, "download": cmd_download, "process": cmd_process}[args.cmd](args)
 
 

@@ -1,6 +1,6 @@
 [package]
 name = "powerpacks-desktop"
-version = "3.39.0"
+version = "3.40.0"
 description = "Powerpacks desktop app"
 edition = "2021"
 publish = false

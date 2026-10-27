@@ -362,6 +362,20 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 # Subcommands
 # ---------------------------------------------------------------------------
 
+def gateway_token() -> str:
+    """What the vendor gateway takes from this machine: the provisioned POWERSET_API_KEY when there is
+    one, else the Powerset login's access token (refreshed when stale); "" when neither exists."""
+    key = os.environ.get("POWERSET_API_KEY", "").strip()
+    if key:
+        return key
+    path = Path(os.environ.get("POWERPACKS_CREDENTIALS_PATH", str(DEFAULT_CREDENTIALS_PATH)))
+    if _load_credentials(path) is None:
+        return ""
+    creds = _credentials_with_fresh_token(path, os.environ.get("POWERPACKS_AUTH0_DOMAIN", ""),
+                                          os.environ.get("POWERPACKS_AUTH0_CLIENT_ID", ""))
+    return str(creds["access_token"])
+
+
 def _login_in_browser(authorize_url: str, timeout: int) -> None:
     from packs.ingestion.primitives.setup.automations.oauth_browser import (
         DEFAULT_BROWSER_PROFILE,

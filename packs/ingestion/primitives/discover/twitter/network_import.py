@@ -105,6 +105,7 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
     generate_person_id,
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
+from packs.powerset.primitives.auth import auth  # noqa: E402
 
 # Fixed per-stage output root (base/discover/twitter). The handle dir hangs off
 # this; a run overwrites in place, so reruns are idempotent by path. Module-level
@@ -896,9 +897,9 @@ def step_pre_resolve_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any
 def step_validate_linkedin(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
     """Validate pre-resolved LinkedIn URLs through Powerset -> linkedin_validated.csv
     (+ raw_linkedin_responses/). Spend-bearing when any row carries a URL to check."""
-    key = os.getenv("POWERSET_API_KEY", "").strip()
+    key = auth.gateway_token()
     if not key:
-        raise PipelineFailed("POWERSET_API_KEY is not set")
+        raise PipelineFailed("Not signed in to Powerset and POWERSET_API_KEY is not set")
     rows = CsvIO.read_dict_rows(out_dir / LINKEDIN_RESOLVED)
     raw_dir = out_dir / RAW_LINKEDIN_DIR
     raw_dir.mkdir(parents=True, exist_ok=True)

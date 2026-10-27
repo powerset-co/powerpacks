@@ -64,7 +64,6 @@ class InstallPipelineTests(unittest.TestCase):
             "archive_v1": lambda data_root: self.native("archive-v1"),
             "build_owner": lambda data_root, url, emails: self.native("owner", url=url, emails=emails),
             "realize": self.realize,
-            "resolve_operator_id": lambda flag: self.native("operator-id")["operator_id"],
             "validate_search_index": lambda *args, **kwargs: self.native("search-validate"),
         }
         for name, operation in functions.items():
@@ -96,7 +95,6 @@ class InstallPipelineTests(unittest.TestCase):
         self.validation_status = "ok"
         self.calls = []
         self.paid_commands = []
-        self.operator_id = "synthetic-operator"
         self.failing_command = ""
         self.exiting_command = ""
         self.fail_at = 0
@@ -136,10 +134,6 @@ class InstallPipelineTests(unittest.TestCase):
         elif command == "realize":
             self.write(self.people, self.csv)
             self.write(self.index / "people.csv", self.csv)
-        elif command == "operator-id":
-            if not self.operator_id:
-                raise SystemExit("deep-context: no operator id.")
-            payload = {"operator_id": self.operator_id}
         elif command == "import-linkedin":
             self.write(self.root / ".powerpacks/network-import/import/linkedin/people.csv", self.csv)
         elif command == "index":
@@ -164,8 +158,6 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(kwargs["cwd"], self.root)
         self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
         name = "import-linkedin" if "import-linkedin" in argv else "index"
-        if name == "index":
-            self.assertEqual(kwargs["env"]["POWERPACKS_OPERATOR_ID"], self.operator_id)
         payload = self.native(name, argv=argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps(payload))
 
@@ -448,13 +440,6 @@ class InstallPipelineTests(unittest.TestCase):
         self.paid_commands.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertEqual(self.paid_commands, ["index"])
-
-    def test_index_without_an_operator_id_stops_before_modal(self):
-        self.operator_id = ""
-        result = self.run_pipeline()
-        self.assertEqual((result["step"], result["status"]), ("index", "failed"))
-        self.assertIn("no operator id", result["action"]["details"]["error"])
-        self.assertFalse(self.indexed())
 
     def test_paid_outputs_completed_before_command_failure_are_reused_on_resume(self):
         matrix_root = self.root

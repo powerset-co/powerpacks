@@ -15,7 +15,8 @@ DIRECT_HOST = "professional-network-data.p.rapidapi.com"
 class LinkedInApiConfigTests(unittest.TestCase):
     def configurations(self):
         return (
-            ({"RAPIDAPI_LINKEDIN_KEY": "direct-key"}, None, DIRECT_HOST, "", {
+            # No gateway key and no Powerset login on this machine: the direct RapidAPI key.
+            ({"RAPIDAPI_LINKEDIN_KEY": "direct-key", "POWERPACKS_CREDENTIALS_PATH": "/nonexistent"}, None, DIRECT_HOST, "", {
                 "x-rapidapi-key": "direct-key", "x-rapidapi-host": DIRECT_HOST,
             }),
             ({"POWERSET_API_KEY": "gateway-key", "RAPIDAPI_LINKEDIN_KEY": "direct-key"}, None,
