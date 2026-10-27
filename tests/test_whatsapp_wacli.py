@@ -662,7 +662,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
     def test_pinned_release_points_at_powerset_fork(self) -> None:
         self.assertEqual(binary.WACLI_REPO, "powerset-co/wacli")
-        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.15.0-fullsync")
+        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.15.1-fullsync")
         self.assertIn("powerset-co/wacli/releases/download", binary.WACLI_RELEASE_BASE)
 
     def test_every_asset_of_the_pinned_version_has_a_sha256_pin(self) -> None:
