@@ -6,7 +6,7 @@
 //!   -> `python -m packs.shared.web.server serve`, as this app's child (an earlier page on the
 //!      port is stopped first); when it does not start, Codex looks into it (crash.rs) and it
 //!      gets one more try
-//!   -> setup not finished: start `bin/onboard` and show /onboarding; otherwise show the Agent.
+//!   -> setup not finished: start `bin/onboard` and show the onboarding step the run is on; otherwise show the Agent.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -37,7 +37,6 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
 const SERVER_TIMEOUT: Duration = Duration::from_secs(20);
 const KEPT_LINES: usize = 40;
 const HOME_PAGE: &str = "/agent";
-const SETUP_PAGE: &str = "/onboarding";
 
 #[derive(Clone, Copy, Serialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -194,7 +193,7 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         if setup == Setup::Done {
             HOME_PAGE
         } else {
-            SETUP_PAGE
+            onboard::resume_page(&root)
         },
     )
 }

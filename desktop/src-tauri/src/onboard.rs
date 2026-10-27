@@ -69,6 +69,29 @@ pub fn setup(root: &Path) -> Setup {
     }
 }
 
+/// The onboarding screen a launch with setup not done opens: a run that took a message source
+/// (Gmail, Messages or WhatsApp signed in) is the Import step; a run that started is Set up;
+/// nothing run yet is the first screen.
+pub fn resume_page(root: &Path) -> &'static str {
+    let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
+        return "/onboarding";
+    };
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let completed = |step: &str| {
+        manifest
+            .get("steps")
+            .and_then(|steps| steps.get(step))
+            .and_then(|entry| entry.get("status"))
+            .and_then(serde_json::Value::as_str)
+            == Some("completed")
+    };
+    if ["gmail_login", "imessage_access", "whatsapp_login"].iter().any(|step| completed(step)) {
+        "/onboarding/import"
+    } else {
+        "/onboarding/setup"
+    }
+}
+
 /// Skip setup on later launches, or stop skipping it.
 pub fn set_skipped(root: &Path, skip: bool) -> Result<(), String> {
     let marker = root.join(SKIP_MARKER);
@@ -228,6 +251,21 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launch_resumes_on_the_step_the_run_is_on() {
+        let root = std::env::temp_dir().join(format!("powerpacks-resume-page-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let root = root.as_path();
+        assert_eq!(resume_page(root), "/onboarding");
+        fs::create_dir_all(root.join(".powerpacks/install")).unwrap();
+        let write = |manifest: &str| fs::write(root.join(MANIFEST), manifest).unwrap();
+        write(r#"{"status":"running","step":"linkedin","steps":{"gmail_login":{"status":"skipped"}}}"#);
+        assert_eq!(resume_page(root), "/onboarding/setup");
+        write(r#"{"status":"running","step":"whatsapp_sync","steps":{"whatsapp_login":{"status":"completed"}}}"#);
+        assert_eq!(resume_page(root), "/onboarding/import");
+    }
 
     #[test]
     fn imported_data_is_a_finished_setup_without_any_record() {
