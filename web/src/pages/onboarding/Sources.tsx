@@ -19,7 +19,7 @@ import { STEPS } from "./steps"
 const NAMES = { gmail: "Gmail", whatsapp: "WhatsApp", linkedin: "LinkedIn" } as const
 
 /** Sources: the other sign-ins, each a row of the Connect list (Messages is the Full Disk Access
- *  switch, Gmail and WhatsApp their sign-ins). Done starts setup over every connected source (their
+ *  switch, Gmail and WhatsApp their sign-ins). Start starts setup over every connected source (their
  *  imports, then deep context once, then the index) and opens Set up on its progress; the app is one
  *  click from there. The right column shows what each source adds until a source's icon or Connect
  *  is clicked: then its guide, what the person is about to see, with their own name in it. */
@@ -57,7 +57,12 @@ export function Sources() {
         <>
           <Heading title="Add more sources" line="Each one adds people; nothing already done is redone." />
           {isDesktop() ? (
-            <Connect onDone={done} rows={["imessage", "gmail", "whatsapp"]} onGuide={setGuide} />
+            <Connect
+              onDone={done}
+              doneLabel="Start"
+              rows={["imessage", "gmail", "whatsapp"]}
+              onGuide={setGuide}
+            />
           ) : (
             <Note>The sign-ins run in the Powerpacks app; this browser view has no app to run them.</Note>
           )}
@@ -94,7 +99,7 @@ export function Sources() {
               "Gmail: everyone you email. Sign in once; the first sync takes minutes to an hour, by mailbox size.",
               "WhatsApp: scan a code with your phone. The first sync takes 30 minutes to a few hours.",
             ]}
-            note="Done starts them together, then learns who everyone is. It runs in the background; you can use Powerpacks meanwhile."
+            note="Start runs them together, then learns who everyone is. It runs in the background; you can use Powerpacks meanwhile."
           />
         )
       }

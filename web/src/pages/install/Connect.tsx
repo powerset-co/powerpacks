@@ -178,19 +178,22 @@ function Mailboxes({
 /** The desktop app's setup before it starts: every sign-in, one row each, so setup itself never
  *  waits on the user. Only Powerset is needed; a source left unconnected is left out of setup.
  *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app.
- *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back. */
+ *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back; the
+ *  onboarding's Sources starts setup from the same button, so it names it Start (`doneLabel`). */
 export type ConnectRow = "powerset" | "codex" | "imessage" | "linkedin" | "gmail" | "whatsapp"
 const ALL_ROWS: readonly ConnectRow[] = ["powerset", "codex", "imessage", "linkedin", "gmail", "whatsapp"]
 
 export function Connect({
   onBack,
   onDone,
+  doneLabel = "Done",
   details,
   rows = ALL_ROWS,
   onGuide,
 }: {
   onBack?: () => void
   onDone?: () => void
+  doneLabel?: string
   details?: Record<AccountSource, ReactNode>
   /** Which rows to show, in this order's subset; the onboarding's Sources shows the message sources alone. */
   rows?: readonly ConnectRow[]
@@ -472,7 +475,7 @@ export function Connect({
       {onDone ? (
         <div className="flex justify-end">
           <Button variant="primary" disabled={busy} onClick={onDone}>
-            Done
+            {doneLabel}
           </Button>
         </div>
       ) : onBack ? (
