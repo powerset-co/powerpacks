@@ -96,9 +96,10 @@ async function settle(page, label = "settle", ms = 5000) {
 async function snapshot(page) {
   const target = process.env.POWERPACKS_PAGE_SHOT;
   if (!target) return;
-  const tmp = `${target}.tmp`;
+  // Playwright reads the image type off the file name, so the temp file keeps the .png ending.
+  const tmp = target.replace(/\.png$/, ".tmp.png");
   try {
-    await page.screenshot({ path: tmp });
+    await page.screenshot({ path: tmp, type: "png" });
     fs.renameSync(tmp, target);
   } catch (error) {
     log(`picture not taken: ${error.message}`);
