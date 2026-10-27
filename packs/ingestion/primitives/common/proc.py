@@ -28,6 +28,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -48,11 +49,13 @@ def emit_progress(message: str, prefix: str = DEFAULT_PROGRESS_PREFIX) -> None:
     print(f"{prefix} {message}", file=sys.stderr, flush=True)
 
 
-def run_cmd(cmd: list[str], *, timeout: int | None = None, prefix: str = DEFAULT_PROGRESS_PREFIX) -> tuple[int, dict[str, Any], str]:
+def run_cmd(cmd: list[str], *, timeout: int | None = None, prefix: str = DEFAULT_PROGRESS_PREFIX,
+            on_stderr: Callable[[str], None] | None = None) -> tuple[int, dict[str, Any], str]:
     """Run a child command, returning `(exit_code, last_json_dict, stderr_text)`.
 
-    stderr is streamed through live for progress; stdout is captured and its
-    last top-level JSON object is returned. On timeout the child is killed and a
+    stderr is streamed through live for progress (and to `on_stderr`, line by line, for a
+    caller that reads counts out of it); stdout is captured and its last top-level JSON
+    object is returned. On timeout the child is killed and a
     timeout note is appended to stderr and emitted as progress under `prefix`.
     """
     effective_timeout = DEFAULT_CHILD_TIMEOUT_SECONDS if timeout is None else timeout
@@ -84,6 +87,8 @@ def run_cmd(cmd: list[str], *, timeout: int | None = None, prefix: str = DEFAULT
             stderr_chunks.append(line)
             sys.stderr.write(line)
             sys.stderr.flush()
+            if on_stderr is not None:
+                on_stderr(line)
 
     threads = [
         threading.Thread(target=read_stdout, daemon=True),

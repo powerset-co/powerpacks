@@ -97,6 +97,19 @@ _SOURCE_STEPS = {source: _LOGIN_STEPS[source] + _SYNC_STEPS[source] for source i
 _SUCCESS = {"ok", "completed", "linked", "skipped"}
 _WAITING = {"needs_user_action", "blocked_user_action", "needs_approval"}
 _DEFAULT_SOURCES = (Source.LINKEDIN, Source.GMAIL, Source.IMESSAGE, Source.WHATSAPP)
+
+
+class GmailCount:
+    """The Gmail sync's count over every mailbox: each mailbox reports its own read and total
+    as it syncs, one after another; the page gets the sums, so the count never starts over."""
+
+    def __init__(self) -> None:
+        self.mailboxes: dict[str, tuple[int, int]] = {}
+
+    def add(self, email: str, read: int, total: int) -> dict[str, int]:
+        self.mailboxes[email] = (read, total)
+        return {"read": sum(read for read, _ in self.mailboxes.values()),
+                "total": sum(total for _, total in self.mailboxes.values())}
 _PERMISSION_POLL_SECONDS = 2
 DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
@@ -266,7 +279,11 @@ class SourceOnboarding:
             self._write("gmail.import.current")
             return True
         self._write("gmail.syncing")
-        result = GmailDiscovery(account_emails=list(self.gmail_emails), sync_after=self.sync_after).run()
+        count = GmailCount()
+        result = GmailDiscovery(
+            account_emails=list(self.gmail_emails), sync_after=self.sync_after,
+            on_progress=lambda email, read, total: self._write("gmail.syncing.count", **count.add(email, read, total),
+                                                               details=count.add(email, read, total))).run()
         if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):
             return False
         self._write("gmail.importing")

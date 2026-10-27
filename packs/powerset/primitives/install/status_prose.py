@@ -219,6 +219,7 @@ PROSE: dict[str, Prose] = {
     "gmail.sync.current": Prose(InstallStep.GMAIL_SYNC, C, "Gmail is already imported"),
     "gmail.import.current": Prose(InstallStep.GMAIL_IMPORT, C, "Gmail contacts ready"),
     "gmail.syncing": Prose(InstallStep.GMAIL_SYNC, R, "Syncing Gmail"),
+    "gmail.syncing.count": Prose(InstallStep.GMAIL_SYNC, R, "Syncing Gmail: {read:,} of {total:,} messages"),
     "gmail.synced": Prose(InstallStep.GMAIL_SYNC, C, "Gmail is synced"),
     "gmail.sync.waiting": Prose(InstallStep.GMAIL_SYNC, W, "Gmail needs you before it can sync. I'll explain in chat."),
     "gmail.sync.failed": Prose(InstallStep.GMAIL_SYNC, F, "Gmail could not sync. I'm checking what happened."),

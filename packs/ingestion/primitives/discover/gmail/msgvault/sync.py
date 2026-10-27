@@ -34,6 +34,10 @@ import shlex
 import shutil
 import sqlite3
 import subprocess
+from collections.abc import Callable
+from contextlib import closing
+import threading
+import re
 import urllib.parse
 import sys
 
@@ -211,6 +215,59 @@ def msgvault_reauthorize_command(email: str) -> str:
     )
 
 
+_TOTAL_LINE = re.compile(r'msg="syncing account".*\bmessages=(\d+)')
+
+
+class _SyncWatcher:
+    """How far msgvault's sync has got, for a count on the page: the total is the `messages=`
+    on its "syncing account" log line; the messages done so far is the run row it keeps in
+    its own database (sync_runs.messages_processed), read every few seconds."""
+
+    def __init__(self, db: str, email: str, on_progress: Callable[[int, int], None]) -> None:
+        self.db = db
+        self.email = email
+        self.on_progress = on_progress
+        self.total = 0
+        self.done = -1
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+
+    def on_line(self, line: str) -> None:
+        match = _TOTAL_LINE.search(line)
+        if match:
+            self.total = int(match.group(1))
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+    def _poll(self) -> None:
+        while not self._stop.wait(_PROGRESS_SECONDS):
+            if not self.total:
+                continue
+            done = self._processed()
+            if done is None or done == self.done:
+                continue
+            self.done = done
+            self.on_progress(min(done, self.total), self.total)
+
+    def _processed(self) -> int | None:
+        try:
+            with closing(sqlite3.connect(f"file:{Path(self.db).expanduser()}?mode=ro", uri=True, timeout=1)) as con:
+                row = con.execute(
+                    "SELECT r.messages_processed FROM sync_runs r JOIN sources s ON s.id = r.source_id "
+                    "WHERE s.identifier = ? ORDER BY r.id DESC LIMIT 1", (self.email,)).fetchone()
+        except sqlite3.Error:
+            return None
+        return int(row[0]) if row and row[0] is not None else None
+
+
+_PROGRESS_SECONDS = 5
+
+
 def sync_msgvault_account(
     email: str,
     db: str,
@@ -221,6 +278,7 @@ def sync_msgvault_account(
     fresh: bool = False,
     limit: int = 0,
     no_attachments: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     # An explicit window (from the onboarding date picker) overrides the
     # resume-inferred --after. With a window we also pass --noresume so the
@@ -263,7 +321,14 @@ def sync_msgvault_account(
         cmd.append("--no-attachments")
     window_label = f" after {sync_after}" if sync_after else ""
     emit_progress(f"Starting Gmail sync for {email}{window_label}.")
-    code, payload, stderr = run_cmd(cmd)
+    watcher = _SyncWatcher(db, email, on_progress) if on_progress else None
+    if watcher:
+        watcher.start()
+    try:
+        code, payload, stderr = run_cmd(cmd, on_stderr=watcher.on_line if watcher else None)
+    finally:
+        if watcher:
+            watcher.stop()
     sync_output = MsgvaultSyncPayload.from_payload(payload)
     error: Any = (stderr or payload) if code != 0 else ""
     result = {
