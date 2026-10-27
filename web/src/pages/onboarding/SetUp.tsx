@@ -323,7 +323,11 @@ export function SetUp() {
         // The right column fills in as the stages finish: the page picture while the connections
         // are read, then the first look the moment people are in.
         known > 0 || ready ? (
-          <FirstLookPanel look={look.data ?? { people: [], total: 0, questions: [] }} ready={ready} />
+          <FirstLookPanel
+            look={look.data ?? { people: [], total: 0, questions: [] }}
+            ready={ready}
+            sourcesNext={step === "setup"}
+          />
         ) : data && (count !== null || processing || data.step === "linkedin") ? (
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>
