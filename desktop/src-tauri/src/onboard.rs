@@ -140,6 +140,10 @@ fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> 
 pub struct Answer {
     /// The user's own LinkedIn profile, when setup cannot tell whose network it is.
     pub linkedin_url: Option<String>,
+    /// The run's sources, when the screen decides them: the onboarding's LinkedIn step runs
+    /// LinkedIn alone whatever else is signed in; its Sources step runs every source. Left out,
+    /// setup keeps the saved choice.
+    pub sources: Option<Vec<String>>,
 }
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
@@ -190,6 +194,9 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
         }
         // Setup's owner step looks the profile up once its credentials are in (pipeline.py).
         onboard.args(["--linkedin-url", url.trim()]);
+    }
+    for source in answer.sources.unwrap_or_default() {
+        onboard.args(["--source", &source]);
     }
 
     let log = root.join(LOG);
@@ -247,6 +254,7 @@ mod tests {
         fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
         let answer = |url: &str| Answer {
             linkedin_url: Some(url.into()),
+            sources: None,
         };
         assert!(start(&root, answer("https://example.com/jordan")).is_err());
         assert!(!root.join("setup-args").exists());

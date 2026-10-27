@@ -66,7 +66,7 @@ export function LinkedIn() {
   const start = () => {
     setError(null)
     setStarting(true)
-    continueSetup({})
+    continueSetup({ sources: ["linkedin"] })
       .then(() => next && void navigate(next.href, { state: { startedAt: Date.now() } }))
       .catch((caught: unknown) => {
         setError(errorText(caught))

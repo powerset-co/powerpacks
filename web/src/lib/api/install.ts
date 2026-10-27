@@ -90,6 +90,8 @@ export function forgetLinkedin(): Promise<void> {
 /** What the user answered to get setup past a wait (desktop/src-tauri/src/onboard.rs Answer). */
 export interface SetupAnswer {
   linkedinUrl?: string
+  /** The run's sources: LinkedIn alone from the LinkedIn step, every source from Sources. */
+  sources?: string[]
 }
 
 /** Resumes setup in the desktop app, which runs it instead of an agent. */
