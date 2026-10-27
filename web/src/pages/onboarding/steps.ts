@@ -1,7 +1,8 @@
-// The onboarding's steps, in order: the window's top bar shows them, each screen is one. The first
+// The onboarding's steps, in order: the window's top bar shows them, each screen is one. ChatGPT is
+// the Codex sign-in the chat runs on. The first
 // look is the Set up screen's right column once people are in, not a step of its own.
 
-export type StepKey = "signup" | "linkedin" | "setup" | "sources"
+export type StepKey = "signup" | "codex" | "linkedin" | "setup" | "sources"
 
 export interface Step {
   key: StepKey
@@ -13,6 +14,7 @@ const SIGNUP: Step = { key: "signup", label: "Sign up", href: "/onboarding/signu
 
 export const STEPS: readonly Step[] = [
   SIGNUP,
+  { key: "codex", label: "ChatGPT", href: "/onboarding/codex" },
   { key: "linkedin", label: "LinkedIn", href: "/onboarding/linkedin" },
   { key: "setup", label: "Set up", href: "/onboarding/setup" },
   { key: "sources", label: "Sources", href: "/onboarding/sources" },

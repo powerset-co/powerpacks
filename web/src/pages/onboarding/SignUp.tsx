@@ -90,6 +90,7 @@ export function SignUp() {
         <Info
           title="What happens next"
           lines={[
+            "Sign in to ChatGPT, which the chat runs on",
             "Connect LinkedIn",
             "A first look at people you know, in minutes",
             "Ask anything about your network",
