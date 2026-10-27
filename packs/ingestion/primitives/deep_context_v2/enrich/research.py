@@ -29,6 +29,7 @@ from packs.ingestion.primitives.deep_context_v2.db.schema import ResearchStatus
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, load_families
 from packs.ingestion.primitives.deep_context_v2.enrich.pre_match import PreMatch, enters, pre_match_families
+from packs.powerset.primitives.auth import auth
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
