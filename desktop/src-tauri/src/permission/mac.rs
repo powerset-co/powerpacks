@@ -155,7 +155,7 @@ fn panel_origin(settings: NSRect, visible: NSRect) -> NSPoint {
 }
 
 pub unsafe fn follow_settings(window: *mut NSWindow) {
-    use objc2_app_kit::NSScreen;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreen};
     use objc2_foundation::NSIntersectsRect;
 
     let window = &*window;
@@ -186,6 +186,16 @@ pub unsafe fn follow_settings(window: *mut NSWindow) {
     }
     if !window.isVisible() {
         window.orderFrontRegardless();
+        // The first time the helper shows, System Settings comes to the front: Powerpacks' own window
+        // would otherwise sit over the list the person is about to drag into. macOS 14 lets an app
+        // hand its activation to another; the activate call is for the versions before it.
+        let settings = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str("com.apple.systempreferences"),
+        );
+        if let Some(settings) = settings.firstObject() {
+            NSApplication::sharedApplication(main).yieldActivationToApplication(&settings);
+            settings.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+        }
     }
 }
 
