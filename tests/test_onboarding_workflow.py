@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import ANY
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -364,7 +365,7 @@ class SourceOnboardingTests(unittest.TestCase):
                  patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
                 SourceOnboarding(self.root, sources=('gmail',),
                                  gmail_emails=('casey@example.com',), sync_after=requested).run()
-            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after=requested)
+            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after=requested, on_progress=ANY)
 
     def test_gmail_unknown_or_filtered_history_is_not_proof_of_coverage(self):
         current = import_common.ImportManifest.from_payload('gmail', {
@@ -588,7 +589,7 @@ class SourceOnboardingTests(unittest.TestCase):
             for call in check.call_args_list:
                 self.assertEqual(call.args[1], ['casey@example.com', 'other@example.com'])
             init.assert_called_once_with(account_emails=['casey@example.com', 'other@example.com'],
-                                         sync_after='2023-01-01')
+                                         sync_after='2023-01-01', on_progress=ANY)
             sync.assert_called_once()
             self.assertEqual(result['step'], 'deep_context')
             self.assertEqual(result['steps']['gmail_import']['status'], 'completed')
@@ -687,7 +688,7 @@ class SourceOnboardingTests(unittest.TestCase):
                 result = SourceOnboarding(self.root, sources=('gmail',),
                                           gmail_emails=('casey@example.com',), sync_after='2023-01-01',
                                           refresh=refresh).run()
-            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after='2023-01-01')
+            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after='2023-01-01', on_progress=ANY)
             self.assertEqual(result['step'], 'deep_context')
         self.assert_preserved()
 

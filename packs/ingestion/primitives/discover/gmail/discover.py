@@ -137,6 +137,7 @@ Changelog:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import argparse
@@ -252,8 +253,10 @@ class GmailAccountChannel(Node):
         fresh: bool = False,
         limit: int = 0,
         no_attachments: bool = False,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         self.account_email = account_email
+        self.on_progress = on_progress
         self.output_base = output_base
         self.discover_dir = gmail_discover_dir(output_base, account_email)
         self.queue_csv = self.discover_dir / "linkedin_resolution_queue.csv"
@@ -298,6 +301,7 @@ class GmailAccountChannel(Node):
             self.sync_query,
             sync_after_override=self.sync_after,
             sync_before=self.sync_before,
+            on_progress=self.on_progress,
             fresh=self.fresh,
             limit=self.limit,
             no_attachments=self.no_attachments,
@@ -413,6 +417,7 @@ class GmailDiscovery(Node):
         fresh: bool = False,
         limit: int = 0,
         no_attachments: bool = False,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
         # ONE resolution point for configuration (see resolve_discovery_inputs):
         # explicit overrides > discovery.config defaults. account_emails IS the
@@ -444,6 +449,7 @@ class GmailDiscovery(Node):
                 fresh=fresh,
                 limit=limit,
                 no_attachments=no_attachments,
+                on_progress=on_progress,
             )
             for email in self.config.account_emails
         ]

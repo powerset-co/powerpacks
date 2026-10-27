@@ -266,7 +266,10 @@ class SourceOnboarding:
             self._write("gmail.import.current")
             return True
         self._write("gmail.syncing")
-        result = GmailDiscovery(account_emails=list(self.gmail_emails), sync_after=self.sync_after).run()
+        result = GmailDiscovery(
+            account_emails=list(self.gmail_emails), sync_after=self.sync_after,
+            on_progress=lambda read, total: self._write("gmail.syncing.count", read=read, total=total,
+                                                        details={"read": read, "total": total})).run()
         if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):
             return False
         self._write("gmail.importing")

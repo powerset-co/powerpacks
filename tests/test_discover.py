@@ -121,7 +121,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             con.close()
             calls: list[list[str]] = []
 
-            def fake_run_cmd(cmd, timeout=None):
+            def fake_run_cmd(cmd, timeout=None, **_kwargs):
                 calls.append(cmd)
                 return 0, {"status": "completed", "messages_added": 0}, ""
 
@@ -143,7 +143,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
                 "in a non-interactive session"
             )
 
-            def fake_run_cmd(cmd, timeout=None):
+            def fake_run_cmd(cmd, timeout=None, **_kwargs):
                 calls.append(cmd)
                 return 1, {}, expired_error
 
