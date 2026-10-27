@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,7 +166,7 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
     for subject in todo:
         by_handle[subject.handle] = subject
     load_env()
-    client = Parallel(api_key=os.environ["POWERSET_API_KEY"], base_url=PARALLEL_BASE_URL,
+    client = Parallel(api_key=auth.gateway_token(), base_url=PARALLEL_BASE_URL,
                       default_headers={"parallel-beta": PARALLEL_BETA_HEADER}, max_retries=0)
     # Submit every run, then read the event stream until the group is done.
     group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)
