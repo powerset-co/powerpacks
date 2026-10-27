@@ -315,7 +315,9 @@ class ForgetLinkedInTests(unittest.TestCase):
                          "('3', 'c', 'Cy', 'VP', 'Acme', '', '', 'Paris')")
             conn.execute("insert into local_people_positions values "
                          "('1', 'Acme', 'CTO', true), ('1', 'Old', 'Engineer', false), "
-                         "('2', 'Beta', 'Founder', true), ('3', 'Acme', 'VP', true)")
+                         "('2', 'Beta', 'Founder', true), ('3', 'Acme', 'VP', true), "
+                         "('1', 'Side project', 'Founder', true), ('2', 'Acme', 'Advisor', true), "
+                         "('3', 'Past venture', 'Founder', false)")
         questions = install.questions()
         self.assertEqual([(q["key"], q["text"], q["count"]) for q in questions],
                          [("company", "Who do I know at Acme?", 2), ("city", "Who do I know in Berlin?", 2)])
@@ -325,6 +327,10 @@ class ForgetLinkedInTests(unittest.TestCase):
         self.assertEqual([(p["name"], p["title"], p["avatar_url"]) for p in answer["people"]],
                          [("Ann", "CTO", "http://p/a"), ("Cy", "VP", "")])
         self.assertEqual([p["name"] for p in install.ask("city", limit=1)["people"]], ["Ann"])
+        # Secondary current roles and former founder roles must not contradict the displayed title/company.
+        founders = install.ask("founders")
+        self.assertEqual(founders["total"], 1)
+        self.assertEqual([(p["name"], p["title"]) for p in founders["people"]], [("Bob", "Founder")])
         self.assertEqual(install.first_look()["questions"], questions)
 
     def test_nothing_to_move_is_fine(self) -> None:
