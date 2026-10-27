@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.42.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.2...powerpacks-v3.42.0) (2026-10-27)
+
+
+### Features
+
+* **index:** gzip API uploads and downloads ([#947](https://github.com/powerset-co/powerpacks/issues/947)) ([e10491d](https://github.com/powerset-co/powerpacks/commit/e10491d08a740621f15827c8db95c98030301dc3))
+
+
+### Bug Fixes
+
+* **web:** pin Node 22 and use jsdom's localStorage in tests ([#944](https://github.com/powerset-co/powerpacks/issues/944)) ([6ee6bd8](https://github.com/powerset-co/powerpacks/commit/6ee6bd886cc46bb3597468d25a4b5b54432068ac))
+
 ## [3.41.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.1...powerpacks-v3.41.2) (2026-10-27)
 
 
