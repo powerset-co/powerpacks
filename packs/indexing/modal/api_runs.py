@@ -1,13 +1,17 @@
 """The index runs through the Powerset API (network-search-api, /v2/powerpacks/modal): upload an
 input file, start a run, read its status, download an output. The laptop signs in with its Powerset
 credentials and holds no Modal token for these; the API derives the operator from the account.
+Transfers use gzip level 6; deploy the API gzip routes before releasing this client.
 
 Created: 2026-10-26
 """
 from __future__ import annotations
 
+import gzip
 import json
 import os
+import shutil
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -49,10 +53,14 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 60) -
 
 def upload(path: Path, name: str) -> str:
     """Puts one input file where the API can reach it; returns the object name to start a run with."""
-    session = _call("POST", "/uploads", {"name": name})
-    with path.open("rb") as handle:
+    with tempfile.TemporaryFile() as handle:
+        with path.open("rb") as source, gzip.GzipFile(fileobj=handle, mode="wb", compresslevel=6, mtime=0) as compressed:
+            shutil.copyfileobj(source, compressed, length=1 << 20)
+        size = handle.tell()
+        handle.seek(0)
+        session = _call("POST", "/uploads", {"name": name + ".gz"})
         request = urllib.request.Request(session["upload_url"], data=handle, method="PUT", headers={
-            "Content-Type": "application/octet-stream", "Content-Length": str(path.stat().st_size)})
+            "Content-Type": "application/octet-stream", "Content-Length": str(size)})
         with urllib.request.urlopen(request, timeout=3600):
             pass
     return str(session["object"])
@@ -71,7 +79,7 @@ def status(label: str) -> dict | None:
 def download(label: str, name: str, target: Path) -> int:
     """Streams one output file to `target` (the previous copy renamed .bkup); bytes written, -1 if
     the API has no such file."""
-    request = urllib.request.Request(f"{_base()}/runs/{label}/files/{name}",
+    request = urllib.request.Request(f"{_base()}/runs/{label}/files/{name}.gz",
                                      headers={"Authorization": f"Bearer {_token()}"})
     try:
         response = urllib.request.urlopen(request, timeout=3600)
@@ -80,15 +88,15 @@ def download(label: str, name: str, target: Path) -> int:
             return -1
         raise RunError(f"GET {label}/files/{name}: HTTP {exc.code}") from exc
     target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    written = 0
+    with response, gzip.GzipFile(fileobj=response, mode="rb") as source, tmp.open("wb") as handle:
+        for chunk in iter(lambda: source.read(1 << 20), b""):
+            handle.write(chunk)
+            written += len(chunk)
     if target.exists():
         backup = target.with_name(target.name + ".bkup")
         target.replace(backup)
         print(f"existing {target.name} renamed to {backup.name}")
-    tmp = target.with_name(target.name + ".tmp")
-    written = 0
-    with response, tmp.open("wb") as handle:
-        for chunk in iter(lambda: response.read(1 << 20), b""):
-            handle.write(chunk)
-            written += len(chunk)
     tmp.replace(target)
     return written
