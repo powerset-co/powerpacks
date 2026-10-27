@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.43.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.0...powerpacks-v3.43.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **whatsapp:** wacli v0.15.1-fullsync, built with FTS5 ([#955](https://github.com/powerset-co/powerpacks/issues/955)) ([f997e06](https://github.com/powerset-co/powerpacks/commit/f997e068d198c73bbfed9ce4fc29b33f53565b1a))
+
 ## [3.43.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.42.0...powerpacks-v3.43.0) (2026-10-27)
 
 
