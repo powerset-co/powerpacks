@@ -206,6 +206,10 @@ class ForgetLinkedInTests(unittest.TestCase):
         self.assertIsNone(install.linkedin_page_image())
         (self.root / controller.PAGE_SHOT).write_bytes(b"PNG")
         self.assertEqual(install.linkedin_page_image(), b"PNG")
+        self.assertIsNone(install.gmail_page_image())
+        (self.root / controller.GMAIL_PAGE_SHOT).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / controller.GMAIL_PAGE_SHOT).write_bytes(b"CLOUD")
+        self.assertEqual(install.gmail_page_image(), b"CLOUD")
         with patch.object(controller, "BROWSER_PROFILE", self.profile):
             payload = install.forget_linkedin()
         self.assertEqual(len(payload["moved"]), 4)

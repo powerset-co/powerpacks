@@ -88,6 +88,21 @@ async function settle(page, label = "settle", ms = 5000) {
   const start = Date.now();
   await page.waitForLoadState("networkidle", { timeout: ms }).catch(() => {});
   log(`${label}: waited ${Date.now() - start}ms (cap ${ms}ms)`);
+  await snapshot(page);
+}
+
+// A picture of the page as it stands, for the person watching from Powerpacks (the Sources
+// screen shows it while this runs). Written whole: a temp file renamed over the last one.
+async function snapshot(page) {
+  const target = process.env.POWERPACKS_PAGE_SHOT;
+  if (!target) return;
+  const tmp = `${target}.tmp`;
+  try {
+    await page.screenshot({ path: tmp });
+    fs.renameSync(tmp, target);
+  } catch (error) {
+    log(`picture not taken: ${error.message}`);
+  }
 }
 
 function regexEscape(value) {
@@ -391,6 +406,7 @@ async function gotoPage(page, url, label, timeout = 30000) {
     log(`open ${label} did not finish cleanly: ${error.message}`);
   }
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+  await snapshot(page);
 }
 
 async function fillFirstVisibleInput(page, value, timeout = 2500) {

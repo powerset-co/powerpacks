@@ -40,6 +40,8 @@ PERMISSION_URL = "x-apple.systempreferences:com.apple.preference.security?Privac
 # The enriched LinkedIn import (the Modal import-linkedin step's output) and the index's own people
 # file when deep context ran (families plus the connections no family holds); the first look reads them.
 LINKEDIN_PEOPLE = ".powerpacks/network-import/import/linkedin/people.csv"
+# The picture the Gmail app setup takes of Google Cloud as it works (google_oauth_browser.js snapshot).
+GMAIL_PAGE_SHOT = ".powerpacks/install/gmail-page.png"
 INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
 # The search index itself; the first look's questions are minted from it and answered by it.
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
@@ -156,6 +158,11 @@ class InstallController:
     def linkedin_page_image(self) -> bytes | None:
         """The picture of the connections page the last read took, or None before one."""
         path = self.root / PAGE_SHOT
+        return path.read_bytes() if path.is_file() else None
+
+    def gmail_page_image(self) -> bytes | None:
+        """The latest picture the Gmail app setup took of Google Cloud, or None before one."""
+        path = self.root / GMAIL_PAGE_SHOT
         return path.read_bytes() if path.is_file() else None
 
     def forget_linkedin(self) -> dict:

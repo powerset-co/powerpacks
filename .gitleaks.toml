@@ -68,3 +68,11 @@ paths = [
 regexes = [
   '''message-linkedin:0123456789abcdef''',
 ]
+
+[[allowlists]]
+description = "Synthetic OpenAI key typed into the Settings key dialog test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+paths = ['''web/src/pages/settings/ProviderKeys\.test\.tsx''']
+regexes = ['''sk-synthetic-9876''']
