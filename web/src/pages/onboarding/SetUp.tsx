@@ -72,6 +72,13 @@ function counts(data: InstallStatus | undefined): { read: number; total: number 
   return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
+/** The running step's line under its bar: the record's own sentence ("Enriching your contacts: 6 of
+ *  16 researched"), with the count added when the sentence does not carry it. */
+function liveLine(data: InstallStatus, count: { read: number; total: number }): string {
+  const pair = `${count.read.toLocaleString()} of ${count.total.toLocaleString()}`
+  return data.message.includes(pair) ? data.message : `${data.message}: ${pair}`
+}
+
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"
 
 /** Whether a stage has anything in the record: its step is running or has run. A source left
@@ -248,9 +255,7 @@ export function SetUp() {
                           <>
                             <ProgressBar label={stage.label} done={count.read} total={count.total} />
                             <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>
-                                {count.read.toLocaleString()} of {count.total.toLocaleString()}
-                              </span>
+                              <span>{liveLine(data, count)}</span>
                               <span>{left !== null ? leftText(left) : ""}</span>
                             </div>
                           </>
@@ -301,12 +306,15 @@ export function SetUp() {
             </Note>
           )}
           {error ? <Note bad>{error}</Note> : null}
-          {long && processing ? (
+          {(step === "import" || long) && processing ? (
             <div className="mt-2 flex flex-col gap-2">
               <Button variant="primary" className="self-start" onClick={() => void navigate(HOME.href)}>
                 Start using Powerpacks now
               </Button>
-              <Note>This keeps building in the background; Setup in the side nav shows where it is.</Note>
+              <Note>
+                The import keeps running in the background; Setup in the side nav shows where it is.
+                {left !== null ? ` This stage: ${leftText(left)}.` : ""}
+              </Note>
             </div>
           ) : null}
         </>
