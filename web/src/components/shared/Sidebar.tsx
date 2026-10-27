@@ -10,7 +10,6 @@ import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
 import { Chats } from "@/pages/agent/Chats"
 
 import {
@@ -150,14 +149,6 @@ function Item({ page, rail }: { page: Page; rail: boolean }) {
     >
       <Icon className="size-[18px] shrink-0" />
       {!rail && <span className="truncate">{page.label}</span>}
-      {!rail && page.key === "memory" ? (
-        <>
-          {" "}
-          <Badge variant="muted" className="h-4 px-1.5 text-[11px] font-semibold">
-            beta
-          </Badge>
-        </>
-      ) : null}
     </NavLink>
   )
 }

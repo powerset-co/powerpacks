@@ -17,8 +17,7 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
-  // Beta: Sidebar badges it.
-  { key: "memory", label: "Memory", href: "/memory" },
+  // Memory (/memory) is reachable but not listed: it is not ready for the nav.
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.
