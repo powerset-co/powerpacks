@@ -50,10 +50,11 @@ class SearchScopeTests(unittest.TestCase):
     def env(self) -> str:
         return (self.root / ".env").read_text()
 
-    def test_with_no_pick_searches_default_to_the_largest_set(self) -> None:
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "t-1"}))
+    def test_with_no_pick_searches_default_to_the_local_index(self) -> None:
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "local"}))
         self.fetch_member_sets.assert_called_with("auth0|me", "postgresql://db")
-        self.assertIn("POWERPACKS_DEFAULT_SET_ID=t-1", self.env())
+        self.assertIn("POWERPACKS_LOCAL_SEARCH_DB=", self.env())
+        self.assertNotIn("POWERPACKS_DEFAULT_SET_ID", self.env())
         (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=p-1\n")
         self.assertEqual(self.request()[1]["selected"], "p-1")
 
@@ -70,14 +71,14 @@ class SearchScopeTests(unittest.TestCase):
         self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", self.env())
         self.assertIn("DATABASE_URL=postgresql://db", self.env())
 
-    def test_a_set_in_env_that_is_not_yours_gives_way_to_your_largest(self) -> None:
+    def test_a_set_in_env_that_is_not_yours_gives_way_to_the_local_index(self) -> None:
         (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=elsewhere\n")
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "t-1"}))
-        self.assertIn("POWERPACKS_DEFAULT_SET_ID=t-1", self.env())
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "local"}))
+        self.assertIn("POWERPACKS_LOCAL_SEARCH_DB=", self.env())
 
     def test_signed_out_has_no_sets(self) -> None:
         self.credentials_subject.return_value = None
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local": False, "selected": ""}))
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local": False, "selected": "local"}))
         self.fetch_member_sets.assert_not_called()
 
     def test_postgres_failure_and_bad_requests_answer_with_an_error(self) -> None:
