@@ -1,12 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
-import { HOME } from "@/lib/nav"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
@@ -62,22 +61,14 @@ interface Progress {
 }
 
 /** The running step's count, from the event's details (workflow.py linkedin.reading.count writes
- *  read/total; pipeline.py's stage counters write done/total), or the index's share done out of
- *  100 (Modal's progress): either way, a pace for the time left. */
-function counts(data: InstallStatus | undefined): { read: number; total: number; percent: boolean } | null {
-  if (data?.step === "index") {
-    const progress = data.index_progress?.progress
-    return typeof progress === "number"
-      ? { read: Math.round(progress * 100), total: 100, percent: true }
-      : null
-  }
+ *  read/total; pipeline.py's stage counters write done/total): a pace for the time left. The index
+ *  has no count (Modal reports phases, not work done), so it shows its phase alone. */
+function counts(data: InstallStatus | undefined): { read: number; total: number } | null {
   const details = data?.action?.details
   if (!isRecord(details)) return null
   const read = details.read ?? details.done
   const { total } = details
-  return typeof read === "number" && typeof total === "number" && total > 0
-    ? { read, total, percent: false }
-    : null
+  return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"
@@ -116,7 +107,6 @@ function finishedLine(data: InstallStatus, stage: Stage): string {
  *  first look opens once people are in. */
 export function SetUp() {
   const client = useQueryClient()
-  const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
   const [retrying, setRetrying] = useState(false)
@@ -182,7 +172,7 @@ export function SetUp() {
   // selection starts them over: the list shows once the run is on a stage.
   const underway =
     data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
-  // The long run: a message source is in, so deep context reads it; the app is one click away meanwhile.
+  // The long run: a message source is in, so deep context reads it.
   const long = data !== undefined && STAGES.some((stage) => stage.source && present(data, stage))
   // With LinkedIn alone there is nothing to learn from messages: those stages are not listed.
   const stages =
@@ -251,9 +241,7 @@ export function SetUp() {
                             <ProgressBar label={stage.label} done={count.read} total={count.total} />
                             <div className="flex justify-between text-xs text-muted-foreground">
                               <span>
-                                {count.percent
-                                  ? `${count.read}% · ${indexProgress?.message ?? ""}`
-                                  : `${count.read.toLocaleString()} of ${count.total.toLocaleString()}`}
+                                {count.read.toLocaleString()} of {count.total.toLocaleString()}
                               </span>
                               <span>{left !== null ? leftText(left) : ""}</span>
                             </div>
@@ -305,18 +293,6 @@ export function SetUp() {
             </Note>
           )}
           {error ? <Note bad>{error}</Note> : null}
-          {long && (processing || ready) ? (
-            <div className="mt-2 flex flex-col gap-2">
-              <Button variant="primary" className="self-start" onClick={() => void navigate(HOME.href)}>
-                Open Powerpacks
-              </Button>
-              {ready ? null : (
-                <Note>
-                  This keeps going while you use Powerpacks; Setup in the sidebar shows where it is.
-                </Note>
-              )}
-            </div>
-          ) : null}
         </>
       }
       right={
