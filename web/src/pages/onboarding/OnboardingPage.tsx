@@ -14,10 +14,11 @@ const SCREENS: Record<StepKey, ComponentType> = {
   linkedin: LinkedIn,
   setup: SetUp,
   sources: Sources,
+  import: SetUp,
 }
 
 /** The onboarding, one screen per step at /onboarding/<step>: sign up, ChatGPT, LinkedIn, set up (with the
- *  first look), sources. Outside the app shell: it is the whole window, as a first run is. */
+ *  first look), sources, import (the Set up screen again, over every source). Outside the app shell: it is the whole window, as a first run is. */
 export function OnboardingPage() {
   const { step } = useParams()
   const current = stepAt(step)
