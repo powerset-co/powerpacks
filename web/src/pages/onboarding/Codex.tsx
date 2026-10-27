@@ -10,8 +10,8 @@ import { Frame, Heading, Info, Note } from "./Frame"
 import { after } from "./steps"
 
 /** Codex: the ChatGPT sign-in the chat runs on, the Accounts page's Codex card (who, the plan,
- *  Connected, Sign out) with the browser sign-in under it. A sign-in finished here moves the screen
- *  on by itself; someone already signed in sees the card and Continue. */
+ *  Connected, Sign out, Connect ChatGPT). A sign-in finished here moves the screen on by itself;
+ *  someone already signed in sees the card and Continue. */
 export function Codex() {
   const navigate = useNavigate()
   const codex = useCodexAccount()
@@ -38,11 +38,7 @@ export function Codex() {
                 <Button variant="primary" size="lg" onClick={() => next && void navigate(next.href)}>
                   Continue
                 </Button>
-              ) : codex.login || codex.loading || codex.status?.installed === false ? null : (
-                <Button variant="primary" size="lg" onClick={codex.connect}>
-                  Sign in via browser ↗
-                </Button>
-              )}
+              ) : null}
             </>
           ) : (
             <Note>The sign-in runs in the Powerpacks app; this browser view has no app to run it.</Note>
