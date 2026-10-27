@@ -46,7 +46,7 @@ export function LinkedIn() {
     }
   }, [queued, running, client])
   const run = standing(record, signed.data, "linkedin")
-  const at = queued && run.state !== "working" ? { state: "working" as const, line: "" } : run
+  const at = queued && run.state !== "working" ? { state: "working" as const } : run
   const next = after("linkedin")
 
   const connect = async () => {

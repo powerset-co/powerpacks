@@ -6,6 +6,7 @@ import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { errorText } from "@/lib/api/http"
 import { continueSetup, fetchConnection } from "@/lib/api/install"
 import { isDesktop } from "@/lib/desktop"
+import { Spinner } from "@/components/shared"
 import { Connect } from "@/pages/install/Connect"
 import { live, POLL_MS, STEPS as SOURCE_STEPS } from "@/pages/install/sources"
 
@@ -14,6 +15,8 @@ import { Guide } from "./guide/Guide"
 import { PageShot } from "./PageShot"
 import type { GuideSource } from "./guide/demos"
 import { STEPS } from "./steps"
+
+const NAMES = { gmail: "Gmail", whatsapp: "WhatsApp", linkedin: "LinkedIn" } as const
 
 /** Sources: the other sign-ins, each a row of the Connect list (Messages is the Full Disk Access
  *  switch, Gmail and WhatsApp their sign-ins). Done starts setup over every connected source (their
@@ -25,14 +28,20 @@ export function Sources() {
   const [error, setError] = useState<string | null>(null)
   const [guide, setGuide] = useState<GuideSource | null>(null)
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
-  // The Gmail app setup runs a browser through Google Cloud; while it does, its pictures show here.
+  // A sign-in under way: the right column follows it, its own line and, for Gmail's app setup,
+  // the pictures its browser takes of Google Cloud. The rows stay at "Working".
   const connection = useQuery({
     queryKey: ["install", "connect"],
     queryFn: ({ signal }) => fetchConnection(signal),
     refetchInterval: POLL_MS,
   })
   const record = connection.data
-  const gmailWorking = record !== undefined && SOURCE_STEPS.gmail.includes(record.step) && live(record)
+  const working =
+    record !== undefined && live(record)
+      ? (["gmail", "whatsapp", "linkedin"] as const).find((source) =>
+          SOURCE_STEPS[source].includes(record.step),
+        )
+      : undefined
   const person = { name: account.data?.name ?? "You", email: account.data?.email ?? "" }
   const setup = STEPS.find((step) => step.key === "setup")
   const done = () => {
@@ -56,13 +65,25 @@ export function Sources() {
         </>
       }
       right={
-        gmailWorking ? (
-          <PageShot
-            url="/api/install/gmail-page"
-            address="console.cloud.google.com"
-            caption={record.message}
-            reading
-          />
+        working && record ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <h2 className="m-0 flex items-center gap-2 text-[15px] font-semibold">
+                <Spinner /> Connecting {NAMES[working]}
+              </h2>
+              <p className="m-0 text-[13px] text-muted-foreground" aria-live="polite">
+                {record.message}
+              </p>
+            </div>
+            {working === "gmail" ? (
+              <PageShot
+                url="/api/install/gmail-page"
+                address="console.cloud.google.com"
+                caption="Google Cloud, as Powerpacks sets up your Gmail app"
+                reading
+              />
+            ) : null}
+          </div>
         ) : guide ? (
           <Guide key={guide} source={guide} person={person} />
         ) : (

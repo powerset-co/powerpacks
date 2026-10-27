@@ -287,8 +287,8 @@ it("shows Working from the click until the sign-in answer after its run is in, n
     expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "linkedin" } }),
   )
   expect(within(linkedin).getByText("Working")).toBeTruthy()
-  // And the run's own line, what it is doing now.
-  expect(within(linkedin).getByText("Checking LinkedIn")).toBeTruthy()
+  // Never the run's own status lines.
+  expect(within(linkedin).queryByText("Checking LinkedIn")).toBeNull()
   expect(screen.getByRole("button", { name: "Set up" }).hasAttribute("disabled")).toBe(true)
   // The run ends; the sign-in answer after it is held back: still Working, no button.
   let release!: () => void
@@ -334,8 +334,7 @@ it("gives WhatsApp's code its box from the click, and the code fills it", async 
   }
   const code = await within(whatsapp).findByAltText("WhatsApp code to scan", {}, { timeout: 4_000 })
   expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
-  // The run's own line follows the run: the newest, never an earlier one.
-  expect(within(whatsapp).getByText("Connect WhatsApp")).toBeTruthy()
+  expect(within(whatsapp).queryByText("Connect WhatsApp")).toBeNull()
   expect(within(whatsapp).queryByText("Preparing")).toBeNull()
 })
 
