@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
-import { useLocation } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
+import { HOME } from "@/lib/nav"
 import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
@@ -73,9 +74,12 @@ function counts(data: InstallStatus | undefined): { read: number; total: number 
 
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"
 
-/** Whether a stage has anything in the record: its step is running or has run. */
+/** Whether a stage has anything in the record: its step is running or has run. A source left
+ *  unconnected writes its steps as skipped, which is not running. */
 function present(data: InstallStatus, stage: Stage): boolean {
-  return stage.steps.some((step) => step === data.step || step in data.steps)
+  return stage.steps.some(
+    (step) => step === data.step || (step in data.steps && data.steps[step]?.status !== "skipped"),
+  )
 }
 
 /** Where one stage stands: done, the one under way, stopped there, or still to come. A source stage
@@ -136,6 +140,7 @@ export function SetUp() {
     record && startedAt !== undefined && Date.parse(record.updated_at) < startedAt ? undefined : record
   const running = data?.status === "running" || (data?.status === "waiting" && (data.installer_pid ?? 0) > 0)
   const failed = data?.status === "failed"
+  const navigate = useNavigate()
   const ready = data?.event === "search.ready"
   const count = counts(data)
   const left = count ? secondsLeft(install.data?.samples ?? [], count.total) : null
@@ -172,7 +177,8 @@ export function SetUp() {
   // selection starts them over: the list shows once the run is on a stage.
   const underway =
     data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
-  // The long run: a message source is in, so deep context reads it.
+  // The long run: a message source is in, so deep context reads it; it can take hours, so the app
+  // is one click away and setup keeps building behind it.
   const long = data !== undefined && STAGES.some((stage) => stage.source && present(data, stage))
   // With LinkedIn alone there is nothing to learn from messages: those stages are not listed.
   const stages =
@@ -293,6 +299,14 @@ export function SetUp() {
             </Note>
           )}
           {error ? <Note bad>{error}</Note> : null}
+          {long && processing ? (
+            <div className="mt-2 flex flex-col gap-2">
+              <Button variant="primary" className="self-start" onClick={() => void navigate(HOME.href)}>
+                Start using Powerpacks now
+              </Button>
+              <Note>This keeps building in the background; Setup in the side nav shows where it is.</Note>
+            </div>
+          ) : null}
         </>
       }
       right={
