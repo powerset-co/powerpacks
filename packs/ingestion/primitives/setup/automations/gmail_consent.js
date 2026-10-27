@@ -1,4 +1,4 @@
-/* Gmail consent in the existing Google profile. Credentials and challenges stay human-owned. */
+/* Gmail consent in the existing Google profile, hidden: a known account is let through without a screen. The moment Google needs the person, the window is theirs: no clicks, the wait is for the callback. */
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
@@ -105,8 +105,13 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
           /Authorization successful!/.test(text)
           ? { status: "ok" } : { status: "error", message: "msgvault rejected the OAuth callback." };
       }
-      // A page mid-navigation (the person just clicked, or Google moved on) throws out of the
-      // snapshot or the click: that is a moment, not the end. The deadline ends the wait.
+      // Once the window is the person's, nothing is clicked for them: the wait is for the callback.
+      if (human) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+      // A page mid-navigation (Google moved on) throws out of the snapshot or the click: that is
+      // a moment, not the end. The deadline ends the wait.
       let action;
       try {
         action = consentAction(await snapshot(page), request);
