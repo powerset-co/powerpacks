@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.43.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.1...powerpacks-v3.43.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **desktop:** a launch with setup under way opens the step the run is on ([#957](https://github.com/powerset-co/powerpacks/issues/957)) ([f1fe4da](https://github.com/powerset-co/powerpacks/commit/f1fe4da303bd963396f0b769494cdcadec07e257))
+* **enrich:** research signs in to the gateway with the login when no key is provisioned ([#959](https://github.com/powerset-co/powerpacks/issues/959)) ([b45a780](https://github.com/powerset-co/powerpacks/commit/b45a780b953827df3ca687ea8d63fca0ac596ebd))
+
 ## [3.43.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.0...powerpacks-v3.43.1) (2026-10-27)
 
 
