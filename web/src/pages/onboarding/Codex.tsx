@@ -32,7 +32,7 @@ export function Codex() {
           {isDesktop() ? (
             <>
               <div className="rounded-[var(--radius-m)] border border-line-strong bg-card px-4 py-3.5">
-                <CodexDetails codex={codex} />
+                <CodexDetails codex={codex} explained={false} />
               </div>
               {signedIn ? (
                 <Button variant="primary" size="lg" onClick={() => next && void navigate(next.href)}>

@@ -22,8 +22,9 @@ function summary(status: CodexStatus | undefined): { name: string; plan: string 
   return { name: account.kind === "apiKey" ? "API key" : "Signed in", plan: null, connected: true }
 }
 
-/** The Codex account that runs Chat, signed in with ChatGPT; its plan as a badge beside it. Desktop app only. */
-export function CodexDetails({ codex }: { codex: CodexAccountState }) {
+/** The Codex account that runs Chat, signed in with ChatGPT; its plan as a badge beside it. Desktop app only.
+ *  `explained`: the line under the account (what it is for); the onboarding keeps its words on the right. */
+export function CodexDetails({ codex, explained = true }: { codex: CodexAccountState; explained?: boolean }) {
   const { name, plan, connected } = summary(codex.status)
   return (
     <div>
@@ -43,11 +44,13 @@ export function CodexDetails({ codex }: { codex: CodexAccountState }) {
       ) : (
         <div className="mt-2 flex min-h-7 items-center justify-between gap-3">
           <p className="m-0 text-xs text-muted-foreground">
-            {codex.status?.installed && codex.status.account?.kind === "apiKey"
-              ? "Uses your API key. API usage is billed separately."
-              : connected
-                ? "Runs Chat with your connected account."
-                : "Connect ChatGPT to run Chat on your plan."}
+            {!explained
+              ? null
+              : codex.status?.installed && codex.status.account?.kind === "apiKey"
+                ? "Uses your API key. API usage is billed separately."
+                : connected
+                  ? "Runs Chat with your connected account."
+                  : "Connect ChatGPT to run Chat on your plan."}
           </p>
           <CodexAction codex={codex} connected={connected} />
         </div>
