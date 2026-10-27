@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.43.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.2...powerpacks-v3.43.3) (2026-10-27)
+
+
+### Bug Fixes
+
+* **onboarding:** on Import, Start searching now is the way on ([#960](https://github.com/powerset-co/powerpacks/issues/960)) ([778590b](https://github.com/powerset-co/powerpacks/commit/778590bf5e50f935f868235ef0d3104f3d3dc68c))
+
 ## [3.43.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.1...powerpacks-v3.43.2) (2026-10-27)
 
 
