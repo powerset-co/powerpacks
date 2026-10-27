@@ -24,7 +24,7 @@ const row = (masked: string | null) => ({
 
 it("a key typed into the dialog is posted and the row shows it", async () => {
   const fetch = vi
-    .fn()
+    .fn<(input: string, init?: RequestInit) => Promise<Response>>()
     .mockResolvedValueOnce(new Response(JSON.stringify(row(null))))
     .mockResolvedValueOnce(new Response(JSON.stringify(row("••••9876"))))
   vi.stubGlobal("fetch", fetch)
@@ -40,9 +40,11 @@ it("a key typed into the dialog is posted and the row shows it", async () => {
   fireEvent.change(field, { target: { value: "sk-synthetic-9876" } })
   fireEvent.click(screen.getByRole("button", { name: "Save" }))
   await waitFor(() => expect(screen.getByText("••••9876")).toBeTruthy())
-  const [url, init] = fetch.mock.calls[1] as [string, RequestInit]
+  const [url, init] = fetch.mock.calls[1] ?? []
   expect(url).toBe("/api/settings/providers")
-  expect(init.method).toBe("POST")
-  expect(JSON.parse(String(init.body))).toEqual({ values: { OPENAI_API_KEY: "sk-synthetic-9876" } })
+  expect(init?.method).toBe("POST")
+  expect(JSON.parse(typeof init?.body === "string" ? init.body : "null")).toEqual({
+    values: { OPENAI_API_KEY: "sk-synthetic-9876" },
+  })
   expect(screen.getByRole("button", { name: "Change key" })).toBeTruthy()
 })

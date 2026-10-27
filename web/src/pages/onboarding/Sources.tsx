@@ -4,12 +4,14 @@ import { useNavigate } from "react-router-dom"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { errorText } from "@/lib/api/http"
-import { continueSetup } from "@/lib/api/install"
+import { continueSetup, fetchConnection } from "@/lib/api/install"
 import { isDesktop } from "@/lib/desktop"
 import { Connect } from "@/pages/install/Connect"
+import { live, POLL_MS, STEPS as SOURCE_STEPS } from "@/pages/install/sources"
 
 import { Frame, Heading, Info, Note } from "./Frame"
 import { Guide } from "./guide/Guide"
+import { PageShot } from "./PageShot"
 import type { GuideSource } from "./guide/demos"
 import { STEPS } from "./steps"
 
@@ -23,6 +25,14 @@ export function Sources() {
   const [error, setError] = useState<string | null>(null)
   const [guide, setGuide] = useState<GuideSource | null>(null)
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
+  // The Gmail app setup runs a browser through Google Cloud; while it does, its pictures show here.
+  const connection = useQuery({
+    queryKey: ["install", "connect"],
+    queryFn: ({ signal }) => fetchConnection(signal),
+    refetchInterval: POLL_MS,
+  })
+  const record = connection.data
+  const gmailWorking = record !== undefined && SOURCE_STEPS.gmail.includes(record.step) && live(record)
   const person = { name: account.data?.name ?? "You", email: account.data?.email ?? "" }
   const setup = STEPS.find((step) => step.key === "setup")
   const done = () => {
@@ -46,7 +56,14 @@ export function Sources() {
         </>
       }
       right={
-        guide ? (
+        gmailWorking ? (
+          <PageShot
+            url="/api/install/gmail-page"
+            address="console.cloud.google.com"
+            caption={record.message}
+            reading
+          />
+        ) : guide ? (
           <Guide key={guide} source={guide} person={person} />
         ) : (
           <Info

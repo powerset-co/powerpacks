@@ -64,7 +64,7 @@ from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts, msgvault_home
 from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
 from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
-from packs.powerset.primitives.install.controller import permission_app
+from packs.powerset.primitives.install.controller import GMAIL_PAGE_SHOT, permission_app
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import source_counts
 from packs.powerset.primitives.install.steps import PROCESSING_STEPS, InstallState, InstallStep
@@ -206,6 +206,8 @@ class SourceOnboarding:
 
     def _gmail_connect(self) -> bool:
         self._write("gmail.checking")
+        # The browser automation leaves a picture of Google Cloud here as it works; Sources shows it.
+        os.environ["POWERPACKS_PAGE_SHOT"] = str(self.root / GMAIL_PAGE_SHOT)
         home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
         local = accounts.status_payload(home)
         if not local["config"]["oauth_configured"]:

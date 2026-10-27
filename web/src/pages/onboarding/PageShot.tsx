@@ -4,18 +4,28 @@ import { cn } from "@/lib/utils"
 
 // Until the picture is there, ask again this often.
 const POLL_MS = 3_000
-const URL = "/api/install/linkedin-page"
 
-/** The picture of the connections page the LinkedIn read took as it started, in a window of its
- *  own: the person sees their own list is what is being read. Asked for until it is there. */
-export function PageShot({ caption, reading }: { caption: string; reading: boolean }) {
-  const [src, setSrc] = useState(() => `${URL}?t=${Date.now()}`)
+/** A picture of a page a run is on, in a window of its own: the LinkedIn connections page as the
+ *  read starts, or Google Cloud as the Gmail app is set up. Asked for until it is there; while
+ *  `reading`, asked for again every few seconds, since the run keeps taking new ones. */
+export function PageShot({
+  url,
+  address,
+  caption,
+  reading,
+}: {
+  url: string
+  address: string
+  caption: string
+  reading: boolean
+}) {
+  const [src, setSrc] = useState(() => `${url}?t=${Date.now()}`)
   const [shown, setShown] = useState(false)
   useEffect(() => {
-    if (shown) return
-    const timer = setInterval(() => setSrc(`${URL}?t=${Date.now()}`), POLL_MS)
+    if (shown && !reading) return
+    const timer = setInterval(() => setSrc(`${url}?t=${Date.now()}`), POLL_MS)
     return () => clearInterval(timer)
-  }, [shown])
+  }, [shown, reading, url])
   return (
     <figure className="m-0 flex flex-col gap-3">
       <div
@@ -29,14 +39,12 @@ export function PageShot({ caption, reading }: { caption: string; reading: boole
           <span className="size-2 rounded-full bg-line-strong" />
           <span className="size-2 rounded-full bg-line-strong" />
           <span className="size-2 rounded-full bg-line-strong" />
-          <span className="ml-2 truncate text-[10px] text-faint">
-            linkedin.com/mynetwork/invite-connect/connections
-          </span>
+          <span className="ml-2 truncate text-[10px] text-faint">{address}</span>
         </div>
         <div className="relative">
           <img
             src={src}
-            alt="Your LinkedIn connections page, as Powerpacks reads it"
+            alt={caption}
             className="block w-full"
             onLoad={() => setShown(true)}
             onError={() => setShown(false)}

@@ -328,6 +328,8 @@ export function SetUp() {
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>
             <PageShot
+              url="/api/install/linkedin-page"
+              address="linkedin.com/mynetwork/invite-connect/connections"
               reading={count !== null}
               caption={
                 count

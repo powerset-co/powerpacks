@@ -292,8 +292,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if parsed.path == "/api/install/connect":
                 self._json(install.connection())
                 return
-            if parsed.path in ("/api/install/qr", "/api/install/linkedin-page", "/api/install/picture"):
+            if parsed.path in ("/api/install/qr", "/api/install/linkedin-page", "/api/install/gmail-page", "/api/install/picture"):
                 body = (install.linkedin_page_image() if parsed.path.endswith("linkedin-page")
+                        else install.gmail_page_image() if parsed.path.endswith("gmail-page")
                         else install.picture(urllib.parse.parse_qs(parsed.query).get("id", [""])[0])
                         if parsed.path.endswith("picture")
                         else install.qr_image(connect="connect=1" in parsed.query.split("&")))

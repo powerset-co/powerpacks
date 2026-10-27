@@ -36,7 +36,7 @@ function Line({ children, bad = false }: { children: ReactNode; bad?: boolean })
   return <span className={cn("text-xs leading-snug", bad ? "text-bad" : "text-foreground")}>{children}</span>
 }
 
-// What to do while each sign-in runs. A row shows this, never the run's own status lines.
+// What to do while each sign-in runs. A row shows this over the run's own line (what it is doing now).
 const TODO: Record<ConnectSource, string> = {
   linkedin: "Sign in to LinkedIn in the window that opens.",
   gmail: "Sign in to Google in the window that opens.",
@@ -319,7 +319,8 @@ export function Connect({
     extra?: ReactNode,
   ) => {
     const run = standing(record, ready, name)
-    const at = queued?.source === name && run.state !== "working" ? { state: "working" as const } : run
+    const at =
+      queued?.source === name && run.state !== "working" ? { state: "working" as const, line: "" } : run
     const command = "command" in at ? at.command : undefined
     const guide = name === "linkedin" || !onGuide ? undefined : () => onGuide(name)
     return (
@@ -341,7 +342,12 @@ export function Connect({
           disabled: busy || (name === "gmail" && !email.includes("@")),
         }}
       >
-        {at.state === "working" ? <Line>{TODO[name]}</Line> : null}
+        {at.state === "working" ? (
+          <>
+            <Line>{TODO[name]}</Line>
+            {at.line ? <span className="text-xs leading-snug text-muted-foreground">{at.line}</span> : null}
+          </>
+        ) : null}
         {at.state === "working" && name === "whatsapp" ? (
           <CodeBox url={"qr" in at ? at.qr : undefined} />
         ) : null}
