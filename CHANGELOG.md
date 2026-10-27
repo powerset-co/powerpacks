@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.41.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.40.0...powerpacks-v3.41.0) (2026-10-27)
+
+
+### Features
+
+* **connect:** a working row says what it is doing; Gmail setup shows Google Cloud as it works ([#928](https://github.com/powerset-co/powerpacks/issues/928)) ([e234df5](https://github.com/powerset-co/powerpacks/commit/e234df5d34a2cf5b81b0f28d07fb8ce3e083cc5f))
+* **desktop:** a fresh launch opens the onboarding ([#936](https://github.com/powerset-co/powerpacks/issues/936)) ([42f380a](https://github.com/powerset-co/powerpacks/commit/42f380ad11b6d185195a37f4cba0fec8ffdbe955))
+* **onboarding:** Start searching now beside Add more sources once search is ready ([#932](https://github.com/powerset-co/powerpacks/issues/932)) ([ec2e6c9](https://github.com/powerset-co/powerpacks/commit/ec2e6c9cff9663574ef65222c202f504431e156b))
+* **onboarding:** the onboarding window, one screen per step ([#913](https://github.com/powerset-co/powerpacks/issues/913)) ([2355bd8](https://github.com/powerset-co/powerpacks/commit/2355bd84968f46ec50ac22133c58aea7d537a575))
+* **search:** a new install searches its local index by default ([#927](https://github.com/powerset-co/powerpacks/issues/927)) ([ade8e55](https://github.com/powerset-co/powerpacks/commit/ade8e5538344db5280700178b31c3f8342f95ff5))
+* **settings:** a provider's key can be typed in ([#925](https://github.com/powerset-co/powerpacks/issues/925)) ([725509b](https://github.com/powerset-co/powerpacks/commit/725509b9272c3905aab04d147d858c6a65a13fa1))
+
+
+### Bug Fixes
+
+* **connect:** the page picture's temp file keeps its .png name ([#930](https://github.com/powerset-co/powerpacks/issues/930)) ([d22dbc0](https://github.com/powerset-co/powerpacks/commit/d22dbc02a1691768590cdd10921795198d3f0157))
+* **onboarding:** Sign out on the ChatGPT account row; invite code link gone ([#934](https://github.com/powerset-co/powerpacks/issues/934)) ([66074c7](https://github.com/powerset-co/powerpacks/commit/66074c701d892e94411d34990e356ca16a0a3c4f))
+* **onboarding:** the ChatGPT step's card has no line under the account ([#929](https://github.com/powerset-co/powerpacks/issues/929)) ([7c9f105](https://github.com/powerset-co/powerpacks/commit/7c9f1053e8ca462e53f0935c566c5e39447bd65c))
+* **onboarding:** the page server answers the ChatGPT step's path ([#937](https://github.com/powerset-co/powerpacks/issues/937)) ([039b087](https://github.com/powerset-co/powerpacks/commit/039b087ee6050f1efed9cf189e0ad1e0815e6a75))
+* **onboarding:** the Sources button is Start ([#935](https://github.com/powerset-co/powerpacks/issues/935)) ([35c79ac](https://github.com/powerset-co/powerpacks/commit/35c79acfa33640d0f487b6546420747856c6a41c))
+* **permission:** place Powerpacks beside System Settings natively, no Accessibility ([#931](https://github.com/powerset-co/powerpacks/issues/931)) ([c951adb](https://github.com/powerset-co/powerpacks/commit/c951adb66e780fff1aca940028d9b9c0b49bdc77))
+* **permission:** System Settings comes to the front when the helper first shows ([#933](https://github.com/powerset-co/powerpacks/issues/933)) ([e8513fb](https://github.com/powerset-co/powerpacks/commit/e8513fb14c107af4764c91c14ea089977452dc13))
+
 ## [3.40.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.3...powerpacks-v3.40.0) (2026-10-27)
 
 
