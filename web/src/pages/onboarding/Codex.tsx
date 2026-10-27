@@ -28,7 +28,7 @@ export function Codex() {
       step="codex"
       left={
         <>
-          <Heading title="Sign in to ChatGPT" line="Powerpacks chats on your ChatGPT plan." />
+          <Heading title="Sign in to ChatGPT" />
           {isDesktop() ? (
             <>
               <div className="rounded-[var(--radius-m)] border border-line-strong bg-card px-4 py-3.5">
@@ -43,7 +43,6 @@ export function Codex() {
                   Sign in via browser ↗
                 </Button>
               )}
-              {signedIn ? null : <Note>Any ChatGPT plan works: Free, Plus or Pro.</Note>}
             </>
           ) : (
             <Note>The sign-in runs in the Powerpacks app; this browser view has no app to run it.</Note>
@@ -54,11 +53,11 @@ export function Codex() {
         <Info
           title="Why ChatGPT"
           lines={[
-            "Questions about your network are answered by Codex, OpenAI's agent, on your own plan.",
+            "Powerpacks chats on your ChatGPT plan: questions about your network are answered by Codex, OpenAI's agent.",
+            "Any plan works: Free, Plus or Pro.",
             "Your network stays on this computer; the chat reads it here.",
-            "Sign in once; Powerpacks keeps the session.",
           ]}
-          note="Next: LinkedIn, then a first look at people you know."
+          note="Sign in once; Powerpacks keeps the session. Next: LinkedIn, then a first look at people you know."
         />
       }
     />
