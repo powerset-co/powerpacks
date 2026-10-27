@@ -1,21 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 
-use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 #[cfg(target_os = "macos")]
 mod mac;
 
-struct Frame {
-    position: PhysicalPosition<i32>,
-    size: PhysicalSize<u32>,
-}
-
 #[derive(Default)]
-pub struct Permission(Mutex<Option<Frame>>);
+pub struct Permission(Mutex<Option<tauri::async_runtime::JoinHandle<()>>>);
+
+const HELPER: (f64, f64) = (560.0, 144.0);
 
 fn bundle(executable: &Path) -> Result<PathBuf, String> {
     executable
@@ -31,132 +26,54 @@ pub async fn permission_begin(
     permission: State<'_, Permission>,
 ) -> Result<(), String> {
     bundle(&std::env::current_exe().map_err(|error| error.to_string())?)?;
+    if app.get_webview_window("permission").is_some() {
+        return Ok(());
+    }
     let window = app
         .get_webview_window(crate::MAIN_WINDOW)
         .ok_or("Powerpacks window is closed.")?;
-    let monitor = window
-        .primary_monitor()
-        .map_err(|error| error.to_string())?
-        .ok_or("No main screen.")?;
-    let area = monitor.work_area();
-    let scale = monitor.scale_factor();
-    let position = area.position.to_logical::<f64>(scale);
-    let size = area.size.to_logical::<f64>(scale);
-    {
-        let mut saved = permission.0.lock().unwrap();
-        if saved.is_none() {
-            *saved = Some(Frame {
-                position: window.outer_position().map_err(|error| error.to_string())?,
-                size: window.inner_size().map_err(|error| error.to_string())?,
-            });
+    let mut url = window.url().map_err(|error| error.to_string())?;
+    url.set_path("/permission");
+    url.set_query(None);
+    url.set_fragment(None);
+    let helper = WebviewWindowBuilder::new(&app, "permission", WebviewUrl::External(url))
+        .title("Messages permission")
+        .inner_size(HELPER.0, HELPER.1)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(false)
+        .focused(false)
+        .accept_first_mouse(true)
+        .disable_drag_drop_handler()
+        .build()
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    helper
+        .with_webview(|webview| unsafe {
+            let window = &*webview.ns_window().cast::<objc2_app_kit::NSWindow>();
+            window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
+            window.setExcludedFromWindowsMenu(true);
+        })
+        .map_err(|error| error.to_string())?;
+    *permission.0.lock().unwrap() = Some(tauri::async_runtime::spawn(async move {
+        loop {
+            #[cfg(target_os = "macos")]
+            if helper
+                .with_webview(|webview| unsafe {
+                    mac::follow_settings(webview.ns_window().cast());
+                })
+                .is_err()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
-    }
-    window
-        .set_min_size(None::<LogicalSize<f64>>)
-        .map_err(|error| error.to_string())?;
-    window
-        .set_position(position)
-        .map_err(|error| error.to_string())?;
-    let titlebar = window
-        .outer_size()
-        .map_err(|error| error.to_string())?
-        .height
-        - window
-            .inner_size()
-            .map_err(|error| error.to_string())?
-            .height;
-    window
-        .set_size(tauri::Size::Logical(LogicalSize::new(
-            size.width / 2.0,
-            size.height - f64::from(titlebar) / scale,
-        )))
-        .map_err(|error| error.to_string())?;
-    if app.get_webview_window("permission").is_none() {
-        let mut url = window.url().map_err(|error| error.to_string())?;
-        url.set_path("/permission");
-        url.set_query(None);
-        url.set_fragment(None);
-        let helper = WebviewWindowBuilder::new(&app, "permission", WebviewUrl::External(url))
-            .title("Messages permission")
-            .inner_size(HELPER.0, HELPER.1)
-            .position(
-                position.x + size.width - HELPER.0 - 16.0,
-                position.y + size.height - HELPER.1 - 16.0,
-            )
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .visible_on_all_workspaces(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .focused(false)
-            .accept_first_mouse(true)
-            .disable_drag_drop_handler()
-            .build()
-            .map_err(|error| error.to_string())?;
-        #[cfg(target_os = "macos")]
-        helper
-            .with_webview(|webview| unsafe {
-                let window = &*webview.ns_window().cast::<objc2_app_kit::NSWindow>();
-                window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
-                window.setExcludedFromWindowsMenu(true);
-            })
-            .map_err(|error| error.to_string())?;
-    }
-    let right = LogicalPosition::new(position.x + size.width / 2.0, position.y);
-    let settings = tauri::async_runtime::spawn_blocking(move || {
-        let script = format!(r#"
-tell application "System Events"
-    repeat 30 times
-        if exists process "System Settings" then
-            tell process "System Settings"
-                if exists window 1 then
-                    set position of window 1 to {{{x}, {y}}}
-                    set size of window 1 to {{{width}, {height}}}
-                    return (position of window 1) & (size of window 1)
-                end if
-            end tell
-        end if
-        delay 0.1
-    end repeat
-    error "System Settings did not open."
-end tell
-"#, x = right.x.round(), y = right.y.round(), width = (size.width / 2.0).round(), height = size.height.round());
-        let output = std::process::Command::new("osascript").args(["-e", &script]).output()
-            .map_err(|error| error.to_string())?;
-        if output.status.success() { Ok(String::from_utf8_lossy(&output.stdout).into_owned()) } else {
-            Err(format!("Could not position System Settings. Allow Powerpacks in Accessibility and Automation, or move Settings to the right yourself. {}", String::from_utf8_lossy(&output.stderr).trim()))
-        }
-    }).await.map_err(|error| error.to_string())??;
-    // The helper sits in the Settings window's lower right corner, over the list it is dragged into.
-    if let (Some(helper), Some((x, y, width, height))) =
-        (app.get_webview_window("permission"), frame(&settings))
-    {
-        helper
-            .set_position(LogicalPosition::new(
-                x + width - HELPER.0 - 16.0,
-                y + height - HELPER.1 - 16.0,
-            ))
-            .map_err(|error| error.to_string())?;
-    }
+    }));
     Ok(())
-}
-
-/// The helper window's logical size.
-const HELPER: (f64, f64) = (360.0, 224.0);
-
-/// A window frame as osascript prints it: `x, y, width, height`.
-fn frame(text: &str) -> Option<(f64, f64, f64, f64)> {
-    let mut parts = text
-        .trim()
-        .split(',')
-        .map(|part| part.trim().parse::<f64>().ok());
-    Some((
-        parts.next()??,
-        parts.next()??,
-        parts.next()??,
-        parts.next()??,
-    ))
 }
 
 #[tauri::command]
@@ -164,30 +81,15 @@ pub async fn permission_end(
     app: AppHandle,
     permission: State<'_, Permission>,
 ) -> Result<(), String> {
-    let frame = permission.0.lock().unwrap().take();
-    if let Some(frame) = frame {
-        if let Some(helper) = app.get_webview_window("permission") {
-            helper.destroy().map_err(|error| error.to_string())?;
-        }
-        let window = app
-            .get_webview_window(crate::MAIN_WINDOW)
-            .ok_or("Powerpacks window is closed.")?;
-        window
-            .set_size(frame.size)
-            .map_err(|error| error.to_string())?;
-        window
-            .set_position(frame.position)
-            .map_err(|error| error.to_string())?;
-        window
-            .set_min_size(Some(LogicalSize::new(
-                crate::WINDOW_MIN_SIZE.0,
-                crate::WINDOW_MIN_SIZE.1,
-            )))
-            .map_err(|error| error.to_string())?;
-        crate::show_main(&app);
-        app.emit_to(crate::MAIN_WINDOW, "permission-ended", ())
-            .map_err(|error| error.to_string())?;
+    if let Some(task) = permission.0.lock().unwrap().take() {
+        task.abort();
     }
+    if let Some(helper) = app.get_webview_window("permission") {
+        helper.destroy().map_err(|error| error.to_string())?;
+    }
+    crate::show_main(&app);
+    app.emit_to(crate::MAIN_WINDOW, "permission-ended", ())
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -214,16 +116,27 @@ pub async fn permission_drag(window: WebviewWindow) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundle, frame};
+    use super::bundle;
     use std::path::Path;
 
     #[test]
-    fn a_frame_is_read_from_what_osascript_prints() {
-        assert_eq!(
-            frame("960, 25, 960, 1055\n"),
-            Some((960.0, 25.0, 960.0, 1055.0))
+    fn guiding_permissions_never_scripts_settings_or_resizes_the_main_window() {
+        let source = include_str!("permission.rs");
+        let begin = source
+            .split("pub async fn permission_begin")
+            .nth(1)
+            .unwrap()
+            .split("pub async fn permission_end")
+            .next()
+            .unwrap();
+        assert!(
+            !begin.contains("osascript"),
+            "Settings tracking must not require Automation"
         );
-        assert_eq!(frame(""), None);
+        assert!(
+            !begin.contains("set_min_size"),
+            "Guidance must leave the main window alone"
+        );
     }
 
     /// The helper is a second window on the page server's URL: its capability must let it call

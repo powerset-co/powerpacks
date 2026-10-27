@@ -27,8 +27,10 @@ url = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSWorkspace", "NSRunningApplication", "NSScreen", "libc"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSGeometry"] }
 
 [profile.release]

@@ -1,3 +1,4 @@
+import { ArrowUp, X } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 
@@ -22,59 +23,63 @@ export function Permission() {
     if (signed.data?.imessage) void invoke("permission_end").catch(fail)
   }, [signed.data?.imessage])
   return (
-    <section
-      className="relative m-2 flex flex-col items-center gap-2 rounded-[var(--radius-l)] border border-line-strong bg-card p-3 text-center shadow-2"
-      aria-label="Messages permission"
-    >
-      <button
-        type="button"
-        className="absolute right-4 top-4 cursor-pointer border-0 bg-transparent p-0 text-sm leading-none text-muted-foreground hover:text-foreground"
-        aria-label="Close"
-        onClick={() => void invoke("permission_end").catch(fail)}
+    <div className="flex h-dvh items-center p-3">
+      <section
+        className="flex w-full flex-col gap-2 rounded-2xl border border-line-strong bg-card p-2 shadow-2"
+        aria-label="Messages permission"
       >
-        ×
-      </button>
-      {signed.data?.imessage === false ? (
-        <>
+        <div className="flex min-h-8 items-center gap-2 pl-10">
+          <ArrowUp size={24} className="shrink-0 text-primary" aria-hidden="true" />
+          <p className="m-0 flex-1 text-xs text-muted-foreground">
+            {signed.data?.imessage === false
+              ? "Drag Powerpacks into the list, then turn it on."
+              : "Checking Full Disk Access…"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            className="cursor-grab rounded-[var(--radius-m)] border-0 bg-transparent p-0 active:cursor-grabbing"
-            aria-label="Drag Powerpacks into Full Disk Access"
-            onMouseDown={(event) => {
-              if (event.button !== 0) return
-              event.preventDefault()
+            className="flex size-8 shrink-0 items-center justify-center rounded-full border-0 bg-surface-2 text-muted-foreground hover:text-foreground"
+            aria-label="Skip"
+            onClick={() => void invoke("permission_end").catch(fail)}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+          {signed.data?.imessage === false ? (
+            <button
+              type="button"
+              className="flex min-h-10 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-xl border border-line-strong bg-card px-2 py-1 text-left text-xs active:cursor-grabbing"
+              aria-label="Drag Powerpacks into Full Disk Access"
+              onMouseDown={(event) => {
+                if (event.button !== 0) return
+                event.preventDefault()
+                setError(null)
+                void invoke("permission_drag").catch(fail)
+              }}
+            >
+              <img src={icon} alt="Powerpacks" width={24} height={24} draggable={false} />
+              Powerpacks
+            </button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
               setError(null)
-              void invoke("permission_drag").catch(fail)
+              void installAction("permissions")
+                .then(() => invoke("permission_begin"))
+                .catch(fail)
             }}
           >
-            <img src={icon} alt="Powerpacks" width={56} height={56} draggable={false} />
-          </button>
-          <p className="m-0 text-xs">Drag this into the list, then turn it on.</p>
-        </>
-      ) : (
-        <p className="m-0 text-xs">Checking Full Disk Access…</p>
-      )}
-      <div className="flex items-center gap-3">
-        <Button
-          size="sm"
-          onClick={() => {
-            setError(null)
-            void installAction("permissions")
-              .then(() => invoke("permission_begin"))
-              .catch(fail)
-          }}
-        >
-          Open the list again
-        </Button>
-        <Button size="sm" onClick={() => void invoke("permission_end").catch(fail)}>
-          Skip
-        </Button>
-      </div>
-      {error || signed.error ? (
-        <p role="alert" className="m-0 max-h-10 overflow-y-auto text-xs text-bad">
-          {error ?? errorText(signed.error)}
-        </p>
-      ) : null}
-    </section>
+            Open the list again
+          </Button>
+        </div>
+        {error || signed.error ? (
+          <p role="alert" className="m-0 max-h-8 overflow-y-auto pl-10 text-xs text-bad">
+            {error ?? errorText(signed.error)}
+          </p>
+        ) : null}
+      </section>
+    </div>
   )
 }

@@ -84,3 +84,127 @@ pub unsafe fn drag(window: *mut NSWindow, path: &Path) -> Result<(), String> {
     );
     Ok(())
 }
+
+// Window metadata is available before Accessibility is granted. Never control Settings itself.
+fn settings_bounds() -> Option<core_graphics::geometry::CGRect> {
+    use core_foundation::{
+        base::{CFType, TCFType},
+        dictionary::CFDictionary,
+        number::CFNumber,
+        string::CFString,
+    };
+    use core_graphics::{
+        geometry::CGRect,
+        window::{
+            copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
+            kCGWindowListOptionOnScreenOnly,
+        },
+    };
+    use objc2_app_kit::NSRunningApplication;
+
+    let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(
+        "com.apple.systempreferences",
+    ));
+    let pid = apps.firstObject()?.processIdentifier() as i64;
+    let windows = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    )?;
+    for value in windows.iter() {
+        let value = unsafe { CFType::wrap_under_get_rule(*value) };
+        let Some(dict) = value.downcast::<CFDictionary>() else {
+            continue;
+        };
+        let row: CFDictionary<CFString, CFType> =
+            unsafe { TCFType::wrap_under_get_rule(dict.as_concrete_TypeRef()) };
+        let number = |key: &str| {
+            row.find(CFString::new(key))?
+                .downcast::<CFNumber>()?
+                .to_i64()
+        };
+        if number("kCGWindowOwnerPID") != Some(pid) || number("kCGWindowLayer") != Some(0) {
+            continue;
+        }
+        let bounds = row
+            .find(CFString::new("kCGWindowBounds"))?
+            .downcast::<CFDictionary>()?;
+        let rect = CGRect::from_dict_representation(&bounds)?;
+        if rect.size.width > 0.0 && rect.size.height > 0.0 {
+            return Some(rect);
+        }
+    }
+    None
+}
+
+fn panel_origin(settings: NSRect, visible: NSRect) -> NSPoint {
+    let (width, height) = super::HELPER;
+    let sidebar = if settings.size.width > 430.0 {
+        215.0
+    } else {
+        0.0
+    };
+    let x = settings.origin.x + sidebar + (settings.size.width - sidebar - width) / 2.0;
+    NSPoint::new(
+        x.max(visible.origin.x)
+            .min((visible.origin.x + visible.size.width - width).max(visible.origin.x))
+            .round(),
+        (settings.origin.y - height - 12.0)
+            .max(visible.origin.y + 24.0)
+            .round(),
+    )
+}
+
+pub unsafe fn follow_settings(window: *mut NSWindow) {
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::NSIntersectsRect;
+
+    let window = &*window;
+    let Some(bounds) = settings_bounds() else {
+        window.orderOut(None);
+        return;
+    };
+    let main = MainThreadMarker::new().expect("Webview callback runs on the main thread");
+    let screens = NSScreen::screens(main);
+    let Some(primary) = screens.firstObject() else {
+        return;
+    };
+    // Quartz uses a top-left origin; AppKit uses the primary display's bottom-left origin.
+    let settings = NSRect::new(
+        NSPoint::new(
+            bounds.origin.x,
+            primary.frame().size.height - bounds.origin.y - bounds.size.height,
+        ),
+        NSSize::new(bounds.size.width, bounds.size.height),
+    );
+    let screen = screens
+        .iter()
+        .find(|screen| NSIntersectsRect(settings, screen.frame()))
+        .unwrap_or(primary);
+    let origin = panel_origin(settings, screen.visibleFrame());
+    if window.frame().origin != origin {
+        window.setFrameOrigin(origin);
+    }
+    if !window.isVisible() {
+        window.orderFrontRegardless();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_follows_the_settings_content_column_and_stays_on_screen() {
+        let visible = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1440.0, 875.0));
+        let settings = NSRect::new(NSPoint::new(300.0, 300.0), NSSize::new(700.0, 550.0));
+        assert_eq!(panel_origin(settings, visible), NSPoint::new(478.0, 144.0));
+        let moved = NSRect::new(NSPoint::new(400.0, 100.0), settings.size);
+        assert_eq!(panel_origin(moved, visible), NSPoint::new(578.0, 24.0));
+        let secondary = NSRect::new(NSPoint::new(-1440.0, 0.0), visible.size);
+        let settings = NSRect::new(NSPoint::new(-1450.0, 400.0), settings.size);
+        assert_eq!(
+            panel_origin(settings, secondary),
+            NSPoint::new(-1273.0, 244.0)
+        );
+    }
+}
