@@ -6,6 +6,7 @@ import { useFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
+import { fetchInstall } from "@/lib/api/install"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
@@ -25,6 +26,7 @@ import {
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
 import { PowersetMark } from "./PowersetMark"
+import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
 
 const COLLAPSED_KEY = "sidebar.collapsed"
@@ -65,6 +67,16 @@ export function Sidebar() {
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
   const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
   const done = useSetupDone()
+  // While setup runs, its nav item turns: the ring in place of the icon, the running step's line
+  // as its tip. The same record the Setup page reads, so the two never disagree.
+  const install = useQuery({
+    queryKey: ["install"],
+    queryFn: ({ signal }) => fetchInstall(signal),
+    enabled: isDesktop() && !done,
+    refetchInterval: 5_000,
+    retry: false,
+  })
+  const running = install.data?.status === "running" ? install.data.message : undefined
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -124,7 +136,7 @@ export function Sidebar() {
             (page.key !== "setup" || !done),
         ).map((page) => (
           <li key={page.key}>
-            <Item page={page} rail={rail} />
+            <Item page={page} rail={rail} running={page.key === "setup" ? running : undefined} />
           </li>
         ))}
       </ul>
@@ -134,20 +146,26 @@ export function Sidebar() {
   )
 }
 
-function Item({ page, rail }: { page: Page; rail: boolean }) {
+function Item({ page, rail, running }: { page: Page; rail: boolean; running?: string }) {
   const Icon = ICONS[page.key]
   return (
     <NavLink
       to={page.href}
       data-nav={page.key}
-      title={rail ? page.label : undefined}
+      title={running ?? (rail ? page.label : undefined)}
       className={cn(
         "flex h-9 items-center gap-2.5 rounded-[var(--radius-s)] px-2.5 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground",
         "aria-[current=page]:bg-surface-2 aria-[current=page]:font-semibold aria-[current=page]:text-foreground",
         rail && "justify-center px-0",
       )}
     >
-      <Icon className="size-[18px] shrink-0" />
+      {running ? (
+        <span className="grid size-[18px] shrink-0 place-items-center">
+          <Spinner className="size-3.5 text-primary" />
+        </span>
+      ) : (
+        <Icon className="size-[18px] shrink-0" />
+      )}
       {!rail && <span className="truncate">{page.label}</span>}
     </NavLink>
   )

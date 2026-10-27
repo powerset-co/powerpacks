@@ -19,6 +19,8 @@ vi.mock("@/lib/api/update", () => ({
 vi.mock("@/lib/api/relay", () => ({ connectRelay: vi.fn() }))
 vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: false, auto_reply: false }) }))
 vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: vi.fn(() => false) }))
+const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
+vi.mock("@/lib/api/install", () => install)
 vi.mock("@/pages/agent/Chats", () => ({ Chats: () => null }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
 
@@ -35,6 +37,7 @@ function mount() {
 
 beforeEach(() => {
   auth.fetchAccount.mockResolvedValue({ signed_in: false, email: null, name: null, picture: null })
+  install.fetchInstall.mockResolvedValue({ status: "waiting", message: "Connect Gmail in your browser" })
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
     media: query,
@@ -53,6 +56,14 @@ it("lists Setup until setup is done", async () => {
   expect(screen.getByRole("link", { name: "People" })).toBeTruthy()
   // Searches heads the chats section instead of being a page link.
   expect(screen.queryByRole("link", { name: "Searches" })).toBeNull()
+})
+
+it("turns the Setup item while setup runs, the running step's line as its tip", async () => {
+  install.fetchInstall.mockResolvedValue({ status: "running", message: "Building your search index" })
+  mount()
+  const setup = await screen.findByRole("link", { name: "Setup" })
+  await waitFor(() => expect(setup.getAttribute("title")).toBe("Building your search index"))
+  expect(setup.querySelector(".animate-spin")).toBeTruthy()
 })
 
 it("drops Setup once setup is done; Settings offers Repair setup instead", async () => {
