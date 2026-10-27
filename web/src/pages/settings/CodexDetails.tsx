@@ -23,7 +23,8 @@ function summary(status: CodexStatus | undefined): { name: string; plan: string 
 }
 
 /** The Codex account that runs Chat, signed in with ChatGPT; its plan as a badge beside it. Desktop app only.
- *  `explained`: the line under the account (what it is for); the onboarding keeps its words on the right. */
+ *  `explained`: the line under the account (what it is for); without it the action sits on the account row
+ *  (the onboarding keeps its words on the right). */
 export function CodexDetails({ codex, explained = true }: { codex: CodexAccountState; explained?: boolean }) {
   const { name, plan, connected } = summary(codex.status)
   return (
@@ -36,25 +37,24 @@ export function CodexDetails({ codex, explained = true }: { codex: CodexAccountS
         <Badge variant={connected ? "ok" : "muted"} className="ml-auto">
           {codex.loading ? "Checking" : connected ? "Connected" : "Not connected"}
         </Badge>
+        {!explained && !codex.login ? <CodexAction codex={codex} connected={connected} /> : null}
       </div>
       {codex.login ? (
         <div className="mt-3">
           <ChatGptSignIn codex={codex} compact />
         </div>
-      ) : (
+      ) : explained ? (
         <div className="mt-2 flex min-h-7 items-center justify-between gap-3">
           <p className="m-0 text-xs text-muted-foreground">
-            {!explained
-              ? null
-              : codex.status?.installed && codex.status.account?.kind === "apiKey"
-                ? "Uses your API key. API usage is billed separately."
-                : connected
-                  ? "Runs Chat with your connected account."
-                  : "Connect ChatGPT to run Chat on your plan."}
+            {codex.status?.installed && codex.status.account?.kind === "apiKey"
+              ? "Uses your API key. API usage is billed separately."
+              : connected
+                ? "Runs Chat with your connected account."
+                : "Connect ChatGPT to run Chat on your plan."}
           </p>
           <CodexAction codex={codex} connected={connected} />
         </div>
-      )}
+      ) : null}
       {codex.error && <p className="m-0 mt-2 text-xs text-bad">{codex.error}</p>}
     </div>
   )

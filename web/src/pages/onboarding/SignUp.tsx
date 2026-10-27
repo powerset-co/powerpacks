@@ -124,6 +124,7 @@ function InviteCode() {
           <DialogBody>
             <Input
               value={code}
+              className="focus-visible:ring-0 focus-visible:ring-offset-0"
               placeholder="e.g. POWER-7F3K"
               aria-label="Invite code"
               onChange={(event) => setCode(event.target.value.toUpperCase())}
