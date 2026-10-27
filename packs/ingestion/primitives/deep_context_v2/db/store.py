@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, DELETED_DDL, FAMILIES_DDL, RELATIONSHIP_KIND_COLUMN_DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
+from packs.ingestion.primitives.deep_context_v2.db.schema import DDL, DELETED_DDL, FAMILIES_DDL, NAME_COLUMNS_DDL, RELATIONSHIP_KIND_COLUMN_DDL, REVIEW_QUEUE_DDL, SCHEMA_VERSION, SETS_DDL, PEOPLE_TABLES_DDL, TAGS_VIEW_DDL
 
 STORE_RELATIVE_PATH = Path("deep-context") / "deep-context-v2.sqlite"
 
@@ -66,6 +66,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 7:
         _migrate_7_to_8(conn)
         version = 8
+    if version == 8:
+        _migrate_8_to_9(conn)
+        version = 9
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -152,3 +155,14 @@ def _migrate_7_to_8(conn: sqlite3.Connection) -> None:
     conn.executescript(FAMILIES_DDL)
     with conn:
         conn.execute("UPDATE meta SET value = '8' WHERE key = 'schema_version'")
+
+
+def _migrate_8_to_9(conn: sqlite3.Connection) -> None:
+    """Add the human's name for a person; nothing saved changes."""
+    with conn:
+        # A schema-2 store gets these columns when its person_tags table is created above.
+        present = {row["name"] for row in conn.execute("PRAGMA table_info(person_tags)")}
+        for column in NAME_COLUMNS_DDL:
+            if column.split()[0] not in present:
+                conn.execute(f"ALTER TABLE person_tags ADD COLUMN {column}")
+        conn.execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'")

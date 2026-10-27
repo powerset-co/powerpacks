@@ -2,6 +2,7 @@
 
 POST /api/people/worth records human worth for every member of the selected families.
 POST /api/people/relationship records a human relationship choice, preserved by refresh.
+POST /api/people/name {parent_id, name} records the human's name for the person, preserved by refresh.
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
 POST /api/people/delete {ids} hides each family for good (deleted_parents; no row is removed); returns `deleted`, the count.
@@ -160,6 +161,28 @@ def decide_worth(conn: sqlite3.Connection, people: SharePeople, ids: tuple[str, 
                 queries_review.insert_worth(conn, candidate_id, worth, "human", now)
 
 
+def parse_name_request(body: bytes) -> tuple[str, str]:
+    """Validate the human's name for a person at the HTTP boundary."""
+    try:
+        request = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid JSON body") from exc
+    if not isinstance(request, dict):
+        raise ValueError("body must be an object")
+    parent_id = request.get("parent_id")
+    if not isinstance(parent_id, str) or not parent_id:
+        raise ValueError("parent_id must be a non-empty string")
+    name = request.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name must be a non-empty string")
+    return parent_id, " ".join(name.split())
+
+
+def decide_name(conn: sqlite3.Connection, parent_id: str, name: str) -> None:
+    """Write the human's name to each member and the page's row; facts and labels never change."""
+    queries_share.write_name(conn, parent_id, tuple(_members(conn).get(parent_id, ())), name, now_iso())
+
+
 def decide_relationship(conn: sqlite3.Connection, people: SharePeople, parent_id: str, kind: str) -> None:
     """Write the human's choice to each member; machine label refreshes never touch it."""
     prior = TagStore(conn).load().get(parent_id)
@@ -216,7 +239,7 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}relationship", f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
+        if parsed.path not in {f"{API_PREFIX}relationship", f"{API_PREFIX}name", f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
                                f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
                                f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
                                f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
@@ -284,6 +307,9 @@ class ShareRoutes:
             if parsed.path == f"{API_PREFIX}relationship":
                 parent_id, kind = parse_relationship_request(body)
                 ids = (parent_id,)
+            elif parsed.path == f"{API_PREFIX}name":
+                parent_id, name = parse_name_request(body)
+                ids = (parent_id,)
             elif parsed.path == f"{API_PREFIX}worth":
                 ids, worth = parse_worth_request(body)
             else:
@@ -295,6 +321,8 @@ class ShareRoutes:
         try:
             if parsed.path == f"{API_PREFIX}relationship":
                 decide_relationship(self.conn, self.people, parent_id, kind)
+            elif parsed.path == f"{API_PREFIX}name":
+                decide_name(self.conn, parent_id, name)
             elif parsed.path == f"{API_PREFIX}worth":
                 decide_worth(self.conn, self.people, ids, worth)
             else:

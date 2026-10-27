@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_realize import FamilyRow, Identifier, Member
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, IdentifierKind, Worth
@@ -89,7 +89,7 @@ def facts_title(facts: dict[str, Any]) -> tuple[str, str]:
 class Realize(Node):
     name = "realize"
     reads = ("current_parent", "current_worth", "current_profile", "candidates", "candidate_identifiers",
-             "candidate_sources", "facts", "research", "deleted_parents")
+             "candidate_sources", "facts", "research", "deleted_parents", "person_tags")
     writes = ("families",)
 
     def build(self) -> tuple[list[dict[str, str]], dict[str, int]]:
@@ -102,6 +102,7 @@ class Realize(Node):
         channels: dict[str, list[str]] = queries_realize.channels_by_candidate(self.conn)
         profile_keys: dict[str, str] = queries_realize.profile_keys(self.conn)
         worth: dict[str, Worth] = queries_realize.worth_by_parent(self.conn)
+        names: dict[str, str] = queries_share.names_by_parent(self.conn)
         research_profiles = {stored["parent_id"]: json.loads(stored["result_json"])["content"]
                              for stored in self.conn.execute(
             "SELECT p.parent_id, r.result_json FROM current_parent p JOIN current_linkedins l USING (candidate_id) "
@@ -176,9 +177,11 @@ class Realize(Node):
                         if value and len(value) > len(row[column]):
                             row[column] = value
 
-            # The family's one name: the profile's when it has one, else the display name of the
-            # member with the most messages.
-            if not row["full_name"]:
+            # The family's one name: the human's when they gave one, else the profile's when it has one,
+            # else the display name of the member with the most messages.
+            if parent_id in names:
+                row["full_name"] = names[parent_id]
+            elif not row["full_name"]:
                 row["full_name"] = ordered[0].display_name
 
             # Worth is not a people column: a worth-no family is exported like any other and counted.
@@ -196,16 +199,17 @@ class Realize(Node):
 
     def family_rows(self, rows: list[dict[str, str]]) -> list[FamilyRow]:
         """The families table's rows: the export row's profile and message columns, with the family's facts
-        filling what the profile lacks (the page's name, title, company and location)."""
+        filling what the profile lacks (the page's name, title, company and location). The human's name wins."""
         members: dict[str, list[MemberFacts]] = {}
         for member in queries_worth.members_with_facts(self.conn):
             members.setdefault(member.family_key, []).append(member)
+        names: dict[str, str] = queries_share.names_by_parent(self.conn)
         families: list[FamilyRow] = []
         for row in rows:
             facts: dict[str, Any] = family_facts(members[row["id"]]).to_payload()
             title, company = facts_title(facts)
             families.append((row["id"], row["public_identifier"], row["linkedin_url"],
-                             str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],
+                             names.get(row["id"]) or str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],
                              row["current_title"] or title, row["current_company"] or company,
                              row["location_raw"] or str(facts.get("location") or ""), row["profile_picture_url"],
                              row["source_channels"], row["interaction_counts"], row["last_interaction"]))

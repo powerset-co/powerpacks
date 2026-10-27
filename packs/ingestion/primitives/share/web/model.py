@@ -238,8 +238,9 @@ class SharePeople:
         cells = parse_json_object(label.labels_json)
         held = queries_share.current_tags(self.conn).get(parent_id)
         worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
-        name = str(facts.get("canonical_name") or "") or row["name"]
-        known_as = (*(member.display_name for member in card.members), *(str(alias) for alias in facts.get("aliases") or []))
+        name = row["name"]
+        known_as = (str(facts.get("canonical_name") or ""), *(member.display_name for member in card.members),
+                    *(str(alias) for alias in facts.get("aliases") or []))
         emails: list[str] = []
         phones: list[str] = []
         for identifier in card.identifiers:

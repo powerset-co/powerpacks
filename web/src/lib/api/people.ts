@@ -1,9 +1,10 @@
-// The People page's four routes on the Python review server (share/web/server.py).
+// The People page's routes on the Python review server (share/web/server.py).
 
 import { body, failure } from "@/lib/api/http"
 import { lastBucket, warmthBucket } from "@/lib/people/facets"
 import {
   PERSON_COLUMNS,
+  type NameResult,
   type PeoplePayload,
   type Person,
   type PersonDetail,
@@ -28,6 +29,22 @@ export async function writeRelationship(
   return (await body<{ rows: RelationshipResult[] }>(response)).rows
 }
 
+/** Writes the human's name for the family; returns the family's row as the server now holds it. */
+export async function writeName(parent_id: string, name: string): Promise<NameResult[]> {
+  const response = await fetch(`${API}name`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent_id, name }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't save the name.")
+  return (await body<{ rows: NameResult[] }>(response)).rows
+}
+
+/** The text the search box matches a row on. */
+export function searchText(row: Pick<Person, "name" | "title" | "company" | "location">): string {
+  return `${row.name} ${row.title} ${row.company} ${row.location}`.toLowerCase()
+}
+
 type PersonCells = Omit<Person, "last" | "warmthBucket" | "search" | "logbook">
 
 /** One `Person` per columnar row, decoded by column name, with the derived fields. Throws
@@ -44,7 +61,7 @@ export function decodePeople(payload: PeoplePayload): Person[] {
       ...row,
       last: lastBucket(row.recency_days),
       warmthBucket: warmthBucket(row.warmth),
-      search: `${row.name} ${row.title} ${row.company} ${row.location}`.toLowerCase(),
+      search: searchText(row),
       logbook: null,
     }
   })
