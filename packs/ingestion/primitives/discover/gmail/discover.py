@@ -417,7 +417,7 @@ class GmailDiscovery(Node):
         fresh: bool = False,
         limit: int = 0,
         no_attachments: bool = False,
-        on_progress: Callable[[int, int], None] | None = None,
+        on_progress: Callable[[str, int, int], None] | None = None,
     ) -> None:
         # ONE resolution point for configuration (see resolve_discovery_inputs):
         # explicit overrides > discovery.config defaults. account_emails IS the
@@ -449,7 +449,8 @@ class GmailDiscovery(Node):
                 fresh=fresh,
                 limit=limit,
                 no_attachments=no_attachments,
-                on_progress=on_progress,
+                # The mailboxes sync one after another; the caller adds them up by name.
+                on_progress=(lambda read, total, email=email: on_progress(email, read, total)) if on_progress else None,
             )
             for email in self.config.account_emails
         ]

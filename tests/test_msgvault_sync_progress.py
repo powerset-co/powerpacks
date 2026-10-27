@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from packs.ingestion.primitives.discover.gmail.msgvault.sync import _SyncWatcher
+from packs.powerset.primitives.install.workflow import GmailCount
 
 
 class SyncWatcherTest(unittest.TestCase):
@@ -27,6 +28,14 @@ class SyncWatcherTest(unittest.TestCase):
             watcher.on_line('level=INFO msg="sync completed" messages_added=12\n')
             self.assertEqual(watcher.total, 2369)
         self.assertEqual(seen, [])
+
+
+class GmailCountTest(unittest.TestCase):
+    def test_mailboxes_add_up_and_a_mailbox_never_starts_the_count_over(self) -> None:
+        count = GmailCount()
+        self.assertEqual(count.add("a@example.com", 500, 2369), {"read": 500, "total": 2369})
+        self.assertEqual(count.add("a@example.com", 2369, 2369), {"read": 2369, "total": 2369})
+        self.assertEqual(count.add("b@example.com", 10, 800), {"read": 2379, "total": 3169})
 
 
 if __name__ == "__main__":
