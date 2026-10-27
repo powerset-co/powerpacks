@@ -20,11 +20,12 @@ export function secondsLeft(samples: readonly Sample[], total: number): number |
   return left / (progressed / elapsed)
 }
 
-/** "about 4 min left", "under a minute left", "about 2 h left". */
+/** "about 4 min left", "under a minute left", "about 1 h 20 min left". */
 export function leftText(seconds: number): string {
   if (seconds < 60) return "under a minute left"
   const minutes = Math.round(seconds / 60)
   if (minutes < 60) return `about ${minutes} min left`
-  const hours = Math.round(minutes / 60)
-  return `about ${hours} h left`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest ? `about ${hours} h ${rest} min left` : `about ${hours} h left`
 }

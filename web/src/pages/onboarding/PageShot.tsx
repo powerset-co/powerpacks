@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 
+import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
 // Until the picture is there, ask again this often.
@@ -7,7 +8,8 @@ const POLL_MS = 3_000
 
 /** A picture of a page a run is on, in a window of its own: the LinkedIn connections page as the
  *  read starts, or Google Cloud as the Gmail app is set up. Asked for until it is there; while
- *  `reading`, asked for again every few seconds, since the run keeps taking new ones. */
+ *  `reading`, asked for again every few seconds, since the run keeps taking new ones. Until it is
+ *  there, a shimmering frame of the same size stands where it will be. */
 export function PageShot({
   url,
   address,
@@ -28,13 +30,7 @@ export function PageShot({
   }, [shown, reading, url])
   return (
     <figure className="m-0 flex flex-col gap-3">
-      <div
-        className={cn(
-          "overflow-hidden rounded-[var(--radius-m)] border border-line-strong bg-background shadow-[var(--shadow-2)] transition-opacity duration-slow ease-out",
-          shown ? "opacity-100" : "opacity-0",
-        )}
-        aria-hidden={!shown}
-      >
+      <div className="overflow-hidden rounded-[var(--radius-m)] border border-line-strong bg-background shadow-[var(--shadow-2)]">
         <div className="flex h-7 items-center gap-1.5 border-b border-line bg-card px-3">
           <span className="size-2 rounded-full bg-line-strong" />
           <span className="size-2 rounded-full bg-line-strong" />
@@ -42,10 +38,14 @@ export function PageShot({
           <span className="ml-2 truncate text-[10px] text-faint">{address}</span>
         </div>
         <div className="relative">
+          {shown ? null : <Skeleton className="aspect-[8/5] w-full rounded-none" aria-hidden />}
           <img
             src={src}
             alt={caption}
-            className="block w-full"
+            className={cn(
+              "block w-full transition-opacity duration-slow ease-out",
+              shown ? "opacity-100" : "hidden",
+            )}
             onLoad={() => setShown(true)}
             onError={() => setShown(false)}
           />
