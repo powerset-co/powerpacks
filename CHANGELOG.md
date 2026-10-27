@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.40.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.3...powerpacks-v3.40.0) (2026-10-27)
+
+
+### Features
+
+* **gateway:** the Powerset login stands in for a gateway key ([#923](https://github.com/powerset-co/powerpacks/issues/923)) ([19ef059](https://github.com/powerset-co/powerpacks/commit/19ef0596c37d97f1ecceb7bbb5e8f79df1b518d8))
+* **index:** LinkedIn import and index build on Modal through the Powerset API ([#921](https://github.com/powerset-co/powerpacks/issues/921)) ([044c565](https://github.com/powerset-co/powerpacks/commit/044c5654f3a27be187285107404d5127cbf4e977))
+* **people:** the human's name for a person (rename in the drawer and from chat) ([#924](https://github.com/powerset-co/powerpacks/issues/924)) ([031e6d7](https://github.com/powerset-co/powerpacks/commit/031e6d78a7a50e7772c516ae58051f0cfd698609))
+
 ## [3.39.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.39.2...powerpacks-v3.39.3) (2026-10-26)
 
 
