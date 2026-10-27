@@ -43,7 +43,7 @@ export function Sources() {
   const setup = STEPS.find((step) => step.key === "setup")
   const done = () => {
     setError(null)
-    continueSetup({})
+    continueSetup({ sources: ["linkedin", "gmail", "imessage", "whatsapp"] })
       .then(() => setup && void navigate(setup.href, { state: { startedAt: Date.now() } }))
       .catch((caught: unknown) => setError(errorText(caught)))
   }
