@@ -107,7 +107,7 @@ class DedupeNameRecallTests(unittest.TestCase):
     def test_cached_same_verdict_merges_once_and_preserves_human_tags(self) -> None:
         self.add("a", "Jordan Bravo Photography", "Jordan Bravo")
         self.add("b", "jordanbravophoto", "Jordan Bravo")
-        self.conn.execute("INSERT INTO person_tags VALUES (?, ?, ?, ?, ?)",
+        self.conn.execute("INSERT INTO person_tags (candidate_id, tags, relationship_kind, note, updated_at) VALUES (?, ?, ?, ?, ?)",
                           ("a", "friend", "friend", "human note", NOW))
         first = self.node()
         queries_dedupe.insert_pair_verdict(self.conn, ("a", "b", first.signature("a", "b"), 1, 1.0,
@@ -120,7 +120,8 @@ class DedupeNameRecallTests(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_parent").fetchone()[0], rows)
         self.assertEqual(queries_dedupe.current_parents(self.conn)["a"],
                          queries_dedupe.current_parents(self.conn)["b"])
-        self.assertEqual(tuple(self.conn.execute("SELECT * FROM person_tags").fetchone()),
+        self.assertEqual(tuple(self.conn.execute(
+            "SELECT candidate_id, tags, relationship_kind, note, updated_at FROM person_tags").fetchone()),
                          ("a", "friend", "friend", "human note", NOW))
 
 

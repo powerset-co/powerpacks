@@ -297,7 +297,8 @@ class GmailAttributionPipelineTests(unittest.TestCase):
     def _human_decisions(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
                      "VALUES (?, 'maybe', 'human', 'Keep my decision', ?)", (CASEY, STAMP))
-        conn.execute("INSERT INTO person_tags VALUES (?, 'trusted', 'close_friend', 'Human note', ?)", (CASEY, STAMP))
+        conn.execute("INSERT INTO person_tags (candidate_id, tags, relationship_kind, note, updated_at) "
+                     "VALUES (?, 'trusted', 'close_friend', 'Human note', ?)", (CASEY, STAMP))
         conn.execute("INSERT INTO deleted_parents SELECT parent_id, ? FROM current_parent WHERE candidate_id=?",
                      (STAMP, MORGAN))
         conn.execute("INSERT INTO candidate_linkedins (candidate_id, linkedin_url, member_id, origin, verdict, "

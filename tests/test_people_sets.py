@@ -78,7 +78,7 @@ class FamiliesTableTests(unittest.TestCase):
             conn.close()
             conn = open_store(root / "store.sqlite")
             self.addCleanup(conn.close)
-            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], "8")
+            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], "9")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM families").fetchone()[0], 0)
             people = SharePeople(conn, root)
             self.assertEqual([row["name"] for row in conn.execute("SELECT name FROM families")], ["Jordan Bravo"])

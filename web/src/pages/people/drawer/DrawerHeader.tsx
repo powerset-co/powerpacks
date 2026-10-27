@@ -1,10 +1,14 @@
-import { Fragment, useState, type ReactNode } from "react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import { ProxiedLinkedinAvatar, DrawerClose, LinkedinLink, SourcePill, Tip } from "@/components/shared"
+import { searchText, writeName } from "@/lib/api/people"
 import { toChannels, type Channel } from "@/lib/channels"
 import { monthYear, plural } from "@/lib/copy"
 import { label } from "@/lib/people/copy"
 import type { Person, PersonDetail } from "@/types/people"
+
+import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
 
 interface DrawerHeaderProps {
   row: Person
@@ -12,6 +16,74 @@ interface DrawerHeaderProps {
   // The icon actions beside Close.
   action: ReactNode
   onClose: () => void
+  onRefresh: () => void
+}
+
+// The name, which a click turns into a field: Enter saves the human's name for the family (kept on
+// refresh, like a relationship choice), Escape or leaving the field drops the edit.
+function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
+  const client = useQueryClient()
+  const [draft, setDraft] = useState<string | null>(null)
+  const field = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (draft !== null) field.current?.select()
+  }, [draft])
+  const save = useMutation({
+    mutationFn: (name: string) => writeName(row.parent_id, name),
+    onSuccess: (results) => {
+      const byId = new Map(results.map((result) => [result.parent_id, result.name]))
+      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) =>
+        current?.map((person) => {
+          const name = byId.get(person.parent_id)
+          return name === undefined ? person : { ...person, name, search: searchText({ ...person, name }) }
+        }),
+      )
+      setDraft(null)
+      onRefresh()
+    },
+  })
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") setDraft(null)
+    if (event.key !== "Enter") return
+    const name = (draft ?? "").trim()
+    if (!name || name === row.name) setDraft(null)
+    else save.mutate(name)
+  }
+  if (draft === null && !save.isPending)
+    return (
+      <h2>
+        <button
+          type="button"
+          className="name-edit"
+          title="Rename"
+          disabled={row.in_progress}
+          onClick={() => setDraft(row.name)}
+        >
+          {row.name}
+        </button>
+      </h2>
+    )
+  return (
+    <h2>
+      <input
+        ref={field}
+        className="name-edit"
+        aria-label="Name"
+        value={draft ?? row.name}
+        disabled={save.isPending}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          if (!save.isPending) setDraft(null)
+        }}
+      />
+      {save.error ? (
+        <span role="alert" className="sub text-destructive">
+          {save.error.message}
+        </span>
+      ) : null}
+    </h2>
+  )
 }
 
 // The detail's strings are "" when it has none; then the row's stand in.
@@ -80,7 +152,7 @@ function ContactLine({ row }: { row: Person }) {
 
 // Who this is and how to reach them: the row draws it at once; the detail adds the headline,
 // picture, LinkedIn link, and the emails and numbers.
-export function DrawerHeader({ row, detail, action, onClose }: DrawerHeaderProps) {
+export function DrawerHeader({ row, detail, action, onClose, onRefresh }: DrawerHeaderProps) {
   const avatar = orNone(detail?.avatar_url) ?? (row.avatar_url || undefined)
   const headline = orNone(detail?.headline) ?? [row.title, row.company].filter(Boolean).join(" · ")
   const channels = toChannels(row.channels)
@@ -89,7 +161,7 @@ export function DrawerHeader({ row, detail, action, onClose }: DrawerHeaderProps
       <ProxiedLinkedinAvatar name={row.name} size={40} src={avatar} />
       <div className="who">
         <div className="name-row">
-          <h2>{row.name}</h2>
+          <Name row={row} onRefresh={onRefresh} />
           {detail?.linkedin_url ? <LinkedinLink url={detail.linkedin_url} /> : null}
         </div>
         {headline ? <div className="sub">{headline}</div> : null}

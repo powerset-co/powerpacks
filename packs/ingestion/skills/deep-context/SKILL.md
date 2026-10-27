@@ -169,6 +169,7 @@ tell the user the count and the names and wait for yes; the other writes just ha
 | Ask | Write |
 |---|---|
 | Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. |
+| Rename | `POST /api/people/name` `{"parent_id": "<parent_id>", "name": "Fahad AlSharekh"}`. The name every page, export and lookup shows from then on; facts stay as written. One person per request. Undo: set the `name` column NULL on the family's `person_tags` rows and run realize. |
 | Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
 | Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. The list replaces the person's tags. Only the label names are tags: is_family, is_close_friend, is_personal, is_professional, is_classmate, is_coworker_current, is_coworker_past, is_client, is_vendor_or_partner, is_investor, is_founder, is_recruiter, is_mentor_or_advisor, is_mentee_or_report, is_service_provider, is_healthcare_legal_or_financial_provider, is_hr_benefits_or_payroll, is_support_billing_or_landlord, is_neighbor_or_local, is_automated_sender, is_transactional, is_stranger, is_minor, met_in_person, notable, owner_would_intro, they_would_take_owner_call, confidential_dealings. Any other word is refused; pick the closest and tell the user. |
 | Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good: a `deleted_parents` row, and its `families` row goes. Members and decisions stay. Undo on request: delete the `deleted_parents` row and run `bin/deep-context-v2 realize` (free). |
@@ -177,9 +178,10 @@ tell the user the count and the names and wait for yes; the other writes just ha
 | Wrong LinkedIn | On the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
 
 What a merged family shows: its keep/skip is the newest human call among its members (else the newest machine
-one); tags are the union; the name is the members' majority `canonical_name`, so two members tie and the row
-may read as either until the next run refreshes facts; the row says in progress until the next run relabels
-the family. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families and
+one); tags are the union; the name is the newest human name among its members, else the members' majority
+`canonical_name` (two members tie and the row may read as either), so "merge these and call him Fahad
+AlSharekh" is the merge insert plus one rename; the row says in progress until the next run relabels
+the family. A rename writes every member, so after a split both sides keep it until renamed again. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families and
 never splits one, and it never re-judges a pair on evidence it has a verdict for, so a human merge or split
 stands. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
 its next update.

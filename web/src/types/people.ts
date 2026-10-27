@@ -164,6 +164,11 @@ export interface WorthResult {
 }
 
 /** What a relationship write changes on the row: the kind, and the flag and reason that follow it. */
+export interface NameResult {
+  parent_id: string
+  name: string
+}
+
 export interface RelationshipResult {
   parent_id: string
   relationship_kind: string
