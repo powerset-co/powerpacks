@@ -95,7 +95,17 @@ function People({
 /** The first look, in the Set up screen's right column once people are in: a few people the
  *  person knows and the questions the index can answer, answered right here. Once search is ready
  *  the ways on are Add more sources and Start searching now, a new chat. Rises in over the page picture. */
-export function FirstLookPanel({ look, ready }: { look: FirstLook; ready: boolean }) {
+/** `sourcesNext`: on Set up the way on is Add more sources (primary) with Start searching now
+ *  beside it; on Import the sources are in, so Start searching now stands alone as primary. */
+export function FirstLookPanel({
+  look,
+  ready,
+  sourcesNext = true,
+}: {
+  look: FirstLook
+  ready: boolean
+  sourcesNext?: boolean
+}) {
   const navigate = useNavigate()
   const [asked, setAsked] = useState<string | null>(null)
   const answer = useQuery({
@@ -157,10 +167,12 @@ export function FirstLookPanel({ look, ready }: { look: FirstLook; ready: boolea
       ) : null}
       {ready ? (
         <div className="flex flex-wrap gap-2">
-          <Button variant="primary" onClick={() => sources && void navigate(sources.href)}>
-            Add more sources
-          </Button>
-          <Button variant="secondary" onClick={() => void navigate(AGENT.href)}>
+          {sourcesNext ? (
+            <Button variant="primary" onClick={() => sources && void navigate(sources.href)}>
+              Add more sources
+            </Button>
+          ) : null}
+          <Button variant={sourcesNext ? "secondary" : "primary"} onClick={() => void navigate(AGENT.href)}>
             Start searching now
           </Button>
         </div>
