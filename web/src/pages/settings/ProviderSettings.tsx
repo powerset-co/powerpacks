@@ -4,16 +4,27 @@ import openaiLogo from "@/assets/providers/openai.png?inline"
 import typesafeLogo from "@/assets/providers/typesafe.png?inline"
 import rapidapiLogo from "@/assets/providers/rapidapi.png?inline"
 
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
-import { useState } from "react"
+import { useState, type FormEvent } from "react"
 
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
 import { openExternal } from "@/lib/api/install"
 import { isDesktop } from "@/lib/desktop"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
-import { fetchProviders, type Provider } from "@/lib/api/providers"
+import { fetchProviders, saveProviderKeys, type Provider } from "@/lib/api/providers"
 import { errorText } from "@/lib/api/http"
 
 /** Local key status has its own query so it never holds up accounts or other settings. */
@@ -91,12 +102,13 @@ function ProviderRow({ provider }: { provider: Provider }) {
       state={provider.connected ? "ready" : "needed"}
       action={{ label: "Connect", onClick: visit }}
     >
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {provider.credentials.map((credential) => (
           <span key={credential.name} className="break-all font-mono">
             {credential.name} <span className="text-foreground">{credential.masked ?? "Not set"}</span>
           </span>
         ))}
+        <KeysDialog provider={provider} />
       </div>
       {error && (
         <p role="alert" className="m-0 text-xs text-bad">
@@ -104,5 +116,82 @@ function ProviderRow({ provider }: { provider: Provider }) {
         </p>
       )}
     </ConnectionRow>
+  )
+}
+
+const LINK =
+  "cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline disabled:opacity-50"
+
+/** The provider's keys, typed in: one field per credential, written to .env on Save. */
+function KeysDialog({ provider }: { provider: Provider }) {
+  const client = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [values, setValues] = useState<Record<string, string>>({})
+  const save = useMutation({
+    mutationFn: saveProviderKeys,
+    onSuccess: (data) => {
+      client.setQueryData(["settings", "providers"], data)
+      setValues({})
+      setOpen(false)
+    },
+  })
+  const typed = Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim()))
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (Object.keys(typed).length) save.mutate(typed)
+  }
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button type="button" className={LINK}>
+          {provider.connected ? "Change key" : "Enter key"}
+        </button>
+      </DialogTrigger>
+      <DialogContent>
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>{provider.name} key</DialogTitle>
+            <DialogDescription>
+              Saved to this computer only. A field left empty keeps its current value.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="flex flex-col gap-3">
+            {provider.credentials.map((credential) => (
+              <label key={credential.name} className="flex flex-col gap-1 text-xs">
+                <span className="font-mono text-muted-foreground">{credential.name}</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={values[credential.name] ?? ""}
+                  placeholder={credential.masked ?? "Paste the key"}
+                  onChange={(event) => setValues({ ...values, [credential.name]: event.target.value })}
+                  className="h-8 rounded-[var(--radius-s)] border border-line-strong bg-card px-2 text-sm text-foreground outline-none focus-visible:border-[color-mix(in_srgb,var(--primary)_55%,var(--line-strong))]"
+                />
+              </label>
+            ))}
+            {save.error ? (
+              <p role="alert" className="m-0 text-xs text-bad">
+                {errorText(save.error)}
+              </p>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary" size="sm">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={!Object.keys(typed).length || save.isPending}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

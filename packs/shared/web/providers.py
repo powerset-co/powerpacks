@@ -1,9 +1,11 @@
-"""Local provider configuration for Settings. No credentials leave except masked tails; no API calls."""
+"""Local provider configuration for Settings: read as masked tails, set by typing a key in (written to
+the checkout's .env). No API calls."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import write_env
 from packs.shared.web import account
 
 
@@ -49,3 +51,22 @@ def read(root: Path) -> dict[str, object]:
                           "connected": all(credential["configured"] for credential in credentials),
                           "credentials": credentials, "connect_url": provider.connect_url})
     return {"providers": providers}
+
+
+# Every credential a provider row shows, the only names Settings may set.
+NAMES = frozenset(name for provider in _PROVIDERS for names in provider.credentials for name in names)
+
+
+def save(root: Path, payload: object) -> dict[str, object]:
+    """Writes the typed keys (`{"values": {NAME: value}}`) to the checkout's .env and answers the rows as read
+    afterwards. A name that is not a provider credential, or an empty value, is refused."""
+    values = payload.get("values") if isinstance(payload, dict) else None
+    if not isinstance(values, dict) or not values:
+        raise ValueError("values is a map of credential names to keys")
+    for name, value in values.items():
+        if name not in NAMES:
+            raise ValueError(f"{name} is not a provider credential")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} needs a value")
+    write_env(root / ".env", {name: value.strip() for name, value in values.items()})
+    return read(root)

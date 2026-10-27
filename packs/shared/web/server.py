@@ -61,6 +61,7 @@ PRIMITIVE = "reconcile_review_web"  # the health identity every Powerpacks page 
 DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
 MAX_FEATURE_REQUEST_BYTES = 1024
+MAX_PROVIDER_REQUEST_BYTES = 4096
 MAX_SCOPE_REQUEST_BYTES = 1024
 MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
 MAX_TEAM_REQUEST_BYTES = 160 * 1024  # support text, including UTF-8 and JSON escaping
@@ -338,7 +339,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             parsed = urllib.parse.urlparse(self.path)
             if self._team(parsed):
                 return
-            if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope"):
+            if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope", "/api/settings/providers"):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
                     self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
@@ -360,6 +361,15 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     flags = features.FeatureFlags.parse(json.loads(self.rfile.read(length)),
                                                         support=features.read(root).support)
                     self._json(features.save(root, flags))
+                except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/settings/providers":
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_PROVIDER_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    self._json(providers.save(root, json.loads(self.rfile.read(length))))
                 except ValueError as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
                 return

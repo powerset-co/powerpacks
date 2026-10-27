@@ -14,3 +14,14 @@ export async function fetchProviders(signal: AbortSignal): Promise<{ providers: 
   if (!response.ok) throw await failure(response, "Couldn't read API connections.")
   return body<{ providers: Provider[] }>(response)
 }
+
+/** Writes typed keys to the checkout's .env; answers the rows as read afterwards. */
+export async function saveProviderKeys(values: Record<string, string>): Promise<{ providers: Provider[] }> {
+  const response = await fetch("/api/settings/providers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't save the key.")
+  return body<{ providers: Provider[] }>(response)
+}
