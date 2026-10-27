@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.41.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.41.0...powerpacks-v3.41.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **gmail:** no clicks in the person's window ([#941](https://github.com/powerset-co/powerpacks/issues/941)) ([f56890b](https://github.com/powerset-co/powerpacks/commit/f56890b13754f19f7f854ec8b3458c99c4c20649))
+* **gmail:** the consent wait survives a page mid-navigation ([#939](https://github.com/powerset-co/powerpacks/issues/939)) ([01c1252](https://github.com/powerset-co/powerpacks/commit/01c1252cdee9708a771198b366bca42123aca65a))
+* **onboarding:** the index stage shows its phase alone; no Open Powerpacks button ([#938](https://github.com/powerset-co/powerpacks/issues/938)) ([ff30382](https://github.com/powerset-co/powerpacks/commit/ff303822f9ecca182e63440541db57a030e3ba70))
+* **onboarding:** WhatsApp keeps its guide while it connects ([#942](https://github.com/powerset-co/powerpacks/issues/942)) ([11f86b2](https://github.com/powerset-co/powerpacks/commit/11f86b2150a05479fee8cfbe972fe03ffd37996a))
+
 ## [3.41.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.40.0...powerpacks-v3.41.0) (2026-10-27)
 
 
