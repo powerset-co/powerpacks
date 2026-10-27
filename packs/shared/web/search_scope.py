@@ -3,10 +3,12 @@
 `.env` holds the choice the way `$search` already reads it: POWERPACKS_DEFAULT_SET_ID names the
 set, and POWERPACKS_LOCAL_SEARCH_DB, when set, makes the local index the default. The sets are the
 signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no sign-in there are
-none. With no set of theirs in `.env` (none yet, or one an import brought from another account),
-searches default to their largest set, written to `.env` so search and picker agree.
+none. With no choice in `.env` (a fresh install, or a set an import brought from another account),
+searches default to this Mac's local index, written to `.env` so search and picker agree.
 
 Changelog:
+  2026-10-27: no choice in .env defaults to the local index, not the largest set: a new install
+      searches its own network first.
   2026-10-14: no set of yours in .env defaults to your largest set; counts come with the sets.
   2026-10-14: created; the chat's search picker reads and writes it through /api/search/scope.
 """
@@ -40,10 +42,8 @@ def read(root: Path) -> dict[str, Any]:
         selected = LOCAL
     elif env.get(SET_KEY) in {row["set_id"] for row in sets}:
         selected = env[SET_KEY]
-    elif sets:
-        return save(root, sets[0]["set_id"])
     else:
-        selected = ""
+        return save(root, LOCAL)
     return {"sets": sets, "local": (root / LOCAL_INDEX).is_file(), "selected": selected}
 
 
