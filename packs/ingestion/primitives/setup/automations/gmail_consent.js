@@ -105,7 +105,15 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
           /Authorization successful!/.test(text)
           ? { status: "ok" } : { status: "error", message: "msgvault rejected the OAuth callback." };
       }
-      const action = consentAction(await snapshot(page), request);
+      // A page mid-navigation (the person just clicked, or Google moved on) throws out of the
+      // snapshot or the click: that is a moment, not the end. The deadline ends the wait.
+      let action;
+      try {
+        action = consentAction(await snapshot(page), request);
+      } catch (_) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
       if (action.kind === "human") {
         if (!human) {
           progress("sign_in");
@@ -118,20 +126,25 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
         await page.waitForTimeout(1000);
         continue;
       }
-      if (action.kind === "account") {
-        await page.locator(`[data-identifier=${JSON.stringify(action.email)}], [data-email=${JSON.stringify(action.email)}]`)
-          .first().click({ timeout: 2500 });
-      } else if (action.kind === "checkbox") {
-        await page.getByRole("checkbox", { name: action.name, exact: true }).check({ timeout: 2500 });
-      } else {
-        await page.getByRole("button", { name: action.name, exact: true }).or(
-          page.getByRole("link", { name: action.name, exact: true })).first().click({ timeout: 2500 });
+      try {
+        if (action.kind === "account") {
+          await page.locator(`[data-identifier=${JSON.stringify(action.email)}], [data-email=${JSON.stringify(action.email)}]`)
+            .first().click({ timeout: 2500 });
+        } else if (action.kind === "checkbox") {
+          await page.getByRole("checkbox", { name: action.name, exact: true }).check({ timeout: 2500 });
+        } else {
+          await page.getByRole("button", { name: action.name, exact: true }).or(
+            page.getByRole("link", { name: action.name, exact: true })).first().click({ timeout: 2500 });
+        }
+      } catch (_) {
+        // The element moved or the page changed under the click: look again.
       }
       await page.waitForTimeout(500);
     }
     return { status: "needs_user_action", message: "Google sign-in did not finish. Retry authorization to reopen Chrome." };
-  } catch (_) {
-    return { status: "needs_user_action", message: "Google authorization could not finish. Retry and complete sign-in in Chrome." };
+  } catch (error) {
+    return { status: "needs_user_action",
+      message: `Google authorization could not finish (${error && error.message ? error.message.split("\n")[0] : error}). Retry and complete sign-in in Chrome.` };
   } finally {
     await context.close().catch(() => {});
     if (human) returnFocus();
