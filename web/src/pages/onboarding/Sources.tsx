@@ -16,13 +16,12 @@ import { PageShot } from "./PageShot"
 import type { GuideSource } from "./guide/demos"
 import { STEPS } from "./steps"
 
-const NAMES = { gmail: "Gmail", whatsapp: "WhatsApp", linkedin: "LinkedIn" } as const
-
 /** Sources: the other sign-ins, each a row of the Connect list (Messages is the Full Disk Access
  *  switch, Gmail and WhatsApp their sign-ins). Start starts setup over every connected source (their
  *  imports, then deep context once, then the index) and opens Set up on its progress; the app is one
  *  click from there. The right column shows what each source adds until a source's icon or Connect
- *  is clicked: then its guide, what the person is about to see, with their own name in it. */
+ *  is clicked: then its guide, what the person is about to see, with their own name in it. While
+ *  Gmail connects, the column shows the run instead: its line and the Google Cloud pictures. */
 export function Sources() {
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
@@ -36,12 +35,10 @@ export function Sources() {
     refetchInterval: POLL_MS,
   })
   const record = connection.data
-  const working =
-    record !== undefined && live(record)
-      ? (["gmail", "whatsapp", "linkedin"] as const).find((source) =>
-          SOURCE_STEPS[source].includes(record.step),
-        )
-      : undefined
+  // Gmail's run takes the right column (its line and the Google Cloud pictures); WhatsApp keeps
+  // its guide, which is what the person is doing on their phone.
+  const gmailWorking =
+    record !== undefined && live(record) && SOURCE_STEPS.gmail.includes(record.step) ? record : undefined
   const person = { name: account.data?.name ?? "You", email: account.data?.email ?? "" }
   const setup = STEPS.find((step) => step.key === "setup")
   const done = () => {
@@ -70,24 +67,22 @@ export function Sources() {
         </>
       }
       right={
-        working && record ? (
+        gmailWorking ? (
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1">
               <h2 className="m-0 flex items-center gap-2 text-[15px] font-semibold">
-                <Spinner /> Connecting {NAMES[working]}
+                <Spinner /> Connecting Gmail
               </h2>
               <p className="m-0 text-[13px] text-muted-foreground" aria-live="polite">
-                {record.message}
+                {gmailWorking.message}
               </p>
             </div>
-            {working === "gmail" ? (
-              <PageShot
-                url="/api/install/gmail-page"
-                address="console.cloud.google.com"
-                caption="Google Cloud, as Powerpacks sets up your Gmail app"
-                reading
-              />
-            ) : null}
+            <PageShot
+              url="/api/install/gmail-page"
+              address="console.cloud.google.com"
+              caption="Google Cloud, as Powerpacks sets up your Gmail app"
+              reading
+            />
           </div>
         ) : guide ? (
           <Guide key={guide} source={guide} person={person} />
