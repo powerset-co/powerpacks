@@ -14,11 +14,11 @@ import { Frame, Heading, Info, Note } from "./Frame"
 import { Guide } from "./guide/Guide"
 import { PageShot } from "./PageShot"
 import type { GuideSource } from "./guide/demos"
-import { STEPS } from "./steps"
+import { after } from "./steps"
 
 /** Sources: the other sign-ins, each a row of the Connect list (Messages is the Full Disk Access
  *  switch, Gmail and WhatsApp their sign-ins). Start starts setup over every connected source (their
- *  imports, then deep context once, then the index) and opens Set up on its progress; the app is one
+ *  imports, then deep context once, then the index) and opens Import on its progress; the app is one
  *  click from there. The right column shows what each source adds until a source's icon or Connect
  *  is clicked: then its guide, what the person is about to see, with their own name in it. While
  *  Gmail connects, the column shows the run instead: its line and the Google Cloud pictures. */
@@ -40,11 +40,11 @@ export function Sources() {
   const gmailWorking =
     record !== undefined && live(record) && SOURCE_STEPS.gmail.includes(record.step) ? record : undefined
   const person = { name: account.data?.name ?? "You", email: account.data?.email ?? "" }
-  const setup = STEPS.find((step) => step.key === "setup")
+  const next = after("sources")
   const done = () => {
     setError(null)
     continueSetup({ sources: ["linkedin", "gmail", "imessage", "whatsapp"] })
-      .then(() => setup && void navigate(setup.href, { state: { startedAt: Date.now() } }))
+      .then(() => next && void navigate(next.href, { state: { startedAt: Date.now() } }))
       .catch((caught: unknown) => setError(errorText(caught)))
   }
   return (

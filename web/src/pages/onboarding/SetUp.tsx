@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate, useParams } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -133,6 +133,8 @@ export function SetUp() {
   })
   // Opened by Continue: the record is the last run's until the new one writes, so a record from
   // before the click is not shown (the moment the run starts, it replaces it).
+  // The same screen serves Set up (the LinkedIn run) and Import (the run over every source).
+  const step = useParams().step === "import" ? "import" : "setup"
   const state: unknown = useLocation().state
   const startedAt = isRecord(state) && typeof state.startedAt === "number" ? state.startedAt : undefined
   const record = install.data?.data
@@ -194,7 +196,7 @@ export function SetUp() {
   const indexProgress = data?.step === "index" ? data.index_progress : null
   return (
     <Frame
-      step="setup"
+      step={step}
       left={
         <>
           <h1 className="m-0 text-[22px] font-bold leading-tight">
