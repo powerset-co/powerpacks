@@ -13,6 +13,7 @@ Created: 2026-10-27
 """
 from __future__ import annotations
 
+import atexit
 import base64
 import gzip
 import json
@@ -80,6 +81,10 @@ class ErrorReporter(logging.Handler):
     def __init__(self, root: Path) -> None:
         super().__init__(level=logging.ERROR)
         self.root = root
+        # The reports in flight: a setup run writes its stop and exits at once, which would
+        # kill a daemon thread mid-request, so the process waits for them before it ends.
+        self.inflight: list[threading.Thread] = []
+        atexit.register(self.drain)
 
     def emit(self, record: logging.LogRecord) -> None:
         stop = getattr(record, "record", None)
@@ -91,8 +96,16 @@ class ErrorReporter(logging.Handler):
         else:
             detail = record.getMessage()
         category = "setup" if stop is not None else "app"
-        threading.Thread(target=self._report, args=(record.getMessage(), detail, category), name="error-report",
-                         daemon=True).start()
+        thread = threading.Thread(target=self._report, args=(record.getMessage(), detail, category),
+                                  name="error-report", daemon=True)
+        self.inflight.append(thread)
+        thread.start()
+
+    def drain(self, timeout: float = 20.0) -> None:
+        """Wait for the reports in flight, each for at most `timeout` seconds."""
+        for thread in self.inflight:
+            thread.join(timeout)
+        self.inflight.clear()
 
     def _report(self, where: str, detail: str, category: str) -> None:
         try:
