@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { fetchInstall } from "@/lib/api/install"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
+import { COLLAPSE_EVENT, COLLAPSED_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
@@ -30,7 +31,6 @@ import { PowersetMark } from "./PowersetMark"
 import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
 
-const COLLAPSED_KEY = "sidebar.collapsed"
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
 const RAIL_ONLY_QUERY = "(max-width: 900px)"
 
@@ -82,6 +82,11 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
+  useEffect(() => {
+    const collapse = () => setCollapsed(true)
+    window.addEventListener(COLLAPSE_EVENT, collapse)
+    return () => window.removeEventListener(COLLAPSE_EVENT, collapse)
+  }, [])
   const railOnly = useMedia(RAIL_ONLY_QUERY)
   const rail = collapsed || railOnly
   const toggle = () => {
