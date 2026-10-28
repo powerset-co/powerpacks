@@ -1,9 +1,9 @@
 name: desktop
 
-# Built at release only (Release Please calls this workflow for the stable build without the
-# debug menu) or by hand: a macOS minute costs ten Linux ones, and the two legs took 15 minutes
-# each on every PR and every main merge. A test build with the debug menu: run it by hand on a
-# branch with "release" off.
+# Built at release only (Release Please calls this workflow for the stable Apple Silicon build
+# without the debug menu) or by hand: a macOS minute costs ten Linux ones, and the build took
+# 15 minutes on every PR and every main merge. By hand: a test build with the debug menu
+# ("release" off), or the Intel app ("intel" on), downloaded from that run's artifacts.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +15,10 @@ on:
         description: Git ref to build.
         type: string
         required: true
+      intel:
+        description: Also build the Intel app (Powerpacks-macos-x64.dmg).
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
@@ -37,8 +41,9 @@ jobs:
   build:
     name: Build macOS dmg (${{ matrix.arch }})
     runs-on: macos-latest
-    # Both Macs from the one Apple Silicon runner: the Intel app is a cross-build (Rust target,
-    # Intel sidecars); its bundle lands under target/<triple>, the native one under target.
+    # The Intel leg runs only when asked for: a cross-build from the same Apple Silicon runner
+    # (Rust target, Intel sidecars); its bundle lands under target/<triple>, the native one under target.
+    if: ${{ matrix.arch == 'arm64' || inputs.intel }}
     strategy:
       fail-fast: false
       matrix:
