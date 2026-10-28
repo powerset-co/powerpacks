@@ -3,6 +3,8 @@
 import { invoke } from "@/lib/desktop"
 import { isRecord } from "@/lib/utils"
 
+export const DEBUG_KEY = ["desktop-debug"] as const
+
 export interface DebugState {
   enabled: boolean
   setupSkipped: boolean

@@ -1,17 +1,23 @@
+import { useQuery } from "@tanstack/react-query"
 import { ChevronRight } from "lucide-react"
 import type { ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 
+import { DEBUG_KEY, fetchDebugState } from "@/lib/api/debug"
+import { isDesktop } from "@/lib/desktop"
 import { cn } from "@/lib/utils"
 
 import { STEPS, type StepKey } from "./steps"
 
 /** The onboarding window: the steps across the top with a line under the ones reached, then two
  *  columns: what to do on the left, what it is about on the right. No Back and no Skip: each
- *  screen moves on by its own action, and the step bar is the way around. */
+ *  screen moves on by its own action. The steps are plain labels in a release build; a test build
+ *  (the debug menu on) and the browser view make them links, a way around while working on them. */
 export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; right: ReactNode }) {
   const navigate = useNavigate()
   const index = STEPS.findIndex((item) => item.key === step)
+  const debug = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState, enabled: isDesktop() })
+  const linked = !isDesktop() || debug.data?.enabled === true
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground" data-onboarding={step}>
       <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-line">
@@ -21,18 +27,26 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
         >
           {STEPS.map((item, at) => (
             <li key={item.key} className="flex items-center gap-3">
-              {/* Each step is a link to its screen, so any screen is a click away. */}
-              <button
-                type="button"
-                aria-current={at === index ? "step" : undefined}
-                className={cn(
-                  "cursor-pointer border-0 bg-transparent p-0 font-semibold uppercase tracking-[.1em] hover:text-foreground",
-                  at === index ? "text-foreground" : "text-faint",
-                )}
-                onClick={() => void navigate(item.href)}
-              >
-                {item.label}
-              </button>
+              {linked ? (
+                <button
+                  type="button"
+                  aria-current={at === index ? "step" : undefined}
+                  className={cn(
+                    "cursor-pointer border-0 bg-transparent p-0 font-semibold uppercase tracking-[.1em] hover:text-foreground",
+                    at === index ? "text-foreground" : "text-faint",
+                  )}
+                  onClick={() => void navigate(item.href)}
+                >
+                  {item.label}
+                </button>
+              ) : (
+                <span
+                  aria-current={at === index ? "step" : undefined}
+                  className={at === index ? "text-foreground" : "text-faint"}
+                >
+                  {item.label}
+                </span>
+              )}
               {at < STEPS.length - 1 ? <ChevronRight className="size-3.5 text-faint" aria-hidden /> : null}
             </li>
           ))}

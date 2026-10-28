@@ -7,6 +7,7 @@ import { DebugMenu } from "./DebugMenu"
 
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true, desktopPlatform: () => "macos" }))
 vi.mock("@/lib/api/debug", () => ({
+  DEBUG_KEY: ["desktop-debug"],
   fetchDebugState: () => Promise.resolve({ enabled: true, setupSkipped: false }),
   resetData: vi.fn(),
   skipSetup: vi.fn(),
