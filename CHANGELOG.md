@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.44.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.4...powerpacks-v3.44.0) (2026-10-28)
+
+
+### Features
+
+* **browser:** ship Powerpacks' own Chromium for the sign-in automations ([#968](https://github.com/powerset-co/powerpacks/issues/968)) ([dce3905](https://github.com/powerset-co/powerpacks/commit/dce3905dbb765613ccf6e973e28cc80496e7bd0a))
+* **nav:** Accounts is a page in the side nav again ([#965](https://github.com/powerset-co/powerpacks/issues/965)) ([ce09c15](https://github.com/powerset-co/powerpacks/commit/ce09c156cdd352a75a4eb71e972774e08c5f3b63))
+
+
+### Bug Fixes
+
+* **accounts:** one heading on the Accounts page ([#967](https://github.com/powerset-co/powerpacks/issues/967)) ([1cff1dc](https://github.com/powerset-co/powerpacks/commit/1cff1dc0ce9132bea86bd1070dab7b980971de07))
+
 ## [3.43.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.3...powerpacks-v3.43.4) (2026-10-28)
 
 
