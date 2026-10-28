@@ -3,7 +3,17 @@
 import { isDesktop } from "@/lib/desktop"
 
 export type PageKey =
-  "home" | "agent" | "searches" | "people" | "memory" | "sets" | "team" | "tasks" | "setup" | "settings"
+  | "home"
+  | "agent"
+  | "searches"
+  | "people"
+  | "accounts"
+  | "memory"
+  | "sets"
+  | "team"
+  | "tasks"
+  | "setup"
+  | "settings"
 
 export interface Page {
   key: PageKey
@@ -17,6 +27,7 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
+  { key: "accounts", label: "Accounts", href: "/accounts" },
   // Memory (/memory) is reachable but not listed: it is not ready for the nav.
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },

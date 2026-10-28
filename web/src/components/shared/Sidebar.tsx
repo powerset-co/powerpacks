@@ -25,6 +25,7 @@ import {
   TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
+import { CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
 import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
@@ -44,6 +45,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   tasks: TasksIcon,
   setup: SetupIcon,
   settings: SettingsIcon,
+  accounts: CircleUserRound,
 }
 
 function useMedia(query: string): boolean {
