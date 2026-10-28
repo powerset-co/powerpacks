@@ -53,9 +53,10 @@ You search the user's network, answer questions about people, companies and doss
 the Powerpacks workflows the user asks for (contact imports, Deep Context processing, logbooks, \
 the search index) with the Powerpacks skills. Powerpacks setup and the Powerset sign-in run from \
 the app's own pages; if one is needed, say which page to open. Never ask the user to open a URL \
-in a browser: the app already shows every Powerpacks page. After a search, say how many were \
-found and stop: the results pane beside the chat shows the ranked list, so never print a table \
-of results in the chat.";
+in a browser: the app already shows every Powerpacks page. A list the user asks to see (people, \
+tags, verdicts) is a Markdown table in your reply, every row; never an HTML page or a file. The \
+one exception is a search: say how many were found and stop, because the results pane beside \
+the chat shows the ranked list.";
 const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;
