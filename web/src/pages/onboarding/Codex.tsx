@@ -61,15 +61,16 @@ export function Codex() {
             note="Sign in once; Powerpacks keeps the session. Next: LinkedIn, then a first look at people you know."
           />
           {signedIn ? null : (
-            <div className="flex flex-col gap-2.5 rounded-[var(--radius-m)] border border-line-strong bg-background px-4 py-3.5">
-              <h3 className="m-0 text-[13px] font-semibold">No ChatGPT account yet?</h3>
-              <p className="m-0 text-[13px] text-muted-foreground">
-                A free account is enough. Create one in your browser, then come back and sign in here.
-              </p>
-              <Button size="lg" asChild>
-                <a href={SIGN_UP_URL}>Create a ChatGPT account ↗</a>
-              </Button>
-            </div>
+            <p className="m-0 text-xs text-muted-foreground">
+              No ChatGPT account yet? A free one is enough:{" "}
+              <a
+                href={SIGN_UP_URL}
+                className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                create one in your browser ↗
+              </a>
+              , then sign in here.
+            </p>
           )}
         </>
       }
