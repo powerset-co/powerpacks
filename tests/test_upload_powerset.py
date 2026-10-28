@@ -557,11 +557,11 @@ class NamespaceResolutionTests(unittest.TestCase):
             names = {namespace.logical: upload_powerset.tp_backend.namespace_name(namespace.logical)
                      for namespace in NAMESPACES}
         self.assertEqual(names, {
-            "people": "aleph_people_v1_dev",
-            "summaries": "aleph_summaries_v1_dev",
-            "education": "aleph_people_education_v1_dev",
-            "companies": "aleph_companies_v1_dev",
-            "schools": "aleph_education_v1_dev",
+            "people": "aleph_people_v3_dev",
+            "summaries": "aleph_summaries_v3_dev",
+            "education": "aleph_people_education_v3_dev",
+            "companies": "aleph_companies_v3_dev",
+            "schools": "aleph_education_v3_dev",
         })
 
 
