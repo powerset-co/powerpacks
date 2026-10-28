@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Callable, Literal
 
 from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME, SignIn, gmail_signins, read_accounts, signed_in
+from packs.ingestion.primitives.discover.gmail.windows import window_start, windows
 from packs.ingestion.primitives.refresh.refresh_sources import (
     SourceResult,
     sync_gmail,
@@ -47,6 +48,7 @@ from packs.ingestion.primitives.setup.automations.accounts import add_account
 ACCOUNTS_PATH = "/accounts/api/accounts"
 SIGNED_IN_PATH = "/accounts/api/signed-in"
 SYNC_PATH = "/accounts/api/sync"
+WINDOWS_PATH = "/accounts/api/gmail/windows"
 RECONNECT_PATH = "/accounts/api/reconnect"
 
 MESSAGE_SYNCS: dict[str, Callable[[], SourceResult]] = {"imessage": sync_imessage, "whatsapp": sync_whatsapp}
@@ -72,6 +74,13 @@ class AccountsApi:
             self._signins = gmail_signins()
             _send_json(handler, asdict(signed_in(self._signins)))
             return True
+        if parsed.path == WINDOWS_PATH:
+            email = urllib.parse.parse_qs(parsed.query).get("email", [""])[0]
+            try:
+                _send_json(handler, windows(MSGVAULT_HOME, email))
+            except Exception as error:  # noqa: BLE001 - Google or the token said no; the card shows why
+                _send_json(handler, {"error": f"Could not count {email}: {error}"}, HTTPStatus.BAD_GATEWAY)
+            return True
         if parsed.path != ACCOUNTS_PATH:
             return False
         self._signins = gmail_signins(self._signins)
@@ -88,10 +97,13 @@ class AccountsApi:
         length = int(handler.headers.get("Content-Length") or 0)
         form = {key: values[0] for key, values in urllib.parse.parse_qs(handler.rfile.read(length).decode()).items()}
         source, email = form.get("source"), form.get("email")
+        # A Gmail sync may name how far back to go (the Accounts page's slider): years, 0 for all.
+        years = int(form["years"]) if form.get("years", "").isdigit() else None
         if parsed.path == SYNC_PATH and source in MESSAGE_SYNCS:
             self._start(source, lambda: self._sync(source, lambda: [MESSAGE_SYNCS[source]()]))
         elif parsed.path == SYNC_PATH and source == "gmail" and email:
-            self._start(email, lambda: self._sync(email, lambda: sync_gmail(only=email)))
+            after = window_start(years) if years is not None else ""
+            self._start(email, lambda: self._sync(email, lambda: sync_gmail(only=email, sync_after=after)))
         elif parsed.path == RECONNECT_PATH and email:
             self._start(email, lambda: self._reconnect(email))
         else:
