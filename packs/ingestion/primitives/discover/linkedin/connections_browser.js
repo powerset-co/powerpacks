@@ -45,6 +45,7 @@
 const fs = require("fs");
 const { chromium } = require("playwright-core");
 const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
+const { shownCount } = require("./count.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
 // Where LinkedIn sends a browser whose session is missing, expired or challenged.
@@ -106,13 +107,16 @@ async function signedIn(page) {
   ]).catch(() => false);
 }
 
-// LinkedIn's own count at the top of the list ("1,234 connections"), read once.
+// LinkedIn's own count at the top of the list, read once (count.js knows the line).
 async function shownTotal(page) {
-  const text = await page.waitForFunction(() => [...document.querySelectorAll("main *")]
+  const leaves = () => page.evaluate(() => [...document.querySelectorAll("main *")]
     .map((element) => (element.childElementCount ? "" : element.textContent.trim()))
-    .find((text) => /^[\d,.]+ connections?$/i.test(text)), null, { timeout: 15000 })
-    .then((handle) => handle.jsonValue(), () => "");
-  return text ? Number(text.replace(/\D/g, "")) : null;
+    .filter(Boolean));
+  for (const deadline = Date.now() + 15000; Date.now() < deadline; await page.waitForTimeout(500)) {
+    const total = shownCount(await leaves().catch(() => []));
+    if (total !== null) return total;
+  }
+  return null;
 }
 
 // LinkedIn's data export: --export request asks for the larger archive unless a
@@ -268,11 +272,7 @@ async function main() {
       return;
     }
     const total = await shownTotal(page);
-    if (total === null) {
-      result({ status: "error", message: "LinkedIn did not show how many connections you have." });
-      return;
-    }
-    log(`reading your connections (LinkedIn shows ${total})`);
+    log(total === null ? "reading your connections" : `reading your connections (LinkedIn shows ${total})`);
     // One picture of the page as it stands, for the setup screen (--screenshot <png path>).
     if (args.screenshot) {
       // The first cards' pictures first, so the page looks the way the person knows it.

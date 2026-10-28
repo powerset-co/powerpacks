@@ -210,6 +210,7 @@ PROSE: dict[str, Prose] = {
     "linkedin.sync.current": Prose(InstallStep.LINKEDIN, C, "LinkedIn connections ready"),
     "linkedin.reading": Prose(InstallStep.LINKEDIN, R, "Reading your LinkedIn connections"),
     "linkedin.reading.count": Prose(InstallStep.LINKEDIN, R, "Reading your LinkedIn connections: {read:,} of {total:,}"),
+    "linkedin.reading.read": Prose(InstallStep.LINKEDIN, R, "Reading your LinkedIn connections: {read:,}"),
     "linkedin.done.read": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new)"),
     "linkedin.done.partial": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new); LinkedIn shows {total:,}"),
     "linkedin.done.limit": Prose(InstallStep.LINKEDIN, C, "{connections:,} LinkedIn connections ({added:,} new). The rest keep syncing on your next run; your contacts are ready to process now."),
