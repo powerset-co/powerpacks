@@ -84,10 +84,7 @@ export function AccountsSettings() {
     linkedin: detail("linkedin"),
   }
   return (
-    <section className="flex flex-col gap-3" aria-labelledby="settings-accounts">
-      <h2 id="settings-accounts" className="m-0 text-[15px] font-semibold">
-        Accounts
-      </h2>
+    <section className="flex flex-col gap-3" aria-label="Accounts">
       {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
       {actionError && (
         <p role="alert" className="m-0 text-xs text-bad">
