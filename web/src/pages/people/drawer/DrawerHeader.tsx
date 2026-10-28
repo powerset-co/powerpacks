@@ -26,9 +26,12 @@ function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
   const client = useQueryClient()
   const [draft, setDraft] = useState<string | null>(null)
   const field = useRef<HTMLInputElement>(null)
+  // Select the whole name once, as the edit opens; not on every keystroke, which would replace
+  // what was just typed.
+  const editing = draft !== null
   useEffect(() => {
-    if (draft !== null) field.current?.select()
-  }, [draft])
+    if (editing) field.current?.select()
+  }, [editing])
   const save = useMutation({
     mutationFn: (name: string) => writeName(row.parent_id, name),
     onSuccess: (results) => {
