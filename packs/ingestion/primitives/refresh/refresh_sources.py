@@ -99,14 +99,15 @@ def _run_status(results: list[SourceResult]) -> Literal["ok", "needs_you", "fail
 # ---------------------------------------------------------------- Gmail
 
 
-def sync_gmail(only: str | None = None) -> list[SourceResult]:
-    """New mail for every signed-in account, or for `only` (one card's Sync). The
-    contact rebuild always reads every stored account, so none is ever dropped."""
+def sync_gmail(only: str | None = None, sync_after: str = "") -> list[SourceResult]:
+    """New mail for every signed-in account, or for `only` (one card's Sync), from `sync_after`
+    (a date; the Accounts page's window) or from where the last sync stopped. The contact
+    rebuild always reads every stored account, so none is ever dropped."""
     with _one_sync_at_a_time():
-        return _sync_gmail(only)
+        return _sync_gmail(only, sync_after)
 
 
-def _sync_gmail(only: str | None) -> list[SourceResult]:
+def _sync_gmail(only: str | None, sync_after: str = "") -> list[SourceResult]:
     emails = _msgvault_emails()
     if not emails:
         return [SourceResult("gmail", "not_connected", "No Gmail account in msgvault.")]
@@ -124,7 +125,8 @@ def _sync_gmail(only: str | None) -> list[SourceResult]:
 
     config = resolve_discovery_inputs(account_emails=emails)
     for email in check["healthy_accounts"]:
-        synced = sync_msgvault_account(email, config.msgvault_db, config.sync_query)
+        synced = (sync_msgvault_account(email, config.msgvault_db, config.sync_query, sync_after_override=sync_after)
+                  if sync_after else sync_msgvault_account(email, config.msgvault_db, config.sync_query))
         if synced["status"] == "failed":
             return [SourceResult("gmail", "failed", f"msgvault sync failed for {email}.", [email])]
     discovered = GmailDiscovery(account_emails=emails, skip_msgvault_sync=True).run()

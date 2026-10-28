@@ -46,3 +46,27 @@ export function syncAccount(account: Account): Promise<void> {
 export function reconnectGmail(email: string): Promise<void> {
   return post("/accounts/api/reconnect", { email }, "Couldn't start the sign-in.")
 }
+
+/** How far back a Gmail sync could go: what each window holds, what is synced, the measured pace. */
+export interface GmailWindows {
+  email: string
+  windows: { years: number; messages: number }[]
+  synced: number
+  // Messages a second over the mailbox's completed syncs here.
+  pace: number
+}
+
+export async function fetchGmailWindows(email: string, signal?: AbortSignal): Promise<GmailWindows> {
+  const response = await fetch(`/accounts/api/gmail/windows?${new URLSearchParams({ email })}`, { signal })
+  if (!response.ok) throw await failure(response, "Couldn't count that mailbox.")
+  return body<GmailWindows>(response)
+}
+
+/** Syncs one mailbox over a window: `years` back, 0 for everything. */
+export function syncGmailWindow(email: string, years: number): Promise<void> {
+  return post(
+    "/accounts/api/sync",
+    { source: "gmail", email, years: String(years) },
+    "Couldn't start the sync.",
+  )
+}

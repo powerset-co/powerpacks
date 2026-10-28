@@ -14,6 +14,7 @@ import { isDesktop } from "@/lib/desktop"
 import type { Account, AccountSource, AccountHealth, Job, JobsPayload } from "@/types/accounts"
 
 import { Connect } from "@/pages/install/Connect"
+import { GmailWindow } from "@/pages/settings/GmailWindow"
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
 
 const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
@@ -187,6 +188,9 @@ function AccountDetails({ account, job, onReconnect, onSync }: AccountDetailsPro
           </>
         )}
       </dl>
+      {account.source === "gmail" && account.health !== "error" && !running ? (
+        <GmailWindow email={account.name} />
+      ) : null}
     </div>
   )
 }
