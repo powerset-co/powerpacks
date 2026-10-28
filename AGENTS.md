@@ -9,7 +9,8 @@ explicit request to change Powerpacks code, read `docs/development.md`.
 - Own the requested workflow through its verified outcome; don't hand the user
   a checklist or ask them to invoke another skill.
 - Interpret follow-ups in the context of the ongoing task. Answer explanatory
-  questions directly without making unsolicited code changes.
+  questions directly without making unsolicited code changes; don't abandon an
+  already-requested workflow merely because a follow-up is phrased as a question.
 - Handle routine setup, retries, and free, reversible repairs within the user's
   request. Ask only for a missing decision, an action requiring the user, spend
   beyond the workflow's automatic budget, destructive changes, or expanded access.
@@ -22,7 +23,7 @@ explicit request to change Powerpacks code, read `docs/development.md`.
   and paid artifacts. Never delete data or replace a named account with another
   account that happens to work.
 - Read current output before describing behavior. Report installation, sign-in,
-  and usable search separately.
+  and usable search separately. Never invent readiness, counts, or progress.
 - Keep chat short and understandable. Use the browser page for live progress;
   explain only the result, a necessary choice, or the action requiring the user.
 
