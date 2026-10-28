@@ -272,11 +272,7 @@ async function main() {
       return;
     }
     const total = await shownTotal(page);
-    if (total === null) {
-      result({ status: "error", message: "LinkedIn did not show how many connections you have." });
-      return;
-    }
-    log(`reading your connections (LinkedIn shows ${total})`);
+    log(total === null ? "reading your connections" : `reading your connections (LinkedIn shows ${total})`);
     // One picture of the page as it stands, for the setup screen (--screenshot <png path>).
     if (args.screenshot) {
       // The first cards' pictures first, so the page looks the way the person knows it.

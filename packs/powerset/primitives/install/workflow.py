@@ -380,8 +380,9 @@ class SourceOnboarding:
             return True
         self._write("linkedin.reading")
         result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
-            on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total,
-                                                    details={"read": read, "total": total}))
+            on_count=lambda read, total: self._write(
+                "linkedin.reading.count" if total is not None else "linkedin.reading.read", read=read, total=total,
+                details={"read": read, "total": total}))
         return self._result(result, f"linkedin.done.{result.get('outcome')}", failed="linkedin.failed",
                             waiting="linkedin.waiting",
                             **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})

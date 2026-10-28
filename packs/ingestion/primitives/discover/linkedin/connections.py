@@ -230,7 +230,8 @@ class LinkedInConnections:
             CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, rows)
         save_pictures(payload["connections"], self.csv_path.with_name(PICTURES.name))
         total, stopped, read = payload["total"], payload["stopped"], len(payload["connections"])
-        stalled = stopped == "end" and read < total * STALL_SHARE
+        # The stall rule needs LinkedIn's count; a page that did not show one is read as far as it goes.
+        stalled = total is not None and stopped == "end" and read < total * STALL_SHARE
         complete = (previous.get("complete", True) if stopped == "known"
                     else stopped == "end" and not stalled)
         # A stalled read asks LinkedIn for the data export; a later run imports it.
@@ -242,7 +243,7 @@ class LinkedInConnections:
             "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
             "updated_at": now_iso()})
         outcome = ("export_requested" if stalled and export in ("requested", "pending") else "stalled" if stalled
-                   else "limit" if stopped == "limit" else "partial" if len(rows) < total else "read")
+                   else "limit" if stopped == "limit" else "partial" if total is not None and len(rows) < total else "read")
         return {
             "status": "completed",
             "outcome": outcome,
