@@ -3,6 +3,7 @@
 
 import type { SignedIn } from "@/lib/api/accounts"
 import { fetchPreflight, installPreflight, type ConnectSource, type Preflight } from "@/lib/api/install"
+import { isRecord } from "@/lib/utils"
 import type { InstallStatus, InstallStep } from "@/types/install"
 
 // While a sign-in or an install is still running, ask again this often.
@@ -33,10 +34,18 @@ export function live(record: InstallStatus): boolean {
 
 export type Standing =
   | { state: "working"; qr?: string }
-  | { state: "needed"; stopped: true; line: string; command?: string }
+  | { state: "needed"; stopped: true; line: string; detail: string | null; command?: string }
   | { state: "checking" }
   | { state: "ready" }
   | { state: "needed" }
+
+/** A stop's own words: the message or error the primitive put in the record's details. */
+export function stopDetail(record: InstallStatus): string | null {
+  const details = record.action?.details
+  if (!isRecord(details)) return null
+  const text = details.message ?? details.error
+  return typeof text === "string" && text.trim() && text !== record.message ? text : null
+}
 
 /** Where one source stands: its sign-in under way (the connect record), else whether it is signed
  *  in (accounts.signed_in, the answer setup takes), else whether its last sign-in stopped. */
@@ -50,7 +59,13 @@ export function standing(
   // Stopped: failed, or waiting with nothing left running (a password, a closed window). It comes
   // before the sign-in answer: a Gmail mailbox added to a signed-in one can stop.
   if (own && (own.status === "failed" || own.status === "waiting"))
-    return { state: "needed", stopped: true, line: own.message, command: own.action?.command }
+    return {
+      state: "needed",
+      stopped: true,
+      line: own.message,
+      detail: stopDetail(own),
+      command: own.action?.command,
+    }
   if (signed === undefined) return { state: "checking" }
   return signed[source] ? { state: "ready" } : { state: "needed" }
 }
