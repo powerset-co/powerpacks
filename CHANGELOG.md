@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.45.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.2...powerpacks-v3.45.3) (2026-10-28)
+
+
+### Bug Fixes
+
+* **accounts:** msgvault says which mailboxes exist; its database is opened only for those ([#989](https://github.com/powerset-co/powerpacks/issues/989)) ([57fb5cc](https://github.com/powerset-co/powerpacks/commit/57fb5cc8c9d52c1d333758305e59a339a6714fe9))
+
 ## [3.45.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.1...powerpacks-v3.45.2) (2026-10-28)
 
 
