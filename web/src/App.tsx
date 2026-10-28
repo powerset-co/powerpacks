@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "rea
 
 import { DebugMenu, EmptyState, ErrorBoundary, Sidebar } from "@/components/shared"
 import { BrokenPage } from "@/components/shared/DebugMenu"
+import { routeExternalLinks } from "@/lib/externalLinks"
 import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
@@ -29,6 +30,8 @@ function Shell() {
   useEffect(() => {
     document.title = `${page.label} · Powerpacks`
   }, [page])
+  // Links to other sites open in the system browser (a no-op outside the desktop app).
+  useEffect(routeExternalLinks, [])
   return (
     <div className="page-enter grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
       <Sidebar />
