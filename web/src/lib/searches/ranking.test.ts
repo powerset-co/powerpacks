@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { RANKED_NAMES, RUN } from "@/testing/searches-fixture"
 import type { PondCandidate, SearchResult } from "@/types/searches"
 
-import { overallScore, pondRows, rankResults } from "./ranking"
+import { overallScore, pondRows, pondSections, rankResults } from "./ranking"
 
 const { search } = RUN
 
@@ -81,6 +81,24 @@ describe("rankResults", () => {
     expect(rankResults(unscreened).mode).toBe("ponds")
     const failed = withRows((row) => ({ ...row, cross_encoder_score: null, cross_encoder_status: "failed" }))
     expect(rankResults(failed).mode).toBe("unavailable")
+  })
+})
+
+describe("pondSections", () => {
+  it("hides people under 0.3", () => {
+    const pond = search.ponds[0]
+    if (!pond) throw new Error("fixture has no ponds")
+    const scored = {
+      ...pond,
+      candidates: pond.candidates.map((row, index) => ({
+        ...row,
+        final_score: [0.2, 0.9, 0.29, 0.3][index] ?? 0,
+      })),
+    }
+    const sections = pondSections(search, scored)
+    expect(sections.map((section) => section.rows.map((result) => result.row.name))).toEqual([
+      ["Casey Delta", "Riley Foxtrot"],
+    ])
   })
 })
 
