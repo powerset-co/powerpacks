@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.45.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.3...powerpacks-v3.45.4) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gmail:** the Google sign-in window is the person's until it is done ([#991](https://github.com/powerset-co/powerpacks/issues/991)) ([2e12377](https://github.com/powerset-co/powerpacks/commit/2e123773701aa45f4d2f186c6c826ff3cbfd81a3))
+
 ## [3.45.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.2...powerpacks-v3.45.3) (2026-10-28)
 
 
