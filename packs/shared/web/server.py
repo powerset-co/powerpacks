@@ -195,6 +195,13 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             return mounted["handler"]
 
     class Handler(BaseHTTPRequestHandler):
+        def handle(self) -> None:
+            # A request that throws is logged, so it reports itself (report.py).
+            try:
+                super().handle()
+            except Exception:
+                logging.getLogger(__name__).exception("Request failed: %s", getattr(self, "path", ""))
+
         def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
@@ -522,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(url)
         return 0
     report.install(root)
-    with _Server((args.host, args.port), persistent_handler(root)) as server:
+    with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
@@ -534,11 +541,6 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("\nshutting down", file=sys.stderr)
     return 0
-
-
-class _Server(ThreadingHTTPServer):
-    def handle_error(self, request, client_address) -> None:  # noqa: ANN001
-        logging.getLogger(__name__).exception("Request failed")
 
 
 def _follow(pid: int, server: ThreadingHTTPServer) -> None:

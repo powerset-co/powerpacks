@@ -60,6 +60,8 @@ class InstallStatusTests(unittest.TestCase):
             f"line one\nsent to arthur@powerset.co from {Path.home()}/x\n")
         root_logger = logging.getLogger()
         before = list(root_logger.handlers)
+        # Another test's run may have installed a reporter for its own root; this test's root is here.
+        root_logger.handlers[:] = [h for h in before if not isinstance(h, report.ErrorReporter)]
         try:
             with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
                 sender.return_value.run.return_value = {"status": "submitted"}
@@ -78,7 +80,8 @@ class InstallStatusTests(unittest.TestCase):
         finally:
             root_logger.handlers[:] = before
         self.assertEqual(sender.call_count, 2)
-        stop, error = (call.args[0] for call in sender.call_args_list)
+        # Each report runs on its own thread, so the two may land in either order.
+        error, stop = sorted((call.args[0] for call in sender.call_args_list), key=lambda r: r.category)
         self.assertEqual(stop.category, "setup")
         self.assertTrue(stop.comment.startswith("Setup stopped at dependencies (step.failed)"))
         self.assertEqual(stop.metadata["powerpacks_version"], "3.44.1")
