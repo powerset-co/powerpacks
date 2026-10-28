@@ -3,13 +3,11 @@ import { useCallback, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
 import { useDismiss } from "@/hooks/useDismiss"
-import { fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
+import { DEBUG_KEY, fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
 import { connectRelay } from "@/lib/api/relay"
 import { useFeatures, useUpdateFeatures } from "@/lib/features"
 import { desktopPlatform, isDesktop } from "@/lib/desktop"
-
-const DEBUG_KEY = ["desktop-debug"] as const
 
 // Every page the app shows, including the ones outside the side nav.
 const PAGES = [
