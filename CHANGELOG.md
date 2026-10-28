@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.45.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.0...powerpacks-v3.45.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **accounts:** a msgvault database with no accounts is no Gmail, not a stop ([#986](https://github.com/powerset-co/powerpacks/issues/986)) ([c04141d](https://github.com/powerset-co/powerpacks/commit/c04141dd7a092ec2a4df0cf71c3f9c13d8a39a25))
+* **onboarding:** match preview questions to displayed primary roles ([#982](https://github.com/powerset-co/powerpacks/issues/982)) ([60f6216](https://github.com/powerset-co/powerpacks/commit/60f62166486c6bd67cb4787375d1bb26fb59766c))
+
 ## [3.45.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.44.1...powerpacks-v3.45.0) (2026-10-28)
 
 
