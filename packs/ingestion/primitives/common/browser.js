@@ -1,6 +1,7 @@
 /* The one place the Chrome automation scripts pick a browser and act like it.
  *
- * Picks Chrome, Brave, Edge, Arc, then Playwright Chromium.
+ * Picks Powerpacks' own Chromium (oauth_browser.py ensure_chromium downloads it into
+ * POWERPACKS_BROWSERS_DIR, default ~/.powerpacks/browsers), else Chrome, Brave, Edge, Arc.
  * The user agent matches the installed major
  * version so it agrees with the Sec-CH-UA hints the browser sends. After a login
  * window closes, returnFocus brings back the app that started the session:
@@ -8,6 +9,7 @@
  * (Terminal, Ghostty, the Claude or Codex desktop app).
  *
  * Changelog:
+ * 2026-10-27: Powerpacks' own Chromium first; the installed browsers are the fallback.
  * 2026-10-09: Share browser discovery with desktop preflight; include cached Chromium.
  * Created: 2026-10-03
  */
@@ -21,14 +23,11 @@ const BROWSER_APPS = [
 ];
 const FALLBACK_MAJOR = 149;
 
-function whichBrowser() {
-  for (const name of BROWSER_APPS) {
-    const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
-    if (fs.existsSync(executable)) return { name, path: executable };
-  }
-  const cache = path.join(os.homedir(), "Library/Caches/ms-playwright");
-  if (!fs.existsSync(cache)) return null;
-  const revisions = fs.readdirSync(cache).filter(name => /^chromium-\d+$/.test(name))
+// Playwright's Chromium, newest revision first, in the layouts its versions have used.
+function ownChromium() {
+  const folder = process.env.POWERPACKS_BROWSERS_DIR || path.join(os.homedir(), ".powerpacks/browsers");
+  if (!fs.existsSync(folder)) return null;
+  const revisions = fs.readdirSync(folder).filter(name => /^chromium-\d+$/.test(name))
     .sort((a, b) => Number(b.split("-")[1]) - Number(a.split("-")[1]));
   for (const revision of revisions) {
     for (const suffix of [
@@ -36,9 +35,19 @@ function whichBrowser() {
       "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
       "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
     ]) {
-      const executable = path.join(cache, revision, suffix);
+      const executable = path.join(folder, revision, suffix);
       if (fs.existsSync(executable)) return { name: "Chromium", path: executable };
     }
+  }
+  return null;
+}
+
+function whichBrowser() {
+  const own = ownChromium();
+  if (own) return own;
+  for (const name of BROWSER_APPS) {
+    const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
+    if (fs.existsSync(executable)) return { name, path: executable };
   }
   return null;
 }
@@ -47,7 +56,7 @@ function whichBrowser() {
 function browserTarget() {
   const browser = whichBrowser();
   if (browser) return { executablePath: browser.path };
-  throw new Error("Install Chrome, Brave, Microsoft Edge, Arc, or Chromium to continue.");
+  throw new Error("Powerpacks could not download its browser. Install Chrome, Brave, Microsoft Edge, or Arc to continue.");
 }
 
 function desktopUserAgent() {

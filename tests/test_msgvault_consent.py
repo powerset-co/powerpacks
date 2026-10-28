@@ -26,7 +26,7 @@ class MsgvaultConsentTests(unittest.TestCase):
             binary.write_text("#!/bin/sh\necho 'Account is already authorized.'\n")
             binary.chmod(0o700)
             with mock.patch.dict(os.environ, {"PATH": str(root) + os.pathsep + os.environ["PATH"]}), \
-                mock.patch.object(oauth_browser, "ensure_playwright_core") as runtime:
+                mock.patch.object(oauth_browser, "ensure_chromium") as runtime:
                 result = oauth_browser.authorize_account(home, "casey@example.com", "", force=False)
             self.assertEqual(result["status"], "ok")
             runtime.assert_not_called()
@@ -61,7 +61,7 @@ class MsgvaultConsentTests(unittest.TestCase):
                 stages = []
                 with mock.patch.dict(os.environ, {"PATH": str(root) + os.pathsep + os.environ["PATH"]}), \
                     mock.patch.object(oauth_browser, "BROWSER_SCRIPT", browser), \
-                    mock.patch.object(oauth_browser, "ensure_playwright_core", return_value={"status": "ok", "node_path": "synthetic"}), \
+                    mock.patch.object(oauth_browser, "ensure_chromium", return_value={"status": "ok", "node_path": "synthetic"}), \
                     redirect_stderr(output):
                     result = oauth_browser.authorize_account(home, "casey@example.com", "", force=True,
                                                              timeout_seconds=1, on_progress=stages.append)
@@ -117,7 +117,7 @@ class MsgvaultConsentTests(unittest.TestCase):
                     return shell.CommandResult(ok=browser_status != "nonzero", returncode=1 if browser_status == "nonzero" else 0, stdout=output)
 
                 with mock.patch.dict(os.environ, {"PATH": str(root) + os.pathsep + os.environ["PATH"]}), \
-                    mock.patch.object(oauth_browser, "ensure_playwright_core", return_value={"status": "ok", "node_path": "synthetic"}), \
+                    mock.patch.object(oauth_browser, "ensure_chromium", return_value={"status": "ok", "node_path": "synthetic"}), \
                     mock.patch.object(oauth_browser, "run_streaming_command", side_effect=browser):
                     result = oauth_browser.authorize_account(home, "casey@example.com", "", force=True, timeout_seconds=1)
                 self.assertNotIn("SYNTHETIC_STATE", json.dumps(result))

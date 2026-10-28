@@ -44,6 +44,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Gmail consent policy
         run: node --test ../tests/test_msgvault_consent.js
+      - name: Browser picker
+        run: node --test ../tests/test_browser_picker.js
       - name: Typecheck, lint, format and unit tests
         run: pnpm check
       - name: Committed dist is the build of the source

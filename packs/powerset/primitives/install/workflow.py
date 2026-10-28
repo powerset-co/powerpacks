@@ -5,6 +5,7 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-10-27: the Gmail and LinkedIn tools step says when it downloads Powerpacks' own browser.
   2026-10-24: the LinkedIn count's read/total go in the event's details too, so the
       onboarding page can estimate the time left from them.
   2026-10-13: `connect()` runs only the chosen sources' tools and logins, into the connect
@@ -63,6 +64,7 @@ from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
 from packs.ingestion.primitives.setup.automations import accounts, msgvault_home
 from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
+from packs.ingestion.primitives.setup.automations.oauth_browser import chromium_installed
 from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
 from packs.powerset.primitives.install.controller import GMAIL_PAGE_SHOT, permission_app
 from packs.powerset.primitives.install.status import InstallStatus
@@ -196,7 +198,8 @@ class SourceOnboarding:
         return False
 
     def _tools(self, source: Source, step: InstallStep) -> bool:
-        self._write("tools.preparing", step=step)
+        downloads = source in (Source.GMAIL, Source.LINKEDIN) and not chromium_installed()
+        self._write("tools.browser" if downloads else "tools.preparing", step=step)
         payload = ImportTools(sources=(source.value,)).run()
         return self._result(payload, "tools.ready", waiting="tools.needs_password", failed="tools.failed", step=step,
                             action={"command": payload["command"]} if "command" in payload else None)

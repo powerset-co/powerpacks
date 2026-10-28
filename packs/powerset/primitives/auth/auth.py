@@ -379,10 +379,10 @@ def gateway_token() -> str:
 def _login_in_browser(authorize_url: str, timeout: int) -> None:
     from packs.ingestion.primitives.setup.automations.oauth_browser import (
         DEFAULT_BROWSER_PROFILE,
-        ensure_playwright_core,
+        ensure_chromium,
     )
 
-    deps = ensure_playwright_core()
+    deps = ensure_chromium()
     if deps["status"] != "ok":
         raise RuntimeError(deps["message"])
     request = {"url": authorize_url, "profileDir": str(DEFAULT_BROWSER_PROFILE.expanduser()),

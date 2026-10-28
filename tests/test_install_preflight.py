@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -31,28 +33,15 @@ class PreflightTests(unittest.TestCase):
     def test_checks_without_node(self, _which, _run):
         self.assertEqual(preflight.checks(), {"browser": {"ok": False, "name": None}, "gcloud": {"ok": True}})
 
-    @patch.object(preflight.subprocess, "Popen")
-    def test_chromium_streams_cli_output(self, popen):
-        process = popen.return_value.__enter__.return_value
-        process.stdout = iter(["Downloading Chromium\n", "Done\n"])
-        process.wait.return_value = 0
-        lines = []
-        self.assertEqual(preflight.install("chromium", lines.append), {"status": "ok"})
-        self.assertEqual(lines, ["Downloading Chromium", "Done"])
-        self.assertEqual(popen.call_args.args[0], ["node", str(oauth_browser.VENDORED_NODE_MODULES / "playwright-core/cli.js"), "install", "chromium"])
+    @patch.object(preflight, "ensure_chromium", return_value={"status": "ok", "installed": False, "node_path": "/n"})
+    def test_chromium_streams_its_install(self, ensure):
+        lines = Mock()
+        self.assertEqual(preflight.install("chromium", lines), {"status": "ok"})
+        ensure.assert_called_once_with(lines)
 
-    @patch.object(preflight.subprocess, "Popen")
-    def test_chromium_failure(self, popen):
-        process = popen.return_value.__enter__.return_value
-        process.stdout = iter(["download failed\n"])
-        process.wait.return_value = 1
-        result = preflight.install("chromium", Mock())
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("download failed", result["message"])
-
-    @patch.object(preflight.subprocess, "Popen", side_effect=OSError("missing node"))
-    def test_install_start_failure(self, _popen):
-        self.assertEqual(preflight.install("chromium", Mock()), {"status": "failed", "message": "missing node"})
+    @patch.object(preflight, "ensure_chromium", return_value={"status": "error", "message": "download failed"})
+    def test_chromium_failure(self, _ensure):
+        self.assertEqual(preflight.install("chromium", Mock()), {"status": "failed", "message": "download failed"})
 
     @patch.object(preflight, "_stream")
     @patch.object(preflight.tarfile, "open")
@@ -99,6 +88,66 @@ class VendoredPlaywrightTests(unittest.TestCase):
     @patch.object(Path, "is_dir", return_value=False)
     def test_cli_install_keeps_node_requirement(self, _directory, _which):
         self.assertEqual(oauth_browser.ensure_playwright_core()["message"], "node is not installed")
+
+
+
+@patch.object(oauth_browser, "ensure_playwright_core", return_value={"status": "ok", "installed": False, "node_path": "/n"})
+@patch.object(oauth_browser.subprocess, "Popen")
+class EnsureChromiumTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.folder = Path(temporary.name)
+        environment = patch.dict(os.environ, {"POWERPACKS_BROWSERS_DIR": str(self.folder)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def finish(self, popen, lines, returncode):
+        process = popen.return_value.__enter__.return_value
+        process.stdout = iter(lines)
+        process.wait.return_value = returncode
+
+    def test_installed_chromium_is_not_installed_again(self, popen, _deps):
+        (self.folder / "chromium-1223").mkdir()
+        (self.folder / "chromium-1223/INSTALLATION_COMPLETE").touch()
+        self.assertEqual(oauth_browser.ensure_chromium(Mock())["node_path"], "/n")
+        popen.assert_not_called()
+
+    def test_unfinished_download_is_installed_again(self, popen, _deps):
+        (self.folder / "chromium-1223/chrome-mac-arm64").mkdir(parents=True)
+        self.finish(popen, [], 0)
+        oauth_browser.ensure_chromium(Mock())
+        popen.assert_called_once()
+
+    def test_installs_into_the_powerpacks_folder_with_the_bundled_cli(self, popen, _deps):
+        self.finish(popen, ["Chrome for Testing downloaded\n"], 0)
+        lines = []
+        self.assertEqual(oauth_browser.ensure_chromium(lines.append)["status"], "ok")
+        self.assertEqual(popen.call_args.args[0], ["node", "/n/playwright-core/cli.js", "install", "--no-shell", "chromium"])
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["PLAYWRIGHT_BROWSERS_PATH"], str(self.folder))
+        self.assertEqual(env["FORCE_COLOR"], "0")
+        self.assertEqual(lines, ["Downloading the browser Powerpacks uses (about 180 MB).", "Chrome for Testing downloaded"])
+
+    def test_failed_download_is_an_error(self, popen, _deps):
+        self.finish(popen, ["Error: getaddrinfo ENOTFOUND cdn.playwright.dev\n"], 1)
+        self.assertEqual(oauth_browser.ensure_chromium(Mock()), {
+            "status": "error", "message": "Powerpacks could not download its browser: Error: getaddrinfo ENOTFOUND cdn.playwright.dev"})
+
+    def test_missing_node_is_an_error(self, popen, _deps):
+        popen.side_effect = OSError("node not found")
+        result = oauth_browser.ensure_chromium(Mock())
+        self.assertEqual(result["status"], "error")
+        self.assertIn("node not found", result["message"])
+
+    def test_missing_runtime_is_returned_as_is(self, popen, deps):
+        deps.return_value = {"status": "error", "message": "npm is not installed"}
+        self.assertEqual(oauth_browser.ensure_chromium(Mock()), {"status": "error", "message": "npm is not installed"})
+        popen.assert_not_called()
+
+    def test_default_folder(self, _popen, _deps):
+        with patch.dict(os.environ, {"POWERPACKS_BROWSERS_DIR": ""}):
+            self.assertEqual(oauth_browser.browsers_dir(), Path.home() / ".powerpacks/browsers")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json
-from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_playwright_core
+from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_chromium
 from packs.ingestion.schemas.people_schema import extract_public_identifier
 from packs.ingestion.primitives.setup.automations.shell import (
     command_error,
@@ -153,7 +153,7 @@ class LinkedInConnections:
         self.record_path = csv_path.with_name(SCRAPE_RECORD.name)
 
     def _browser(self, *args: str, timeout: int, on_progress: Callable[[dict], None] | None = None) -> dict[str, Any]:
-        deps = ensure_playwright_core()
+        deps = ensure_chromium()
         if deps["status"] != "ok":
             return {"status": "failed", "message": deps["message"]}
         result = run_streaming_command(

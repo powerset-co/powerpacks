@@ -6,6 +6,9 @@ downloads the client secret JSON, the add-test-users flow, and msgvault account
 consent. Sign-in and challenges use a visible window in the same profile.
 
 Changelog:
+  2026-10-27: ensure_chromium installs Playwright's Chromium into ~/.powerpacks/browsers
+    (POWERPACKS_BROWSERS_DIR) once; every browser automation calls it before node, and
+    common/browser.js launches that Chromium before any browser on the Mac.
   2026-10-09: login_gcloud approves `gcloud auth login` in the saved profile; one Google sign-in.
   2026-10-09: Use the bundled playwright-core before command-line npm dependencies.
   2026-09-23 (typed rows): `browser_status` / `browser_client_secret_path` are the
@@ -65,6 +68,8 @@ DEFAULT_BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/google-oauth")
 DEFAULT_DOWNLOAD_DIR = Path("~/.msgvault/oauth-downloads")
 DEFAULT_NODE_DEPS = Path("~/.powerpacks/browser-node")
 VENDORED_NODE_MODULES = _REPO_ROOT / "vendor/browser-node/node_modules"
+# Powerpacks' own Chromium; common/browser.js reads the same folder and env override.
+DEFAULT_BROWSERS_DIR = Path("~/.powerpacks/browsers")
 DEFAULT_OAUTH_CLIENT_NAME = "local-msg-vault"
 BROWSER_SCRIPT = Path(__file__).with_name("google_oauth_browser.js")
 
@@ -75,7 +80,7 @@ def login_gcloud(cmd: list[str], email: str, *, profile_dir: Path = DEFAULT_BROW
     Console automation then reuses, so setup asks for Google once. gcloud opens its URL
     through Python's webbrowser, which runs $BROWSER: `true` opens nothing, and gcloud
     still prints the URL and waits on its localhost callback."""
-    deps = ensure_playwright_core()
+    deps = ensure_chromium()
     if deps["status"] != "ok":
         return CommandResult(ok=False, message=deps["message"])
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -158,7 +163,7 @@ def authorize_account(
                             "message": "" if success else "msgvault account authorization failed."}
                 if not line.strip().startswith("https://accounts.google.com/"):
                     continue
-                deps = ensure_playwright_core()
+                deps = ensure_chromium()
                 if deps["status"] != "ok":
                     return deps
                 request = {"url": line.strip(), "email": email, "clientId": configured["client_id"],
@@ -229,6 +234,41 @@ def ensure_playwright_core(node_deps: Path = DEFAULT_NODE_DEPS.expanduser()) -> 
     }
 
 
+def browsers_dir() -> Path:
+    """Where Powerpacks keeps its own Chromium."""
+    return Path(os.environ.get("POWERPACKS_BROWSERS_DIR") or DEFAULT_BROWSERS_DIR).expanduser()
+
+
+def chromium_installed() -> bool:
+    """Whether Playwright finished installing Chromium there (it writes this marker last)."""
+    return any(browsers_dir().glob("chromium-*/INSTALLATION_COMPLETE"))
+
+
+def ensure_chromium(on_progress: Callable[[str], None] = progress) -> dict[str, Any]:
+    """playwright-core (ensure_playwright_core) and its Chromium, downloaded once by playwright-core's
+    own installer, so the automations run on a Mac with no Chromium browser of its own."""
+    deps = ensure_playwright_core()
+    if deps["status"] != "ok" or chromium_installed():
+        return deps
+    on_progress("Downloading the browser Powerpacks uses (about 180 MB).")
+    command = ["node", str(Path(deps["node_path"]) / "playwright-core/cli.js"), "install", "--no-shell", "chromium"]
+    # FORCE_COLOR=0: plain lines for the Connect screen, which shows the last one.
+    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(browsers_dir()), "FORCE_COLOR": "0"}
+    last_line = ""
+    try:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env) as proc:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                last_line = line.rstrip()
+                on_progress(last_line)
+            returncode = proc.wait()
+    except OSError as exc:
+        return {"status": "error", "message": f"Powerpacks could not download its browser: {exc}"}
+    if returncode != 0:
+        return {"status": "error", "message": f"Powerpacks could not download its browser: {last_line or returncode}"}
+    return deps
+
+
 def browser_status(payload: dict[str, Any]) -> str:
     """The status reported by google_oauth_browser.js, "error" when it reported none."""
     return str(payload.get("status") or "error")
@@ -253,7 +293,7 @@ def run_browser_automation(
     """Drive google_oauth_browser.js to create the OAuth app and download its secret;
     `on_progress` gets each stage it reaches."""
     progress("Opening Chrome to create the Google OAuth app...")
-    deps = ensure_playwright_core()
+    deps = ensure_chromium()
     if deps["status"] != "ok":
         return deps
     download_dir.mkdir(parents=True, exist_ok=True)
@@ -312,7 +352,7 @@ def run_browser_add_test_users(
 ) -> dict[str, Any]:
     """Drive google_oauth_browser.js in add-test-users mode for the consent screen."""
     progress("Opening Chrome to add Google OAuth test users...")
-    deps = ensure_playwright_core()
+    deps = ensure_chromium()
     if deps["status"] != "ok":
         return deps
     download_dir.mkdir(parents=True, exist_ok=True)

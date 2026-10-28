@@ -12,6 +12,25 @@ from packs.powerset.primitives.install import tools
 
 
 class ImportToolsTests(unittest.TestCase):
+    def setUp(self):
+        browser = patch.object(tools, "ensure_chromium", return_value={"status": "ok", "installed": False, "node_path": "/n"})
+        self.ensure_chromium = browser.start()
+        self.addCleanup(browser.stop)
+
+    @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
+    @patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True})
+    def test_gmail_and_linkedin_get_the_powerpacks_browser(self, _msgvault):
+        for source in ("gmail", "linkedin"):
+            self.assertEqual(tools.ImportTools(sources=(source,)).run()["status"], "ok")
+        self.assertEqual(self.ensure_chromium.call_count, 2)
+
+    @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
+    def test_browser_download_failure_fails_the_step(self):
+        self.ensure_chromium.return_value = {"status": "error", "message": "Powerpacks could not download its browser: offline"}
+        result = tools.ImportTools(sources=("linkedin",)).run()
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("offline", result["message"])
+
     def test_tool_discovery_keeps_the_selected_python_first(self):
         with patch.dict(os.environ, {"PATH": "/selected/python/bin:/usr/bin"}):
             tools.ImportTools(sources=()).run()
@@ -55,6 +74,7 @@ class ImportToolsTests(unittest.TestCase):
         self.assertEqual(tools.ImportTools(sources=("whatsapp",)).run()["status"], "ok")
         msgvault.assert_not_called()
         run.assert_not_called()
+        self.ensure_chromium.assert_not_called()
 
     @patch.object(binary, "ensure_wacli_report", side_effect=PrimitiveBlocked({"message": "Failed to download wacli"}))
     @patch("shutil.which", return_value="/fixture/bin/tool")
