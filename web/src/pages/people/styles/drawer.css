@@ -82,12 +82,49 @@
   cursor: text;
   transition: background var(--t-fast) var(--ease-out);
 }
-.who .name-row button.name-edit:hover:enabled,
 .who .name-row input.name-edit {
   background: var(--secondary);
 }
-.who .name-row button.name-edit:disabled {
+/* The pencil beside the name: faint until hovered. The check and cross while editing: small
+   circles, the check in the accent. */
+.who .name-row .name-pencil,
+.who .name-row .name-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--faint);
+}
+.who .name-row .name-pencil {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+}
+.who .name-row .name-pencil:hover:enabled {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.who .name-row .name-pencil:disabled {
   cursor: default;
+  opacity: 0.4;
+}
+.who .name-row .name-confirm {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--muted-foreground);
+}
+.who .name-row .name-confirm:hover:enabled {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.who .name-row .name-confirm[aria-label="Save name"] {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--line-strong));
 }
 .who .name-row input.name-edit {
   width: 100%;

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
+import { Check, Pencil, X } from "lucide-react"
 
 import { ProxiedLinkedinAvatar, DrawerClose, LinkedinLink, SourcePill, Tip } from "@/components/shared"
 import { searchText, writeName } from "@/lib/api/people"
@@ -19,15 +20,18 @@ interface DrawerHeaderProps {
   onRefresh: () => void
 }
 
-// The name, which a click turns into a field: Enter saves the human's name for the family (kept on
-// refresh, like a relationship choice), Escape or leaving the field drops the edit.
+// The name with a pencil beside it: the pencil opens a field, Enter or the check saves the human's
+// name for the family (kept on refresh, like a relationship choice), Escape or the cross drops it.
 function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
   const client = useQueryClient()
   const [draft, setDraft] = useState<string | null>(null)
   const field = useRef<HTMLInputElement>(null)
+  // Select the whole name once, as the edit opens; not on every keystroke, which would replace
+  // what was just typed.
+  const editing = draft !== null
   useEffect(() => {
-    if (draft !== null) field.current?.select()
-  }, [draft])
+    if (editing) field.current?.select()
+  }, [editing])
   const save = useMutation({
     mutationFn: (name: string) => writeName(row.parent_id, name),
     onSuccess: (results) => {
@@ -44,27 +48,31 @@ function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
   })
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") setDraft(null)
-    if (event.key !== "Enter") return
+    if (event.key === "Enter") confirm()
+  }
+  const confirm = () => {
     const name = (draft ?? "").trim()
     if (!name || name === row.name) setDraft(null)
     else save.mutate(name)
   }
   if (draft === null && !save.isPending)
     return (
-      <h2>
+      <h2 className="flex items-center gap-2">
+        <span className="min-w-0 truncate">{row.name}</span>
         <button
           type="button"
-          className="name-edit"
+          className="name-pencil"
+          aria-label="Rename"
           title="Rename"
           disabled={row.in_progress}
           onClick={() => setDraft(row.name)}
         >
-          {row.name}
+          <Pencil className="size-3.5" aria-hidden />
         </button>
       </h2>
     )
   return (
-    <h2>
+    <h2 className="flex items-center gap-2">
       <input
         ref={field}
         className="name-edit"
@@ -73,10 +81,25 @@ function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
         disabled={save.isPending}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={onKeyDown}
-        onBlur={() => {
-          if (!save.isPending) setDraft(null)
-        }}
       />
+      <button
+        type="button"
+        className="name-confirm"
+        aria-label="Save name"
+        disabled={save.isPending}
+        onClick={confirm}
+      >
+        <Check className="size-3.5" aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="name-confirm"
+        aria-label="Cancel"
+        disabled={save.isPending}
+        onClick={() => setDraft(null)}
+      >
+        <X className="size-3.5" aria-hidden />
+      </button>
       {save.error ? (
         <span role="alert" className="sub text-destructive">
           {save.error.message}
