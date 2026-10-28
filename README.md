@@ -36,8 +36,7 @@ agent reads the saved error and retries without deleting your data.
 ### Mac app
 
 [Download Powerpacks for Mac](https://github.com/powerset-co/powerpacks/releases/latest/download/Powerpacks-macos-arm64.dmg)
-(Apple silicon, the newest release; [Intel Macs](https://github.com/powerset-co/powerpacks/releases/latest/download/Powerpacks-macos-x64.dmg)
-take this one). Open the `.dmg` and drag Powerpacks to Applications. The
+(Apple silicon, the newest release). Open the `.dmg` and drag Powerpacks to Applications. The
 app runs setup itself: connect your accounts, or bring over the Powerpacks you already have.
 
 The app is not notarized yet, so macOS stops it the first time: open System Settings →

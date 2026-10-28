@@ -1,12 +1,10 @@
 name: desktop
 
-# Every main merge publishes the debug build to Edge. Release Please calls this workflow
-# separately for stable builds without the debug menu.
+# Built at release only (Release Please calls this workflow for the stable Apple Silicon build
+# without the debug menu) or by hand: a macOS minute costs ten Linux ones, and the build took
+# 15 minutes on every PR and every main merge. By hand: a test build with the debug menu
+# ("release" off), or the Intel app ("intel" on), downloaded from that run's artifacts.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    paths: ["desktop/**", "web/dist/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
     inputs:
       release:
@@ -17,6 +15,10 @@ on:
         description: Git ref to build.
         type: string
         required: true
+      intel:
+        description: Also build the Intel app (Powerpacks-macos-x64.dmg).
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       ref:
@@ -32,15 +34,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: desktop-${{ inputs.ref || github.ref }}
+  group: desktop-${{ inputs.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Build macOS dmg (${{ matrix.arch }})
     runs-on: macos-latest
-    # Both Macs from the one Apple Silicon runner: the Intel app is a cross-build (Rust target,
-    # Intel sidecars); its bundle lands under target/<triple>, the native one under target.
+    # The Intel leg runs only when asked for: a cross-build from the same Apple Silicon runner
+    # (Rust target, Intel sidecars); its bundle lands under target/<triple>, the native one under target.
+    if: ${{ matrix.arch == 'arm64' || inputs.intel }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -145,31 +148,3 @@ jobs:
             desktop/${{ matrix.bundle }}/macos/*.app.tar.gz.sig
           if-no-files-found: error
 
-  edge:
-    needs: build
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.ref }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: Powerpacks-macos-*
-          path: dmg
-          merge-multiple: true
-      - name: Publish Edge
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          title="Edge (${GITHUB_SHA:0:7})"
-          printf 'Debug build from main at `%s`. Includes the debug menu.\n' "$GITHUB_SHA" > notes.md
-          if gh release view edge --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/edge" --method PATCH \
-              -f sha="$GITHUB_SHA" -F force=true
-            gh release edit edge --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --notes-file notes.md --prerelease --latest=false
-          else
-            gh release create edge --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "$title" --notes-file notes.md --prerelease --latest=false
-          fi
-          gh release upload edge dmg/*.dmg --clobber --repo "$GITHUB_REPOSITORY"
