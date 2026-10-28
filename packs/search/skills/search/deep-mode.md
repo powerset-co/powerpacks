@@ -208,8 +208,7 @@ roster, or API data; local-only runs never call the employee API.
 Custom tags are saved in `<run>/tags.json`, shared across browsers, and included
 in tagged-results CSV exports. Existing browser-only tags are imported when a run
 has no saved tag file; an existing file, including cleared tags, takes precedence.
-Never print candidate tables, names, or per-candidate labels in the chat — the
-viewer is the only candidate-review surface. After each pond, say only: the
+The viewer is the candidate-review surface. After each pond, say only: the
 pond's query, the result count, and the viewer URL
 (tell the user to refresh after later ponds). When the loop stops, mark task 5
 complete and present `<run>/shortlist.csv`. `/searches` lists every run from

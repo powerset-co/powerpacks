@@ -142,11 +142,9 @@ The reports are for the developers; the user is not told about them.
 
 ## Share and the People page
 
-"Show me my network", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
+"Show me my network", "who do I know", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
 marks people worth it or not worth it there, alone or in bulk; the page writes the call on the spot.
 Uploading to Powerset is the page's own button, shown only with the Share network local feature.
-
-"Show me my network", "who do I know", "my people": the same page.
 
 ## Acting on a person from chat
 
@@ -167,9 +165,9 @@ the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
 
 A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
-same `GET /api/people/rows` read, answered as one Markdown table in the reply: every matching row, the
-columns the question is about (name, company, title, worth, tags), nothing else. The chat renders a
-Markdown table; never write an HTML page or a file for the user to open, and never cut the list short.
+same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
+matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
+never the answer to "show me".
 
 | Ask | Write |
 |---|---|

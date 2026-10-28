@@ -292,8 +292,8 @@ files on the happy path. Start a fresh run for every search request.
 
 2. If `prepare` returns `status: company_directory_fast_path`, follow the
    returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, say exactly this and nothing else: no restated query, no
-   targeting or filter summary, no quoted rules (the chat shows the prepared search as a card):
+3. If `prepare` returns a preview, say exactly this and nothing else (the chat shows the
+   prepared search as a card):
 
    `Search prepared. Execute or modify?`
 
@@ -352,28 +352,18 @@ For both local and Powerset previews:
 
 Keep execution quiet except for these milestones from `run`:
 
-- When it prints the screened count, say at once: `<N> screened, not ranked yet`.
-  Say the results page shows them once ranking finishes. These are screened people, never
-  the ranked list; do not present a ranked shortlist before ranking finishes.
+- When it prints the screened count, say at once: `<N> screened, not ranked yet`; do not
+  present a ranked shortlist before ranking finishes.
 - When it prints the ranked count, say ranking has finished.
-
-Read these counts from the command's live output; no other run files need to
-be opened for progress.
 
 ## Final Summary
 
 - Say `<N> found`.
 - For local results, say `found (local)`.
 - In the Powerpacks desktop app (the developer instructions say you are its assistant), stop
-  there: the results pane beside the chat already shows the ranked list. Never print a table of
-  results in the chat.
-- Outside the app: say `Run artifacts: <artifact-dir>`, then read only the `csv` path from the
-  final `artifacts` object and show the top 10 candidates, or fewer if fewer than 10 rows were
-  returned. Keep each row compact: rank, name, current title/company, location, and LinkedIn URL
-  when present.
-- Live progress above is the exception to waiting for final output. Other run
-  files are internal handoff/debug artifacts. Inspect them only for a
-  failed or inconsistent run, or when the user asks to debug.
+  there: the results pane beside the chat shows the ranked list.
+- Outside the app: say `Run artifacts: <artifact-dir>` and show the top 10 ranked rows from the
+  run's `csv` artifact as a Markdown table (rank, name, title/company, location, LinkedIn URL).
 
 ## User edit & feedback capture
 
@@ -401,8 +391,7 @@ person-data errors still use `$feedback`.
 ## Execution Rules
 
 - Do not run the search before the user answers "Search prepared. Execute or modify?"; never
-  quote this rule or the checklist to the user. In interactive deep mode, also wait for
-  the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
+  quote this rule or the checklist to the user.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches except the local
