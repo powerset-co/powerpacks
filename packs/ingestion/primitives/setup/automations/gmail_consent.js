@@ -1,4 +1,6 @@
 /* Gmail consent in the existing Google profile, hidden: a known account is let through without a screen. The moment Google needs the person, the window is theirs: no clicks, the wait is for the callback. */
+const { waitUntil } = require("./page_wait.js");
+
 const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.modify",
@@ -95,40 +97,40 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
   let page = context.pages()[0] || await context.newPage();
   let human = false;
   const open = () => page.goto(request.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+  const done = url => {
+    const current = new URL(url);
+    return current.origin + current.pathname === CALLBACK;
+  };
   try {
     await open();
-    while (Date.now() < deadline && !page.isClosed()) {
-      const current = new URL(page.url());
-      if (current.origin + current.pathname === CALLBACK) {
+    for (;;) {
+      // Once the window is the person's, nothing is clicked for them: the wait is for the
+      // callback, measured (page_wait.js): the page settled, the network alive, the person
+      // still there.
+      const wait = await waitUntil(page, { done, human, deadlineMs: deadline - Date.now() });
+      if (wait.status === "ok") {
+        const current = new URL(page.url());
         const text = await page.locator("body").innerText();
         return current.searchParams.get("state") === state && current.searchParams.has("code") &&
           /Authorization successful!/.test(text)
           ? { status: "ok" } : { status: "error", message: "msgvault rejected the OAuth callback." };
       }
-      // Once the window is the person's, nothing is clicked for them: the wait is for the callback.
-      if (human) {
-        await page.waitForTimeout(1000);
-        continue;
-      }
-      // A page mid-navigation (Google moved on) throws out of the snapshot or the click: that is
-      // a moment, not the end. The deadline ends the wait.
+      if (wait.status !== "act") return wait;
+      // The page settled and is the script's: read it once, click once, measure again. A read
+      // that throws means Google moved on between the settle and the read (a redirect after load).
       let action;
       try {
         action = consentAction(await snapshot(page), request);
       } catch (_) {
-        await page.waitForTimeout(1000);
         continue;
       }
       if (action.kind === "human") {
-        if (!human) {
-          progress("sign_in");
-          await context.close();
-          context = await launchChrome(request.profileDir, false);
-          page = context.pages()[0] || await context.newPage();
-          human = true;
-          await open();
-        }
-        await page.waitForTimeout(1000);
+        progress("sign_in");
+        await context.close();
+        context = await launchChrome(request.profileDir, false);
+        page = context.pages()[0] || await context.newPage();
+        human = true;
+        await open();
         continue;
       }
       try {
@@ -144,9 +146,7 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
       } catch (_) {
         // The element moved or the page changed under the click: look again.
       }
-      await page.waitForTimeout(500);
     }
-    return { status: "needs_user_action", message: "Google sign-in did not finish. Retry authorization to reopen Chrome." };
   } catch (error) {
     return { status: "needs_user_action",
       message: `Google authorization could not finish (${error && error.message ? error.message.split("\n")[0] : error}). Retry and complete sign-in in Chrome.` };
