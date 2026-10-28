@@ -1,9 +1,12 @@
 """Installer progress reflects completion, human waits, and interrupted work."""
 from __future__ import annotations
 
+import base64
+import gzip
+import logging
 import os
-import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -48,6 +51,50 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["retry_command"], "bin/bootstrap")
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
+
+    def test_every_logged_error_reports_itself(self) -> None:
+        from packs.powerset.primitives.install import report
+        (self.root / ".release-please-manifest.json").write_text('{".": "3.44.1"}')
+        self.status.directory.mkdir(parents=True, exist_ok=True)
+        (self.root / ".powerpacks/install/install.log").write_text(
+            f"line one\nsent to arthur@powerset.co from {Path.home()}/x\n")
+        root_logger = logging.getLogger()
+        before = list(root_logger.handlers)
+        # Another test's run may have installed a reporter for its own root; this test's root is here.
+        root_logger.handlers[:] = [h for h in before if not isinstance(h, report.ErrorReporter)]
+        try:
+            with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
+                sender.return_value.run.return_value = {"status": "submitted"}
+                report.install(self.root)
+                report.install(self.root)  # once per process
+                self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
+                self.status.write("step.failed", step=InstallStep.DEPENDENCIES, pid=os.getpid(),
+                                  details={"error": "boom"}, account_email="arthur@powerset.co")
+                try:
+                    raise ValueError("signals broke for arthur@powerset.co")
+                except ValueError:
+                    logging.getLogger("test.report").exception("Signals check failed")
+                for thread in threading.enumerate():
+                    if thread.name == "error-report":
+                        thread.join(5)
+        finally:
+            root_logger.handlers[:] = before
+        self.assertEqual(sender.call_count, 2)
+        # Each report runs on its own thread, so the two may land in either order.
+        error, stop = sorted((call.args[0] for call in sender.call_args_list), key=lambda r: r.category)
+        self.assertEqual(stop.category, "setup")
+        self.assertTrue(stop.comment.startswith("Setup stopped at dependencies (step.failed)"))
+        self.assertEqual(stop.metadata["powerpacks_version"], "3.44.1")
+        self.assertEqual([a.name for a in stop.artifacts], ["error.txt", "install.log"])
+        unpacked = {a.name: gzip.decompress(base64.b64decode(a.data)).decode() for a in stop.artifacts}
+        self.assertNotIn("arthur@powerset.co", unpacked["error.txt"])
+        self.assertNotIn("account_email", unpacked["error.txt"])
+        self.assertIn("boom", unpacked["error.txt"])
+        self.assertEqual(unpacked["install.log"], "line one\nsent to <email> from ~/x")
+        self.assertEqual(error.category, "app")
+        self.assertEqual(error.comment, "Signals check failed")
+        self.assertIn("ValueError: signals broke for <email>",
+                      gzip.decompress(base64.b64decode(error.artifacts[0].data)).decode())
 
     def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
         first = self.status.write("discover.learning", pid=os.getpid())

@@ -48,6 +48,8 @@ import webbrowser
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from packs.powerset.primitives.install import report
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +195,13 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             return mounted["handler"]
 
     class Handler(BaseHTTPRequestHandler):
+        def handle(self) -> None:
+            # A request that throws is logged, so it reports itself (report.py).
+            try:
+                super().handle()
+            except Exception:
+                logging.getLogger(__name__).exception("Request failed: %s", getattr(self, "path", ""))
+
         def _json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
@@ -519,8 +528,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.open:
             webbrowser.open(url)
         return 0
-    threading.excepthook = lambda args: logging.getLogger(__name__).error(
-        "Background thread failed", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+    report.install(root)
     with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
