@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.45.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.1...powerpacks-v3.45.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **setup:** a run reads the sign-ins of its own sources only ([#987](https://github.com/powerset-co/powerpacks/issues/987)) ([dc0ba70](https://github.com/powerset-co/powerpacks/commit/dc0ba7013a8f707d633abb04929b584e574b3fe3))
+
 ## [3.45.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.0...powerpacks-v3.45.1) (2026-10-28)
 
 
