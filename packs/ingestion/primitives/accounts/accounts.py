@@ -149,13 +149,19 @@ def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:
     return [*_gmail_accounts(signins), _imessage_account(), _whatsapp_account(), _linkedin_account()]
 
 
+def _has_accounts(conn: sqlite3.Connection) -> bool:
+    """A database msgvault opened but never added an account to (an old command-line install)
+    has no `sources` table yet: it holds no accounts."""
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone() is not None
+
+
 def gmail_signins(signins: dict[str, SignIn] | None = None) -> dict[str, SignIn]:
     """Probe stored Gmail sign-ins unless the cached mailbox list still matches."""
     if not DEFAULT_MSGVAULT_DB.exists():
         return {}
     with sqlite3.connect(f"file:{DEFAULT_MSGVAULT_DB}?mode=ro", uri=True) as conn:
         emails = [row[0] for row in conn.execute(
-            "SELECT identifier FROM sources WHERE source_type = 'gmail' ORDER BY identifier")]
+            "SELECT identifier FROM sources WHERE source_type = 'gmail' ORDER BY identifier")] if _has_accounts(conn) else []
     if signins is not None and signins.keys() == set(emails):
         return signins
     with ThreadPoolExecutor(max_workers=len(emails) or 1) as pool:
@@ -190,7 +196,7 @@ def _gmail_rows(db: Path) -> list[_GmailRow]:
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
         sources = conn.execute(
             "SELECT id, identifier, last_sync_at FROM sources WHERE source_type = 'gmail' ORDER BY identifier"
-        ).fetchall()
+        ).fetchall() if _has_accounts(conn) else []
         rows = []
         for source_id, email, last_sync_at in sources:
             messages, latest = conn.execute(

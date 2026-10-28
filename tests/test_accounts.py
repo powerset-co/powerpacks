@@ -71,6 +71,17 @@ class TaskHistoryTest(unittest.TestCase):
 
 
 class AccountsJobsTest(unittest.TestCase):
+    def test_a_msgvault_database_without_accounts_is_no_gmail(self):
+        # msgvault opened the database (a `status` or an old install) but never added an account:
+        # no `sources` table yet. Setup must read that as no mailboxes, not stop on it.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE messages (id INTEGER)")
+            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db):
+                self.assertEqual(accounts.gmail_signins(), {})
+                self.assertEqual(accounts._gmail_rows(db), [])
+
     def test_accounts_reuse_signins_and_signed_in_refreshes_the_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
