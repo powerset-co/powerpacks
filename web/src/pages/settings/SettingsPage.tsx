@@ -4,7 +4,6 @@ import { errorText } from "@/lib/api/http"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { useFeatureSettings, useUpdateFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
-import { AccountsSettings } from "./AccountsSettings"
 import { ProviderSettings } from "./ProviderSettings"
 
 /** Local API connections, account repair and remote-assist preferences, from the account menu. */
@@ -17,7 +16,6 @@ export function SettingsPage() {
     account.data?.signed_in === true && (account.data.email?.toLowerCase().endsWith("@powerset.co") ?? false)
   return (
     <Page title="Settings">
-      <AccountsSettings />
       {onTeam ? <ProviderSettings /> : null}
       <section className="flex flex-col gap-3" aria-labelledby="remote-assist">
         <div className="flex flex-col gap-1">

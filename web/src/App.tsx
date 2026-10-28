@@ -18,6 +18,7 @@ import { PeoplePage } from "@/pages/people/PeoplePage"
 import { ReviewPage } from "@/pages/review/ReviewPage"
 import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { SetsPage } from "@/pages/sets/SetsPage"
+import { AccountsPage } from "@/pages/settings/AccountsPage"
 import { SettingsPage } from "@/pages/settings/SettingsPage"
 import { TasksPage } from "@/pages/tasks/TasksPage"
 
@@ -97,7 +98,7 @@ export function App() {
                 )
               }
             />
-            <Route path="/accounts" element={<Navigate to="/settings" replace />} />
+            <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/team" element={<TeamPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/settings" element={<SettingsPage />} />

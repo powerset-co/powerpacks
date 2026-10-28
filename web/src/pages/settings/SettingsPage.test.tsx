@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { isDesktop } from "@/lib/desktop"
 
+import { AccountsPage } from "./AccountsPage"
 import { SettingsPage } from "./SettingsPage"
 
 vi.mock("@/lib/desktop", () => ({ isDesktop: vi.fn(() => false) }))
@@ -78,11 +79,20 @@ it("offers Remote assist in a browser, and no Repair setup", async () => {
   expect(screen.queryByRole("heading", { name: "Repair setup" })).toBeNull()
 })
 
-it("offers Accounts without setup navigation buttons", () => {
+it("the Accounts page offers the accounts without setup navigation buttons", () => {
   vi.mocked(isDesktop).mockReturnValue(true)
-  mount()
-  expect(screen.getByRole("heading", { name: "Accounts" })).toBeTruthy()
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <MemoryRouter initialEntries={["/accounts"]}>
+        <Routes>
+          <Route path="/accounts" element={<AccountsPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+  expect(screen.getByRole("heading", { level: 1, name: "Accounts" })).toBeTruthy()
   for (const name of ["Done", "Back", "Set up"]) expect(screen.queryByRole("button", { name })).toBeNull()
+  expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull()
 })
 
 it("keeps settings and account setup usable while provider status is loading", async () => {
@@ -100,7 +110,6 @@ it("keeps settings and account setup usable while provider status is loading", a
   )
   mount()
   expect(await screen.findByLabelText("Loading API connections")).toBeTruthy()
-  expect(screen.getByRole("heading", { name: "Accounts" })).toBeTruthy()
   await waitFor(() =>
     expect(
       screen.getByRole<HTMLInputElement>("checkbox", { name: "Let the Powerset team work on this install" })
