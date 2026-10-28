@@ -39,10 +39,7 @@ that checkout, regardless of the chat's directory. Configuration is its `.env`;
 workflow data is its `.powerpacks/`. A copied skill bundle is not a data root.
 Do not write Powerpacks state into an unrelated project or the skills folder.
 
-If `.codex/AGENTS.md` exists in the checkout, read it for remembered account and
-network context. It is a snapshot, not proof of current access. Refresh it with
-`bin/agent-bootstrap` when missing/stale, after account or network changes, or
-when the user asks. Never print secret values.
+Never print secret values.
 
 ## Choose the skill
 
