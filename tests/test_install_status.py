@@ -74,9 +74,10 @@ class InstallStatusTests(unittest.TestCase):
                     raise ValueError("signals broke for arthur@powerset.co")
                 except ValueError:
                     logging.getLogger("test.report").exception("Signals check failed")
-                for thread in threading.enumerate():
-                    if thread.name == "error-report":
-                        thread.join(5)
+                reporter = next(h for h in root_logger.handlers if isinstance(h, report.ErrorReporter))
+                self.assertEqual(len(reporter.inflight), 2)
+                reporter.drain()  # what the process does at exit: the reports go out before it ends
+                self.assertEqual(reporter.inflight, [])
         finally:
             root_logger.handlers[:] = before
         self.assertEqual(sender.call_count, 2)
