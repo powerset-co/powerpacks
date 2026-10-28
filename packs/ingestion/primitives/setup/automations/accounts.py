@@ -299,10 +299,11 @@ def stored_accounts(home: Path) -> tuple[list[dict[str, Any]], str]:
 
 
 def stored_mailboxes(home: Path) -> tuple[str, ...]:
-    """The Gmail addresses msgvault holds, lower-cased and sorted."""
+    """The Gmail addresses msgvault holds (its `type` is gmail), lower-cased and sorted."""
     accounts, _ = stored_accounts(home)
     return tuple(sorted({str(account.get("email") or account.get("identifier") or "").strip().lower()
-                         for account in accounts} - {""}))
+                         for account in accounts
+                         if str(account.get("type") or account.get("source_type") or "gmail").lower() == "gmail"} - {""}))
 
 
 def status_payload(home: Path) -> dict[str, Any]:
