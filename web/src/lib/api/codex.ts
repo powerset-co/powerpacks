@@ -90,11 +90,65 @@ function accessSettings(fullAccess: boolean): Record<string, unknown> {
     : { approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite", networkAccess: true } }
 }
 
-export async function startTurn(threadId: string, text: string, fullAccess: boolean): Promise<void> {
+/** The models Codex offers (app-server `model/list`): what the composer's picker lists. */
+export interface CodexModel {
+  id: string
+  name: string
+  description: string
+  isDefault: boolean
+  defaultEffort: string
+  efforts: { id: string; description: string }[]
+}
+
+function decodeModel(raw: unknown): CodexModel | null {
+  if (!isRecord(raw) || typeof raw.id !== "string") return null
+  const efforts = Array.isArray(raw.supportedReasoningEfforts) ? raw.supportedReasoningEfforts : []
+  return {
+    id: raw.id,
+    name: typeof raw.displayName === "string" ? raw.displayName : raw.id,
+    description: typeof raw.description === "string" ? raw.description : "",
+    isDefault: raw.isDefault === true,
+    defaultEffort: typeof raw.defaultReasoningEffort === "string" ? raw.defaultReasoningEffort : "",
+    efforts: efforts.flatMap((effort) =>
+      isRecord(effort) && typeof effort.reasoningEffort === "string"
+        ? [
+            {
+              id: effort.reasoningEffort,
+              description: typeof effort.description === "string" ? effort.description : "",
+            },
+          ]
+        : [],
+    ),
+  }
+}
+
+export async function fetchModels(): Promise<CodexModel[]> {
+  const listed = await call("model/list", {})
+  const data: unknown[] = isRecord(listed) && Array.isArray(listed.data) ? listed.data : []
+  return data.flatMap((raw) => {
+    const model = decodeModel(raw)
+    return model ? [model] : []
+  })
+}
+
+/** The chat's model and effort; null keeps Codex's own default for each. */
+export interface TurnChoice {
+  model: string | null
+  effort: string | null
+}
+
+export async function startTurn(
+  threadId: string,
+  text: string,
+  fullAccess: boolean,
+  choice: TurnChoice = { model: null, effort: null },
+): Promise<void> {
   await call("turn/start", {
     threadId,
     input: [{ type: "text", text, text_elements: [] }],
     ...accessSettings(fullAccess),
+    ...(choice.model ? { model: choice.model } : {}),
+    ...(choice.effort ? { effort: choice.effort } : {}),
   })
 }
 

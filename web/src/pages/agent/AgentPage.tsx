@@ -21,6 +21,7 @@ import { ApprovalCard } from "./ApprovalCard"
 import { CodexGate } from "./CodexGate"
 import { Composer } from "./Composer"
 import { FullAccessTip } from "./FullAccessTip"
+import { ModelPicker } from "./ModelPicker"
 import { SearchScope } from "./SearchScope"
 import { Transcript } from "./Transcript"
 import { SearchHistory } from "./collaboration/SearchHistory"
@@ -164,7 +165,12 @@ function Conversation({
         onSend={(text) => void send(text)}
         onStop={() => void stop()}
         onFullAccess={fullAccess}
-        footer={<SearchScope />}
+        footer={
+          <>
+            <SearchScope />
+            <ModelPicker />
+          </>
+        }
       />
     </section>
   )
