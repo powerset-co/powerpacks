@@ -135,6 +135,11 @@
   animation: pop-out var(--t-fast) var(--ease-out) forwards;
 }
 
+/* A panel that opens beside a menu row (pages/agent/ModelPicker.tsx). */
+.pop-in {
+  animation: pop-in var(--t-med) var(--ease-out);
+}
+
 /* Shared keyframes (results.css), and reduced motion: every CSS animation and transition
    stops. JS animations (row entrance, count roll) check hooks/useReducedMotion themselves. */
 @layer base {

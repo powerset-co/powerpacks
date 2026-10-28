@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query"
 import { Check, ChevronRight } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { frontier } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
 import { fetchModels, type CodexModel } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
+import { cn } from "@/lib/utils"
 
 const MODELS_KEY = ["codex-models"] as const
 const ROW =
@@ -25,9 +26,13 @@ function ModelRow({ model, picked, onPick }: { model: CodexModel; picked: boolea
   )
 }
 
-/** A row that flies a panel out beside it on hover (or click), as the Claude app's Effort row
- *  does. The panel is its own popover: it grows upward from the row and flips to the side with
- *  room instead of running off the window. */
+// A flyout panel's width, and the room it needs beside the menu before it flips to the left.
+const FLYOUT_WIDTH_PX = 256
+
+/** A row that flies a panel out beside it on hover, as the Claude app's Effort row does. The
+ *  panel is part of the row's own box, so the pointer can cross from the row to the panel
+ *  (through the gap, which the box covers) without the panel closing; it grows upward from the
+ *  row and opens on the left when the window edge is near. */
 function FlyoutRow({
   open,
   onOpen,
@@ -41,33 +46,36 @@ function FlyoutRow({
   children?: ReactNode
   panel: ReactNode
 }) {
+  const row = useRef<HTMLDivElement>(null)
+  const [side, setSide] = useState<"right" | "left">("right")
+  const enter = () => {
+    const box = row.current?.getBoundingClientRect()
+    setSide(box && box.right + 8 + FLYOUT_WIDTH_PX > window.innerWidth ? "left" : "right")
+    onOpen(true)
+  }
   return (
-    <Popover open={open} onOpenChange={onOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={ROW}
-          data-open={open}
-          onMouseEnter={() => onOpen(true)}
-          onClick={() => onOpen(true)}
+    <div ref={row} className="relative" onMouseEnter={enter} onMouseLeave={() => onOpen(false)}>
+      <button type="button" className={ROW} data-open={open} aria-expanded={open} onClick={enter}>
+        <span className="flex-1">{label}</span>
+        {children}
+        <ChevronRight className="size-4 text-faint" aria-hidden />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={label}
+          className={cn(
+            "absolute bottom-[-6px] z-10",
+            side === "right" ? "left-full pl-2" : "right-full pr-2",
+          )}
+          style={{ width: FLYOUT_WIDTH_PX + 8 }}
         >
-          <span className="flex-1">{label}</span>
-          {children}
-          <ChevronRight className="size-4 text-faint" aria-hidden />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="right"
-        align="end"
-        sideOffset={8}
-        alignOffset={6}
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        className="w-64 p-1.5"
-        aria-label={label}
-      >
-        {panel}
-      </PopoverContent>
-    </Popover>
+          <div className="pop-in rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md">
+            {panel}
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
