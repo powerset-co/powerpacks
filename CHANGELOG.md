@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.43.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.3...powerpacks-v3.43.4) (2026-10-28)
+
+
+### Bug Fixes
+
+* **people:** drawer menus open above the drawer; a pencil opens the rename ([#963](https://github.com/powerset-co/powerpacks/issues/963)) ([70d6d99](https://github.com/powerset-co/powerpacks/commit/70d6d9932f99ac48b970145135796c7e7ef5f37a))
+
 ## [3.43.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.2...powerpacks-v3.43.3) (2026-10-27)
 
 
