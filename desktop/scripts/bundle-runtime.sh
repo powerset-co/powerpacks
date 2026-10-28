@@ -10,7 +10,7 @@ set -euo pipefail
 UV_VERSION="0.13.5"
 CODEX_VERSION="0.161.0"
 NODE_VERSION="22.16.0"
-PLAYWRIGHT_VERSION="1.60.0"
+PLAYWRIGHT_VERSION="1.64.1"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"

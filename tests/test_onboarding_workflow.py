@@ -53,6 +53,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.data.write_text('person_id,name\ncandidate:phone:+15550100,Jordan Bravo\n')
         InstallStatus(self.root).write('install.skills_ready', pid=os.getpid())
         self.tools = patch.object(ImportTools, 'run', return_value={'status': 'ok'}).start()
+        self.chromium = patch('packs.powerset.primitives.install.workflow.chromium_installed', return_value=True).start()
         self.linkedin_run = LinkedInConnections.run
         self.linkedin_login = LinkedInConnections.login
         patch.object(LinkedInConnections, 'run', return_value={
@@ -441,6 +442,17 @@ class SourceOnboardingTests(unittest.TestCase):
         sync.assert_not_called()
         self.assertTrue((self.root / '.powerpacks/install/connect.json').is_file())
         self.assertEqual(InstallStatus(self.root).read()['event'], before)
+
+    def test_tools_step_says_when_it_downloads_the_browser(self):
+        write = InstallStatus.write
+        for installed, said, unsaid in ((False, 'tools.browser', 'tools.preparing'), (True, 'tools.preparing', 'tools.browser')):
+            self.chromium.return_value = installed
+            with self.subTest(installed=installed), \
+                 patch.object(InstallStatus, 'write', autospec=True, side_effect=write) as spy:
+                SourceOnboarding(self.root, sources=('linkedin',), record='connect').connect()
+                events = [call.args[1] for call in spy.call_args_list]
+                self.assertIn(said, events)
+                self.assertNotIn(unsaid, events)
 
     @staticmethod
     def ready(*sources, mailboxes=()):

@@ -16,6 +16,7 @@ Not worded here:
   - the live index line ("Building search records"), sent by the Modal run.
 
 Changelog:
+  2026-10-27: `tools.browser`: the tools step downloads Powerpacks' own browser.
   2026-10-13: under the desktop app, setup never asks which Gmail account (the Connect screen
       connects it) and WhatsApp has no skip: their words are gone.
   2026-10-13: `sources.connected` ends a Connect screen run (workflow.py `connect`); the page
@@ -166,6 +167,7 @@ PROSE: dict[str, Prose] = {
 
     # Logging in to your accounts: tools first, then every login back to back
     "tools.preparing": Prose(None, R, "Preparing import tools"),
+    "tools.browser": Prose(None, R, "Downloading the browser Powerpacks uses (about 180 MB)"),
     "tools.ready": Prose(None, C, "Contact import tools are ready"),
     "tools.needs_password": Prose(None, W, "Your Mac password is needed to prepare import tools. I'll ask in chat."),
     "tools.failed": Prose(None, F, "Import tools could not be prepared. I'm checking what happened."),

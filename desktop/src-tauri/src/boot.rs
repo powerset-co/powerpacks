@@ -171,6 +171,25 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         .current_dir(&root);
     stream(app, boot, sync, "Python setup")?;
 
+    // The browser the sign-ins run in: Playwright's Chromium, downloaded once into
+    // ~/.powerpacks/browsers by the playwright-core the app ships. A failure here does not stop
+    // the launch: the Connect step downloads it again before the first sign-in.
+    if !browser_installed() {
+        boot.step(
+            app,
+            "Downloading the browser Powerpacks uses",
+            "About 180 MB, once.",
+        );
+        match install_browser(&root) {
+            Ok(install) => {
+                if let Err(error) = stream(app, boot, install, "Browser setup") {
+                    boot.line(app, format!("Browser download failed: {error}. It is tried again at Connect."));
+                }
+            }
+            Err(error) => boot.line(app, format!("Browser download skipped: {error}")),
+        }
+    }
+
     if let Err(error) = serve(app, &root) {
         boot.step(app, "Powerpacks is fixing itself", "This takes a minute.");
         if !crash::repair(&root, &version, &Crash::server(&root)).unwrap_or(false) {
@@ -293,6 +312,43 @@ pub fn serve(app: &AppHandle, root: &Path) -> Result<(), String> {
         "The Powerpacks page did not start. See {}.",
         log_path.display()
     ))
+}
+
+/// Where Playwright's Chromium lives: `POWERPACKS_BROWSERS_DIR`, else ~/.powerpacks/browsers
+/// (packs/ingestion/primitives/common/browser.js reads the same).
+fn browsers_dir() -> PathBuf {
+    std::env::var_os("POWERPACKS_BROWSERS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".powerpacks").join("browsers")))
+        .unwrap_or_else(|| PathBuf::from(".powerpacks/browsers"))
+}
+
+/// Whether a Chromium download finished: Playwright leaves INSTALLATION_COMPLETE in its folder.
+fn browser_installed() -> bool {
+    let Ok(entries) = std::fs::read_dir(browsers_dir()) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_string_lossy().starts_with("chromium-")
+            && entry.path().join("INSTALLATION_COMPLETE").is_file()
+    })
+}
+
+/// `node playwright-core/cli.js install --no-shell chromium` with the bundled node, into
+/// `browsers_dir()`.
+fn install_browser(root: &Path) -> Result<Command, String> {
+    let node = paths::bundled("node")?;
+    let cli = root.join("vendor/browser-node/node_modules/playwright-core/cli.js");
+    if !cli.is_file() {
+        return Err(format!("playwright-core is missing (expected at {})", cli.display()));
+    }
+    let mut install = Command::new(node);
+    install
+        .arg(cli)
+        .args(["install", "--no-shell", "chromium"])
+        .env("PLAYWRIGHT_BROWSERS_PATH", browsers_dir())
+        .current_dir(root);
+    Ok(install)
 }
 
 /// Run `command`, showing its output on the splash; fail with its last line.

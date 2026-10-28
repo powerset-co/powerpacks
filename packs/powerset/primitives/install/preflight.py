@@ -1,6 +1,7 @@
 """Check desktop prerequisites and install Chromium or a user-local Google Cloud CLI.
 
 Changelog:
+  2026-10-27: Chromium goes into Powerpacks' own folder (oauth_browser.ensure_chromium).
   2026-10-09: Share browser discovery and install prerequisites without Homebrew.
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from packs.ingestion.primitives.setup.automations.oauth_browser import VENDORED_NODE_MODULES
+from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_chromium
 
 
 BROWSER_SCRIPT = Path(__file__).resolve().parents[3] / "ingestion/primitives/common/browser.js"
@@ -52,7 +53,9 @@ def install(item: str, on_progress: Callable[[str], None]) -> dict:
     """Install chromium or gcloud, streaming progress and returning ok or failed."""
     try:
         if item == "chromium":
-            _stream(["node", str(VENDORED_NODE_MODULES / "playwright-core/cli.js"), "install", "chromium"], on_progress)
+            browser = ensure_chromium(on_progress)
+            if browser["status"] != "ok":
+                return {"status": "failed", "message": browser["message"]}
         elif item == "gcloud":
             arch = "arm" if platform.machine() == "arm64" else "x86_64"
             url = f"https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-{arch}.tar.gz"

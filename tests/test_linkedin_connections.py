@@ -37,7 +37,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.csv = Path(temp.name) / "discover/linkedin/Connections.csv"
         self.known = []
-        deps = patch(f"{MODULE}.ensure_playwright_core", return_value={"status": "ok", "node_path": "/tmp/node_modules"})
+        deps = patch(f"{MODULE}.ensure_chromium", return_value={"status": "ok", "node_path": "/tmp/node_modules"})
         deps.start()
         self.addCleanup(deps.stop)
 

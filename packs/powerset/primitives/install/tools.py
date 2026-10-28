@@ -1,10 +1,11 @@
 """Prepare optional import tools through their existing binary installers.
 
 No account login, mailbox sync, WhatsApp pairing, or source-data changes.
-Gmail and LinkedIn use the desktop runtime or command-line node/npm and a
-Chromium browser (`common/browser.js` picks it).
+Gmail and LinkedIn use the desktop runtime or command-line node/npm and
+Powerpacks' own Chromium (`common/browser.js` picks it).
 
 Changelog:
+  2026-10-27: Gmail and LinkedIn download Powerpacks' own Chromium instead of installing Chrome.
   2026-10-09: Desktop preflight owns Node, browser, and user-local gcloud setup.
   2026-10-03: LinkedIn is a source here; Brave counts as the browser.
 """
@@ -21,16 +22,13 @@ from packs.ingestion.primitives.common.jsonio import emit
 from packs.ingestion.primitives.discover.messages.wacli import binary
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked, PrimitiveFailed
 from packs.ingestion.primitives.setup.automations import msgvault_home, shell
+from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_chromium
 
 
 class ImportSource(str, Enum):
     GMAIL = "gmail"
     LINKEDIN = "linkedin"
     WHATSAPP = "whatsapp"
-
-
-BROWSER_APPS = tuple(Path(f"/Applications/{name}.app") for name in
-                     ("Google Chrome", "Brave Browser", "Microsoft Edge", "Arc"))
 
 
 HOMEBREW_INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
@@ -61,11 +59,9 @@ class ImportTools:
             packages.append(("tmux", ["tmux"]))
         if not desktop and ImportSource.GMAIL in self.sources and not shutil.which("gcloud"):
             packages.append(("gcloud", ["--cask", "gcloud-cli"]))
-        if not desktop and {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources):
-            if not shutil.which("node") or not shutil.which("npm"):
-                packages.append(("node", ["node"]))
-            if not any(app.is_dir() for app in BROWSER_APPS):
-                packages.append(("chrome", ["--cask", "google-chrome"]))
+        browser = {ImportSource.GMAIL, ImportSource.LINKEDIN} & set(self.sources)
+        if not desktop and browser and (not shutil.which("node") or not shutil.which("npm")):
+            packages.append(("node", ["node"]))
         if packages:
             brew = shutil.which("brew")
             if not brew:
@@ -77,6 +73,10 @@ class ImportTools:
                 result = shell.run_command([brew, "install", *args], timeout=900)
                 if not result.ok:
                     return {"status": "failed", "message": f"Could not install {name}: {shell.command_error(result)}"}
+        if browser:
+            installed["chromium"] = ensure_chromium()
+            if installed["chromium"]["status"] != "ok":
+                return {"status": "failed", "message": installed["chromium"]["message"], "tools": installed}
         if ImportSource.GMAIL in self.sources:
             shell.progress("Preparing Gmail import.")
             installed["msgvault"] = msgvault_home.ensure_msgvault(install=True)

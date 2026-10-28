@@ -14,7 +14,7 @@ class LoginGcloudTests(unittest.TestCase):
         proc = mock.Mock(stdout=io.StringIO(f"Your browser has been opened to visit:\n\n    {URL}\n"))
         proc.wait.return_value = returncode
         proc.poll.return_value = returncode
-        with mock.patch.object(oauth_browser, "ensure_playwright_core", return_value={"status": "ok", "node_path": "/n"}), \
+        with mock.patch.object(oauth_browser, "ensure_chromium", return_value={"status": "ok", "node_path": "/n"}), \
                 mock.patch.object(oauth_browser.subprocess, "Popen", return_value=proc) as popen, \
                 mock.patch.object(oauth_browser, "run_streaming_command",
                                   return_value=CommandResult(ok=True, stdout=json.dumps(browser_payload))) as browser:

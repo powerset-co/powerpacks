@@ -1,6 +1,9 @@
 /* The one place the Chrome automation scripts pick a browser and act like it.
  *
- * Picks Chrome, Brave, Edge, Arc, then Playwright Chromium.
+ * Picks Powerpacks' own Chromium (oauth_browser.py ensure_chromium downloads it into
+ * POWERPACKS_BROWSERS_DIR, default ~/.powerpacks/browsers), else Chrome, Brave, Edge, Arc.
+ * A saved profile last written by a newer Chrome than that Chromium opens in the installed
+ * browser instead: Chrome refuses a profile from a newer version.
  * The user agent matches the installed major
  * version so it agrees with the Sec-CH-UA hints the browser sends. After a login
  * window closes, returnFocus brings back the app that started the session:
@@ -8,6 +11,8 @@
  * (Terminal, Ghostty, the Claude or Codex desktop app).
  *
  * Changelog:
+ * 2026-10-27: Powerpacks' own Chromium first; the installed browsers are the fallback, and
+ *   the browser for a profile made by a newer Chrome.
  * 2026-10-09: Share browser discovery with desktop preflight; include cached Chromium.
  * Created: 2026-10-03
  */
@@ -21,14 +26,11 @@ const BROWSER_APPS = [
 ];
 const FALLBACK_MAJOR = 149;
 
-function whichBrowser() {
-  for (const name of BROWSER_APPS) {
-    const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
-    if (fs.existsSync(executable)) return { name, path: executable };
-  }
-  const cache = path.join(os.homedir(), "Library/Caches/ms-playwright");
-  if (!fs.existsSync(cache)) return null;
-  const revisions = fs.readdirSync(cache).filter(name => /^chromium-\d+$/.test(name))
+// Playwright's Chromium, newest revision first, in the layouts its versions have used.
+function ownChromium() {
+  const folder = process.env.POWERPACKS_BROWSERS_DIR || path.join(os.homedir(), ".powerpacks/browsers");
+  if (!fs.existsSync(folder)) return null;
+  const revisions = fs.readdirSync(folder).filter(name => /^chromium-\d+$/.test(name))
     .sort((a, b) => Number(b.split("-")[1]) - Number(a.split("-")[1]));
   for (const revision of revisions) {
     for (const suffix of [
@@ -36,24 +38,56 @@ function whichBrowser() {
       "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
       "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
     ]) {
-      const executable = path.join(cache, revision, suffix);
+      const executable = path.join(folder, revision, suffix);
       if (fs.existsSync(executable)) return { name: "Chromium", path: executable };
     }
   }
   return null;
 }
 
-// Spread into launchPersistentContext options.
-function browserTarget() {
-  const browser = whichBrowser();
-  if (browser) return { executablePath: browser.path };
-  throw new Error("Install Chrome, Brave, Microsoft Edge, Arc, or Chromium to continue.");
+function installedBrowser() {
+  for (const name of BROWSER_APPS) {
+    const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
+    if (fs.existsSync(executable)) return { name, path: executable };
+  }
+  return null;
 }
 
-function desktopUserAgent() {
+const majorOf = version => Number(/^(\d+)\./.exec(version || "")?.[1] || 0);
+
+// The newest Chrome that wrote the profile; 0 for a profile not made yet.
+function profileMajor(profileDir) {
+  const preferences = profileDir && path.join(profileDir, "Default/Preferences");
+  if (!preferences || !fs.existsSync(preferences)) return 0;
+  const saved = JSON.parse(fs.readFileSync(preferences, "utf8"));
+  return Math.max(majorOf(saved.profile?.created_by_version), majorOf(saved.extensions?.last_chrome_version));
+}
+
+// The app's Info.plist beside .../Contents/MacOS/<binary> names its version.
+function chromiumMajor(executable) {
+  const plist = fs.readFileSync(path.join(path.dirname(executable), "../Info.plist"), "utf8");
+  return majorOf(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]);
+}
+
+// The browser for `profileDir`: our Chromium, unless a newer installed Chrome wrote the profile.
+function whichBrowser(profileDir) {
+  const own = ownChromium();
+  const installed = installedBrowser();
+  if (own && installed && profileMajor(profileDir) > chromiumMajor(own.path)) return installed;
+  return own || installed;
+}
+
+// Spread into launchPersistentContext options.
+function browserTarget(profileDir) {
+  const browser = whichBrowser(profileDir);
+  if (browser) return { executablePath: browser.path };
+  throw new Error("Powerpacks could not download its browser. Install Chrome, Brave, Microsoft Edge, or Arc to continue.");
+}
+
+function desktopUserAgent(profileDir) {
   let major = FALLBACK_MAJOR;
   try {
-    const binary = browserTarget().executablePath;
+    const binary = browserTarget(profileDir).executablePath;
     const match = /(\d+)\.\d+\.\d+/.exec(execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5000 }));
     if (match) major = Number(match[1]);
   } catch (_) {
