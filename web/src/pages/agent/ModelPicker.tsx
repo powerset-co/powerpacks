@@ -12,9 +12,9 @@ import { cn } from "@/lib/utils"
 const MODELS_KEY = ["codex-models"] as const
 const ROW =
   "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary data-[open=true]:bg-secondary"
-// A flyout: the panel that opens beside a row on hover, as the Claude app's Effort does.
-const FLYOUT =
-  "absolute left-full top-0 ml-1 w-64 rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md"
+// A flyout: the panel that opens beside a row on hover, as the Claude app's Effort does. Its own
+// Popover, so it opens on whichever side has room instead of running off the window.
+const FLYOUT = "w-64 p-1.5"
 
 type Flyout = "effort" | "more" | null
 
