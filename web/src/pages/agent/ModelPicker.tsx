@@ -73,7 +73,12 @@ export function ModelPicker() {
         <span className="truncate">{picked.name}</span>
         {effort ? <span className="capitalize text-faint">{effort}</span> : null}
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-56 overflow-visible p-1.5">
+      <PopoverContent
+        align="start"
+        side="top"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        className="w-56 overflow-visible p-1.5"
+      >
         <ul className="m-0 flex list-none flex-col p-0">
           {shown.map((model) => (
             <ModelRow
