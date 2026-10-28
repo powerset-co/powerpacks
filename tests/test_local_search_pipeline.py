@@ -1393,6 +1393,37 @@ class PreviewFilterKeysTests(unittest.TestCase):
                         fetch.assert_called_once_with(["p1"], env_file=Path(".env"), allowed_operator_ids=["op1"])
                         local_fetch.assert_not_called()
 
+    def test_a_failed_attribution_lookup_is_recorded_in_the_run(self):
+        """The chat drops the pipeline's stderr, so a failed Postgres lookup must land in results.json."""
+        module = load_pipeline_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module.ROOT = root
+            module.QUICK_SEARCH_ROOT = root / ".powerpacks/search"
+            module.DEEP_SEARCH_ROOT = root / ".powerpacks/deep-search"
+            artifacts = root / ".powerpacks/runs/artifacts/founders"
+            artifacts.mkdir(parents=True)
+            (artifacts / "rows.jsonl").write_text(json.dumps({"person_id": "p1", "name": "A"}) + "\n")
+            (artifacts / "profiles.jsonl").write_text("")
+            state = root / ".powerpacks/runs/founders.json"
+            state.write_text(json.dumps({"query": "founders", "steps": [
+                {"id": "expand_search_request", "output": {"role_search_filters": {}}},
+                {"id": "resolve_set_operators", "output": {"set_id": "s1", "operator_ids": ["op1"]}},
+            ]}))
+            run = root / ".powerpacks/search/founders"
+            run.mkdir(parents=True)
+            ledger = run / "pipeline.ledger.json"
+            ledger.write_text(json.dumps({
+                "created_at": "2026-10-16T00:00:00Z", "steps": {},
+                "artifacts": {"jsonl": ".powerpacks/runs/artifacts/founders/rows.jsonl",
+                              "profiles_path": ".powerpacks/runs/artifacts/founders/profiles.jsonl"}}))
+            with mock.patch.object(module.pg, "fetch_network_attribution", side_effect=RuntimeError("pooler down")):
+                module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/founders.json",
+                                         "status": "completed", "env_file": ".env"})
+            saved = json.loads((root / ".powerpacks/deep-search/founders/results.json").read_text())
+            self.assertNotIn("person_attribution", saved)
+            self.assertEqual(saved["person_attribution_error"], "RuntimeError: pooler down")
+
     def test_powerset_preview_carries_the_same_keys(self):
         module = load_pipeline_module()
         payload = {"normalized_query": "scientists", "role_search_filters": {"cities": ["Boston"], **self.EDITABLE}}

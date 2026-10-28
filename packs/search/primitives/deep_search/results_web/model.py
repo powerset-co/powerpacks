@@ -805,10 +805,11 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
 
 def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[str, Any],
                         traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
-                        status: str, person_attribution: dict[str, Any] | None = None) -> None:
+                        status: str, person_attribution: dict[str, Any] | None = None,
+                        person_attribution_error: str | None = None) -> None:
     """Save a quick search as a one-pond run beside the deep ones, with the filters and traits it
     ran with and, on a Powerset set, who in the set knows each person (the deep runs' shape), and
-    list it."""
+    list it. When that lookup failed, the run carries the error instead of silently showing no sources."""
     rows = len(tuple(_jsonl_rows(_artifact_path(root, jsonl))))
     artifacts = {"jsonl": jsonl, "profiles_path": profiles_path}
     payload: dict[str, Any] = {
@@ -821,6 +822,8 @@ def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[st
     }
     if person_attribution:
         payload["person_attribution"] = person_attribution
+    if person_attribution_error:
+        payload["person_attribution_error"] = person_attribution_error
     write_json(root / run_id / "results.json", payload)
     card = SearchCard(run_id=run_id, title=query, company="", status=status,
                       created_at=created_at, updated_at=created_at, search_version="quick",

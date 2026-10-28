@@ -1163,27 +1163,30 @@ def record_quick_run(result: dict[str, Any]) -> None:
     filters=preview_filters(expanded)
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
+    attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file"))
     record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
-                        person_attribution=quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file")))
+                        person_attribution=attribution, person_attribution_error=attribution_error)
 
-def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> dict[str, Any]:
-    """Save the same source contract for local and Powerset search results."""
+def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> tuple[dict[str, Any], str | None]:
+    """Save the same source contract for local and Powerset search results. A failed lookup comes back
+    as its error text, recorded in the run beside the rows: the chat drops stderr, so a line there is lost."""
     people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
     if ledger.get("mode")=="local_duckdb":
         from packs.search.primitives.deep_search.person_attribution import local_network_attribution
-        return local_network_attribution(Path(ledger["duckdb"]), people)
+        return local_network_attribution(Path(ledger["duckdb"]), people), None
     if not env_file:
-        return {}
+        return {}, "no env file: the set's Postgres lookup was not made"
     scope=latest_step(state,"resolve_set_operators")
     if not people or not scope.get("operator_ids"):
-        return {}
+        return {}, None
     try:
-        return pg.fetch_network_attribution(people, env_file=Path(env_file), allowed_operator_ids=list(scope["operator_ids"]))
+        return pg.fetch_network_attribution(people, env_file=Path(env_file), allowed_operator_ids=list(scope["operator_ids"])), None
     except Exception as e:
-        print(f"search: network attribution lookup failed ({type(e).__name__}); the rows show no sources", file=sys.stderr, flush=True)
-        return {}
+        error=f"{type(e).__name__}: {e}"
+        print(f"search: network attribution lookup failed ({error}); the rows show no sources", file=sys.stderr, flush=True)
+        return {}, error
 
 def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_kwargs) -> None:
     if done(ledger, "llm_rerank_candidates") or ledger["artifacts"].get("query_results_csv"):

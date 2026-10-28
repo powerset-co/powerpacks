@@ -66,7 +66,9 @@ def namespace_name(logical_name: str = "people", *, config: Mapping[str, str] | 
     configured = config.get(env_key)
     if configured:
         return configured
-    version = config.get("ALEPH_INDEX_VERSION", "v1").strip().lower()
+    # v3 is the family the Powerset API serves (ALEPH_INDEX_VERSION=v3 in its production deploy);
+    # v1 is the legacy family and only an explicit ALEPH_INDEX_VERSION=v1 reaches it.
+    version = config.get("ALEPH_INDEX_VERSION", "v3").strip().lower()
     if not re.fullmatch(r"v[1-9][0-9]*", version):
         raise ValueError(f"Invalid ALEPH_INDEX_VERSION: {version!r}")
     base = TURBOPUFFER_NAMESPACES[logical_name].removesuffix("_v1") + f"_{version}"
