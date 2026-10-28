@@ -281,26 +281,37 @@ def add_account(home: Path, email: str, app_name: str, *, headless: bool, force:
     }
 
 
+def stored_accounts(home: Path) -> tuple[list[dict[str, Any]], str]:
+    """The accounts msgvault holds, from msgvault itself (`list-accounts`), and its error if it
+    could not say. msgvault owns its database; nothing else reads it to answer this."""
+    if not shutil.which("msgvault") or not db_path(home).exists():
+        return [], ""
+    result = run_msgvault(["list-accounts", "--json", "--local"], home, timeout=30)
+    if not result.ok:
+        return [], command_error(result)
+    try:
+        accounts = parse_json_fragment(result.stdout or "[]")
+    except json.JSONDecodeError:
+        if "No accounts found" in result.stdout:
+            return [], ""
+        return [], "list-accounts did not return JSON"
+    return [account for account in accounts if isinstance(account, dict)], ""
+
+
+def stored_mailboxes(home: Path) -> tuple[str, ...]:
+    """The Gmail addresses msgvault holds, lower-cased and sorted."""
+    accounts, _ = stored_accounts(home)
+    return tuple(sorted({str(account.get("email") or account.get("identifier") or "").strip().lower()
+                         for account in accounts} - {""}))
+
+
 def status_payload(home: Path) -> dict[str, Any]:
     """Build the full `status` payload: binary, config, accounts, MCP, gcloud."""
     msgvault_path = shutil.which("msgvault") or ""
     version = run_command(["msgvault", "version"], timeout=15) if msgvault_path else CommandResult(ok=False, returncode=0)
     cfg_path = config_path(home)
     secrets = parse_client_secret_paths(cfg_path)
-    accounts: Any = []
-    accounts_error = ""
-    if msgvault_path and db_path(home).exists():
-        result = run_msgvault(["list-accounts", "--json", "--local"], home, timeout=30)
-        if result.ok:
-            try:
-                accounts = parse_json_fragment(result.stdout or "[]")
-            except json.JSONDecodeError:
-                if "No accounts found" in result.stdout:
-                    accounts = []
-                else:
-                    accounts_error = "list-accounts did not return JSON"
-        else:
-            accounts_error = command_error(result)
+    accounts, accounts_error = stored_accounts(home)
     mcp = mcp_status()
     secret_records = {
         name: {"path": value, "exists": bool(value and Path(value).expanduser().exists())}
