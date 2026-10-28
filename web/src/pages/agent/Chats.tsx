@@ -12,6 +12,7 @@ import { archiveThread } from "@/lib/api/codex"
 import { useFeatures } from "@/lib/features"
 import { AGENT } from "@/lib/nav"
 import { runDate } from "@/lib/searches/copy"
+import { readStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 
@@ -41,6 +42,16 @@ function ChatList({ rail }: { rail: boolean }) {
   useEffect(() => {
     void client.invalidateQueries({ queryKey: THREADS_KEY })
   }, [agent.threadId, agent.running, client])
+
+  // The chat each saved search ran in (AgentPage writes it): that chat is the search.
+  const linked = new Map<string, string>()
+  for (const card of searches.data ?? []) {
+    const threadId = readStored("local", `search-thread:${card.run_id}`, (raw) =>
+      typeof raw === "string" ? raw : null,
+    )
+    if (threadId && threads.data?.some((thread) => thread.id === threadId)) linked.set(threadId, card.title)
+  }
+  const unlinked = (searches.data ?? []).filter((card) => ![...linked.values()].includes(card.title))
 
   const pick = (action: () => void) => {
     action()
@@ -101,7 +112,7 @@ function ChatList({ rail }: { rail: boolean }) {
                       "aria-[current=page]:bg-surface-2 aria-[current=page]:text-foreground",
                     )}
                   >
-                    {thread.title}
+                    {linked.get(thread.id) ?? thread.title}
                   </button>
                   <button
                     type="button"
@@ -132,11 +143,11 @@ function ChatList({ rail }: { rail: boolean }) {
               {item.title}
             </button>
           ))}
-        {searches.data?.length ? (
+        {unlinked.length ? (
           <section className="mb-2">
             <h2 className="m-0 px-2.5 pb-1 pt-3 text-[11px] font-semibold text-faint">Saved searches</h2>
             <ul className="m-0 flex list-none flex-col gap-px p-0">
-              {searches.data.map((card) => (
+              {unlinked.map((card) => (
                 <li key={card.run_id}>
                   <button
                     type="button"
