@@ -85,10 +85,10 @@ function progress(payload) {
 
 function launch(profileDir, headless) {
   return chromium.launchPersistentContext(profileDir, {
-    ...browserTarget(),
+    ...browserTarget(profileDir),
     headless,
     viewport: null,
-    userAgent: desktopUserAgent(),
+    userAgent: desktopUserAgent(profileDir),
     ignoreDefaultArgs: ["--enable-automation"],
     args: ["--disable-blink-features=AutomationControlled", "--disable-infobars", "--disable-extensions"],
   });

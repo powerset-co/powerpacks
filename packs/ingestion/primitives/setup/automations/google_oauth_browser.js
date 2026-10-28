@@ -351,12 +351,12 @@ function onGoogleLogin(url) {
 // Headless runs get a fixed desktop viewport; the visible login window uses the screen.
 function launchChrome(profileDir, headless) {
   return chromium.launchPersistentContext(profileDir, {
-    ...browserTarget(),
+    ...browserTarget(profileDir),
     headless,
     acceptDownloads: true,
     viewport: headless ? { width: 1440, height: 900 } : null,
     // A consumer-grade UA (no HeadlessChrome token) matched to the installed major.
-    userAgent: desktopUserAgent(),
+    userAgent: desktopUserAgent(profileDir),
     // Strip the automation fingerprints Google's "this browser may not be
     // secure" check keys on: the --enable-automation switch (which also sets
     // navigator.webdriver and shows the "controlled by automated software" +
