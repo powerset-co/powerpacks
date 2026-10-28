@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.46.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.4...powerpacks-v3.46.0) (2026-10-28)
+
+
+### Features
+
+* **agent:** lists are tables in the chat; the memory skill leaves routing ([#996](https://github.com/powerset-co/powerpacks/issues/996)) ([62aa680](https://github.com/powerset-co/powerpacks/commit/62aa6806f2d8af16831ac65bb7229734e8171dff))
+* **agent:** model and effort pickers in the chat composer ([#981](https://github.com/powerset-co/powerpacks/issues/981)) ([23f496a](https://github.com/powerset-co/powerpacks/commit/23f496ac7298837a04d22afc3c7d4325dca42f4f))
+* **desktop:** the app links its skills into ~/.agents/skills at every launch ([#1000](https://github.com/powerset-co/powerpacks/issues/1000)) ([4a22f05](https://github.com/powerset-co/powerpacks/commit/4a22f05d06e3a9d4a6b442ef742912c506b7c090))
+* **gmail:** measured waits for the Google sign-in windows, not timers ([#997](https://github.com/powerset-co/powerpacks/issues/997)) ([6c9404a](https://github.com/powerset-co/powerpacks/commit/6c9404a0a733cdf063c035418ab367584d47b517))
+
+
+### Bug Fixes
+
+* **desktop:** outbound links open through the app's own opener ([#1002](https://github.com/powerset-co/powerpacks/issues/1002)) ([a9ae6a2](https://github.com/powerset-co/powerpacks/commit/a9ae6a29b579c93508e5517b6a217fd5d6470f06))
+* **linkedin:** read the connections count in any language ([#1004](https://github.com/powerset-co/powerpacks/issues/1004)) ([d22d3fe](https://github.com/powerset-co/powerpacks/commit/d22d3fec51bfc3ec8d633b59c44c539a3a978dfb))
+* **setup:** the error report goes out before the run exits; a stop shows its own words ([#1003](https://github.com/powerset-co/powerpacks/issues/1003)) ([e3b370f](https://github.com/powerset-co/powerpacks/commit/e3b370f1c15810f7daa30c094537f0abdbe9364c))
+
 ## [3.45.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.3...powerpacks-v3.45.4) (2026-10-28)
 
 
