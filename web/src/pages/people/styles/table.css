@@ -140,9 +140,6 @@
 .worth[data-worth="yes"] .dot {
   background: var(--ok);
 }
-.worth[data-worth="maybe"] .dot {
-  background: var(--warn);
-}
 .worth[data-worth="no"] .dot {
   background: var(--bad);
 }

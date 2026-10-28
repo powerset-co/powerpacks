@@ -96,7 +96,7 @@ class PeopleWorthTests(StoreTests):
                               [(candidate, f"{candidate}@example.com", f"{candidate}@example.com")
                                for candidate in ("c1", "c2")])
         self.conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, input_fingerprint, created_at) "
-                          "VALUES ('c1', 'maybe', 'machine', 'uncertain', 'v1', ?)", (NOW,))
+                          "VALUES ('c1', 'maybe', 'machine', 'uncertain', 'v1', ?)", (NOW,))  # judged before 2026-10-28
         self.conn.commit()
         Realize(self.conn, self.root).run()
         PersonLabels(self.conn, self.root).run()
@@ -114,8 +114,8 @@ class PeopleWorthTests(StoreTests):
     def test_worth_write_returns_human_worth_for_the_whole_family_and_keeps_tags(self) -> None:
         from dataclasses import asdict
         initial, = self.people.load()
-        # The machine's "maybe" reaches the page as its own call; only the human writes yes or no.
-        self.assertEqual((initial.worth, initial.worth_source, initial.reason), ("maybe", "machine", "worth_maybe"))
+        # A machine "maybe" from before the detectors is not a call: the page shows the person as not assessed.
+        self.assertEqual((initial.worth, initial.worth_source), ("", "machine"))
         self.assertNotIn("share", asdict(initial))
         self.assertNotIn("share_source", asdict(initial))
         labels = [tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")]

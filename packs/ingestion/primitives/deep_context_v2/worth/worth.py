@@ -2,7 +2,9 @@
 
 A family contains the candidates with a current parent, or one unparented candidate.
 Only families with facts are judged. An exact LinkedIn pre-match is worth yes in code;
-Luna supplies everyone's labels and everyone else's worth. One worth row is written
+Luna supplies everyone's labels and, through four detectors (broadcast sender, shared mailbox,
+vendor the owner only buys from, someone acting for another person), everyone else's worth: no
+when a detector fires at NO_THRESHOLD, yes otherwise (reason.py). One worth row is written
 per member. Every family is asked every run, or the selected ones on a People refresh with a
 selection: an unchanged request is answered from the exact-request cache for free, changed
 facts or a question version bump are a new request.
@@ -32,7 +34,7 @@ from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth import evidence, luna
 from packs.ingestion.primitives.deep_context_v2.worth.luna import ChannelSummary, Labels
 from packs.ingestion.primitives.deep_context_v2.worth.pre_match import pre_match
-from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
+from packs.ingestion.primitives.deep_context_v2.worth.reason import decide, reason
 
 DECISIONS_CACHE_DIR = Path("deep-context") / "decisions"  # answers by request digest
 # Measured overhead per question beyond the request text (2026-10-13).
@@ -215,7 +217,7 @@ class Worth(Node):
                     text = NOTABLE_REASON_PREFIX + family.match.position.strip()
                 verdicts[family.key] = Verdict(schema.Worth.YES.value, text, labels_json)
             else:
-                decision: str = str(labels["worth"])
+                decision: str = decide(labels)
                 verdicts[family.key] = Verdict(decision, reason(labels, decision), labels_json)
         now: str = now_iso()
         rows: list[WorthRow] = []
@@ -232,7 +234,7 @@ class Worth(Node):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="06 Worth: yes, maybe or no per family (Luna Decisions).")
+    parser = argparse.ArgumentParser(description="06 Worth: yes or no per family; no when a Luna detector fires (broadcast, mailbox, vendor, intermediary).")
     parser.add_argument("--data-root", type=Path, default=Path(".powerpacks"))
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="judge only the first N families")
     parser.add_argument("--dry-run", action="store_true", help="count and price only; no call, no manifest")

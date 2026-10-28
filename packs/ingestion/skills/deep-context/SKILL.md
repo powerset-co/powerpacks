@@ -67,7 +67,7 @@ prints stage lines; it never creates, updates or reports tasks, and never speaks
 3. Collect messages and emails
 4. Build dossiers
 5. Merge duplicate people
-6. Assess network worth
+6. Assess network worth: yes unless a Luna detector says the contact is a newsletter or automated sender, a shared mailbox, a vendor the owner only buys from, or an assistant acting for someone else
 7. Enrich identities
 8. Export people, decide the share list and build the search index
 9. Review LinkedIn matches
@@ -168,7 +168,7 @@ tell the user the count and the names and wait for yes; the other writes just ha
 
 | Ask | Write |
 |---|---|
-| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. |
+| Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. The machine's call is yes unless one of four detectors fired (`labels_json`: `broadcast`, `mailbox`, `vendor_only`, `intermediary`, each a probability; no at 0.75 or above); its `reason` names the one that fired. There is no maybe. |
 | Rename | `POST /api/people/name` `{"parent_id": "<parent_id>", "name": "Fahad AlSharekh"}`. The name every page, export and lookup shows from then on; facts stay as written. One person per request. Undo: set the `name` column NULL on the family's `person_tags` rows and run realize. |
 | Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
 | Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. The list replaces the person's tags. Only the label names are tags: is_family, is_close_friend, is_personal, is_professional, is_classmate, is_coworker_current, is_coworker_past, is_client, is_vendor_or_partner, is_investor, is_founder, is_recruiter, is_mentor_or_advisor, is_mentee_or_report, is_service_provider, is_healthcare_legal_or_financial_provider, is_hr_benefits_or_payroll, is_support_billing_or_landlord, is_neighbor_or_local, is_automated_sender, is_transactional, is_stranger, is_minor, met_in_person, notable, owner_would_intro, they_would_take_owner_call, confidential_dealings. Any other word is refused; pick the closest and tell the user. |

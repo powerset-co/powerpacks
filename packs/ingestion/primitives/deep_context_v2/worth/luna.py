@@ -1,12 +1,19 @@
 """Luna's worth and label request for one family.
 
-The questions read the family's raw messages, profile and message counts. Worth is the
-`worth` choice; its reason comes from worth's yes/no answers (reason.py). Answers are
+The questions read the family's raw messages, profile and message counts. Worth is not a
+judgment of the person: four detectors (worth_questions.json) each answer with a probability
+whether the contact is a broadcast sender, a shared mailbox, a vendor the owner only buys from,
+or someone acting for another person. Any detector at NO_THRESHOLD or above is worth no;
+otherwise yes (worth.py). The reason names the detector that fired (reason.py). Answers are
 cached by REQUEST_VERSION and the exact request.
+
+Changelog:
+  2026-10-28: worth = detectors, yes unless one fires; no maybe; no relationship or standing questions.
 """
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
@@ -26,10 +33,16 @@ from packs.ingestion.primitives.share.questions import (
 )
 
 # A bump asks every family again.
-REQUEST_VERSION = "deep-context-luna-decisions-20261015"
+REQUEST_VERSION = "deep-context-luna-detectors-20261028"
 
 _HERE = Path(__file__).parent
 WORTH_QUESTIONS: list[dict[str, Any]] = assets.json_file(_HERE, "worth_questions.json")
+DETECTORS: tuple[str, ...] = tuple(question["name"] for question in WORTH_QUESTIONS)
+# A detector at this probability or above makes the family worth no (the lab on a real store:
+# true mailbox 1.00, assistant .92, vendor .81; the one false signal on a kept person was .50).
+NO_THRESHOLD = 0.75
+# Below the threshold but above this, the reason still names the closest call.
+NEAR_MISS = 0.5
 EMAIL_SOURCES = frozenset((SourceChannel.GMAIL.value,))
 
 # A notable position is worth yes regardless of messages. "Vice President" is not "president".
@@ -58,30 +71,6 @@ class ChannelSummary:
 
 
 # ---- request 1: the labels and worth
-
-
-def _channel_policy(sources: tuple[str, ...]) -> str:
-    """Email and phone contacts are held to different bars; a family with both gets the generous one."""
-    email: bool = False
-    phone: bool = False
-    for source in sources:
-        if source in EMAIL_SOURCES:
-            email = True
-        else:
-            phone = True
-    if email and phone:
-        rule = ("These messages come from both email and phone messages. Bias toward yes when either channel "
-                "shows a genuine human relationship; automated noise in one channel must not erase real "
-                "correspondence in the other. Use maybe only when both channels remain genuinely ambiguous.")
-    elif email:
-        rule = ("These messages come from email. Bias toward yes for clearly human, person-directed correspondence, "
-                "including sparse, one-off, old, academic, or plausibly important professional contacts. Use no only "
-                "for clear automated mail, broadcast/transactional noise, or unengaged cold spam. Maybe should be rare.")
-    else:
-        rule = ("These messages come from phone messages. Repeated or clearly two-way personal or professional "
-                "conversation is yes. Sparse context, a bare number, or an uncertain one-sided exchange may be maybe; "
-                "automated service traffic or obvious spam is no. A name or area code is weak context only.")
-    return "\n\nWORTH SOURCE POLICY:\n" + rule
 
 
 def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], channels: ChannelSummary,
@@ -139,15 +128,17 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
         "evidence_policy": EVIDENCE_POLICY,
     }
     worth: list[dict[str, Any]] = copy.deepcopy(WORTH_QUESTIONS)
-    worth[0]["instructions"] += _channel_policy(channels.sources)
-    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False), "questions": label_questions() + worth}
+    # One cache partition per owner: the owner's families share nothing with another install's.
+    cache_key: str = "powerpacks-worth-" + hashlib.sha256(owner.name.encode("utf-8")).hexdigest()[:16]
+    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False), "questions": label_questions() + worth,
+            "prompt_cache_key": cache_key}
 
 
 def refused(answers: list[Answer]) -> bool:
     """A refused choice or score leaves the family unlabelled: the answer is not saved and the family is
-    asked again next run. A refused yes/no question only leaves that label out (Luna declines is_minor for some)."""
+    asked again next run. A refused yes/no question only leaves that label out (Luna declines is_minor for
+    some); a refused detector is a detector that did not fire."""
     asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
-    asked.update(question["name"] for question in WORTH_QUESTIONS if question["type"] == "choice")
     return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)
 
 

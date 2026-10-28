@@ -206,7 +206,8 @@ class SharePeople:
                 recency_days=cells.get("recency_days"),
                 cadence=str(cells.get("cadence") or ""),
                 direction=str(cells.get("direction") or ""),
-                worth=decision["worth"] if decision is not None else "",
+                # A machine "maybe" from before the detectors (2026-10-28) is not a call: not assessed.
+                worth=decision["worth"] if decision is not None and decision["worth"] != "maybe" else "",
                 worth_source=decision["decided_by"] if decision is not None else "",
                 relationship_kind=str(cells.get("relationship_kind") or ""),
                 mode=str(cells.get("mode") or ""),

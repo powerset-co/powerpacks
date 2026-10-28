@@ -79,8 +79,8 @@ class MergeReason(StrEnum):
 
 class Worth(StrEnum):
     YES = "yes"
-    MAYBE = "maybe"
     NO = "no"
+    MAYBE = "maybe"  # written by worth before 2026-10-28; still in older stores, never written now, shown as not assessed
 
 
 class DecidedBy(StrEnum):

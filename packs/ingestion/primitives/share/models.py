@@ -37,7 +37,7 @@ class PersonEvidence:
     source_channels: tuple[str, ...]
     interaction_counts: dict[str, int]
     last_interaction: str | None
-    network_worth: str                   # the family's current worth: yes, maybe or no
+    network_worth: str                   # the family's current worth: yes or no
     worth_labels: dict[str, Any] | None  # the labels worth saved; None when a human decided and no machine row exists
     facts: dict[str, Any]
     shared_overlaps: frozenset[str]      # `facts.shared_context[].overlap` values

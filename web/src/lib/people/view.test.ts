@@ -6,7 +6,7 @@ describe("view query parameters", () => {
   it("round-trips multiple facet values, search, tab and descending sort", () => {
     const view: PeopleView = {
       tab: "no",
-      filters: new Map([["worth", new Set(["yes", "maybe"])]]),
+      filters: new Map([["worth", new Set(["yes", "no"])]]),
       text: "Acme & partners + friends",
       sort: { key: "last", dir: -1 },
     }
