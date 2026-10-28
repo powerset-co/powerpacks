@@ -1,8 +1,9 @@
 """Installer progress reflects completion, human waits, and interrupted work."""
 from __future__ import annotations
 
+import base64
+import gzip
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,6 +49,33 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["retry_command"], "bin/bootstrap")
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
+
+    def test_a_stop_reports_itself_with_the_record_and_log_tails(self) -> None:
+        self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
+        (self.root / ".release-please-manifest.json").write_text('{".": "3.44.1"}')
+        self.status.directory.mkdir(parents=True, exist_ok=True)
+        (self.root / ".powerpacks/install/install.log").write_text(
+            f"line one\nsent to arthur@powerset.co from {Path.home()}/x\n")
+        with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
+            sender.return_value.run.return_value = {"status": "submitted"}
+            with patch("packs.powerset.primitives.install.status.report", wraps=__import__(
+                    "packs.powerset.primitives.install.report", fromlist=["report"]).report) as reported:
+                self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
+                self.assertEqual(reported.call_count, 0)
+                self.status.write("step.failed", step=InstallStep.DEPENDENCIES, pid=os.getpid(),
+                                  details={"error": "boom"}, account_email="arthur@powerset.co")
+                self.assertEqual(reported.call_count, 1)
+        request = sender.call_args.args[0]
+        self.assertEqual(request.category, "setup")
+        self.assertEqual(request.metadata["event"], "step.failed")
+        self.assertEqual(request.metadata["powerpacks_version"], "3.44.1")
+        names = [artifact.name for artifact in request.artifacts]
+        self.assertEqual(names, ["manifest.json", "install.log"])
+        unpacked = {a.name: gzip.decompress(base64.b64decode(a.data)).decode() for a in request.artifacts}
+        self.assertNotIn("arthur@powerset.co", unpacked["manifest.json"])
+        self.assertNotIn("account_email", unpacked["manifest.json"])
+        self.assertIn("boom", unpacked["manifest.json"])
+        self.assertEqual(unpacked["install.log"], "line one\nsent to <email> from ~/x")
 
     def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
         first = self.status.write("discover.learning", pid=os.getpid())

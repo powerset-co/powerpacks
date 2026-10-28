@@ -5,6 +5,7 @@ step come from there. The manifest is the one record the page, the agent and the
 CLI read; a primitive's own text goes into the action's details, not the line.
 
 Changelog:
+  2026-10-27: a failed step, or a wait on an error, reports itself to Powerset (report.py).
   2026-10-13: a record can be named: the desktop app's Connect screen runs each source's logins
       into `connect.json`, so the setup record stays on its welcome until setup starts.
   2026-10-09: `step_started_at` records when the run entered the current step, so the page can
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
+from packs.powerset.primitives.install.report import report
 from packs.powerset.primitives.install.status_prose import page_prose, render
 from packs.powerset.primitives.install.steps import DEFAULT_PLAN, PROCESSING_STEPS, SOURCE_STEPS, InstallState, InstallStep
 
@@ -64,7 +66,8 @@ class _InstallManifest:
 
 class InstallStatus:
     def __init__(self, root: Path, name: str = "manifest") -> None:
-        self.directory = Path(root).resolve() / ".powerpacks/install"
+        self.root = Path(root).resolve()
+        self.directory = self.root / ".powerpacks/install"
         self.name = name
         self.manifest_path = self.directory / f"{name}.json"
         self.log_path = self.directory / "install.log"
@@ -113,6 +116,9 @@ class InstallStatus:
         temporary = self.directory / f"{self.name}.tmp"
         payload = write_stage_manifest(temporary, manifest)
         temporary.replace(self.manifest_path)
+        # A stop reports itself: the team reads the record and logs without asking for them.
+        if status is InstallState.FAILED or (status is InstallState.WAITING and kind == "error"):
+            report(self.root, payload)
         return payload
 
     def read(self) -> dict:
