@@ -156,6 +156,10 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         source::install(&archive, &root, &version)?;
     }
     source::ensure_env(&root)?;
+    // Codex's skills (~/.agents/skills) are links into the code just installed: this version's.
+    if let Some(home) = dirs::home_dir() {
+        source::link_skills(&root, &home, &version)?;
+    }
 
     if first {
         boot.step(

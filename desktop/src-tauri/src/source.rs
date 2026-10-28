@@ -226,6 +226,67 @@ fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     }
 }
 
+/// The installer's stamp in ~/.agents/skills, which the command-line install writes too.
+const SKILLS_STAMP: &str = ".powerpacks-install.json";
+
+/// Codex reads skills from ~/.agents/skills, the one place the command-line install fills too.
+/// The app puts a link there for each bundled skill, into the code it just installed, so a
+/// skill is always this version's; a copy or an older link with the same name is replaced.
+pub fn link_skills(root: &Path, home: &Path, version: &str) -> Result<(), String> {
+    let skills = home.join(".agents/skills");
+    fs::create_dir_all(&skills)
+        .map_err(|error| format!("Could not create {}: {error}", skills.display()))?;
+    for skill in bundled_skills(root)? {
+        let name = skill.file_name().ok_or("a skill without a name")?;
+        let link = skills.join(name);
+        if fs::symlink_metadata(&link).is_ok() {
+            remove_any(&link)?;
+        }
+        link_dir(&skill, &link)
+            .map_err(|error| format!("Could not link {}: {error}", link.display()))?;
+    }
+    let stamp = format!(
+        "{{\n  \"package\": \"powerpacks\",\n  \"version\": \"{version}\",\n  \"harness\": \"app\",\n  \"repo_root\": \"{}\"\n}}\n",
+        root.display()
+    );
+    fs::write(skills.join(SKILLS_STAMP), stamp).map_err(|error| error.to_string())
+}
+
+/// Every `packs/<pack>/skills/<name>` holding a SKILL.md.
+fn bundled_skills(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut found = Vec::new();
+    let packs = root.join("packs");
+    for pack in fs::read_dir(&packs)
+        .map_err(|error| format!("Could not read {}: {error}", packs.display()))?
+    {
+        let skills = pack
+            .map_err(|error| error.to_string())?
+            .path()
+            .join("skills");
+        let Ok(entries) = fs::read_dir(&skills) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            if path.join("SKILL.md").is_file() {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+fn remove_any(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    let removed = if metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    removed.map_err(|error| format!("Could not remove {}: {error}", path.display()))
+}
+
 /// `.env` from the Powerset template, as bootstrap writes it, readable only by the user.
 pub fn ensure_env(root: &Path) -> Result<(), String> {
     let env = root.join(".env");
@@ -278,6 +339,39 @@ fn top_level_entries(archive: &Path) -> Result<Vec<PathBuf>, String> {
 mod tests {
     use super::*;
     use crate::paths;
+
+    #[test]
+    fn the_app_links_its_skills_into_agents_skills_over_any_copy() {
+        let tmp = std::env::temp_dir().join(format!("powerpacks-skills-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let root = tmp.join("app");
+        let home = tmp.join("home");
+        for (pack, name) in [("search", "search"), ("ingestion", "deep-context")] {
+            let skill = root.join("packs").join(pack).join("skills").join(name);
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+        }
+        fs::create_dir_all(root.join("packs/memory/skills/memory")).unwrap(); // no SKILL.md: not a skill
+        let skills = home.join(".agents/skills");
+        fs::create_dir_all(skills.join("search")).unwrap();
+        fs::write(skills.join("search/SKILL.md"), "stale copy").unwrap();
+        fs::create_dir_all(skills.join("ship")).unwrap(); // the user's own, untouched
+
+        link_skills(&root, &home, "3.46.0").unwrap();
+        link_skills(&root, &home, "3.46.0").unwrap(); // a second launch replaces the links, nothing else
+
+        assert_eq!(
+            fs::read_link(skills.join("search")).unwrap(),
+            root.join("packs/search/skills/search")
+        );
+        assert!(skills.join("deep-context/SKILL.md").is_file());
+        assert!(!skills.join("memory").exists());
+        assert!(skills.join("ship").is_dir());
+        assert!(fs::read_to_string(skills.join(SKILLS_STAMP))
+            .unwrap()
+            .contains("3.46.0"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn finds_importable_supported_checkouts_in_order_without_the_runtime_root() {
