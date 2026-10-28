@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.45.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.44.1...powerpacks-v3.45.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** build the Mac app for Intel too ([#972](https://github.com/powerset-co/powerpacks/issues/972)) ([3029ea1](https://github.com/powerset-co/powerpacks/commit/3029ea1c56a60b43eee7396395392a26daa1943b))
+
+
+### Bug Fixes
+
+* **search:** read Postgres on the powerset_v2 layout; the picker's set wins over a stale env ([#973](https://github.com/powerset-co/powerpacks/issues/973)) ([bc00fbc](https://github.com/powerset-co/powerpacks/commit/bc00fbc29c78be7854328bfdf63fd7d214e1b66b))
+* **setup:** every error reports itself, from one place ([#971](https://github.com/powerset-co/powerpacks/issues/971)) ([e14ae36](https://github.com/powerset-co/powerpacks/commit/e14ae36811f3f078a6b8613b201554a0496489ad))
+
 ## [3.44.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.44.0...powerpacks-v3.44.1) (2026-10-28)
 
 
