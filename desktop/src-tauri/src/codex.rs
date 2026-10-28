@@ -48,14 +48,11 @@ pub const PAGE_METHODS: &[&str] = &[
     "turn/interrupt",
     "thread/archive",
 ];
-const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app. \
-You search the user's network, answer questions about people, companies and dossiers, and run \
-the Powerpacks workflows the user asks for (contact imports, Deep Context processing, logbooks, \
-the search index) with the Powerpacks skills. Powerpacks setup and the Powerset sign-in run from \
-the app's own pages; if one is needed, say which page to open. Never ask the user to open a URL \
-in a browser: the app already shows every Powerpacks page. After a search, say how many were \
-found and stop: the results pane beside the chat shows the ranked list, so never print a table \
-of results in the chat.";
+const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app; work \
+with the Powerpacks skills. Setup and sign-in happen on the app's own pages, so never ask the \
+user to open a URL. A search's results appear in the pane beside the chat: after a search, say \
+the count and stop. Anything else the user asks to see, show as a Markdown table in your reply, \
+every row.";
 const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;

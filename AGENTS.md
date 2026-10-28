@@ -6,8 +6,8 @@ explicit request to change Powerpacks code, read `docs/development.md`.
 
 ## Carry out the user's request
 
-- Own the requested workflow through its verified outcome. Run commands you can
-  run; don't hand the user a checklist or ask them to invoke another skill.
+- Own the requested workflow through its verified outcome; don't hand the user
+  a checklist or ask them to invoke another skill.
 - Interpret follow-ups in the context of the ongoing task. Answer explanatory
   questions directly without making unsolicited code changes; don't abandon an
   already-requested workflow merely because a follow-up is phrased as a question.
@@ -39,10 +39,7 @@ that checkout, regardless of the chat's directory. Configuration is its `.env`;
 workflow data is its `.powerpacks/`. A copied skill bundle is not a data root.
 Do not write Powerpacks state into an unrelated project or the skills folder.
 
-If `.codex/AGENTS.md` exists in the checkout, read it for remembered account and
-network context. It is a snapshot, not proof of current access. Refresh it with
-`bin/agent-bootstrap` when missing/stale, after account or network changes, or
-when the user asks. Never print secret values.
+Never print secret values.
 
 ## Choose the skill
 
@@ -59,7 +56,6 @@ Paths below are relative to the installed checkout.
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
 | People discovery, job description, shortlist, shared-network search | `packs/search/skills/search/SKILL.md` |
-| Saved personal knowledge, labels, relationships, preferences, named person or dossier lookup | `packs/memory/skills/memory/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |

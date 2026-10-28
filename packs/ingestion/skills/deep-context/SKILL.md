@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. To retrieve saved knowledge or a named person's dossier, use memory.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`.
 ---
 
 # deep-context
@@ -142,11 +142,9 @@ The reports are for the developers; the user is not told about them.
 
 ## Share and the People page
 
-"Show me my network", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
+"Show me my network", "who do I know", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
 marks people worth it or not worth it there, alone or in bulk; the page writes the call on the spot.
 Uploading to Powerset is the page's own button, shown only with the Share network local feature.
-
-"Show me my network", "who do I know", "my people": the same page.
 
 ## Acting on a person from chat
 
@@ -165,6 +163,11 @@ Then one POST with every `parent_id`: worth and delete take `ids`, tags takes on
 relationship is one person per request. Never walk the store's tables for names: the row's `name` is what
 the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
+
+A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
+same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
+matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
+never the answer to "show me".
 
 | Ask | Write |
 |---|---|
@@ -186,8 +189,8 @@ never splits one, and it never re-judges a pair on evidence it has a verdict for
 stands. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
 its next update.
 
-For a named person's saved dossier or questions about existing personal knowledge,
-follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
+A named person's saved dossier, or a question about what Powerpacks knows of them, is
+`bin/deep-context-v2 lookup --name "<name>" --json`, answered in the chat. Do not run processing for a lookup.
 
 ## What is where
 
