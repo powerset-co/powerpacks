@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.44.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.44.0...powerpacks-v3.44.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **onboarding:** step bar is read-only in release builds ([#969](https://github.com/powerset-co/powerpacks/issues/969)) ([476cd52](https://github.com/powerset-co/powerpacks/commit/476cd52f74cfe5997f41b128e00552fd9519e848))
+
 ## [3.44.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.43.4...powerpacks-v3.44.0) (2026-10-28)
 
 
