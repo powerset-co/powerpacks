@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import base64
 import gzip
+import logging
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -76,6 +78,32 @@ class InstallStatusTests(unittest.TestCase):
         self.assertNotIn("account_email", unpacked["manifest.json"])
         self.assertIn("boom", unpacked["manifest.json"])
         self.assertEqual(unpacked["install.log"], "line one\nsent to <email> from ~/x")
+
+    def test_a_logged_error_reports_its_traceback(self) -> None:
+        from packs.powerset.primitives.install.report import ErrorReporter
+        (self.root / ".release-please-manifest.json").write_text('{".": "3.44.1"}')
+        logger = logging.getLogger("test.report")
+        reporter = ErrorReporter(self.root)
+        logger.addHandler(reporter)
+        try:
+            with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
+                sender.return_value.run.return_value = {"status": "submitted"}
+                try:
+                    raise ValueError("signals broke for arthur@powerset.co")
+                except ValueError:
+                    logger.exception("Signals check failed")
+                logger.error("no traceback here")
+                for thread in threading.enumerate():
+                    if thread.name == "error-report":
+                        thread.join(5)
+        finally:
+            logger.removeHandler(reporter)
+        self.assertEqual(sender.call_count, 1)
+        request = sender.call_args.args[0]
+        self.assertEqual(request.category, "app")
+        self.assertEqual(request.comment, "Page server: Signals check failed")
+        detail = gzip.decompress(base64.b64decode(request.artifacts[0].data)).decode()
+        self.assertIn("ValueError: signals broke for <email>", detail)
 
     def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
         first = self.status.write("discover.learning", pid=os.getpid())

@@ -48,6 +48,8 @@ import webbrowser
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from packs.powerset.primitives.install.report import ErrorReporter
 from pathlib import Path
 from typing import Any
 
@@ -521,7 +523,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     threading.excepthook = lambda args: logging.getLogger(__name__).error(
         "Background thread failed", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
-    with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
+    # Every error logged with a traceback, and every request that throws, reports itself.
+    logging.getLogger().addHandler(ErrorReporter(root))
+    with _Server((args.host, args.port), persistent_handler(root)) as server:
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
@@ -533,6 +537,11 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             print("\nshutting down", file=sys.stderr)
     return 0
+
+
+class _Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:  # noqa: ANN001
+        logging.getLogger(__name__).exception("Request failed")
 
 
 def _follow(pid: int, server: ThreadingHTTPServer) -> None:
