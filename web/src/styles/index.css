@@ -120,6 +120,21 @@
   }
 }
 
+/* Dropdowns and popovers (Radix): data-state drives the open and close motion. */
+[data-radix-select-viewport],
+[data-radix-popper-content-wrapper] > [data-state] {
+  transform-origin: var(
+    --radix-select-content-transform-origin,
+    var(--radix-popover-content-transform-origin, top)
+  );
+}
+[data-radix-popper-content-wrapper] > [data-state="open"] {
+  animation: pop-in var(--t-med) var(--ease-out);
+}
+[data-radix-popper-content-wrapper] > [data-state="closed"] {
+  animation: pop-out var(--t-fast) var(--ease-out) forwards;
+}
+
 /* Shared keyframes (results.css), and reduced motion: every CSS animation and transition
    stops. JS animations (row entrance, count roll) check hooks/useReducedMotion themselves. */
 @layer base {
@@ -149,6 +164,23 @@
   @keyframes fade-out {
     to {
       opacity: 0;
+    }
+  }
+  /* A menu opening (components/ui/select.tsx, popover.tsx): it grows from where it was summoned. */
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes pop-out {
+    to {
+      opacity: 0;
+      transform: scale(0.96);
     }
   }
   /* A spinner's turn (the share button while a check or upload runs). */

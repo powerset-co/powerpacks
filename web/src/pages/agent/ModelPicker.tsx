@@ -3,28 +3,13 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react"
 import { useState } from "react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { frontier } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
 import { fetchModels } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
 import { cn } from "@/lib/utils"
 
 const MODELS_KEY = ["codex-models"] as const
-// The list opens on the newest two generations (gpt-6.1 and gpt-6 today); More models shows the rest.
-const GENERATION = /^gpt-(\d+(?:\.\d+)?)/
-const SHOWN_GENERATIONS = 2
-
-function generation(id: string): number {
-  const match = GENERATION.exec(id)
-  return match?.[1] ? Number(match[1]) : 0
-}
-
-/** The models of the newest generations; the whole list when it has nothing to hide. */
-export function frontier<T extends { id: string }>(list: T[]): T[] {
-  const newest = [...new Set(list.map((model) => generation(model.id)))]
-    .sort((a, b) => b - a)
-    .slice(0, SHOWN_GENERATIONS)
-  return list.filter((model) => newest.includes(generation(model.id)))
-}
 const ROW =
   "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary"
 

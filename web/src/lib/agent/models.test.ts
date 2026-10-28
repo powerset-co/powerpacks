@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { frontier } from "./ModelPicker"
+import { frontier } from "./models"
 
 describe("frontier", () => {
   it("keeps the newest two generations and hides the rest", () => {
