@@ -50,17 +50,27 @@ async function loginGcloud(request, { launchChrome, progress, returnFocus }) {
       if (page.url().startsWith(callback) || page.url().startsWith("https://cloud.google.com/sdk/auth_success")) {
         return { status: "ok" };
       }
-      const action = consentAction(await snapshot(page), request);
-      if (action.kind === "human") {
-        if (!human) {
-          progress("sign_in");
-          await context.close();
-          context = await launchChrome(request.profileDir, false);
-          page = context.pages()[0] || await context.newPage();
-          human = true;
-          await open();
-        }
+      // Once the window is the person's, nothing is read or clicked for them: the wait is for
+      // gcloud's callback. (A snapshot mid-sign-in threw out of the loop and closed the window.)
+      if (human) {
         await page.waitForTimeout(1000);
+        continue;
+      }
+      // A page mid-navigation (Google moved on) throws out of the snapshot: a moment, not the end.
+      let action;
+      try {
+        action = consentAction(await snapshot(page), request);
+      } catch (_) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+      if (action.kind === "human") {
+        progress("sign_in");
+        await context.close();
+        context = await launchChrome(request.profileDir, false);
+        page = context.pages()[0] || await context.newPage();
+        human = true;
+        await open();
         continue;
       }
       if (action.kind === "account") {

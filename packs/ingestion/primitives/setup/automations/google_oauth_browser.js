@@ -26,7 +26,6 @@ const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/b
 
 const { GMAIL_SCOPES, authorize } = require("./gmail_consent.js");
 const { loginGcloud } = require("./gcloud_consent.js");
-const HUMAN_LOGIN_ACCOUNT_RETRY_MS = 60000;
 
 class StepError extends Error {
   constructor(stuckAt, message) {
@@ -159,23 +158,6 @@ async function clickLocator(locator, label, timeout = 2500) {
   }
   await locator.first().page().waitForLoadState("domcontentloaded", { timeout: 2500 }).catch(() => {});
   return true;
-}
-
-async function clickEmailAccount(page, email, timeout = 2500) {
-  if (!email) return false;
-  const candidates = [
-    page.getByText(email, { exact: false }),
-    page.locator(`[data-email="${email}"]`),
-    page.locator(`text=${email}`),
-  ];
-  for (const locator of candidates) {
-    if (await visible(locator, timeout)) {
-      await locator.first().click();
-      await page.waitForLoadState("domcontentloaded").catch(() => {});
-      return true;
-    }
-  }
-  return false;
 }
 
 async function chooseRadio(page, candidates, timeout = 1500) {
@@ -373,10 +355,11 @@ function launchChrome(profileDir, headless) {
   });
 }
 
+// The window is the person's: nothing is clicked for them (a click on the account chip mid
+// sign-in sent Google back to the identifier page); the wait is for the login to end.
 async function waitForHumanLogin(page, email, timeoutMs) {
   const start = Date.now();
   let lastUrl = "";
-  let nextAccountClickAt = 0;
   while (Date.now() - start < timeoutMs) {
     const url = page.url();
     if (url !== lastUrl) {
@@ -385,13 +368,6 @@ async function waitForHumanLogin(page, email, timeoutMs) {
     }
     if (!onGoogleLogin(url)) {
       return true;
-    }
-    const now = Date.now();
-    if (now >= nextAccountClickAt) {
-      nextAccountClickAt = now + HUMAN_LOGIN_ACCOUNT_RETRY_MS;
-      if (await clickEmailAccount(page, email, 900)) {
-        log(`selected Google account ${email}; retrying account selection in 60s if login is still pending`);
-      }
     }
     await page.waitForTimeout(1500);
   }
@@ -887,6 +863,8 @@ async function main() {
     context = await launchChrome(profileDir, true);
     page = context.pages()[0] || await context.newPage();
     await gotoPage(page, overview, "OAuth overview");
+    // The same settle the first check had: the Console redirects a few times before it lands.
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
     if (onGoogleLogin(page.url())) {
       await context.close().catch(() => {});
       result({ status: "error", message: "Google did not keep the login for the headless browser." });
