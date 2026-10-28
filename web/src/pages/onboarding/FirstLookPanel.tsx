@@ -96,7 +96,8 @@ function People({
  *  person knows and the questions the index can answer, answered right here. Once search is ready
  *  the ways on are Add more sources and Start searching now, a new chat. Rises in over the page picture. */
 /** `sourcesNext`: on Set up the way on is Add more sources (primary) with Start searching now
- *  beside it; on Import the sources are in, so Start searching now stands alone as primary. */
+ *  beside it; on Import the sources are in, so Start searching now is primary and Add more
+ *  sources stands beside it. */
 export function FirstLookPanel({
   look,
   ready,
@@ -175,6 +176,11 @@ export function FirstLookPanel({
           <Button variant={sourcesNext ? "secondary" : "primary"} onClick={() => void navigate(AGENT.href)}>
             Start searching now
           </Button>
+          {sourcesNext ? null : (
+            <Button variant="secondary" onClick={() => sources && void navigate(sources.href)}>
+              Add more sources
+            </Button>
+          )}
         </div>
       ) : null}
     </div>
