@@ -368,10 +368,9 @@ be opened for progress.
 - In the Powerpacks desktop app (the developer instructions say you are its assistant), stop
   there: the results pane beside the chat already shows the ranked list. Never print a table of
   results in the chat.
-- Outside the app: say `Run artifacts: <artifact-dir>`, then read only the `csv` path from the
-  final `artifacts` object and show the top 10 candidates, or fewer if fewer than 10 rows were
-  returned. Keep each row compact: rank, name, current title/company, location, and LinkedIn URL
-  when present.
+- Outside the app: say `Run artifacts: <artifact-dir>`, then show the whole ranked list as the
+  Markdown table the run wrote at `shortlist.md` in that directory (the `shortlist_md` path in
+  the final `summary`): print the file as it is, every row, no HTML page and no reformatting.
 - Live progress above is the exception to waiting for final output. Other run
   files are internal handoff/debug artifacts. Inspect them only for a
   failed or inconsistent run, or when the user asks to debug.

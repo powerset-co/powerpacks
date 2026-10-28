@@ -97,6 +97,20 @@ class SearchHarnessTests(unittest.TestCase):
         self.hydrate_attribution = patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_export_writes_the_whole_shortlist_as_a_markdown_table(self) -> None:
+        summary = {"groups": {"": [
+            {"name": "Jordan Bravo", "linkedin_url": "https://www.linkedin.com/in/jordan", "title": "Staff Engineer",
+             "company": "Example Co", "why": "Built the search | ranking stack"},
+            {"name": "Casey Delta", "linkedin_url": "", "title": "CTO", "company": "Other Co", "why": ""},
+        ]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            written = search_harness.export_search_summary(summary, Path(tmp))
+            table = Path(written["shortlist_md"]).read_text().splitlines()
+        self.assertEqual(table[0], "| # | Name | Current role | Company | Why |")
+        self.assertEqual(table[2], "| 1 | [Jordan Bravo](https://www.linkedin.com/in/jordan) | Staff Engineer | Example Co | Built the search \\| ranking stack |")
+        self.assertEqual(table[3], "| 2 | Casey Delta | CTO | Other Co |  |")
+        self.assertEqual(len(table), 4)
+
     def test_summary_preserves_candidate_judgment_across_ponds_without_group_arbitration(self) -> None:
         results = {"iterations": [
             {"pond_n": 1, "query": "First pond", "shortlist_grades": [

@@ -452,6 +452,23 @@ def write_shortlist_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
             writer.writerow({field: row.get(field, "") for field in SHORTLIST_FIELDS})
 
 
+def write_shortlist_markdown(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """The shortlist as one Markdown table, the whole list: what a chat shows instead of a page.
+    A pipe in a cell would split it, so cells are kept on one line with pipes escaped."""
+    def cell(value: Any) -> str:
+        return " ".join(str(value or "").split()).replace("|", "\\|")
+
+    lines = ["| # | Name | Current role | Company | Why |", "| --- | --- | --- | --- | --- |"]
+    for row in rows:
+        name = cell(row.get("Name"))
+        url = str(row.get("LinkedIn URL") or "")
+        lines.append("| " + " | ".join([
+            str(row.get("Rank", "")), f"[{name}]({url})" if url else name, cell(row.get("Current Role")),
+            cell(row.get("Current Company")), cell(row.get("Rationale"))]) + " |")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str, str]:
     def rows(groups: Sequence[str]) -> list[dict[str, Any]]:
         output = []
@@ -469,10 +486,13 @@ def export_search_summary(summary: Mapping[str, Any], run_dir: Path) -> dict[str
         return output
 
     shortlist = run_dir / "shortlist.csv"
+    markdown = run_dir / "shortlist.md"
     relationship = run_dir / "relationship.csv"
-    write_shortlist_csv(shortlist, rows(("",)))
+    ranked = rows(("",))
+    write_shortlist_csv(shortlist, ranked)
+    write_shortlist_markdown(markdown, ranked)
     write_shortlist_csv(relationship, [])
-    return {"shortlist_csv": str(shortlist), "relationship_csv": str(relationship)}
+    return {"shortlist_csv": str(shortlist), "shortlist_md": str(markdown), "relationship_csv": str(relationship)}
 
 
 def _save(results: dict[str, Any], run_dir: Path) -> None:
