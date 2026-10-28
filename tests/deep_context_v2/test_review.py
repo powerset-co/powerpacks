@@ -193,16 +193,16 @@ class ReviewTests(StoreFixture, unittest.TestCase):
         self.assertEqual(payloads.candidates(replace(card, pending=())), ())
 
     def test_api_card_exclusion_wrapping_and_next_after_save(self) -> None:
-        self.assertEqual(self.api.linkedin_card({"exclude": [" p:1 , "]}).finished.synthesize_pending, False)
+        self.assertEqual(self.api.linkedin_card({"exclude": ["p:1"]}).finished.synthesize_pending, False)
         card = self.api.linkedin_card({"index": ["999"], "debug": ["1"]})
         self.assertEqual(card.queue.index, 0)
         self.assertEqual(card.queue.total, 1)
         result = self.api.decide({"parent_slug": ["p:1"], "decision": ["keep"], "pub": ["42"]})
         self.assertTrue(result.ok)
         self.assertEqual(result.next.pending, 0)
-        with self.assertRaises(Refusal) as caught:
-            self.api.decide({"parent_slug": ["p:1"], "decision": ["detach"]})
-        self.assertEqual(caught.exception.status, HTTPStatus.CONFLICT)
+        changed = self.api.decide({"parent_slug": ["p:1"], "decision": ["detach"]})
+        self.assertTrue(changed.ok)
+        self.assertEqual(queries_review.review_queue(self.conn)["p:1"].decision, "detach")
 
     def test_api_unknown_and_invalid_decisions_are_bad_requests(self) -> None:
         for form in [{"decision": ["unknown"]}, {"decision": ["keep"], "pub": ["missing"]}, {"decision": ["fix"], "new_url": ["bad"]}]:
@@ -224,7 +224,7 @@ class ReviewTests(StoreFixture, unittest.TestCase):
         handler = Handler(headers={"Origin": "https://example.com"})
         self.api.post(handler, urllib.parse.urlparse("/api/review/decide"))
         self.assertEqual(handler.status, 403)
-        for path, status in [("/retarget", 501), ("/missing", 404)]:
+        for path, status in [("/retarget", 400), ("/missing", 404)]:
             handler = Handler(headers={"Origin": "http://localhost:8777"})
             self.api.post(handler, urllib.parse.urlparse(path))
             self.assertEqual(handler.status, status)

@@ -73,12 +73,14 @@ class StoreTests(StoreFixture, unittest.TestCase):
     def linkedin(self, candidate: str, verdict: str, decider: str, *, member: str = "42", url: str = "https://www.linkedin.com/in/jordan-bravo", origin: str = "research") -> None:
         self.conn.execute("INSERT INTO candidate_linkedins(candidate_id,linkedin_url,member_id,origin,verdict,decided_by,judgment_fingerprint,reason,created_at) VALUES (?,?,?,?,?,?,?,'',?)", (candidate, url, member, origin, verdict, decider, "fp", NOW))
 
-    def test_synthetic_is_human_only_and_origin_matches_key(self) -> None:
-        for decider, url, origin in [("machine", "synthetic:h", "synthetic"), ("human", "https://www.linkedin.com/in/jordan-bravo", "synthetic"), ("human", "synthetic:h", "research")]:
-            with self.subTest(decider=decider, url=url), self.assertRaises(sqlite3.IntegrityError):
-                self.linkedin("a", "confirmed", decider, url=url, origin=origin)
-        self.linkedin("a", "confirmed", "human", url="synthetic:h", member="synthetic:h", origin="synthetic")
-        self.assertEqual(self.conn.execute("SELECT profile_key FROM current_profile").fetchone()[0], "synthetic:h")
+    def test_synthetic_origin_matches_key_for_human_and_machine(self) -> None:
+        for decider in ("human", "machine"):
+            for url, origin in (("https://www.linkedin.com/in/jordan-bravo", "synthetic"),
+                                ("synthetic:h", "research")):
+                with self.subTest(decider=decider, url=url), self.assertRaises(sqlite3.IntegrityError):
+                    self.linkedin("a", "confirmed", decider, url=url, origin=origin)
+            self.linkedin("a", "confirmed", decider, url="synthetic:h", member="synthetic:h", origin="synthetic")
+            self.assertEqual(self.conn.execute("SELECT profile_key FROM current_profile").fetchone()[0], "synthetic:h")
 
     def test_parent_latest_wins_even_after_human_row(self) -> None:
         self.conn.execute("INSERT INTO candidate_parent(candidate_id,parent_id,reason,created_at) VALUES ('a','li:42','human',?)", (NOW,))
@@ -120,27 +122,33 @@ class StoreTests(StoreFixture, unittest.TestCase):
         self.assertEqual(queries._batches([1, 2, 3], size=2), [[1, 2], [3]])
         self.assertEqual(queries._batches([]), [])
 
-    def test_share_replacement_is_atomic_and_preserves_tags(self) -> None:
-        tags = [("a", "friend", "note", NOW)]
-        human = [("a", "jordan", "yes", "human choice", "", "human", NOW)]
-        queries_share.decide_share(self.conn, tags, human)
-        self.assertEqual(queries_share.current_tags(self.conn)["p:1"].tags, "friend")
-        self.assertEqual(queries_share.current_share(self.conn)[0].source, "human")
-        labels = [("b", "casey", "Casey", "yes", "", "{}", NOW)]
-        machine = [("b", "casey", "no", "machine choice", "", "machine", NOW)]
-        queries_share.replace_share(self.conn, labels, machine)
-        self.assertEqual(set(queries_share.labels_by_candidate(self.conn)), {"b"})
-        self.assertEqual(queries_share.current_share(self.conn)[0].share, "no")
+    def test_label_replacement_transaction_preserves_human_tags(self) -> None:
+        queries_share.write_tags(self.conn, [("a", "friend", "note", NOW)])
+        with self.conn:
+            queries_share.replace_labels(self.conn, [("a", "jordan", "Jordan", "yes", "", "{}", NOW)])
+        labels = [("b", "casey", "Casey", "no", "", "{}", NOW)]
+        with self.conn:
+            queries_share.replace_labels(self.conn, labels)
+        current = queries_share.labels_by_parent(self.conn)["p:1"]
+        self.assertEqual((current.candidate_id, current.worth), ("b", "no"))
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM person_labels").fetchone()[0], 1)
         self.assertEqual(queries_share.current_tags(self.conn)["p:1"].note, "note")
-        with self.assertRaises(sqlite3.IntegrityError):
-            queries_share.replace_share(self.conn, [], [("missing", "x", "yes", "", "", "machine", NOW)])
-        self.assertEqual(queries_share.current_share(self.conn)[0].share, "no")
-        self.assertEqual(set(queries_share.labels_by_candidate(self.conn)), {"b"})
+        with self.assertRaises(sqlite3.IntegrityError), self.conn:
+            queries_share.replace_labels(self.conn, [("missing", "x", "Missing", "yes", "", "{}", NOW)])
+        self.assertEqual(queries_share.labels_by_parent(self.conn)["p:1"], current)
+        self.assertEqual(queries_share.current_tags(self.conn)["p:1"].tags, "friend")
 
-    def test_share_human_precedence_and_tag_tie_is_stable(self) -> None:
-        queries_share.decide_share(self.conn, [("b", "second", "", NOW), ("a", "first", "", NOW)], [("a", "jordan", "yes", "", "", "human", NOW), ("b", "casey", "no", "", "", "machine", "2099")])
-        self.assertEqual(queries_share.current_tags(self.conn)["p:1"].candidate_id, "a")
-        self.assertEqual(queries_share.current_share(self.conn)[0].share, "yes")
+    def test_family_tags_union_and_latest_note_tie_is_stable(self) -> None:
+        queries_share.write_tags(self.conn, [("b", "second|friend", "second note", NOW),
+                                            ("a", "first|friend", "first note", NOW)])
+        held = queries_share.current_tags(self.conn)["p:1"]
+        self.assertEqual((held.candidate_id, held.tags, held.note),
+                         ("a", "first|friend|second", "first note"))
+        queries_share.write_tags(self.conn, [("b", "second", "new note", "2099")])
+        held = queries_share.current_tags(self.conn)["p:1"]
+        self.assertEqual((held.candidate_id, held.tags, held.note),
+                         ("b", "first|friend|second", "new note"))
+        self.assertEqual(queries_share.current_tags(self.conn, ("missing",)), {})
 
     def test_owner_projection_normalizes_and_renders_dates(self) -> None:
         payload = {"name": " Jordan Bravo ", "emails": ["Jordan@Example.com", "j@example.com"], "phones": ["+1 (555) 010-0000"], "work": [{"company": "Example", "title": "Founder", "start": 2020, "end": 0}, {"company": "Other", "end": 2019}], "education": [{"school": "Example U", "note": "CS"}], "locations": ["Springfield"], "notes": "friend"}

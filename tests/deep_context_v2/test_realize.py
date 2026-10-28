@@ -15,6 +15,7 @@ from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize, 
 from packs.ingestion.schemas.people_schema import JSON_LIST_COLUMNS, JSON_OBJECT_COLUMNS, LIST_VALUE_COLUMNS, PEOPLE_SCHEMA_COLUMNS, normalize_people_row, parse_interaction_counts
 from packs.indexing.lib.io import read_csv
 from packs.shared.csv_io import CsvIO
+from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
 
 NOW = "2026-10-07T22:00:00Z"
 URL = "https://www.linkedin.com/in/jordan-bravo"
@@ -38,7 +39,9 @@ class RealizeTests(unittest.TestCase):
         queries.insert_candidate_sources(self.conn, [(key, channel)])
         self.conn.execute("INSERT INTO candidate_parent(candidate_id,parent_id,reason,created_at) VALUES (?,?,'singleton',?)", (key, parent, NOW))
         if facts:
-            queries.upsert_facts(self.conn, key, "{}", "fp", "fake", "none", NOW)
+            dossier = SynthesizedFacts(name, (), (), "", "", "", "", "", "unknown", (), (), (),
+                                       OwnedIdentifiers((), (), ()), (), 0.8, False)
+            queries.upsert_facts(self.conn, key, json.dumps(dossier.to_payload()), "fp", "fake", "none", NOW)
         self.conn.commit()
 
     def profile(self, key: str, member: str, *, url: str = URL, origin: str = "research", decider: str = "machine") -> None:
@@ -88,6 +91,9 @@ class RealizeTests(unittest.TestCase):
     def test_synthetic_and_worth_no_still_export_without_url(self) -> None:
         self.candidate("a", facts=True)
         self.profile("a", "synthetic:h", url="synthetic:h", origin="synthetic", decider="human")
+        content = {"real_name": "Jordan Bravo", "summary": "Founder", "work_experience": [], "education": []}
+        self.conn.execute("INSERT INTO research VALUES ('h', 'p:1', 'no_match', ?, ?)",
+                          (json.dumps({"content": content}), NOW))
         self.conn.execute("INSERT INTO worth(candidate_id,worth,decided_by,reason,created_at) VALUES ('a','no','human','skip',?)", (NOW,))
         rows, counts = self.node.build()
         self.assertEqual(rows[0]["linkedin_url"], "")

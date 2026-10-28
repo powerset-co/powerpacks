@@ -15,7 +15,9 @@ results, persisted rows, counts, rollback, reruns and actual consumer round trip
 They do not read user archives or call live providers.
 
 The runner blocks network connections and DNS. A hard deadline stops execution
-after 290 seconds. Dependency installation occurs before this deadline. The
+after 290 seconds. Dependency installation and tokenizer data setup occur before
+this deadline. A cold setup downloads the public `o200k_base` tokenizer data;
+warm setup uses the cache. Neither setup calls a model provider. The
 separate CI job has an eight-minute limit, including setup.
 
 Coverage includes the entire v2 Python package, including unimported modules.

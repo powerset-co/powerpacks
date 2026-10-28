@@ -215,10 +215,17 @@ class NameTests(unittest.TestCase):
                 self.assertFalse(names.written_names_can_match(a, b))
 
 
-    def test_dossier_name_only_extends_same_written_given_name(self):
-        for written, dossier, expected in (("Jordan", "Jordan Bravo", "Jordan Bravo"),
-                 ("Jordan", "Casey Bravo", "Jordan"), ("", "Jordan Bravo", ""),
-                 ("Jordan Delta", "Jordan Bravo", "Jordan Delta")):
+    def test_matching_keeps_distinct_written_and_dossier_names(self):
+        for written, dossier, expected in (
+                ("Jordan", "Jordan Bravo", ("Jordan", "Jordan Bravo")),
+                ("Jordan", "Casey Bravo", ("Jordan", "Casey Bravo")),
+                ("", "Jordan Bravo", ("Jordan Bravo",)),
+                ("Jordan Delta", "Jordan Bravo", ("Jordan Delta", "Jordan Bravo")),
+                ("Jordan Bravo", "Jordan Bravo", ("Jordan Bravo",)),
+                ("Jordan Bravo", "   ", ("Jordan Bravo",)),
+                ("", " ", ()),
+                ("Jordan Van Der Bravo", "Jordan Vanderbravo",
+                 ("Jordan Van Der Bravo", "Jordan Vanderbravo", "jordan vanderbravo"))):
             with self.subTest(written=written, dossier=dossier):
                 self.assertEqual(names.names_for_matching(written, dossier), expected)
 

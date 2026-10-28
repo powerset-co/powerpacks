@@ -114,7 +114,7 @@ class PromptTests(unittest.TestCase):
     def test_render_directions_threads_and_empty_fallbacks(self):
         rendered = prompt.render_batch(bundle(), [message(direction=d) for d in MessageDirection])
         for label in ("ME", "THEM", "OTHER-IN-GROUP"):
-            self.assertIn(f"2026-01-01 {label}] Synthetic subject", rendered)
+            self.assertIn(f"2026-01-01 {label}; recipients unavailable] Synthetic subject", rendered)
         self.assertIn("Shared group chats (names only): Synthetic group", rendered)
         self.assertIn("owner@example.com, jordan@example.com", rendered)
         empty = replace(bundle(), full_name="", emails=(), source_channels=(), groups=(), thread_participants=())
@@ -244,10 +244,33 @@ class SynthesizeTests(unittest.TestCase):
         with patch.object(synthesize.tiktoken, "get_encoding", return_value=encoder), patch.object(synthesize, "estimate_cost_usd", return_value=0.01):
             result = node.estimate()
         self.assertEqual((result["bundles"], result["pending"], result["calls"], result["work"]), (1, 1, 1, 1))
-        self.assertEqual(result["input_tokens"], len(node.prompt + node.work()[0].prompts[0]))
+        self.assertEqual(result["input_tokens"], len(node.work()[0].system_prompt + node.work()[0].prompts[0]))
         self.assertEqual(result["output_tokens_assumed"], 750)
         self.assertEqual(self.calls, [])
         self.assertFalse((self.root / "deep-context/v2-manifests").exists())
+
+    def test_mixed_sources_estimate_and_calls_use_each_work_items_system_prompt(self):
+        self.seed(bundle())
+        phone = replace(message(), channel=MessageChannel.IMESSAGE)
+        self.seed(replace(bundle("candidate:phone:+15550100", [phone]), source_channels=("imessage",)))
+        node = self.node()
+        work = node.work()
+        self.assertEqual({item.system_prompt for item in work}, {node.prompt, node.email_prompt})
+        self.assertNotEqual(node.prompt, node.email_prompt)
+        for item in work:
+            self.assertEqual(item.fingerprint,
+                             synthesize.input_fingerprint(item.prompts, item.system_prompt, self.config))
+        encoder = type("Encoder", (), {"encode": lambda self, value: list(value)})()
+        with patch.object(synthesize.tiktoken, "get_encoding", return_value=encoder):
+            result = node.estimate()
+        self.assertEqual(result["calls"], 2)
+        self.assertEqual(result["input_tokens"],
+                         sum(len(item.system_prompt + user) for item in work for user in item.prompts))
+        self.assertEqual(self.calls, [])
+        node.run()
+        self.assertCountEqual([(call["system_prompt"], call["user_prompt"]) for call in self.calls],
+                              [(item.system_prompt, user) for item in work for user in item.prompts])
+        self.assertEqual(node.work(), [])
 
     def test_cli_paid_path_uses_real_store_and_manifest(self):
         self.seed(bundle())

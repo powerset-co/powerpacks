@@ -21,7 +21,7 @@ from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import Identif
 from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import FamilyWorth, LinkedinVerdict, Research
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import Connection, MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
-from packs.ingestion.primitives.deep_context_v2.enrich import jev_identity, judge, pre_match, profiles, proposals, research, settle, sol_identity
+from packs.ingestion.primitives.deep_context_v2.enrich import judge, pre_match, profiles, proposals, research, settle, sol_identity
 from packs.ingestion.primitives.deep_context_v2.enrich import enrich
 from packs.ingestion.primitives.deep_context_v2.enrich.enrich import EMAIL_CONFIRMED_REASON, Enrich, confirm_by_email
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, family_evidence, judgment_fingerprint, load_families
@@ -42,7 +42,7 @@ def facts() -> SynthesizedFacts:
 
 def family() -> Family:
     member = MemberFacts("c1", "p:1", json.dumps(facts().to_payload()), NOW)
-    return Family("p:1", ("c1", "c2"), (member,), ("f1",), FamilyWorth("yes", "machine"),
+    return Family("p:1", ("c1", "c2"), (member,), ("f1",), FamilyWorth("yes", "machine", "{}"),
                   ("Jordan Bravo",), (Identifier("email", "jordan@example.com"),), facts(), 3, ())
 
 
@@ -186,8 +186,8 @@ class PreMatchTests(unittest.TestCase):
     def test_entry_excludes_existing_linkedin_human_answer_and_non_yes_worth(self) -> None:
         excluded = [replace(family(), parent_id="li:4242"),
                     replace(family(), verdicts=(held(decided_by="human"),)),
-                    replace(family(), worth=FamilyWorth("maybe", "machine")),
-                    replace(family(), worth=FamilyWorth("no", "machine"))]
+                    replace(family(), worth=FamilyWorth("maybe", "machine", "{}")),
+                    replace(family(), worth=FamilyWorth("no", "machine", "{}"))]
         for fam in excluded:
             with self.subTest(fam=fam):
                 self.assertFalse(pre_match.enters(fam))
@@ -200,7 +200,7 @@ class ProfileTests(StoreCase):
             actual = profiles.load_profiles(self.root, [URL, URL + "/?tracking=fixture"], fetch=True)
         self.assertEqual((len(actual.found), actual.missing, actual.fetched), (1, 0, 0))
         self.assertEqual(actual.found[URL].location, "Springfield")
-        self.assertTrue(actual.found[URL].real)
+        self.assertTrue(judge.ProposedProfile("research", actual.found[URL]).supported)
 
     def test_missing_or_memberless_cache_is_missing(self) -> None:
         self.cache(member_id="")
@@ -238,9 +238,10 @@ class ProfileTests(StoreCase):
         self.assertEqual(actual.location, "Springfield, Example State, US")
         self.assertEqual(actual.judge_view()["experiences"], list(actual.experiences))
 
-    def test_shell_is_not_real(self) -> None:
-        self.assertFalse(replace(profile(), location="", experiences=()).real)
-        self.assertFalse(replace(profile(), full_name="").real)
+    def test_profile_shell_has_no_supporting_biography(self) -> None:
+        shell = replace(profile(), location="", experiences=(), headline="")
+        self.assertFalse(judge.ProposedProfile("research", shell).supported)
+        self.assertTrue(judge.ProposedProfile("research", profile()).supported)
 
 
 class ResearchTests(unittest.TestCase):
@@ -285,16 +286,16 @@ class JudgePlanTests(unittest.TestCase):
 
     def test_wrong_profile_excluded_only_when_every_member_holds_wrong(self) -> None:
         wrong = replace(family(), verdicts=(held(verdict="wrong_person"), held("c2", "wrong_person")))
-        self.assertEqual(judge.plan(found(wrong), {URL: profile()}, set()), judge.JudgePlan([], 0, 0, 0))
+        self.assertEqual(judge.plan(found(wrong), {URL: profile()}, set()), judge.JudgePlan([], 1, 1, 0))
         partial = replace(wrong, verdicts=wrong.verdicts[:1])
         self.assertEqual(len(judge.plan(found(partial), {URL: profile()}, set()).tasks), 1)
 
     def test_human_answer_no_worth_and_linkedin_parent_excluded(self) -> None:
         for fam in (replace(family(), verdicts=(held(decided_by="human"),)),
-                    replace(family(), parent_id="li:4242"), replace(family(), worth=FamilyWorth("no", "machine"))):
+                    replace(family(), parent_id="li:4242"), replace(family(), worth=FamilyWorth("no", "machine", "{}"))):
             with self.subTest(fam=fam):
                 self.assertEqual(judge.plan(found(fam), {URL: profile()}, set()).entering, 0)
-        self.assertEqual(len(judge.plan(found(replace(family(), worth=FamilyWorth("maybe", "machine"))),
+        self.assertEqual(len(judge.plan(found(replace(family(), worth=FamilyWorth("maybe", "machine", "{}"))),
                                         {URL: profile()}, set()).tasks), 1)
 
     def test_citations_deduplicated_and_non_evidence_fields_removed(self) -> None:
@@ -323,59 +324,55 @@ class JudgeWriteTests(StoreCase):
         counts = judge.write(self.conn, task(urls=(URL, OTHER)),
                              {URL: SolVerdict("wrong_person", 0.9, "Different"),
                               OTHER: SolVerdict("needs_review", 0.5, "Ambiguous")}, NOW)
-        self.assertEqual(counts, {"confirmed": 0, "wrong_person": 1, "needs_review": 1, "split": 0, "parent_rows": 0})
+        self.assertEqual(counts, {"confirmed": 0, "wrong_person": 1, "needs_review": 1, "insufficient_evidence": 0, "split": 0, "parent_rows": 0})
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_linkedins").fetchone()[0], 4)
         self.assertEqual(set(queries_dedupe.current_parents(self.conn).values()), {"p:1"})
 
     def test_multiple_sol_confirmations_become_review_with_reasons_preserved(self) -> None:
         caller = SimpleNamespace(call=AsyncMock(return_value={
-            "verdict": "confirmed", "confidence": 0.8, "reason": "Matches", "supporting_evidence": [],
-            "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False}))
+            "verdict": "confirmed", "match_probability": 0.8, "reason": "Matches", "supporting_evidence": [],
+            "contradicting_evidence": []}))
         actual = asyncio.run(judge.sol(caller, task(urls=(URL, OTHER)), "Synthetic owner"))
         self.assertEqual(set(actual), {URL, OTHER})
         self.assertEqual(set(actual.values()), {SolVerdict("needs_review", 0.8, "Matches")})
         self.assertEqual(caller.call.await_count, 2)
 
     def test_sol_rejects_missing_invalid_and_out_of_range_answers(self) -> None:
-        for answer in ({}, {"verdict": "invented", "confidence": 0.5, "reason": "x"},
-                       {"verdict": "confirmed", "confidence": 2, "reason": "x"}):
+        for answer in ({}, {"verdict": "invented", "match_probability": 0.5, "reason": "x"},
+                       {"verdict": "confirmed", "match_probability": 2, "reason": "x"}):
             caller = SimpleNamespace(call=AsyncMock(return_value=answer))
             with self.subTest(answer=answer), self.assertRaises(jsonschema.ValidationError):
                 asyncio.run(sol_identity.verdict(caller, "synthetic prompt"))
 
 
 class SettleTests(unittest.TestCase):
-    def test_under_message_bar_settles_no_for_all_candidates(self) -> None:
-        rows = settle.settle_rows([replace(family(), messages=24)], Profiles({}, 0, 0), NOW)
-        self.assertEqual([row[:2] for row in rows], [("c1", "no"), ("c2", "no")])
-        self.assertEqual(rows[0][3], settle.REASON)
-        self.assertTrue(rows[0][5])
-        self.assertEqual(settle.settle_rows([replace(family(), messages=25)], Profiles({}, 0, 0), NOW), [])
+    def test_thin_non_connection_does_not_overwrite_worth(self) -> None:
+        for messages in (0, 24, 25):
+            with self.subTest(messages=messages):
+                self.assertEqual(settle.settle_rows([replace(family(), messages=messages)], NOW), [])
 
-    def test_human_worth_and_already_no_are_untouched(self) -> None:
-        for worth in (FamilyWorth("yes", "human"), FamilyWorth("no", "human"), FamilyWorth("no", "machine")):
+    def test_human_worth_and_already_yes_are_untouched(self) -> None:
+        for worth in (FamilyWorth("yes", "human", "{}"), FamilyWorth("no", "human", "{}"),
+                      FamilyWorth("yes", "machine", "{}")):
             with self.subTest(worth=worth):
-                self.assertEqual(settle.settle_rows([replace(family(), worth=worth)], Profiles({}, 0, 0), NOW), [])
+                fam = replace(family(), worth=worth, verdicts=(held(),))
+                self.assertEqual(settle.settle_rows([fam], NOW), [])
 
-    def test_network_review_is_worth_yes_wrong_is_not(self) -> None:
-        fam = replace(family(), worth=FamilyWorth("maybe", "machine"), verdicts=(held(),))
-        rows = settle.settle_rows([fam], Profiles({}, 0, 0), NOW)
+    def test_network_review_is_worth_yes_and_preserves_labels(self) -> None:
+        labels = '{"is_family": 0.8}'
+        fam = replace(family(), worth=FamilyWorth("maybe", "machine", labels), verdicts=(held(),))
+        rows = settle.settle_rows([fam], NOW)
         self.assertEqual([row[1] for row in rows], ["yes", "yes"])
         self.assertEqual(rows[0][3], settle.OWN_CONNECTION_REASON)
+        self.assertEqual(rows[0][4], labels)
         self.assertFalse(settle.own_connection(replace(fam, verdicts=(held(verdict="wrong_person"),))))
+        self.assertEqual(settle.settle_rows([replace(fam, verdicts=(held(verdict="wrong_person"),))], NOW), [])
 
-    def test_confirmed_real_profile_requires_matching_parent(self) -> None:
-        fam = replace(family(), parent_id="li:4242", verdicts=(held(verdict="confirmed", origin="research"),))
-        cached = Profiles({URL: profile()}, 0, 0)
-        self.assertTrue(settle.has_real_profile(fam, cached))
-        self.assertEqual(settle.confirmed_urls([fam]), [URL])
-        self.assertEqual(settle.settle_rows([fam], cached, NOW), [])
-        self.assertFalse(settle.has_real_profile(replace(fam, parent_id="p:1"), cached))
-        self.assertFalse(settle.has_real_profile(fam, Profiles({}, 1, 0)))
-
-    def test_human_accepted_synthetic_card_counts_as_real_profile(self) -> None:
-        fam = replace(family(), verdicts=(held(verdict="confirmed", origin="synthetic", decided_by="human"),))
-        self.assertTrue(settle.has_real_profile(fam, Profiles({}, 0, 0)))
+    def test_research_confirmation_is_not_an_own_connection(self) -> None:
+        fam = replace(family(), worth=FamilyWorth("maybe", "machine", "{}"),
+                      verdicts=(held(verdict="confirmed", origin="research"),))
+        self.assertFalse(settle.own_connection(fam))
+        self.assertEqual(settle.settle_rows([fam], NOW), [])
 
 
 class NodeReachabilityTests(StoreCase):
@@ -391,8 +388,7 @@ class NodeReachabilityTests(StoreCase):
         self.cache()
         # Concrete provider boundaries only: keep derive, judge planning, writes, settlement and Node.run real.
         fake_caller = AsyncMock()
-        with patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=[])), \
-             patch.object(judge.OpenAIResponsesConfig, "resolve", return_value=SimpleNamespace()), \
+        with patch.object(judge.OpenAIResponsesConfig, "resolve", return_value=SimpleNamespace()), \
              patch.object(judge, "OpenAIResponsesCaller", return_value=fake_caller):
             manifest = Enrich(self.conn, self.root, limit=None).run()
         self.assertEqual(manifest.status, "completed")
@@ -411,33 +407,33 @@ class ProviderFlowTests(StoreCase):
         fake.__aexit__ = AsyncMock(return_value=False)
         return fake
 
-    def test_jev_alone_confirms_only_one_profile_without_sol_call(self) -> None:
-        fake = self.caller(error=AssertionError("Sol must not run"))
-        with patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=["confirmed", "needs_review"])), \
-             patch.object(judge, "OpenAIResponsesCaller", return_value=fake):
-            counts = asyncio.run(judge.decide(self.conn, [task(urls=(URL, OTHER))], self.root, "Synthetic owner", NOW))
+    def test_unopposed_sol_match_confirms_all_members(self) -> None:
+        answer = {"verdict": "confirmed", "match_probability": 0.95, "reason": "Matches",
+                  "supporting_evidence": [], "contradicting_evidence": []}
+        fake = self.caller(answer)
+        with patch.object(judge, "OpenAIResponsesCaller", return_value=fake):
+            counts = asyncio.run(judge.decide(self.conn, [task()], "Synthetic owner", NOW))
         self.assertEqual(counts["confirmed"], 1)
         self.assertEqual(counts["judge_failed"], 0)
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_linkedins").fetchone()[0], 2)
-        fake.__aenter__.return_value.call.assert_not_awaited()
+        self.assertEqual(set(queries_dedupe.current_parents(self.conn).values()), {"li:4242"})
+        fake.__aenter__.return_value.call.assert_awaited_once()
 
     def test_failed_sol_is_counted_and_has_no_verdict_or_parent_writes(self) -> None:
         fake = self.caller(error=RuntimeError("synthetic provider failure"))
-        with patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=["needs_review"])), \
-             patch.object(judge, "OpenAIResponsesCaller", return_value=fake), patch("builtins.print") as printed:
-            counts = asyncio.run(judge.decide(self.conn, [task()], self.root, "Synthetic owner", NOW))
+        with patch.object(judge, "OpenAIResponsesCaller", return_value=fake), patch("builtins.print") as printed:
+            counts = asyncio.run(judge.decide(self.conn, [task()], "Synthetic owner", NOW))
         self.assertEqual(counts, {"judge_failed": 1})
         self.assertEqual(self.conn.execute("SELECT count(*) FROM candidate_linkedins").fetchone()[0], 0)
         printed.assert_called_once_with("failed one family: RuntimeError")
 
-    def test_sol_after_pending_jev_writes_review_and_preserves_confidence(self) -> None:
-        answer = {"verdict": "needs_review", "confidence": 0.6, "reason": "Ambiguous", "supporting_evidence": [],
-                  "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False}
-        with patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=["needs_review"])), \
-             patch.object(judge, "OpenAIResponsesCaller", return_value=self.caller(answer)):
-            counts = asyncio.run(judge.decide(self.conn, [task()], self.root, "Synthetic owner", NOW))
-        self.assertEqual(counts["needs_review"], 1)
-        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT confidence, reason FROM candidate_linkedins")],
+    def test_sol_below_threshold_writes_insufficient_evidence_and_preserves_probability(self) -> None:
+        answer = {"verdict": "needs_review", "match_probability": 0.6, "reason": "Ambiguous", "supporting_evidence": [],
+                  "contradicting_evidence": []}
+        with patch.object(judge, "OpenAIResponsesCaller", return_value=self.caller(answer)):
+            counts = asyncio.run(judge.decide(self.conn, [task()], "Synthetic owner", NOW))
+        self.assertEqual(counts["insufficient_evidence"], 1)
+        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT match_probability, reason FROM candidate_linkedins")],
                          [(0.6, "Ambiguous")] * 2)
 
 
@@ -469,7 +465,7 @@ class ProviderFlowTests(StoreCase):
         client.task_run.result.assert_called_once()
         client.task_group.add_runs.assert_called_once()
 
-    def test_enrich_run_researches_then_judges_and_settles_thin_wrong_person(self) -> None:
+    def test_enrich_run_researches_then_judges_without_overwriting_worth(self) -> None:
         from parallel.types import TaskRunEvent
 
         self.cache()
@@ -479,19 +475,18 @@ class ProviderFlowTests(StoreCase):
         client = MagicMock()
         client.task_group.create.return_value.task_group_id = "synthetic-group"
         client.task_group.events.return_value.__enter__.return_value = iter([event])
-        answer = {"verdict": "wrong_person", "confidence": 0.9, "reason": "Different", "supporting_evidence": [],
-                  "contradicting_evidence": [], "linkedin_plausibly_absent": False, "recommend_deep_research": False}
+        answer = {"verdict": "wrong_person", "match_probability": 0.9, "reason": "Different", "supporting_evidence": [],
+                  "contradicting_evidence": []}
         with patch.object(research, "Parallel", return_value=client), \
              patch.dict("os.environ", {"PARALLEL_API_KEY": "synthetic"}), \
-             patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=["needs_review"])), \
              patch.object(judge, "OpenAIResponsesCaller", return_value=self.caller(answer)):
             manifest = Enrich(self.conn, self.root, limit=1).run()
         self.assertEqual(manifest.status, "completed")
         self.assertEqual(manifest.counts["research_submitted"], 1)
         self.assertEqual(manifest.counts["judge_families"], 1)
         self.assertEqual(manifest.counts["wrong_person"], 1)
-        self.assertEqual(manifest.counts["settle_worth_rows"], 2)
-        self.assertEqual(queries_enrich.family_worth(self.conn), {"p:1": FamilyWorth("no", "machine")})
+        self.assertEqual(manifest.counts["settle_worth_rows"], 0)
+        self.assertEqual(queries_enrich.family_worth(self.conn), {"p:1": FamilyWorth("yes", "machine", "{}")})
 
     def test_research_node_run_uses_real_subjects_and_authorized_store_writes(self) -> None:
         from parallel.types import TaskRunEvent
@@ -542,28 +537,19 @@ class CliTests(StoreCase):
         self.assertEqual(code, 0)
         return json.loads(stream.getvalue())
 
-    def test_enrich_and_judge_dry_runs_price_uncached_and_cached_requests(self) -> None:
+    def test_enrich_and_judge_dry_runs_price_sol_requests(self) -> None:
         self.connection(None)
         self.cache()
         self.sync_store()
         actual = self.payload(enrich.main, ["--dry-run", "--limit", "1"])
         self.assertEqual(actual["judge_families"], 1)
-        self.assertEqual(actual["jev_requests"], 2)
-        self.assertEqual(actual["jev_cached"], 0)
         self.assertEqual(actual["sol_calls_at_most"], 1)
-        first = proposals.derive(self.conn)
-        planned = judge.plan(first, profiles.load_profiles(self.root, proposals.all_urls(first), fetch=False).found, set())
-        from packs.search.primitives.llm_rerank_candidates.jev.client import cache_path, request_digest
-        for pair in judge.jev_pairs(planned.tasks[0]):
-            for view, request in pair.items():
-                path = cache_path(self.data_root / judge.JEV_CACHE_RELATIVE_DIR / view, request_digest(request))
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("{}")
+        self.assertGreater(actual["sol_input_tokens"], 0)
+        self.assertGreater(actual["sol_cost_usd_at_most"], 0)
         actual = self.payload(judge.main, ["--limit", "1"])
         self.assertEqual(actual["profiles_to_judge"], 1)
-        self.assertEqual(actual["jev_cached"], 2)
-        self.assertEqual(actual["jev_input_tokens"], 0)
-        self.assertEqual(actual["jev_cost_usd"], 0)
+        self.assertEqual(actual["sol_calls_at_most"], 1)
+        self.assertGreater(actual["sol_input_tokens"], 0)
 
     def test_enrich_cli_runs_email_confirmation_without_sol_calls(self) -> None:
         self.connection()
@@ -573,8 +559,7 @@ class CliTests(StoreCase):
         fake.__aenter__ = AsyncMock(return_value=SimpleNamespace(call=AsyncMock(side_effect=AssertionError("Sol call"))))
         fake.__aexit__ = AsyncMock(return_value=False)
         stream = io.StringIO()
-        with patch.object(jev_identity, "answer_all", new=AsyncMock(return_value=[])), \
-             patch.object(judge, "OpenAIResponsesCaller", return_value=fake), redirect_stdout(stream):
+        with patch.object(judge, "OpenAIResponsesCaller", return_value=fake), redirect_stdout(stream):
             self.assertEqual(enrich.main(["--data-root", str(self.data_root), "--limit", "0"]), 0)
         self.assertIn("completed", stream.getvalue())
         self.assertIn("'email_confirmed': 1", stream.getvalue())
@@ -632,7 +617,7 @@ class CliTests(StoreCase):
         self.assertEqual(actual, {"fetched": 0, "found": 0, "missing": 0})
 
     def test_settle_cli_reports_family_and_candidate_counts(self) -> None:
-        self.assertEqual(self.payload(settle.main, []), {"families_to_yes": 0, "families_to_no": 1, "worth_rows": 2})
+        self.assertEqual(self.payload(settle.main, []), {"families_to_yes": 0, "families_to_no": 0, "worth_rows": 0})
 
     def test_research_cli_dry_run_respects_zero_limit(self) -> None:
         actual = self.payload(research.main, ["--dry-run", "--limit", "0"])
@@ -640,54 +625,7 @@ class CliTests(StoreCase):
         self.assertEqual(actual["estimated_cost_usd"], 0)
 
 
-class JevTests(unittest.TestCase):
-    def answers(self, strong: bool) -> tuple[dict, dict]:
-        network = {"identity": {"probabilities": {"confirmed": 1.0, "needs_review": 0.0, "wrong_person": 0.0}},
-                   "competing_identity": {"noul": 0.0}, "concrete_conflict": {"noul": 0.0},
-                   "positive_connection": {"noul": 1.0}}
-        association = {"association": {"probabilities": {"yes": 1.0, "review": 0.0, "no": 0.0}},
-                       "source_conflict": {"noul": 0.0}, "specific_connection": {"noul": 1.0}}
-        if not strong:
-            network["competing_identity"]["noul"] = 1.0
-            network["concrete_conflict"]["noul"] = 1.0
-            network["positive_connection"]["noul"] = 0.0
-            association["source_conflict"]["noul"] = 1.0
-            association["specific_connection"]["noul"] = 0.0
-        return network, association
-
-    def test_calibrated_views_must_both_agree_and_clear_threshold(self) -> None:
-        network, association = self.answers(True)
-        self.assertGreaterEqual(jev_identity.probability(network, association), jev_identity.MODEL.threshold)
-        self.assertEqual(jev_identity.classify(network, association), "confirmed")
-        network["identity"]["probabilities"] = {"confirmed": 0.1, "wrong_person": 0.9}
-        self.assertEqual(jev_identity.classify(network, association), "needs_review")
-        network, association = self.answers(True)
-        association["association"]["probabilities"] = {"yes": 0.1, "no": 0.9}
-        self.assertEqual(jev_identity.classify(network, association), "needs_review")
-        network, association = self.answers(False)
-        self.assertEqual(jev_identity.classify(network, association), "needs_review")
-
-    def test_request_provenance_and_view_policy(self) -> None:
-        pair = jev_identity.requests(family_evidence(family()), profile().judge_view(), False, [OTHER, URL])
-        self.assertEqual(set(pair), {"network", "association"})
-        dossier = json.loads(pair["network"]["state"]["dossier"])
-        self.assertFalse(dossier["network_context"]["proposed_url_in_imported_linkedin_record"])
-        self.assertEqual(dossier["network_context"]["same_parent_imported_urls"], sorted([OTHER, URL]))
-        self.assertIn("web research", dossier["network_context"]["provenance"])
-        self.assertNotEqual(pair["network"]["state"]["evidence_policy"], pair["association"]["state"]["evidence_policy"])
-
-    def test_answer_all_deduplicates_requests_and_preserves_pair_order(self) -> None:
-        pair = jev_identity.requests({}, profile().judge_view(), True, [URL])
-        network, association = self.answers(True)
-        async def answers(batch: dict, **kwargs: object) -> dict:
-            response = network if Path(kwargs["output_dir"]).name == "network" else association
-            return {digest: SimpleNamespace(response={"answers": response}) for digest in batch}
-        with tempfile.TemporaryDirectory() as directory, patch.object(jev_identity, "answer_requests", side_effect=answers) as provider:
-            actual = asyncio.run(jev_identity.answer_all([pair, pair], Path(directory)))
-        self.assertEqual(actual, ["confirmed", "confirmed"])
-        self.assertEqual(provider.await_count, 2)
-        self.assertTrue(all(len(call.args[0]) == 1 for call in provider.call_args_list))
-
+class SolPromptTests(unittest.TestCase):
     def test_sol_prompt_renders_optional_evidence_and_omits_empty_fields(self) -> None:
         enriched = replace(facts(), relationship_to_owner="Synthetic colleague", school="Example College",
                            employers=(EmployerFact("Example Labs", "Founder", "current"), EmployerFact("", "", "unknown")),

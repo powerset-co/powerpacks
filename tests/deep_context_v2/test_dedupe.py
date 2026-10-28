@@ -31,7 +31,7 @@ class BlockingTests(unittest.TestCase):
             self.assertEqual(blocking.name_keys(name), set())
 
     def test_pairs_unique_sorted_email_local_and_stats(self):
-        result = blocking.block(["c", "b", "a"], {"a": "Jordan Bravo", "b": "Jordan Bravo", "c": ""},
+        result = blocking.block(["c", "b", "a"], {"a": ("Jordan Bravo",), "b": ("Jordan Bravo",), "c": ()},
                                 {"a": [Identifier("email", "same@example.com")], "b": [], "c": [Identifier("email", "same@other.example")]})
         self.assertEqual(result.pairs, [("a", "b"), ("a", "c")])
         self.assertEqual(result.bucketed, 3)
@@ -41,12 +41,21 @@ class BlockingTests(unittest.TestCase):
         for size, expected in ((3, 3), (4, 0)):
             ids = [str(i) for i in range(size)]
             with patch.object(blocking, "MAX_BUCKET", 3):
-                result = blocking.block(ids, dict.fromkeys(ids, "Jordan Bravo"), {i: [] for i in ids})
+                result = blocking.block(ids, dict.fromkeys(ids, ("Jordan Bravo",)), {i: [] for i in ids})
             self.assertEqual(len(result.pairs), expected)
             self.assertEqual(result.stats["words"].members_in_skipped, size if size == 4 else 0)
 
+    def test_written_and_dossier_names_bucket_once_per_candidate(self):
+        result = blocking.block(["c", "b", "a"],
+                                {"a": ("Jordan", "Jordan Bravo"), "b": ("Jordan Bravo", "Jordan Bravo"),
+                                 "c": ("Casey Delta", "Jordan Bravo")},
+                                {candidate: [] for candidate in ("a", "b", "c")})
+        self.assertEqual(result.pairs, [("a", "b"), ("a", "c"), ("b", "c")])
+        self.assertEqual(result.bucketed, 3)
+        self.assertEqual(result.stats["words"], blocking.KindStats(1, 3.0, 3, 0))
+
     def test_phone_and_single_word_do_not_block(self):
-        result = blocking.block(["a", "b"], {"a": "Jordan", "b": "Jordan"}, {i: [Identifier("phone", "+15550100")] for i in ("a", "b")})
+        result = blocking.block(["a", "b"], {"a": ("Jordan",), "b": ("Jordan",)}, {i: [Identifier("phone", "+15550100")] for i in ("a", "b")})
         self.assertEqual(result.pairs, [])
         self.assertEqual(result.bucketed, 0)
 

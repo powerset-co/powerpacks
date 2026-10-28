@@ -291,8 +291,9 @@ class RunTests(StoreCase):
 
     def test_review_cli_server_and_http_boundaries(self):
         response = io.BytesIO(b'{"progress":{"linkedin_pending":3}}')
-        with patch.object(run, "start_page", return_value=dict(pid=43210, url="http://127.0.0.1:8123/")) as start, patch("urllib.request.urlopen", return_value=response) as request, redirect_stdout(io.StringIO()) as out:
+        with patch.object(run, "stop_page") as stop, patch.object(run, "start_page", return_value=dict(pid=43210, url="http://127.0.0.1:8123/")) as start, patch("urllib.request.urlopen", return_value=response) as request, redirect_stdout(io.StringIO()) as out:
             self.assertEqual(run.main(["review", "--data-root", str(self.root), "--port", "8123"]), 0)
+        stop.assert_called_once_with("127.0.0.1", 8123)
         start.assert_called_once_with(self.root.parent, port=8123)
         request.assert_called_once_with("http://127.0.0.1:8123/api/review/page", timeout=5)
         self.assertIn("3 people to check", out.getvalue())
@@ -303,7 +304,7 @@ class RunTests(StoreCase):
             self.assertEqual(run.main(["stop", "--data-root", str(self.root)]), 0)
         self.assertIn("no review server running", out.getvalue())
 
-    def test_finish_cli_keeps_review_until_index_succeeds(self):
+    def test_finish_cli_keeps_review_on_both_failed_and_successful_index(self):
         self.write_owner()
         pid = self.root / run.REVIEW_PID_FILE
         pid.write_text("43210")
@@ -311,16 +312,16 @@ class RunTests(StoreCase):
             self.assertEqual(run.main(["finish", "--data-root", str(self.root), "--operator-id", "synthetic"]), 7)
         people = self.root / "network-import/merged/people.csv"
         self.assertTrue(people.exists())
-        self.assertIn("review server stays up", out.getvalue())
-        self.assertEqual(index.call_args.args[0], run.index_command(self.root, people))
+        self.assertIn("the Modal build did not complete; run finish again", out.getvalue())
+        self.assertEqual(index.call_args.args[0], run.index_command(self.root, self.root / "search-index/people.csv"))
         self.assertEqual(index.call_args.kwargs["env"]["POWERPACKS_OPERATOR_ID"], "synthetic")
         kill.assert_not_called()
         self.assertEqual(pid.read_text(), "43210")
-        with patch("subprocess.run", return_value=SimpleNamespace(returncode=0)), patch("os.kill") as kill, redirect_stdout(io.StringIO()) as out:
+        with patch("subprocess.run", return_value=SimpleNamespace(returncode=0)), patch.object(run, "keep_updated") as update, patch("os.kill") as kill, redirect_stdout(io.StringIO()) as out:
             self.assertEqual(run.main(["finish", "--data-root", str(self.root), "--operator-id", "synthetic"]), 0)
-        self.assertIn("review server stopped", out.getvalue())
-        kill.assert_called_once_with(43210, signal.SIGTERM)
-        self.assertFalse(pid.exists())
+        update.assert_called_once_with(self.root.parent)
+        kill.assert_not_called()
+        self.assertEqual(pid.read_text(), "43210")
 
 
 if __name__ == "__main__":

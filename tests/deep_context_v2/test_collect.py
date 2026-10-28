@@ -29,11 +29,14 @@ class MessageFixtures(unittest.TestCase):
             con.executescript("""
                 CREATE TABLE participants(id INTEGER PRIMARY KEY, email_address TEXT, display_name TEXT);
                 CREATE TABLE sources(identifier TEXT);
+                CREATE TABLE conversations(id TEXT PRIMARY KEY, source_conversation_id TEXT);
                 CREATE TABLE messages(id INTEGER PRIMARY KEY, message_type TEXT, sender_id INTEGER,
                     conversation_id TEXT, sent_at TEXT, received_at TEXT, internal_date TEXT,
-                    subject TEXT, snippet TEXT, deleted_at TEXT, deleted_from_source_at TEXT);
+                    subject TEXT, snippet TEXT, deleted_at TEXT, deleted_from_source_at TEXT,
+                    source_message_id TEXT);
                 CREATE TABLE message_bodies(message_id INTEGER, body_text TEXT);
-                CREATE TABLE message_recipients(message_id INTEGER, participant_id INTEGER, display_name TEXT);
+                CREATE TABLE message_recipients(message_id INTEGER, participant_id INTEGER,
+                    display_name TEXT, recipient_type TEXT);
                 INSERT INTO sources VALUES('OWNER@example.com'), (NULL), ('');
                 INSERT INTO participants VALUES(1, 'JORDAN@example.com', 'Jordan Bravo');
                 INSERT INTO participants VALUES(2, 'owner@example.com', 'Owner Bravo');
@@ -82,10 +85,12 @@ class MessageFixtures(unittest.TestCase):
 
     def add_email(self, ident, sender, subject, body, thread, recipients, *, deleted=None, kind="email"):
         with sqlite3.connect(self.archive) as con:
-            con.execute("INSERT INTO messages VALUES(?,?,?,?,?,NULL,NULL,?,?,?,NULL)",
-                        (ident, kind, sender, thread, f"2026-01-{ident:02d}", subject, "preview", deleted))
+            con.execute("INSERT OR IGNORE INTO conversations VALUES(?,?)", (thread, thread))
+            con.execute("INSERT INTO messages VALUES(?,?,?,?,?,NULL,NULL,?,?,?,NULL,?)",
+                        (ident, kind, sender, thread, f"2026-01-{ident:02d}", subject, "preview", deleted,
+                         f"synthetic-message-{ident}"))
             con.execute("INSERT INTO message_bodies VALUES(?,?)", (ident, body))
-            con.executemany("INSERT INTO message_recipients VALUES(?,?, '')", [(ident, recipient) for recipient in recipients])
+            con.executemany("INSERT INTO message_recipients VALUES(?,?, '', 'to')", [(ident, recipient) for recipient in recipients])
 
     def sources(self, *, cap=20, group_size=25, channels=None):
         sources = readers.ContextSources(channels=set(self.person.source_channels) if channels is None else channels,
@@ -103,15 +108,25 @@ class MessageFixtures(unittest.TestCase):
         self.assertEqual(gmail.count_messages_for(con, "missing@example.com", set()), 0)
         self.assertEqual(len(gmail.fetch_recent_rows(con, "jordan@example.com", 20)), 4)
 
-    def test_gmail_selection_breadth_signal_neardup_and_roles(self):
+    def test_gmail_selection_preserves_distinct_headers_and_roles(self):
         con = gmail.open_msgvault(self.archive)
         self.addCleanup(con.close)
         messages = gmail.recent_emails_for(con, "jordan@example.com", 20, {"owner@example.com"})
-        self.assertEqual(len(messages), 2)
-        self.assertEqual([entry.from_role for entry in messages], ["contact", "me"])
+        self.assertEqual(len(messages), 3)
+        self.assertEqual([entry.from_role for entry in messages], ["contact", "contact", "me"])
         self.assertEqual(messages[0].subject, "Duplicate")
+        self.assertEqual(messages[0].snippet, messages[1].snippet)
+        self.assertNotEqual(messages[0].email_headers, messages[1].email_headers)
         self.assertNotIn("Third party", " ".join(entry.snippet for entry in messages))
         self.assertEqual(gmail.recent_emails_for(con, "jordan@example.com", 0, set()), [])
+
+    def test_gmail_neardup_requires_matching_headers(self):
+        self.add_email(7, 1, "Repeated", "Founder at Example Labs https://example.com +15550100000", "thread-b", [2])
+        con = gmail.open_msgvault(self.archive)
+        self.addCleanup(con.close)
+        messages = gmail.recent_emails_for(con, "jordan@example.com", 20, {"owner@example.com"})
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(sum(message.email_headers.thread_id == "thread-b" for message in messages), 1)
 
 
     def test_gmail_thread_rosters_names_dedup_and_limit(self):
@@ -151,7 +166,7 @@ class MessageFixtures(unittest.TestCase):
     def test_collect_cross_channel_chronological_counts_and_caps(self):
         messages, available = self.sources().collect_person(self.person)
         self.assertEqual(available, 12)  # 3 Gmail + 3 direct + 3 group + 3 WhatsApp
-        self.assertEqual(len(messages), 9)  # near-duplicate email and blank chat bodies omitted
+        self.assertEqual(len(messages), 10)  # distinct email headers survive; blank chat bodies do not
         self.assertEqual(messages, sorted(messages, key=MessageEntry.content_order_key))
         self.assertEqual({entry.channel for entry in messages}, set(MessageChannel))
         limited, available = self.sources(cap=1).collect_person(self.person)
@@ -206,7 +221,7 @@ class MessageFixtures(unittest.TestCase):
         rerun = node.run()
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.counts, dict(candidates=2, bundles=1, no_messages=1, capped=1,
-                         messages_gmail=2, messages_imessage=2, messages_imessage_group=3, messages_whatsapp=2))
+                         messages_gmail=3, messages_imessage=2, messages_imessage_group=3, messages_whatsapp=2))
         self.assertEqual(rerun.counts, result.counts)
         row, = conn.execute("SELECT payload_json, content_fingerprint FROM bundles").fetchall()
         self.assertEqual(row["content_fingerprint"], hashlib.sha256(row["payload_json"].encode()).hexdigest())
