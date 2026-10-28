@@ -71,25 +71,26 @@ class TaskHistoryTest(unittest.TestCase):
 
 
 class AccountsJobsTest(unittest.TestCase):
-    def test_a_msgvault_database_without_accounts_is_no_gmail(self):
-        # msgvault opened the database (a `status` or an old install) but never added an account:
-        # no `sources` table yet. Setup must read that as no mailboxes, not stop on it.
+    def test_gmail_follows_what_msgvault_says_it_holds(self):
+        # msgvault owns its database: with no accounts in it (an old command-line install's file,
+        # or none at all) nothing is probed and the database is never opened.
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
             with sqlite3.connect(db) as conn:
                 conn.execute("CREATE TABLE messages (id INTEGER)")
-            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db):
+            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db), \
+                 patch.object(accounts, "stored_mailboxes", return_value=()), \
+                 patch.object(accounts, "check_account") as probe:
                 self.assertEqual(accounts.gmail_signins(), {})
-                self.assertEqual(accounts._gmail_rows(db), [])
+                self.assertEqual(accounts._gmail_accounts(None)[0].health, "off")
+            probe.assert_not_called()
 
     def test_accounts_reuse_signins_and_signed_in_refreshes_the_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "msgvault.db"
-            with sqlite3.connect(db) as conn:
-                conn.execute("CREATE TABLE sources (source_type TEXT, identifier TEXT)")
-                conn.execute("INSERT INTO sources (source_type, identifier) VALUES ('gmail', 'casey@example.com')")
             api = AccountsApi()
             with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db), \
+                 patch.object(accounts, "stored_mailboxes", return_value=("casey@example.com",)) as held, \
                  patch.object(accounts, "check_account", return_value=SimpleNamespace(status="reauthorization_required")) as probe, \
                  patch("packs.ingestion.primitives.accounts.api.read_accounts", return_value=[]), \
                  patch("packs.ingestion.primitives.accounts.api.installed_runners", return_value=[]), \
@@ -114,15 +115,13 @@ class AccountsJobsTest(unittest.TestCase):
                 api.jobs["whatsapp"] = Job("running", "Syncing…")
                 get("/accounts/api/accounts")
                 self.assertEqual(probe.call_count, 2)
-                with sqlite3.connect(db) as conn:
-                    conn.execute("INSERT INTO sources (source_type, identifier) VALUES ('gmail', 'jordan@example.com')")
+                held.return_value = ("casey@example.com", "jordan@example.com")
                 get("/accounts/api/accounts")
                 self.assertEqual(set(api._signins), {"casey@example.com", "jordan@example.com"})
                 self.assertEqual(probe.call_count, 4)
                 get("/accounts/api/accounts")
                 self.assertEqual(probe.call_count, 4)
-                with sqlite3.connect(db) as conn:
-                    conn.execute("DELETE FROM sources WHERE identifier = 'casey@example.com'")
+                held.return_value = ("jordan@example.com",)
                 self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["jordan@example.com"])
                 self.assertEqual(probe.call_count, 5)
                 api._sync("whatsapp", lambda: [])

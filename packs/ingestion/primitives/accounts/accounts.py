@@ -54,7 +54,7 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 from packs.ingestion.primitives.discover.messages.wacli.store_db import whatsapp_epoch_to_iso  # noqa: E402
 from packs.ingestion.primitives.imports.status import linkedin_connections_count  # noqa: E402
 from packs.ingestion.primitives.setup.automations import msgvault_home  # noqa: E402
-from packs.ingestion.primitives.setup.automations.accounts import check_account  # noqa: E402
+from packs.ingestion.primitives.setup.automations.accounts import check_account, stored_mailboxes  # noqa: E402
 
 Source = Literal["gmail", "imessage", "whatsapp", "linkedin"]
 Health = Literal["ok", "warning", "error", "off"]
@@ -155,19 +155,9 @@ def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:
     return [*_gmail_accounts(signins), _imessage_account(), _whatsapp_account(), _linkedin_account()]
 
 
-def _has_accounts(conn: sqlite3.Connection) -> bool:
-    """A database msgvault opened but never added an account to (an old command-line install)
-    has no `sources` table yet: it holds no accounts."""
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone() is not None
-
-
 def gmail_signins(signins: dict[str, SignIn] | None = None) -> dict[str, SignIn]:
-    """Probe stored Gmail sign-ins unless the cached mailbox list still matches."""
-    if not DEFAULT_MSGVAULT_DB.exists():
-        return {}
-    with sqlite3.connect(f"file:{DEFAULT_MSGVAULT_DB}?mode=ro", uri=True) as conn:
-        emails = [row[0] for row in conn.execute(
-            "SELECT identifier FROM sources WHERE source_type = 'gmail' ORDER BY identifier")] if _has_accounts(conn) else []
+    """Probe the sign-in of every mailbox msgvault holds, unless the cached list still matches."""
+    emails = stored_mailboxes(MSGVAULT_HOME)
     if signins is not None and signins.keys() == set(emails):
         return signins
     with ThreadPoolExecutor(max_workers=len(emails) or 1) as pool:
@@ -189,20 +179,24 @@ class _GmailRow:
 
 
 def _gmail_accounts(signins: dict[str, SignIn] | None) -> list[Account]:
-    if not DEFAULT_MSGVAULT_DB.exists():
+    emails = stored_mailboxes(MSGVAULT_HOME)
+    if not emails:
         return [Account("gmail", "Gmail", "off", "Not connected", 0, 0, None, None)]
-    rows = _gmail_rows(DEFAULT_MSGVAULT_DB)
+    rows = _gmail_rows(DEFAULT_MSGVAULT_DB, emails)
     if signins is None:
         signins = gmail_signins()
     contacts = _gmail_contacts()
     return [_gmail_account(row, signins[row.email], contacts.get(row.email, 0)) for row in rows]
 
 
-def _gmail_rows(db: Path) -> list[_GmailRow]:
+def _gmail_rows(db: Path, emails: tuple[str, ...]) -> list[_GmailRow]:
+    """Each mailbox's messages and last sync, from msgvault's database, for the mailboxes msgvault
+    named (so the tables exist)."""
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
         sources = conn.execute(
-            "SELECT id, identifier, last_sync_at FROM sources WHERE source_type = 'gmail' ORDER BY identifier"
-        ).fetchall() if _has_accounts(conn) else []
+            "SELECT id, identifier, last_sync_at FROM sources WHERE source_type = 'gmail' "
+            f"AND lower(identifier) IN ({','.join('?' * len(emails))}) ORDER BY identifier", emails
+        ).fetchall()
         rows = []
         for source_id, email, last_sync_at in sources:
             messages, latest = conn.execute(
