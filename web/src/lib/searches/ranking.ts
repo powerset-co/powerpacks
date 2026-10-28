@@ -160,6 +160,16 @@ export function pondRows(search: SearchResult, pond: Pond): ResultRow[] {
   }))
 }
 
+// A quick search shows only people at this pond score or above, as the cloud search does.
+export const WEAK_SCORE = 0.3
+
+/** A quick search's pond as the page shows it: the people scoring 0.3 or more. */
+export function pondSections(search: SearchResult, pond: Pond): ResultSection[] {
+  return [
+    { heading: null, rows: pondRows(search, pond).filter((result) => result.row.final_score >= WEAK_SCORE) },
+  ]
+}
+
 /** How many people a pond kept: those reviewed, else the rows it returned. */
 export function pondKept(pond: Pond): number {
   return pond.reviewed_count || pond.candidates.length
@@ -170,5 +180,5 @@ export function panelSections(search: SearchResult, results: Results, pondAt: nu
   if (results.mode === "ranked") return results.sections
   const pond = search.ponds[pondAt]
   if (results.mode === "unavailable" || !pond) return []
-  return [{ heading: null, rows: pondRows(search, pond) }]
+  return pondSections(search, pond)
 }
