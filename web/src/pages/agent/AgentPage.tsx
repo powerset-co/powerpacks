@@ -10,6 +10,8 @@ import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
+import { collapseSidebar } from "@/lib/sidebar"
+import { writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { searchRunKey } from "@/pages/searches/hooks/useSearchRun"
@@ -218,12 +220,27 @@ function Workspace() {
     lastRunning.current = runRunning ? runId : null
   }, [client, runId, runRunning])
 
-  // Chat and results split the room evenly; the results keep 380px at the narrowest window (960px).
+  // A search run in this chat is this chat's: the side nav lists the two as one.
+  useEffect(() => {
+    if (runId && agent.threadId && listed.has(runId))
+      writeStored("local", `search-thread:${runId}`, agent.threadId)
+  }, [runId, agent.threadId, listed])
+
+  // Results open beside the chat: the sidebar folds to its rail, once per search.
+  const showing = runId !== null && listed.has(runId)
+  const folded = useRef<string | null>(null)
+  useEffect(() => {
+    if (!showing || folded.current === runId) return
+    folded.current = runId
+    collapseSidebar()
+  }, [showing, runId])
+
+  // Chat and results split the room 2:3; the results keep 380px at the narrowest window (960px).
   return (
     <main
       className={cn(
         "grid min-h-0 grid-cols-[minmax(0,1fr)]",
-        runId && listed.has(runId) && "grid-cols-[minmax(0,1fr)_minmax(380px,1fr)]",
+        showing && "grid-cols-[minmax(0,2fr)_minmax(380px,3fr)]",
       )}
     >
       <Conversation runTitle={runTitle} runId={runId} collaboration={collaboration} />
