@@ -11,7 +11,7 @@ SKILLS_DIR="${1:-$HOME/.agents/skills}"
 LEGACY_SKILLS_DIR="$CODEX_HOME/skills"
 
 MANAGED_SKILLS=(
-  memory search search-company search-sql build-local-search-index
+  search search-company search-sql build-local-search-index
   powerset powerset-login powerset-set feedback update-powerpacks fix-powerpacks install-powerpacks powerpacks-doctor sales-nav-search build-outbound
   msgvault import-gmail import-twitter deep-context logbook
   import-messages clean-slate
@@ -45,7 +45,6 @@ install_skill() {
 }
 
 install_skill search "$REPO_ROOT/packs/search/skills/search/SKILL.md"
-install_skill memory "$REPO_ROOT/packs/memory/skills/memory/SKILL.md"
 install_skill search-company "$REPO_ROOT/packs/search/skills/search-company/SKILL.md"
 install_skill search-sql "$REPO_ROOT/packs/search/skills/search-sql/SKILL.md"
 install_skill build-local-search-index "$REPO_ROOT/packs/indexing/skills/build-local-search-index/SKILL.md"
