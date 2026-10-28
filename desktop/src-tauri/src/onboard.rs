@@ -77,15 +77,21 @@ pub fn resume_page(root: &Path) -> &'static str {
         return "/onboarding";
     };
     let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    let completed = |step: &str| {
+    let status = |step: &str| {
         manifest
             .get("steps")
             .and_then(|steps| steps.get(step))
             .and_then(|entry| entry.get("status"))
             .and_then(serde_json::Value::as_str)
-            == Some("completed")
     };
-    if ["gmail_login", "imessage_access", "whatsapp_login"].iter().any(|step| completed(step)) {
+    // A fresh install's manifest holds only the install's own steps (record_install); setup has
+    // run once its account step is in it. Before that the window starts at Sign up.
+    if status("account").is_none() {
+        "/onboarding"
+    } else if ["gmail_login", "imessage_access", "whatsapp_login"]
+        .iter()
+        .any(|step| status(step) == Some("completed"))
+    {
         "/onboarding/import"
     } else {
         "/onboarding/setup"
@@ -254,16 +260,26 @@ mod tests {
 
     #[test]
     fn a_launch_resumes_on_the_step_the_run_is_on() {
-        let root = std::env::temp_dir().join(format!("powerpacks-resume-page-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("powerpacks-resume-page-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let root = root.as_path();
         assert_eq!(resume_page(root), "/onboarding");
         fs::create_dir_all(root.join(".powerpacks/install")).unwrap();
         let write = |manifest: &str| fs::write(root.join(MANIFEST), manifest).unwrap();
-        write(r#"{"status":"running","step":"linkedin","steps":{"gmail_login":{"status":"skipped"}}}"#);
+        // A fresh install: only the install's own steps are recorded, so the window starts at Sign up.
+        write(
+            r#"{"status":"waiting","step":"skills","event":"setup.ready","steps":{"dependencies":{"status":"completed"},"skills":{"status":"completed"}}}"#,
+        );
+        assert_eq!(resume_page(root), "/onboarding");
+        write(
+            r#"{"status":"running","step":"linkedin","steps":{"account":{"status":"completed"},"gmail_login":{"status":"skipped"}}}"#,
+        );
         assert_eq!(resume_page(root), "/onboarding/setup");
-        write(r#"{"status":"running","step":"whatsapp_sync","steps":{"whatsapp_login":{"status":"completed"}}}"#);
+        write(
+            r#"{"status":"running","step":"whatsapp_sync","steps":{"account":{"status":"completed"},"whatsapp_login":{"status":"completed"}}}"#,
+        );
         assert_eq!(resume_page(root), "/onboarding/import");
     }
 
