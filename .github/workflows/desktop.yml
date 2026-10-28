@@ -37,8 +37,22 @@ concurrency:
 
 jobs:
   build:
-    name: Build macOS dmg
+    name: Build macOS dmg (${{ matrix.arch }})
     runs-on: macos-latest
+    # Both Macs from the one Apple Silicon runner: the Intel app is a cross-build (Rust target,
+    # Intel sidecars); its bundle lands under target/<triple>, the native one under target.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            triple: aarch64-apple-darwin
+            target_flag: ""
+            bundle: src-tauri/target/release/bundle
+          - arch: x64
+            triple: x86_64-apple-darwin
+            target_flag: --target x86_64-apple-darwin
+            bundle: src-tauri/target/x86_64-apple-darwin/release/bundle
     defaults:
       run:
         working-directory: desktop
@@ -55,11 +69,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          key: ${{ matrix.arch }}
       - run: pnpm install --frozen-lockfile
-      - run: scripts/bundle-runtime.sh aarch64-apple-darwin
+      - run: scripts/bundle-runtime.sh ${{ matrix.triple }}
         shell: bash
       # With the Apple secrets set (desktop/README.md "Signing"), the macOS build is signed with
       # the Developer ID certificate and notarized, so it opens without a Gatekeeper warning.
@@ -78,9 +95,10 @@ jobs:
             export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
             config=(--config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$APPLE_SIGNING_IDENTITY\"}}}")
           fi
-          pnpm tauri build --bundles app "${config[@]}"
+          pnpm tauri build --bundles app $TARGET_FLAG "${config[@]}"
         shell: bash
         env:
+          TARGET_FLAG: ${{ matrix.target_flag }}
           RELEASE: ${{ inputs.release }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           # Powerpacks' Google OAuth client for Gmail (a Desktop-app client in the same Google
@@ -97,29 +115,34 @@ jobs:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
       # The dmg: dmgbuild writes the drag-to-Applications window itself (desktop/dmg/settings.py);
       # Tauri's dmg step needs Finder, which the runner cannot drive, and shipped a plain listing.
-      # The bundled uv runs it with no install step. The app inside is what Tauri signed and
-      # notarized; the disk image itself carries no signature (Gatekeeper judges the app).
+      # The runner's Python runs it (the bundled uv is the app's, Intel on the Intel leg). The
+      # app inside is what Tauri signed and notarized; the disk image itself carries no
+      # signature (Gatekeeper judges the app).
       - name: Package the dmg
         run: |
-          out=src-tauri/target/release/bundle/dmg
+          out=$BUNDLE/dmg
           mkdir -p "$out"
-          PP_APP=src-tauri/target/release/bundle/macos/Powerpacks.app \
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet dmgbuild
+          PP_APP=$BUNDLE/macos/Powerpacks.app \
           PP_BG=dmg/dmg-background.png \
           PP_ICON=src-tauri/icons/icon.icns \
-            src-tauri/binaries/uv-aarch64-apple-darwin run --no-project --with dmgbuild \
-              dmgbuild -s dmg/settings.py Powerpacks "$out/Powerpacks-macos-arm64.dmg"
+            "$RUNNER_TEMP/dmgbuild/bin/dmgbuild" -s dmg/settings.py Powerpacks "$out/Powerpacks-macos-$ARCH.dmg"
         shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+          ARCH: ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
-          name: Powerpacks-macos-arm64
-          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          name: Powerpacks-macos-${{ matrix.arch }}
+          path: desktop/${{ matrix.bundle }}/dmg/*.dmg
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Powerpacks-macos-arm64-updater
+          name: Powerpacks-macos-${{ matrix.arch }}-updater
           path: |
-            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
-            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            desktop/${{ matrix.bundle }}/macos/*.app.tar.gz
+            desktop/${{ matrix.bundle }}/macos/*.app.tar.gz.sig
           if-no-files-found: error
 
   edge:
@@ -131,8 +154,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Powerpacks-macos-arm64
+          pattern: Powerpacks-macos-*
           path: dmg
+          merge-multiple: true
       - name: Publish Edge
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,4 +172,4 @@ jobs:
             gh release create edge --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "$title" --notes-file notes.md --prerelease --latest=false
           fi
-          gh release upload edge dmg/Powerpacks-macos-arm64.dmg --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload edge dmg/*.dmg --clobber --repo "$GITHUB_REPOSITORY"

@@ -32,9 +32,10 @@ jobs:
       - if: ${{ steps.release.outputs.release_created && !contains(steps.release.outputs.tag_name, '-rc') }}
         run: git push --force origin "${{ steps.release.outputs.tag_name }}^{commit}:refs/heads/stable"
 
-  # Each release carries the Mac app, built without the debug menu, under one fixed name so
-  # releases/latest/download/Powerpacks-macos-arm64.dmg is always the newest (README.md). A
-  # release made with github.token fires no `release` event, so the build is chained here.
+  # Each release carries the Mac app for both chips, built without the debug menu, under fixed
+  # names so releases/latest/download/Powerpacks-macos-arm64.dmg (and -x64) is always the newest
+  # (README.md). A release made with github.token fires no `release` event, so the build is
+  # chained here.
   desktop:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
@@ -52,23 +53,28 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Powerpacks-macos-arm64
-          path: dmg
-      - uses: actions/download-artifact@v4
-        with:
-          name: Powerpacks-macos-arm64-updater
-          path: updater
+          pattern: Powerpacks-macos-*
+          path: built
+      # One latest.json names both chips; the app asks for its own (darwin-aarch64, darwin-x86_64).
       - run: |
-          cp dmg/*.dmg Powerpacks-macos-arm64.dmg
-          cp updater/*.app.tar.gz Powerpacks-macos-arm64.app.tar.gz
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          for arch in arm64 x64; do
+            cp built/Powerpacks-macos-$arch/*.dmg Powerpacks-macos-$arch.dmg
+            cp built/Powerpacks-macos-$arch-updater/*.app.tar.gz Powerpacks-macos-$arch.app.tar.gz
+          done
           jq -n \
             --arg version "${TAG#powerpacks-v}" \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --rawfile signature updater/*.app.tar.gz.sig \
-            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/Powerpacks-macos-arm64.app.tar.gz" \
-            '{version: $version, pub_date: $pub_date, platforms: {"darwin-aarch64": {signature: ($signature | rtrimstr("\n")), url: $url}}}' \
+            --rawfile arm64 built/Powerpacks-macos-arm64-updater/*.app.tar.gz.sig \
+            --rawfile x64 built/Powerpacks-macos-x64-updater/*.app.tar.gz.sig \
+            --arg arm64_url "$base/Powerpacks-macos-arm64.app.tar.gz" \
+            --arg x64_url "$base/Powerpacks-macos-x64.app.tar.gz" \
+            '{version: $version, pub_date: $pub_date, platforms: {
+               "darwin-aarch64": {signature: ($arm64 | rtrimstr("\n")), url: $arm64_url},
+               "darwin-x86_64": {signature: ($x64 | rtrimstr("\n")), url: $x64_url}}}' \
             > latest.json
-          gh release upload "$TAG" Powerpacks-macos-arm64.dmg Powerpacks-macos-arm64.app.tar.gz latest.json \
+          gh release upload "$TAG" Powerpacks-macos-arm64.dmg Powerpacks-macos-arm64.app.tar.gz \
+            Powerpacks-macos-x64.dmg Powerpacks-macos-x64.app.tar.gz latest.json \
             --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}
