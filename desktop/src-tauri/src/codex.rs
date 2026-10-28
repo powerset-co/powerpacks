@@ -43,6 +43,7 @@ pub const PAGE_METHODS: &[&str] = &[
     "account/read",
     "account/login/cancel",
     "account/logout",
+    "model/list",
     "turn/start",
     "turn/interrupt",
     "thread/archive",

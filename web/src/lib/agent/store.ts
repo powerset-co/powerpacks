@@ -29,6 +29,9 @@ export interface AgentState {
   fullAccess: boolean
   /** A saved search opened from the sidebar; the chat's first message is about it. */
   searchRun: string | null
+  /** The model and effort the next turn runs with; null is Codex's default. Remembered on this Mac. */
+  model: string | null
+  effort: string | null
 }
 
 export const EMPTY_AGENT: AgentState = {
@@ -40,6 +43,8 @@ export const EMPTY_AGENT: AgentState = {
   approvals: [],
   fullAccess: false,
   searchRun: null,
+  model: null,
+  effort: null,
 }
 
 let localIds = 0
@@ -99,6 +104,8 @@ export function reduce(state: AgentState, event: AgentEvent): AgentState {
 }
 
 const FULL_ACCESS_KEY = "powerpacks.agent.fullAccess"
+const MODEL_KEY = "powerpacks.agent.model"
+const EFFORT_KEY = "powerpacks.agent.effort"
 // The open chat, so leaving the page or relaunching the app reopens it.
 const OPEN_CHAT_KEY = "powerpacks.agent.openChat"
 
@@ -118,7 +125,12 @@ function recalled(key: string): string {
   }
 }
 
-let state: AgentState = { ...EMPTY_AGENT, fullAccess: recalled(FULL_ACCESS_KEY) === "1" }
+let state: AgentState = {
+  ...EMPTY_AGENT,
+  fullAccess: recalled(FULL_ACCESS_KEY) === "1",
+  model: recalled(MODEL_KEY) || null,
+  effort: recalled(EFFORT_KEY) || null,
+}
 const listeners = new Set<() => void>()
 
 function set(next: AgentState): void {
@@ -170,7 +182,7 @@ export async function send(message: string): Promise<void> {
     set({ ...state, threadId })
     remember(OPEN_CHAT_KEY, threadId)
     if (state.searchRun) writeStored("local", `search-thread:${state.searchRun}`, threadId)
-    await startTurn(threadId, text, state.fullAccess)
+    await startTurn(threadId, text, state.fullAccess, { model: state.model, effort: state.effort })
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
   }
@@ -191,6 +203,18 @@ export async function answer(approval: Approval, choice: ApprovalChoice): Promis
 }
 
 /** Turning it on also approves whatever is already waiting; it applies from the next message. */
+/** The model for the next turns; the effort resets to that model's own default. */
+export function setModel(model: string | null): void {
+  set({ ...state, model, effort: null })
+  remember(MODEL_KEY, model ?? "")
+  remember(EFFORT_KEY, "")
+}
+
+export function setEffort(effort: string | null): void {
+  set({ ...state, effort })
+  remember(EFFORT_KEY, effort ?? "")
+}
+
 export async function setFullAccess(on: boolean): Promise<void> {
   const waiting = on ? state.approvals : []
   set({ ...state, fullAccess: on })
