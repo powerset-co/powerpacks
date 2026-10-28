@@ -9,6 +9,22 @@ import { errorText } from "@/lib/api/http"
 import { cn } from "@/lib/utils"
 
 const MODELS_KEY = ["codex-models"] as const
+// The list opens on the newest two generations (gpt-6.1 and gpt-6 today); More models shows the rest.
+const GENERATION = /^gpt-(\d+(?:\.\d+)?)/
+const SHOWN_GENERATIONS = 2
+
+function generation(id: string): number {
+  const match = GENERATION.exec(id)
+  return match?.[1] ? Number(match[1]) : 0
+}
+
+/** The models of the newest generations; the whole list when it has nothing to hide. */
+export function frontier<T extends { id: string }>(list: T[]): T[] {
+  const newest = [...new Set(list.map((model) => generation(model.id)))]
+    .sort((a, b) => b - a)
+    .slice(0, SHOWN_GENERATIONS)
+  return list.filter((model) => newest.includes(generation(model.id)))
+}
 const ROW =
   "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary"
 
@@ -19,6 +35,7 @@ export function ModelPicker() {
   const agent = useAgent()
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<"models" | "effort">("models")
+  const [all, setAll] = useState(false)
   const models = useQuery({ queryKey: MODELS_KEY, queryFn: fetchModels, staleTime: Infinity })
   const list = models.data ?? []
   // The list could not be read: say why in the pill's place, so the cause is on screen.
@@ -36,8 +53,14 @@ export function ModelPicker() {
     : picked.defaultEffort
   const show = (next: boolean) => {
     setOpen(next)
-    if (!next) setPane("models")
+    if (!next) {
+      setPane("models")
+      setAll(false)
+    }
   }
+  const front = frontier(list)
+  // The pick stays listed even when it is an older model.
+  const shown = all ? list : front.includes(picked) ? front : [...front, picked]
   return (
     <Popover open={open} onOpenChange={show}>
       <PopoverTrigger
@@ -52,7 +75,7 @@ export function ModelPicker() {
         {pane === "models" ? (
           <>
             <ul className="m-0 flex list-none flex-col p-0">
-              {list.map((model) => (
+              {shown.map((model) => (
                 <li key={model.id}>
                   <button
                     type="button"
@@ -75,6 +98,15 @@ export function ModelPicker() {
                 <button type="button" className={ROW} onClick={() => setPane("effort")}>
                   <span className="flex-1">Effort</span>
                   <span className="capitalize text-muted-foreground">{effort}</span>
+                  <ChevronRight className="size-4 text-faint" aria-hidden />
+                </button>
+              </>
+            ) : null}
+            {!all && shown.length < list.length ? (
+              <>
+                <div className="my-1.5 border-t border-line" />
+                <button type="button" className={ROW} onClick={() => setAll(true)}>
+                  <span className="flex-1">More models</span>
                   <ChevronRight className="size-4 text-faint" aria-hidden />
                 </button>
               </>
