@@ -1,26 +1,42 @@
 import { useQuery } from "@tanstack/react-query"
-import { Check, ChevronLeft, ChevronRight } from "lucide-react"
+import { Check, ChevronRight } from "lucide-react"
 import { useState } from "react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { frontier } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
-import { fetchModels } from "@/lib/api/codex"
+import { fetchModels, type CodexModel } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
 import { cn } from "@/lib/utils"
 
 const MODELS_KEY = ["codex-models"] as const
 const ROW =
-  "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary"
+  "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary data-[open=true]:bg-secondary"
+// A flyout: the panel that opens beside a row on hover, as the Claude app's Effort does.
+const FLYOUT =
+  "absolute left-full top-0 ml-1 w-64 rounded-md border bg-popover p-1.5 text-popover-foreground shadow-md"
+
+type Flyout = "effort" | "more" | null
+
+function ModelRow({ model, picked, onPick }: { model: CodexModel; picked: boolean; onPick: () => void }) {
+  return (
+    <li>
+      <button type="button" className={ROW} title={model.description} onClick={onPick}>
+        <span className="flex-1 truncate">{model.name}</span>
+        {picked ? <Check className="size-4 text-primary" aria-hidden /> : null}
+      </button>
+    </li>
+  )
+}
 
 /** One pill, "GPT-6.1-Sol  Low": the model Codex answers with and how hard it thinks. It opens
- *  the app-server's own model list (model/list), with an Effort row that turns the panel into
- *  the picked model's efforts, its default marked Recommended. */
+ *  the newest generations of the app-server's model list (model/list) with a check on the pick;
+ *  hovering Effort flies out the picked model's efforts, its default marked Recommended, and
+ *  hovering More models flies out the older ones. */
 export function ModelPicker() {
   const agent = useAgent()
   const [open, setOpen] = useState(false)
-  const [pane, setPane] = useState<"models" | "effort">("models")
-  const [all, setAll] = useState(false)
+  const [flyout, setFlyout] = useState<Flyout>(null)
   const models = useQuery({ queryKey: MODELS_KEY, queryFn: fetchModels, staleTime: Infinity })
   const list = models.data ?? []
   // The list could not be read: say why in the pill's place, so the cause is on screen.
@@ -36,16 +52,17 @@ export function ModelPicker() {
   const effort = picked.efforts.some((option) => option.id === agent.effort)
     ? agent.effort
     : picked.defaultEffort
+  const front = frontier(list)
+  const shown = front.includes(picked) ? front : [...front, picked]
+  const more = list.filter((model) => !shown.includes(model))
   const show = (next: boolean) => {
     setOpen(next)
-    if (!next) {
-      setPane("models")
-      setAll(false)
-    }
+    if (!next) setFlyout(null)
   }
-  const front = frontier(list)
-  // The pick stays listed even when it is an older model.
-  const shown = all ? list : front.includes(picked) ? front : [...front, picked]
+  const pick = (model: CodexModel) => {
+    setModel(model.id)
+    show(false)
+  }
   return (
     <Popover open={open} onOpenChange={show}>
       <PopoverTrigger
@@ -56,86 +73,99 @@ export function ModelPicker() {
         <span className="truncate">{picked.name}</span>
         {effort ? <span className="capitalize text-faint">{effort}</span> : null}
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-64 p-1.5">
-        {pane === "models" ? (
+      <PopoverContent align="start" side="top" className="w-56 overflow-visible p-1.5">
+        <ul className="m-0 flex list-none flex-col p-0">
+          {shown.map((model) => (
+            <ModelRow
+              key={model.id}
+              model={model}
+              picked={model.id === picked.id}
+              onPick={() => pick(model)}
+            />
+          ))}
+        </ul>
+        {picked.efforts.length > 0 ? (
           <>
-            <ul className="m-0 flex list-none flex-col p-0">
-              {shown.map((model) => (
-                <li key={model.id}>
-                  <button
-                    type="button"
-                    className={ROW}
-                    title={model.description}
-                    onClick={() => {
-                      setModel(model.id)
-                      show(false)
-                    }}
-                  >
-                    <span className="flex-1 truncate">{model.name}</span>
-                    {model.id === picked.id ? <Check className="size-4 text-primary" aria-hidden /> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {picked.efforts.length > 0 ? (
-              <>
-                <div className="my-1.5 border-t border-line" />
-                <button type="button" className={ROW} onClick={() => setPane("effort")}>
-                  <span className="flex-1">Effort</span>
-                  <span className="capitalize text-muted-foreground">{effort}</span>
-                  <ChevronRight className="size-4 text-faint" aria-hidden />
-                </button>
-              </>
-            ) : null}
-            {!all && shown.length < list.length ? (
-              <>
-                <div className="my-1.5 border-t border-line" />
-                <button type="button" className={ROW} onClick={() => setAll(true)}>
-                  <span className="flex-1">More models</span>
-                  <ChevronRight className="size-4 text-faint" aria-hidden />
-                </button>
-              </>
-            ) : null}
+            <div className="my-1.5 border-t border-line" />
+            <div className="relative" onMouseEnter={() => setFlyout("effort")}>
+              <button
+                type="button"
+                className={ROW}
+                data-open={flyout === "effort"}
+                onClick={() => setFlyout("effort")}
+              >
+                <span className="flex-1">Effort</span>
+                <span className="capitalize text-muted-foreground">{effort}</span>
+                <ChevronRight className="size-4 text-faint" aria-hidden />
+              </button>
+              {flyout === "effort" ? (
+                <div className={cn(FLYOUT, "-top-1.5")} role="menu" aria-label="Effort">
+                  <p className="m-0 px-2.5 pb-2 pt-1 text-xs text-muted-foreground">
+                    Higher effort means more thorough answers, but takes longer and uses your limits faster.
+                  </p>
+                  <ul className="m-0 flex list-none flex-col p-0">
+                    {picked.efforts.map((option) => (
+                      <li key={option.id}>
+                        <button
+                          type="button"
+                          className={ROW}
+                          title={option.description}
+                          onClick={() => {
+                            setEffort(option.id)
+                            show(false)
+                          }}
+                        >
+                          <span className="capitalize">{option.id}</span>
+                          {option.id === picked.defaultEffort ? (
+                            <span className="rounded-full border border-line px-1.5 text-[10px] text-muted-foreground">
+                              Recommended
+                            </span>
+                          ) : null}
+                          <span className="flex-1" />
+                          {option.id === effort ? (
+                            <Check className="size-4 text-primary" aria-hidden />
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
           </>
-        ) : (
+        ) : null}
+        {more.length > 0 ? (
           <>
-            <button
-              type="button"
-              className={cn(ROW, "text-muted-foreground")}
-              onClick={() => setPane("models")}
-            >
-              <ChevronLeft className="size-4" aria-hidden />
-              <span className="flex-1">{picked.name}</span>
-            </button>
-            <p className="m-0 px-2.5 pb-2 pt-1 text-xs text-muted-foreground">
-              Higher effort means more thorough answers, but takes longer and uses your limits faster.
-            </p>
-            <ul className="m-0 flex list-none flex-col p-0">
-              {picked.efforts.map((option) => (
-                <li key={option.id}>
-                  <button
-                    type="button"
-                    className={ROW}
-                    title={option.description}
-                    onClick={() => {
-                      setEffort(option.id)
-                      show(false)
-                    }}
-                  >
-                    <span className="capitalize">{option.id}</span>
-                    {option.id === picked.defaultEffort ? (
-                      <span className="rounded-full border border-line px-1.5 text-[10px] text-muted-foreground">
-                        Recommended
-                      </span>
-                    ) : null}
-                    <span className="flex-1" />
-                    {option.id === effort ? <Check className="size-4 text-primary" aria-hidden /> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="my-1.5 border-t border-line" />
+            <div className="relative" onMouseEnter={() => setFlyout("more")}>
+              <button
+                type="button"
+                className={ROW}
+                data-open={flyout === "more"}
+                onClick={() => setFlyout("more")}
+              >
+                <span className="flex-1">More models</span>
+                <ChevronRight className="size-4 text-faint" aria-hidden />
+              </button>
+              {flyout === "more" ? (
+                <ul
+                  className={cn(FLYOUT, "-top-1.5 m-0 flex list-none flex-col")}
+                  role="menu"
+                  aria-label="More models"
+                >
+                  {more.map((model) => (
+                    <ModelRow
+                      key={model.id}
+                      model={model}
+                      picked={model.id === picked.id}
+                      onPick={() => pick(model)}
+                    />
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           </>
-        )}
+        ) : null}
       </PopoverContent>
     </Popover>
   )
