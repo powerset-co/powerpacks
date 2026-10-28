@@ -22,6 +22,7 @@ from pathlib import Path
 
 from packs.powerset.primitives.auth import auth
 from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
+from packs.powerset.primitives.install import report
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
@@ -296,6 +297,7 @@ def main() -> None:
                         help="Only the chosen sources' tools and logins, for the desktop app's Connect screen")
     args = parser.parse_args()
     root = args.root.resolve()
+    report.install(root)
     status = InstallStatus(root)
     status.directory.mkdir(parents=True, exist_ok=True)
     # The server and agent can both request a resume. Only this process owns work.

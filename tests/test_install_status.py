@@ -52,58 +52,46 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["log_path"], str(self.root / ".powerpacks/install/install.log"))
         self.assertFalse((self.root / ".powerpacks/install/manifest.tmp").exists())
 
-    def test_a_stop_reports_itself_with_the_record_and_log_tails(self) -> None:
-        self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
+    def test_every_logged_error_reports_itself(self) -> None:
+        from packs.powerset.primitives.install import report
         (self.root / ".release-please-manifest.json").write_text('{".": "3.44.1"}')
         self.status.directory.mkdir(parents=True, exist_ok=True)
         (self.root / ".powerpacks/install/install.log").write_text(
             f"line one\nsent to arthur@powerset.co from {Path.home()}/x\n")
-        with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
-            sender.return_value.run.return_value = {"status": "submitted"}
-            with patch("packs.powerset.primitives.install.status.report", wraps=__import__(
-                    "packs.powerset.primitives.install.report", fromlist=["report"]).report) as reported:
-                self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
-                self.assertEqual(reported.call_count, 0)
-                self.status.write("step.failed", step=InstallStep.DEPENDENCIES, pid=os.getpid(),
-                                  details={"error": "boom"}, account_email="arthur@powerset.co")
-                self.assertEqual(reported.call_count, 1)
-        request = sender.call_args.args[0]
-        self.assertEqual(request.category, "setup")
-        self.assertEqual(request.metadata["event"], "step.failed")
-        self.assertEqual(request.metadata["powerpacks_version"], "3.44.1")
-        names = [artifact.name for artifact in request.artifacts]
-        self.assertEqual(names, ["manifest.json", "install.log"])
-        unpacked = {a.name: gzip.decompress(base64.b64decode(a.data)).decode() for a in request.artifacts}
-        self.assertNotIn("arthur@powerset.co", unpacked["manifest.json"])
-        self.assertNotIn("account_email", unpacked["manifest.json"])
-        self.assertIn("boom", unpacked["manifest.json"])
-        self.assertEqual(unpacked["install.log"], "line one\nsent to <email> from ~/x")
-
-    def test_a_logged_error_reports_its_traceback(self) -> None:
-        from packs.powerset.primitives.install.report import ErrorReporter
-        (self.root / ".release-please-manifest.json").write_text('{".": "3.44.1"}')
-        logger = logging.getLogger("test.report")
-        reporter = ErrorReporter(self.root)
-        logger.addHandler(reporter)
+        root_logger = logging.getLogger()
+        before = list(root_logger.handlers)
         try:
             with patch("packs.powerset.primitives.install.report.SendFeedback") as sender:
                 sender.return_value.run.return_value = {"status": "submitted"}
+                report.install(self.root)
+                report.install(self.root)  # once per process
+                self.status.write("tools.preparing", step=InstallStep.DEPENDENCIES, pid=os.getpid())
+                self.status.write("step.failed", step=InstallStep.DEPENDENCIES, pid=os.getpid(),
+                                  details={"error": "boom"}, account_email="arthur@powerset.co")
                 try:
                     raise ValueError("signals broke for arthur@powerset.co")
                 except ValueError:
-                    logger.exception("Signals check failed")
-                logger.error("no traceback here")
+                    logging.getLogger("test.report").exception("Signals check failed")
                 for thread in threading.enumerate():
                     if thread.name == "error-report":
                         thread.join(5)
         finally:
-            logger.removeHandler(reporter)
-        self.assertEqual(sender.call_count, 1)
-        request = sender.call_args.args[0]
-        self.assertEqual(request.category, "app")
-        self.assertEqual(request.comment, "Page server: Signals check failed")
-        detail = gzip.decompress(base64.b64decode(request.artifacts[0].data)).decode()
-        self.assertIn("ValueError: signals broke for <email>", detail)
+            root_logger.handlers[:] = before
+        self.assertEqual(sender.call_count, 2)
+        stop, error = (call.args[0] for call in sender.call_args_list)
+        self.assertEqual(stop.category, "setup")
+        self.assertTrue(stop.comment.startswith("Setup stopped at dependencies (step.failed)"))
+        self.assertEqual(stop.metadata["powerpacks_version"], "3.44.1")
+        self.assertEqual([a.name for a in stop.artifacts], ["error.txt", "install.log"])
+        unpacked = {a.name: gzip.decompress(base64.b64decode(a.data)).decode() for a in stop.artifacts}
+        self.assertNotIn("arthur@powerset.co", unpacked["error.txt"])
+        self.assertNotIn("account_email", unpacked["error.txt"])
+        self.assertIn("boom", unpacked["error.txt"])
+        self.assertEqual(unpacked["install.log"], "line one\nsent to <email> from ~/x")
+        self.assertEqual(error.category, "app")
+        self.assertEqual(error.comment, "Signals check failed")
+        self.assertIn("ValueError: signals broke for <email>",
+                      gzip.decompress(base64.b64decode(error.artifacts[0].data)).decode())
 
     def test_a_step_keeps_when_it_started_across_its_events(self) -> None:
         first = self.status.write("discover.learning", pid=os.getpid())
