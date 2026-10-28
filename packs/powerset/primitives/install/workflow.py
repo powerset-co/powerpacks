@@ -429,7 +429,7 @@ class SourceOnboarding:
         # sources signed in (accounts.signed_in, the answer that screen shows) and leaves the rest
         # out, so it never waits on the user; Gmail syncs exactly the mailboxes signed in.
         if DESKTOP:
-            ready = signed_in()
+            ready = signed_in(sources=tuple(source.value for source in self.sources))
             self.skip_sources = tuple(dict.fromkeys(
                 [*self.skip_sources, *(source for source in self.sources if not getattr(ready, source.value))]))
             self.gmail_emails = ready.mailboxes
