@@ -115,7 +115,7 @@ class PeopleWorthTests(StoreTests):
         from dataclasses import asdict
         initial, = self.people.load()
         # A machine "maybe" from before the detectors is not a call: the page shows the person as not assessed.
-        self.assertEqual((initial.worth, initial.worth_source), ("", "machine"))
+        self.assertEqual((initial.worth, initial.worth_source, initial.reason), ("", "machine", "unjudged"))
         self.assertNotIn("share", asdict(initial))
         self.assertNotIn("share_source", asdict(initial))
         labels = [tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")]

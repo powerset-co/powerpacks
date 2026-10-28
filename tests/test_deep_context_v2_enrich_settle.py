@@ -25,7 +25,7 @@ class SettleTests(StoreTests):
             "test", None, "test", NOW))
 
     def test_without_a_profile_or_messages_every_worth_is_preserved(self) -> None:
-        for worth in ("yes", "no"):
+        for worth in ("yes", "no", "maybe"):  # maybe: a row from before 2026-10-28
             with self.subTest(worth=worth):
                 self._worth(worth)
                 before = [tuple(row) for row in self.conn.execute("SELECT * FROM worth")]

@@ -445,6 +445,8 @@ class LabelsTests(unittest.TestCase):
         declined = [*ANSWERS, {"type": "refusal", "name": "is_minor"}]
         self.assertFalse(luna.refused(declined))
         self.assertNotIn("is_minor", luna.labels(declined))
+        # An unanswered detector is not a yes: the family is asked again.
+        self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "mailbox"}]))
 
     def test_a_detector_at_the_threshold_is_no_and_the_reason_names_it(self) -> None:
         fired = {"broadcast": 0.1, "mailbox": 0.98, "vendor_only": 0.2, "intermediary": 0.75}
@@ -456,6 +458,8 @@ class LabelsTests(unittest.TestCase):
         quiet = {"broadcast": 0.1, "mailbox": 0.0, "vendor_only": 0.2, "intermediary": 0.3}
         self.assertEqual((decide(quiet), reason(quiet, "yes")), ("yes", "Nothing automated or transactional stands out."))
         near = {**quiet, "vendor_only": 0.6}
+        self.assertEqual(reason({**quiet, "mailbox": 0.7499}, "yes"), "Nothing automated or transactional stands out; "
+                                                                      "the closest call was a shared mailbox or role account (0.74).")
         self.assertEqual((decide(near), reason(near, "yes")), ("yes", "Nothing automated or transactional stands out; "
                                                                       "the closest call was a vendor the owner only buys from (0.60)."))
         # A declined detector did not fire.

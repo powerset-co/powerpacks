@@ -12,7 +12,6 @@ Changelog:
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import re
@@ -23,7 +22,6 @@ from typing import Any, Sequence
 from packs.ingestion.primitives.deep_context_v2 import assets
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
-from packs.ingestion.primitives.deep_context_v2.db.schema import SourceChannel
 from packs.ingestion.primitives.deep_context_v2.decisions import MODEL, Answer
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import batches, render_batch
@@ -38,12 +36,6 @@ REQUEST_VERSION = "deep-context-luna-detectors-20261028"
 _HERE = Path(__file__).parent
 WORTH_QUESTIONS: list[dict[str, Any]] = assets.json_file(_HERE, "worth_questions.json")
 DETECTORS: tuple[str, ...] = tuple(question["name"] for question in WORTH_QUESTIONS)
-# A detector at this probability or above makes the family worth no (the lab on a real store:
-# true mailbox 1.00, assistant .92, vendor .81; the one false signal on a kept person was .50).
-NO_THRESHOLD = 0.75
-# Below the threshold but above this, the reason still names the closest call.
-NEAR_MISS = 0.5
-EMAIL_SOURCES = frozenset((SourceChannel.GMAIL.value,))
 
 # A notable position is worth yes regardless of messages. "Vice President" is not "president".
 NOTABLE_POSITION_RE = re.compile(
@@ -127,18 +119,18 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
         "reference_date": reference_date,
         "evidence_policy": EVIDENCE_POLICY,
     }
-    worth: list[dict[str, Any]] = copy.deepcopy(WORTH_QUESTIONS)
-    # One cache partition per owner: the owner's families share nothing with another install's.
+    # A cache routing hint keyed by the owner's name: one install's families route together.
     cache_key: str = "powerpacks-worth-" + hashlib.sha256(owner.name.encode("utf-8")).hexdigest()[:16]
-    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False), "questions": label_questions() + worth,
-            "prompt_cache_key": cache_key}
+    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False),
+            "questions": label_questions() + WORTH_QUESTIONS, "prompt_cache_key": cache_key}
 
 
 def refused(answers: list[Answer]) -> bool:
-    """A refused choice or score leaves the family unlabelled: the answer is not saved and the family is
-    asked again next run. A refused yes/no question only leaves that label out (Luna declines is_minor for
-    some); a refused detector is a detector that did not fire."""
+    """A refused choice, score or detector leaves the family unlabelled: the answer is not saved and the
+    family is asked again next run, so an unanswered detector never settles as yes. A refused yes/no
+    label only leaves that label out (Luna declines is_minor for some)."""
     asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
+    asked.update(DETECTORS)
     return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)
 
 

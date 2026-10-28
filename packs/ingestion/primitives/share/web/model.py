@@ -283,7 +283,7 @@ def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:
         return "human_worth"
     if flag:
         return flag
-    return f"worth_{decision['worth']}" if decision is not None else "unjudged"
+    return f"worth_{decision['worth']}" if decision is not None and decision["worth"] != "maybe" else "unjudged"
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))

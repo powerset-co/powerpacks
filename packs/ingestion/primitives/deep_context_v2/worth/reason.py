@@ -10,7 +10,13 @@ Changelog:
 """
 from __future__ import annotations
 
-from packs.ingestion.primitives.deep_context_v2.worth.luna import DETECTORS, NEAR_MISS, NO_THRESHOLD, Labels
+from packs.ingestion.primitives.deep_context_v2.worth.luna import DETECTORS, Labels
+
+# A detector at this probability or above makes the family worth no (the lab on a real store:
+# true mailbox 1.00, assistant .92, vendor .81; the one false signal on a kept person was .50).
+NO_THRESHOLD = 0.75
+# Below the threshold but above this, a yes still names the closest call.
+NEAR_MISS = 0.5
 
 PHRASES: dict[str, str] = {
     "broadcast": "a newsletter or automated sender",
@@ -43,13 +49,18 @@ def reason(labels: Labels, verdict: str) -> str:
     """"Looks like a shared mailbox or role account (0.98)." for no; for yes, what came closest, if anything."""
     found = detections(labels)
     if verdict == "no":
-        fired = [f"{PHRASES[name]} ({probability:.2f})" for name, probability in found if probability >= NO_THRESHOLD]
+        fired = [f"{PHRASES[name]} ({_shown(probability)})" for name, probability in found if probability >= NO_THRESHOLD]
         return "Looks like " + _joined(fired) + "."
     near = [(name, probability) for name, probability in found if probability >= NEAR_MISS]
     if not near:
         return NOTHING
     name, probability = near[0]
-    return f"{NOTHING[:-1]}; the closest call was {PHRASES[name]} ({probability:.2f})."
+    return f"{NOTHING[:-1]}; the closest call was {PHRASES[name]} ({_shown(probability)})."
+
+
+def _shown(probability: float) -> str:
+    """Two decimals, never rounded up: a yes at 0.7499 reads 0.74, not the threshold."""
+    return f"{int(probability * 100) / 100:.2f}"
 
 
 def _joined(parts: list[str]) -> str:
