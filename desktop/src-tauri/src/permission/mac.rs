@@ -155,7 +155,9 @@ fn panel_origin(settings: NSRect, visible: NSRect) -> NSPoint {
 }
 
 pub unsafe fn follow_settings(window: *mut NSWindow) {
-    use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreen};
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationOptions, NSRunningApplication, NSScreen,
+    };
     use objc2_foundation::NSIntersectsRect;
 
     let window = &*window;

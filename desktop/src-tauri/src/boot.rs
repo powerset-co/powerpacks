@@ -183,7 +183,10 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         match install_browser(&root) {
             Ok(install) => {
                 if let Err(error) = stream(app, boot, install, "Browser setup") {
-                    boot.line(app, format!("Browser download failed: {error}. It is tried again at Connect."));
+                    boot.line(
+                        app,
+                        format!("Browser download failed: {error}. It is tried again at Connect."),
+                    );
                 }
             }
             Err(error) => boot.line(app, format!("Browser download skipped: {error}")),
@@ -340,7 +343,10 @@ fn install_browser(root: &Path) -> Result<Command, String> {
     let node = paths::bundled("node")?;
     let cli = root.join("vendor/browser-node/node_modules/playwright-core/cli.js");
     if !cli.is_file() {
-        return Err(format!("playwright-core is missing (expected at {})", cli.display()));
+        return Err(format!(
+            "playwright-core is missing (expected at {})",
+            cli.display()
+        ));
     }
     let mut install = Command::new(node);
     install
