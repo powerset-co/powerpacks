@@ -189,7 +189,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, previous_cwd)
         ready = SignedIn(linkedin=False, gmail=False, imessage=False, whatsapp=False, mailboxes=())
-        with patch('packs.powerset.primitives.install.workflow.signed_in', side_effect=lambda: ready), \
+        with patch('packs.powerset.primitives.install.workflow.signed_in', side_effect=lambda sources: ready), \
              patch.object(ImportTools, 'run', return_value={'status': 'ok'}), \
              patch.object(accounts, 'status_payload', return_value={
                  'config': {'oauth_configured': True}, 'database': {'exists': True}, 'accounts': []}), \
