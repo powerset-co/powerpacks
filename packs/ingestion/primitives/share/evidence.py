@@ -78,6 +78,8 @@ class ShareEvidence:
 
         people: list[PersonEvidence] = []
         for parent_id, row in rows.items():
+            if parent_id not in members or parent_id not in worth:
+                continue  # Directory-only people have no machine labels to compute.
             family: list[MemberFacts] = members[parent_id]
             facts: dict[str, Any] = family_facts(family).to_payload()
             channel_counts: list[ChannelCount] = []

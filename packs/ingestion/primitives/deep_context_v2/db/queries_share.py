@@ -85,10 +85,8 @@ def write_name(conn: sqlite3.Connection, parent_id: str, members: tuple[str, ...
         conn.execute("UPDATE families SET name = ? WHERE parent_id = ?", (name, parent_id))
 
 
-def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, Labels]:
-    """The family's exported labels with the human's latest relationship choice and name applied. `parents`
-    narrows to those families."""
-    names: dict[str, str] = names_by_parent(conn, parents)
+def relationships_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, str]:
+    """The human's relationship choices, including families without machine labels."""
     relationships: dict[str, str] = {}
     for row in conn.execute(
         "SELECT p.parent_id, t.relationship_kind FROM current_parent p JOIN person_tags t USING (candidate_id) "
@@ -97,6 +95,14 @@ def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) ->
         parents,
     ):
         relationships.setdefault(row["parent_id"], row["relationship_kind"])
+    return relationships
+
+
+def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, Labels]:
+    """The family's exported labels with the human's latest relationship choice and name applied. `parents`
+    narrows to those families."""
+    names: dict[str, str] = names_by_parent(conn, parents)
+    relationships = relationships_by_parent(conn, parents)
     found: dict[str, Labels] = {}
     for row in conn.execute(
         "SELECT p.parent_id, l.*, json_extract(l.labels_json, '$.relationship_kind') AS relationship_kind "
@@ -181,5 +187,6 @@ def delete_set(conn: sqlite3.Connection, set_id: str) -> None:
 def families(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, sqlite3.Row]:
     """parent_id -> its families row as realize wrote it; `parents` narrows to those families."""
     return {row["parent_id"]: row for row in conn.execute(
-        "SELECT * FROM families" + (" WHERE parent_id IN (" + ",".join("?" * len(parents)) + ")" if parents else "")
+        "SELECT * FROM families WHERE parent_id IN (SELECT parent_id FROM current_parent)"
+        + (" AND parent_id IN (" + ",".join("?" * len(parents)) + ")" if parents else "")
         + " ORDER BY parent_id", parents)}

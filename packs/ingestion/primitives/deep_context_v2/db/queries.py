@@ -8,8 +8,10 @@ Created: 2026-10-06
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
+from typing import Any
 
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import Person
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind
@@ -103,7 +105,7 @@ def channels_present(conn: sqlite3.Connection) -> set[str]:
     """Which message channels the candidates came from. An unlinked channel has no candidates, so this
     is also the list of message stores a run opens."""
     channels: set[str] = set()
-    for row in conn.execute("SELECT DISTINCT source FROM candidate_sources"):
+    for row in conn.execute("SELECT DISTINCT source FROM candidate_sources WHERE source != 'linkedin'"):
         channels.add(row["source"])
     return channels
 
@@ -113,7 +115,8 @@ def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
     readers match on) and its channels (which stores to open). Nobody builds a dossier on the operator."""
     people: list[Person] = []
     for row in conn.execute(
-        "SELECT candidate_id, display_name FROM candidates WHERE is_owner = 0 ORDER BY candidate_id LIMIT ?",
+        "SELECT candidate_id, display_name FROM candidates WHERE is_owner = 0 AND candidate_id IN "
+        "(SELECT candidate_id FROM candidate_sources WHERE source != 'linkedin') ORDER BY candidate_id LIMIT ?",
         (limit,),
     ):
         candidate_id: str = row["candidate_id"]
@@ -133,6 +136,19 @@ def candidates_to_collect(conn: sqlite3.Connection, limit: int) -> list[Person]:
             channels.append(source["source"])
         people.append(Person(candidate_id, row["display_name"], tuple(emails), tuple(phones), tuple(channels)))
     return people
+
+
+def confirmed_linkedin_urls(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Confirmed URL history: reimporting a known source alias adds no self-verdict."""
+    return {(row["candidate_id"], row["linkedin_url"]) for row in conn.execute(
+        "SELECT candidate_id, linkedin_url FROM candidate_linkedins WHERE verdict = 'confirmed'")}
+
+
+def imported_linkedins(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Verified source evidence, keyed by the source member's permanent li: parent."""
+    return {"li:" + row["candidate_id"].removeprefix("candidate:linkedin:"): json.loads(row["import_json"])
+            for row in conn.execute("SELECT candidate_id, import_json FROM candidates "
+                                    "WHERE candidate_id IN (SELECT candidate_id FROM candidate_sources WHERE source = 'linkedin')")}
 
 
 def upsert_bundle(conn: sqlite3.Connection, candidate_id: str, payload_json: str, fingerprint: str, now: str) -> None:
