@@ -11,6 +11,8 @@ import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
 import { Frame, Info, Note } from "./Frame"
+import { stopDetail } from "@/pages/install/sources"
+
 import { leftText, secondsLeft, type Sample } from "./pace"
 import { FirstLookPanel } from "./FirstLookPanel"
 import { PageShot } from "./PageShot"
@@ -288,7 +290,8 @@ export function SetUp() {
                                 "Try again"
                               )}
                             </Button>
-                            <Note>The log has the details: {data.log_path}</Note>
+                            {stopDetail(data) ? <Note bad>{stopDetail(data)}</Note> : null}
+                            <Note>Logs are in {data.log_path.replace(/\/[^/]*$/, "/")}</Note>
                           </div>
                         ) : null}
                       </div>
