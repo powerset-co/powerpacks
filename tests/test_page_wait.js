@@ -10,6 +10,8 @@ const http = require("node:http");
 const { browserTarget } = require("../packs/ingestion/primitives/common/browser.js");
 const { networkWatch, settled, waitUntil } = require("../packs/ingestion/primitives/setup/automations/page_wait.js");
 const { authorize, consentAction } = require("../packs/ingestion/primitives/setup/automations/gmail_consent.js");
+const { GCLOUD_CLIENT, loginGcloud } = require("../packs/ingestion/primitives/setup/automations/gcloud_consent.js");
+const { loginGcloud: loginGcloudBefore } = require("./fixtures/gcloud_consent_before.js");
 const { request, consent } = require("./test_msgvault_consent.js");
 
 let chromium = null;
@@ -37,9 +39,17 @@ const server = http.createServer((incoming, response) => {
     return;
   }
   const next = Object.fromEntries(HOPS.map(([hop, to]) => [`/${hop}`, to]))[url.pathname];
+  // Google's real sign-in is several redirects per hop: `server.chain` extra 302s before the page.
+  const via = (to, n) => (n > 0 ? `/redirect?n=${n}&to=${encodeURIComponent(to)}` : to);
+  if (url.pathname === "/redirect") {
+    response.writeHead(302, { Location: via(url.searchParams.get("to"), Number(url.searchParams.get("n")) - 1) });
+    response.end();
+    return;
+  }
   if (incoming.method === "POST") {
     setTimeout(() => {
-      response.writeHead(302, { Location: next });
+      // The callback is gcloud's whole localhost origin, so the sign-in pages live on 127.0.0.1.
+      response.writeHead(302, { Location: via(next.startsWith("/callback") ? base() + next : next, server.chain) });
       response.end();
     }, server.delay);
     return;
@@ -52,14 +62,16 @@ const server = http.createServer((incoming, response) => {
     <script>fetch("/poll").catch(() => {});</script></body></html>`);
 });
 server.delay = 0;
+server.chain = 0;
 
-before(async () => { await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); });
+// Bound on every loopback address: gcloud's callback must be http://localhost.
+before(async () => { await new Promise(resolve => server.listen(0, resolve)); });
 after(async () => {
   for (const response of held) response.destroy();
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));
 });
-const base = () => `http://127.0.0.1:${server.address().port}`;
+const base = () => `http://localhost:${server.address().port}`;
 
 async function open(conditions, pathname = "/identifier") {
   const browser = await chromium.launch({ executablePath, headless: true });
@@ -184,4 +196,66 @@ test("(e) a page holding a long-poll open: settled resolves in under 3 s where n
   } finally {
     await close();
   }
+});
+
+// gcloud's sign-in, old loop (before #991) and new, on the same fake multi-hop sign-in. The
+// person drives the hops in the visible window; the result says how the wait ended.
+async function gcloudSignIn(loginGcloud, conditions) {
+  const pages = [];
+  const launchChrome = async () => {
+    const browser = await chromium.launch({ executablePath, headless: true });
+    const context = await browser.newContext();
+    // The consent URL is Google's (validateRequest insists); it lands on the fake sign-in,
+    // whose origin makes consentAction say "human" on the identifier page.
+    await context.route("https://accounts.google.com/**", route => route.fulfill({ status: 302, headers: { Location: `http://127.0.0.1:${server.address().port}/identifier` } }));
+    const page = await context.newPage();
+    pages.push(page);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Network.enable");
+    await cdp.send("Network.emulateNetworkConditions", conditions);
+    const close = context.close.bind(context);
+    context.close = async () => { await close(); await browser.close(); };
+    return context;
+  };
+  const hops = [];
+  let ended = false;
+  const person = (async () => {
+    // The second window is the person's; the first was headless and closed by then.
+    while (pages.length < 2 && !ended) await new Promise(resolve => setTimeout(resolve, 50));
+    if (ended) return;
+    const page = pages[1];
+    try {
+      await page.waitForURL("**/identifier");
+      for (const [hop, to] of HOPS) {
+        await page.fill("input", "casey");
+        await page.getByRole("button", { name: "Next" }).click();
+        await page.waitForURL(`**${to.split("?")[0]}**`);
+        hops.push(hop);
+      }
+    } catch (_) {
+      // The window closed under the person: the old loop threw out and closed it.
+    }
+  })();
+  const request = { email: "casey@example.com", profileDir: "unused", timeoutSeconds: 60,
+    url: `https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=${GCLOUD_CLIENT}&redirect_uri=${encodeURIComponent(`${base()}/`)}&scope=openid&state=SYNTHETIC_STATE` };
+  const result = await loginGcloud(request, { launchChrome, progress: () => {}, returnFocus: () => {} });
+  ended = true;
+  await person;
+  return { result, launches: pages.length, hops };
+}
+
+test("(f) the old gcloud loop (before #991) throws out mid-hop on slow 3G; the new one reaches the callback", { skip }, async t => {
+  server.delay = 1500;
+  server.chain = 0;
+  const before = await gcloudSignIn(loginGcloudBefore, SLOW_3G);
+  t.diagnostic(`old loop: ${JSON.stringify(before.result)} after hops ${before.hops.join(",") || "none"}`);
+  // The old loop snapshotted every second with no human guard; a snapshot under a navigation
+  // threw "Execution context was destroyed" out of it and closed the person's window.
+  assert.equal(before.result.status, "needs_user_action");
+  assert.match(before.result.message, /could not finish/);
+  assert.ok(before.hops.length < HOPS.length, "the window closed under the person mid-hop");
+  const after = await gcloudSignIn(loginGcloud, SLOW_3G);
+  t.diagnostic(`new loop: ${JSON.stringify(after.result)} after hops ${after.hops.join(",")}`);
+  assert.deepEqual(after.result, { status: "ok" });
+  assert.deepEqual(after.hops, HOPS.map(([hop]) => hop));
 });
