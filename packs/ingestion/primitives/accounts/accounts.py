@@ -101,17 +101,23 @@ class SignedIn:
     mailboxes: tuple[str, ...]
 
 
-def signed_in(signins: dict[str, SignIn] | None = None) -> SignedIn:
-    """Each source's sign-in, read where it lives. Gmail counts once every stored mailbox's
-    sign-in is healthy now: an expired one would open Google's consent mid-setup."""
-    if signins is None:
+ALL_SOURCES = ("linkedin", "gmail", "imessage", "whatsapp")
+
+
+def signed_in(signins: dict[str, SignIn] | None = None, sources: tuple[str, ...] = ALL_SOURCES) -> SignedIn:
+    """Each source's sign-in, read where it lives; only `sources` are read, the rest answer no
+    (a LinkedIn-only setup run never touches msgvault or Messages). Gmail counts once every
+    stored mailbox's sign-in is healthy now: an expired one would open Google's consent mid-setup."""
+    if "gmail" not in sources:
+        signins = {}
+    elif signins is None:
         signins = gmail_signins()
-    owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower()
+    owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower() if signins else ""
     return SignedIn(
-        linkedin=_linkedin_session(),
+        linkedin="linkedin" in sources and _linkedin_session(),
         gmail=bool(signins) and all(state == "healthy" for state in signins.values()),
-        imessage=_messages_readable(),
-        whatsapp=_whatsapp_linked(),
+        imessage="imessage" in sources and _messages_readable(),
+        whatsapp="whatsapp" in sources and _whatsapp_linked(),
         mailboxes=tuple(sorted(signins, key=lambda email: email != owner)),
     )
 
