@@ -166,6 +166,11 @@ relationship is one person per request. Never walk the store's tables for names:
 the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
 
+A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
+same `GET /api/people/rows` read, answered as one Markdown table in the reply: every matching row, the
+columns the question is about (name, company, title, worth, tags), nothing else. The chat renders a
+Markdown table; never write an HTML page or a file for the user to open, and never cut the list short.
+
 | Ask | Write |
 |---|---|
 | Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. |
