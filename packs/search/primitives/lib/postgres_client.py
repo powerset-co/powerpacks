@@ -1,4 +1,13 @@
-"""Small standalone Postgres client for Powerpacks primitives."""
+"""Small standalone Postgres client for Powerpacks primitives.
+
+Every connection reads the `powerset_v2` schema first, the layout the Powerset API serves
+(`SET search_path TO powerset_v2, public`, as api_v2/db/postgres.py does): persons, companies and
+operator_person_sources are real tables there, distinct from the same-named `public` tables; users,
+sets and set_members are views over public. Reading `public` alone shows counts the app never shows.
+
+Changelog:
+- 2026-10-28: connect() pins the search_path; the picker's set in .env wins over a stale process env.
+"""
 
 from __future__ import annotations
 
@@ -60,6 +69,29 @@ def database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{db}?sslmode={sslmode}"
 
 
+SEARCH_PATH = "powerset_v2, public"
+
+
+def connect(dsn: str | None = None) -> Any:
+    """A connection on the API's schema layout: powerset_v2 first, public behind it."""
+    conn = ensure_psycopg2().connect(dsn or database_url())
+    with conn.cursor() as cur:
+        cur.execute(f"SET search_path TO {SEARCH_PATH}")
+    return conn
+
+
+def picked_set_id(env_file: Path | None) -> str | None:
+    """The set the Search-in picker wrote to .env. The file wins over the process environment,
+    which keeps whatever value the agent's shell started with."""
+    if not env_file or not env_file.exists():
+        return None
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("POWERPACKS_DEFAULT_SET_ID="):
+            return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    return None
+
+
 def ensure_psycopg2() -> Any:
     try:
         import psycopg2  # type: ignore
@@ -107,6 +139,9 @@ def credentials_subject(credentials_path: Path | None = None) -> str | None:
 
 def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | None = None) -> dict[str, Any]:
     load_env_file(env_file)
+    picked = picked_set_id(env_file)
+    if picked:
+        return {"set_id": picked, "source": "env_file"}
     explicit = os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
     if explicit:
         return {"set_id": explicit, "source": "env"}
@@ -117,7 +152,7 @@ def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | 
 
     assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
     assert_columns_in_contract("users", ["id", "user_id"])
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     query = """
         SELECT id::text, name, is_personal
         FROM sets
@@ -126,7 +161,7 @@ def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | 
         ORDER BY is_personal DESC, created_at DESC
         LIMIT 1
     """
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(query, (subject,))
             row = cur.fetchone()
@@ -141,7 +176,7 @@ def fetch_member_sets(subject: str, dsn: str) -> list[dict[str, Any]]:
     so not in the column contract, whose live check reads information_schema)."""
     assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
     assert_columns_in_contract("set_members", ["set_id", "user_id"])
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     query = """
         SELECT s.id::text, s.name, s.is_personal, s.created_by = %(subject)s, coalesce(c.person_count, 0)
         FROM sets s
@@ -151,7 +186,7 @@ def fetch_member_sets(subject: str, dsn: str) -> list[dict[str, Any]]:
                OR EXISTS (SELECT 1 FROM set_members m WHERE m.set_id = s.id AND m.user_id = %(subject)s))
         ORDER BY coalesce(c.person_count, 0) DESC, lower(s.name)
     """
-    with psycopg2.connect(dsn) as conn:
+    with connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(query, {"subject": subject})
             rows = cur.fetchall()
@@ -228,7 +263,7 @@ def fetch_set_operator_ids(
     assert_columns_in_contract("sets", ["id", "name", "created_by", "is_active", "is_personal"])
     assert_columns_in_contract("set_members", ["id", "set_id", "user_id", "role", "joined_at"])
     assert_columns_in_contract("users", ["id", "user_id", "email", "name"])
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     query = """
         SELECT
             s.id::text AS set_id,
@@ -252,7 +287,7 @@ def fetch_set_operator_ids(
             sm.joined_at ASC NULLS LAST,
             sm.user_id ASC NULLS LAST
     """
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(query, (resolved_set_id,))
             rows = cur.fetchall()
@@ -360,7 +395,7 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
     # Batch into chunks to avoid giant queries timing out
     BATCH_SIZE = 500
     all_rows: list[dict[str, Any]] = []
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             for i in range(0, len(person_ids), BATCH_SIZE):
                 batch = person_ids[i:i + BATCH_SIZE]
@@ -402,7 +437,7 @@ def fetch_interaction_counts(
     if scope is not None:
         columns.append("operator_id")
     assert_columns_in_contract("person_source_summary", columns)
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     params: list[Any] = [person_ids]
     scope_sql = ""
     if scope is not None:
@@ -415,7 +450,7 @@ def fetch_interaction_counts(
         GROUP BY person_id
     """
     try:
-        with psycopg2.connect(database_url()) as conn:
+        with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, tuple(params))
                 return {str(row[0]): int(row[1] or 0) for row in cur.fetchall()}
@@ -513,7 +548,7 @@ def fetch_source_attribution(
         WHERE pss.person_id = ANY(%s::uuid[]){scope_sql}
     """
     try:
-        with psycopg2.connect(database_url()) as conn:
+        with connect() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(query, tuple(params))
                 rows = [dict(r) for r in cur.fetchall()]
@@ -549,7 +584,7 @@ def fetch_network_attribution(
                 if str(row["person_id"]) in wanted and str(row["operator_id"]) in scope]
     else:
         psycopg2 = ensure_psycopg2()
-        with psycopg2.connect(database_url()) as conn:
+        with connect() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
                     SELECT ops.person_id::text, ops.operator_id::text, u.name AS operator_name,
@@ -654,14 +689,14 @@ def fetch_social_filter_person_ids(payload: dict[str, Any], env_file: Path | Non
         return []
     load_env_file(env_file)
     assert_columns_in_contract("persons", ["id"] + list(dict.fromkeys(column for _, column, _ in active)))
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     conditions = []
     params: dict[str, Any] = {}
     for key, column, op in active:
         conditions.append(f"{column} {op} %({key})s")
         params[key] = payload[key]
     query = f"SELECT id::text FROM persons WHERE {' AND '.join(conditions)} ORDER BY id"
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
             return [str(row[0]) for row in cur.fetchall()]
@@ -681,7 +716,7 @@ def fetch_interaction_filter_person_ids(payload: dict[str, Any], env_file: Path 
 
     load_env_file(env_file)
     assert_columns_in_contract("person_source_summary", ["person_id", "operator_id", "total_interactions"])
-    psycopg2 = ensure_psycopg2()
+    ensure_psycopg2()
     operator_ids = [str(v) for v in payload.get("operator_ids") or payload.get("allowed_operator_ids") or [] if v]
     searcher_operator_id = str(payload.get("searcher_operator_id") or "").strip()
     if not searcher_operator_id and len(operator_ids) == 1:
@@ -717,7 +752,7 @@ def fetch_interaction_filter_person_ids(payload: dict[str, Any], env_file: Path 
         """, params)
         return {str(row[0]) for row in cur.fetchall()}
 
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             operator_matches = query_operator(cur) if has_operator else None
             set_matches = query_set(cur) if has_set else None
@@ -747,7 +782,7 @@ def resolve_person_investors(names: list[str], env_file: Path | None = None, *, 
     assert_columns_in_contract("persons", selected_columns)
     psycopg2 = ensure_psycopg2()
     rows: list[dict[str, Any]] = []
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             for name in names:
                 normalized_identifier = "".join(ch for ch in name.lower() if ch.isalnum())
@@ -797,7 +832,7 @@ def live_table_columns(env_file: Path | None = None) -> dict[str, list[dict[str,
         ORDER BY table_schema, table_name, ordinal_position
     """
     result: dict[str, list[dict[str, Any]]] = {table: [] for table in tables}
-    with psycopg2.connect(database_url()) as conn:
+    with connect() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, (tables,))
             for row in cur.fetchall():

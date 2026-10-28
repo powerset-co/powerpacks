@@ -15,8 +15,12 @@ import turbopuffer_search_backend as backend  # noqa: E402
 
 
 class NamespaceVersionTests(unittest.TestCase):
-    def test_default_stays_v1(self):
+    def test_default_is_the_v3_family_the_api_serves(self):
         with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(backend.namespace_name("people"), "aleph_people_v3")
+
+    def test_v1_only_when_asked(self):
+        with mock.patch.dict(os.environ, {"ALEPH_INDEX_VERSION": "v1"}, clear=True):
             self.assertEqual(backend.namespace_name("people"), "aleph_people_v1")
 
     def test_v3_selects_complete_family(self):

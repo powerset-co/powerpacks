@@ -213,12 +213,11 @@ def lookup_local_duckdb(public_identifier: str, db_path: Path) -> dict[str, Any]
 
 def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
     try:
-        from postgres_client import database_url, ensure_psycopg2  # noqa: PLC0415
+        from postgres_client import connect, ensure_psycopg2  # noqa: PLC0415
     except ImportError:
         return None
     try:
-        psycopg2 = ensure_psycopg2()
-        url = database_url()
+        ensure_psycopg2()
     except Exception:
         return None
     query = """
@@ -230,7 +229,7 @@ def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
         LIMIT 1
     """
     try:
-        with psycopg2.connect(url) as conn:
+        with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, (public_identifier,))
                 row = cur.fetchone()
