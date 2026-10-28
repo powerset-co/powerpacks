@@ -1,10 +1,8 @@
 name: gitleaks
 
+# The PR run already scanned what reaches main; no second run on the merge.
 on:
   pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:

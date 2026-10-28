@@ -10,10 +10,46 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels the run in progress; main's runs queue instead.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # What the change touches: a web-only diff skips the Python suite and vice versa. The two
+  # Node tests under tests/ belong to both. A hand-run checks everything.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.diff.outputs.python }}
+      web: ${{ steps.diff.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+            echo "python=true" >> "$GITHUB_OUTPUT"; echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only "$base" "${{ github.sha }}")
+          web_only='^(web/|tests/test_msgvault_consent\.js|tests/test_browser_picker\.js)'
+          python_only='^(packs/|bin/|scripts/|tests/|pyproject\.toml|uv\.lock|\.python-version)'
+          if echo "$files" | grep -vE "$web_only" | grep -q .; then echo "python=true" >> "$GITHUB_OUTPUT"; else echo "python=false" >> "$GITHUB_OUTPUT"; fi
+          if echo "$files" | grep -vE "$python_only" | grep -q . || echo "$files" | grep -qE '^tests/test_(msgvault_consent|browser_picker)\.js'; then echo "web=true" >> "$GITHUB_OUTPUT"; else echo "web=false" >> "$GITHUB_OUTPUT"; fi
+          echo "files: $(echo "$files" | wc -l | tr -d ' ')"; cat "$GITHUB_OUTPUT"
+
   python:
     name: Python lint and offline tests
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
+    # The suite takes about five minutes; a hang once held a runner for an hour.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -27,7 +63,10 @@ jobs:
 
   web:
     name: Web app check, build and committed dist
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: web
