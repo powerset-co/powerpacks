@@ -59,7 +59,6 @@ Paths below are relative to the installed checkout.
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
 | People discovery, job description, shortlist, shared-network search | `packs/search/skills/search/SKILL.md` |
-| Saved personal knowledge, labels, relationships, preferences, named person or dossier lookup | `packs/memory/skills/memory/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |
