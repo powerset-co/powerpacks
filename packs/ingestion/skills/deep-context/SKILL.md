@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. To retrieve saved knowledge or a named person's dossier, use memory.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`.
 ---
 
 # deep-context
@@ -191,8 +191,8 @@ never splits one, and it never re-judges a pair on evidence it has a verdict for
 stands. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
 its next update.
 
-For a named person's saved dossier or questions about existing personal knowledge,
-follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
+A named person's saved dossier, or a question about what Powerpacks knows of them, is
+`bin/deep-context-v2 lookup --name "<name>" --json`, answered in the chat. Do not run processing for a lookup.
 
 ## What is where
 
