@@ -1,20 +1,16 @@
 import { useQuery } from "@tanstack/react-query"
 import { Check, ChevronRight } from "lucide-react"
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { frontier } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
 import { fetchModels, type CodexModel } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
-import { cn } from "@/lib/utils"
 
 const MODELS_KEY = ["codex-models"] as const
 const ROW =
   "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary data-[open=true]:bg-secondary"
-// A flyout: the panel that opens beside a row on hover, as the Claude app's Effort does. Its own
-// Popover, so it opens on whichever side has room instead of running off the window.
-const FLYOUT = "w-64 p-1.5"
 
 type Flyout = "effort" | "more" | null
 
@@ -29,10 +25,56 @@ function ModelRow({ model, picked, onPick }: { model: CodexModel; picked: boolea
   )
 }
 
+/** A row that flies a panel out beside it on hover (or click), as the Claude app's Effort row
+ *  does. The panel is its own popover: it grows upward from the row and flips to the side with
+ *  room instead of running off the window. */
+function FlyoutRow({
+  open,
+  onOpen,
+  label,
+  children,
+  panel,
+}: {
+  open: boolean
+  onOpen: (open: boolean) => void
+  label: string
+  children?: ReactNode
+  panel: ReactNode
+}) {
+  return (
+    <Popover open={open} onOpenChange={onOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={ROW}
+          data-open={open}
+          onMouseEnter={() => onOpen(true)}
+          onClick={() => onOpen(true)}
+        >
+          <span className="flex-1">{label}</span>
+          {children}
+          <ChevronRight className="size-4 text-faint" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="end"
+        sideOffset={8}
+        alignOffset={6}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        className="w-64 p-1.5"
+        aria-label={label}
+      >
+        {panel}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** One pill, "GPT-6.1-Sol  Low": the model Codex answers with and how hard it thinks. It opens
- *  the newest generations of the app-server's model list (model/list) with a check on the pick;
- *  hovering Effort flies out the picked model's efforts, its default marked Recommended, and
- *  hovering More models flies out the older ones. */
+ *  upward with the newest generations of the app-server's model list (model/list), a check on
+ *  the pick, an Effort row that flies out the picked model's efforts (its default marked
+ *  Recommended) and a More models row that flies out the older generations. */
 export function ModelPicker() {
   const agent = useAgent()
   const [open, setOpen] = useState(false)
@@ -63,6 +105,8 @@ export function ModelPicker() {
     setModel(model.id)
     show(false)
   }
+  const flyoutOpen = (which: Flyout) => (next: boolean) =>
+    setFlyout(next ? which : flyout === which ? null : flyout)
   return (
     <Popover open={open} onOpenChange={show}>
       <PopoverTrigger
@@ -77,7 +121,7 @@ export function ModelPicker() {
         align="start"
         side="top"
         onOpenAutoFocus={(event) => event.preventDefault()}
-        className="w-56 overflow-visible p-1.5"
+        className="w-56 p-1.5"
       >
         <ul className="m-0 flex list-none flex-col p-0">
           {shown.map((model) => (
@@ -92,19 +136,12 @@ export function ModelPicker() {
         {picked.efforts.length > 0 ? (
           <>
             <div className="my-1.5 border-t border-line" />
-            <div className="relative" onMouseEnter={() => setFlyout("effort")}>
-              <button
-                type="button"
-                className={ROW}
-                data-open={flyout === "effort"}
-                onClick={() => setFlyout("effort")}
-              >
-                <span className="flex-1">Effort</span>
-                <span className="capitalize text-muted-foreground">{effort}</span>
-                <ChevronRight className="size-4 text-faint" aria-hidden />
-              </button>
-              {flyout === "effort" ? (
-                <div className={cn(FLYOUT, "-top-1.5")} role="menu" aria-label="Effort">
+            <FlyoutRow
+              open={flyout === "effort"}
+              onOpen={flyoutOpen("effort")}
+              label="Effort"
+              panel={
+                <>
                   <p className="m-0 px-2.5 pb-2 pt-1 text-xs text-muted-foreground">
                     Higher effort means more thorough answers, but takes longer and uses your limits faster.
                   </p>
@@ -134,30 +171,22 @@ export function ModelPicker() {
                       </li>
                     ))}
                   </ul>
-                </div>
-              ) : null}
-            </div>
+                </>
+              }
+            >
+              <span className="capitalize text-muted-foreground">{effort}</span>
+            </FlyoutRow>
           </>
         ) : null}
         {more.length > 0 ? (
           <>
             <div className="my-1.5 border-t border-line" />
-            <div className="relative" onMouseEnter={() => setFlyout("more")}>
-              <button
-                type="button"
-                className={ROW}
-                data-open={flyout === "more"}
-                onClick={() => setFlyout("more")}
-              >
-                <span className="flex-1">More models</span>
-                <ChevronRight className="size-4 text-faint" aria-hidden />
-              </button>
-              {flyout === "more" ? (
-                <ul
-                  className={cn(FLYOUT, "-top-1.5 m-0 flex list-none flex-col")}
-                  role="menu"
-                  aria-label="More models"
-                >
+            <FlyoutRow
+              open={flyout === "more"}
+              onOpen={flyoutOpen("more")}
+              label="More models"
+              panel={
+                <ul className="m-0 flex list-none flex-col p-0">
                   {more.map((model) => (
                     <ModelRow
                       key={model.id}
@@ -167,8 +196,8 @@ export function ModelPicker() {
                     />
                   ))}
                 </ul>
-              ) : null}
-            </div>
+              }
+            />
           </>
         ) : null}
       </PopoverContent>
