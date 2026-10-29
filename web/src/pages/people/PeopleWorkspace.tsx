@@ -151,10 +151,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     },
     [pickHide, startOver],
   )
-  const clearFilters = useCallback(() => {
-    setFilters({})
-    for (const key of view.hide) pickHide(key)
-  }, [setFilters, view.hide, pickHide])
+  const clearFilters = useCallback(() => setFilters({}), [setFilters])
   const setRelationship = useCallback(
     (kind: string) => setFilters(kind ? { relationship_kind: [kind] } : {}),
     [setFilters],
@@ -249,7 +246,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             empty={
               <EmptyText
                 hasPeople={rows.length > 0}
-                filtered={view.filters.size > 0 || view.hide.size > 0 || view.text !== ""}
+                filtered={view.filters.size > 0 || view.text !== ""}
                 tab={view.tab}
                 onClear={clearFilters}
               />

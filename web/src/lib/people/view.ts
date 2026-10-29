@@ -2,7 +2,7 @@
 
 import { WORTH_TABS, type WorthTab } from "@/types/people"
 
-import { FACETS, HIDES, isHideKey, isSortKey, type FacetFilters, type HideKey, type Sort } from "./facets"
+import { FACETS, HIDES, isSortKey, type FacetFilters, type HideKey, type Sort } from "./facets"
 
 /** The Worth select: everyone, one worth call, or no call yet. */
 export type Tab = WorthTab
@@ -11,7 +11,8 @@ export const TABS: readonly Tab[] = WORTH_TABS
 export interface PeopleView {
   tab: Tab
   filters: FacetFilters
-  // The Filters menu: the kinds of people hidden from the list.
+  // The Filters menu: the kinds of people hidden from the list. Every kind starts hidden; the
+  // URL names the ones shown (`show=`).
   hide: ReadonlySet<HideKey>
   text: string
   sort: Sort
@@ -20,7 +21,7 @@ export interface PeopleView {
 export const DEFAULT_VIEW: PeopleView = {
   tab: "all",
   filters: new Map(),
-  hide: new Set(),
+  hide: new Set(HIDES.map(({ key }) => key)),
   text: "",
   sort: { key: "name", dir: 1 },
 }
@@ -37,7 +38,7 @@ export function readView(params: URLSearchParams): PeopleView {
         return values.length ? [[key, new Set(values)]] : []
       }),
     ),
-    hide: new Set(params.getAll("hide").filter(isHideKey)),
+    hide: new Set(HIDES.map(({ key }) => key).filter((key) => !params.getAll("show").includes(key))),
   }
 }
 
@@ -57,7 +58,7 @@ export function writeView(
     params.delete(`filter.${key}`)
     for (const value of filters.get(key) ?? []) params.append(`filter.${key}`, value)
   }
-  params.delete("hide")
-  for (const { key } of HIDES) if (hide.has(key)) params.append("hide", key)
+  params.delete("show")
+  for (const { key } of HIDES) if (!hide.has(key)) params.append("show", key)
   return params
 }

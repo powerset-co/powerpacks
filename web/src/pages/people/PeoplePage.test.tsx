@@ -913,7 +913,7 @@ it("saves a human relationship from the profile and refreshes its source", async
   expect(changed).toBe(true)
 })
 
-it("hides LinkedIn-only people from the Filters menu and keeps that in the URL", async () => {
+it("hides LinkedIn-only people until the Filters menu shows them, and keeps that in the URL", async () => {
   const people: Partial<Cells>[] = [
     {
       parent_id: "li:7001",
@@ -943,13 +943,14 @@ it("hides LinkedIn-only people from the Filters menu and keeps that in the URL",
     ),
   )
   const { container } = renderPage()
-  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
-  fireEvent.click(screen.getByRole("button", { name: "Filters" }))
-  fireEvent.click(await screen.findByRole("checkbox", { name: "Hide LinkedIn-only people" }))
   await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(1))
   expect(container.querySelector(".row")?.textContent).toContain("Jordan Bravo")
   expect(screen.getByRole("button", { name: "Filters" }).textContent).toContain("Filters · 1")
-  expect(new URLSearchParams(must(at()).split("?")[1]).getAll("hide")).toEqual(["linkedin_only"])
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }))
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Hide LinkedIn-only people" }))
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toBe("Filters")
+  expect(new URLSearchParams(must(at()).split("?")[1]).getAll("show")).toEqual(["linkedin_only"])
 })
 
 it("keeps human edits and leaves out message actions for a LinkedIn-only person", async () => {
@@ -1021,7 +1022,7 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
       return serve(url, init)
     }),
   )
-  const { container } = renderPage("/people?sections=relationship")
+  const { container } = renderPage("/people?sections=relationship&show=linkedin_only")
   await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
   const row = (name: string) =>
     must([...container.querySelectorAll<HTMLElement>(".row")].find((each) => each.textContent.includes(name)))

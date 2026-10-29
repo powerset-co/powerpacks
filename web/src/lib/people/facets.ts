@@ -129,10 +129,6 @@ export const HIDES: readonly HideDef[] = [
   { key: "linkedin_only", label: "Hide LinkedIn-only people", hides: (r) => r.linkedin_only },
 ]
 
-export function isHideKey(value: string): value is HideKey {
-  return HIDES.some((entry) => entry.key === value)
-}
-
 export function isFacetKey(value: string): value is FacetKey {
   return FACET_BY_KEY.has(value)
 }

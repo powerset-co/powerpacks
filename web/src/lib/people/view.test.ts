@@ -7,7 +7,7 @@ describe("view query parameters", () => {
     const view: PeopleView = {
       tab: "no",
       filters: new Map([["worth", new Set(["yes", "maybe"])]]),
-      hide: new Set(["linkedin_only"]),
+      hide: new Set(),
       text: "Acme & partners + friends",
       sort: { key: "last", dir: -1 },
     }
@@ -24,7 +24,7 @@ describe("view query parameters", () => {
   it("removes cleared filters, search and sort while preserving other parameters", () => {
     const params = writeView(
       DEFAULT_VIEW,
-      new URLSearchParams("filter.worth=yes&hide=linkedin_only&q=acme&sort=last&dir=desc&person=p1"),
+      new URLSearchParams("filter.worth=yes&show=linkedin_only&q=acme&sort=last&dir=desc&person=p1"),
     )
     expect(params.toString()).toBe("person=p1&tab=all")
   })
