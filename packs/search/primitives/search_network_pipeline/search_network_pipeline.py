@@ -289,11 +289,16 @@ def cross_encoder_child_args(args) -> list[str]:
 
 def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
     env_file=getattr(args,"env_file",".env") or ".env"
+    backend=getattr(args,"backend",None)
     base=(
         f"uv run --env-file {shlex.quote(env_file)} --project . python "
         f"packs/search/primitives/search_network_pipeline/search_network_pipeline.py {subcommand} "
         f"--ledger {shlex.quote(str(lp))}"
     )
+    if backend:
+        base+=f" --backend {backend}"
+        if backend=="local":
+            base+=f" --db {shlex.quote(str(args.db))}"
     return base + (" " + extra if extra else "")
 
 def payload_from_expand_output(out: dict[str, Any], *, backend: str = "powerset") -> dict[str, Any]:
@@ -1282,10 +1287,7 @@ def cmd_prepare_local(args):
         payload=apply_local_title_clustering(payload, db_path)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        extra=(
-            f"--backend local --db {shlex.quote(str(db_path))} "
-            f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
-        )
+        extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
@@ -1320,11 +1322,16 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_backend(p):
-    # The Search-in picker's choice is the default, as the picked set is: an agent that leaves the
-    # flag off still runs where the picker points.
-    picked_db=pg.picked(Path(".env"),"POWERPACKS_LOCAL_SEARCH_DB")
-    p.add_argument("--backend",choices=("powerset","local"),default="local" if picked_db else "powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Default: the Search-in picker's choice")
-    p.add_argument("--db",default=picked_db or DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
+    p.add_argument("--backend",choices=("powerset","local"),default=None,help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Unstated: the Search-in picker's choice in the env file")
+    p.add_argument("--db",default=None,help="Local DuckDB path (used only with --backend local); unstated: the picker's, else "+DEFAULT_LOCAL_DB)
+
+def resolve_backend(args) -> None:
+    """The Search-in picker's choice is the default, as the picked set is: an agent that leaves the
+    flag off still runs where the picker points. Every command the pipeline hands back carries the
+    resolved flags (uv_python_command), so a run follows its prepare, not a later picker change."""
+    picked=pg.picked(Path(args.env_file),"POWERPACKS_LOCAL_SEARCH_DB") if getattr(args,"env_file",None) else None
+    args.backend=getattr(args,"backend",None) or ("local" if picked else "powerset")
+    args.db=getattr(args,"db",None) or picked or DEFAULT_LOCAL_DB
 
 def add_run(p):
     add_backend(p)
@@ -1398,5 +1405,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     ap=build_parser()
-    args=ap.parse_args(); raise SystemExit(args.func(args))
+    args=ap.parse_args()
+    if hasattr(args,"backend"): resolve_backend(args)
+    raise SystemExit(args.func(args))
 if __name__ == "__main__": main()
