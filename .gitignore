@@ -59,3 +59,4 @@ tests/visual/**/*.diff.png
 
 # the local UI build is committed: the Python server serves it and installs have no node
 !web/dist/
+qa-out/
