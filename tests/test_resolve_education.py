@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import sys
 import unittest
@@ -41,6 +42,81 @@ class ResolveEducationTests(unittest.TestCase):
         self.assertTrue(resolve_education.is_affiliated_candidate(["stanford"], "Stanford Graduate School of Business"))
         self.assertTrue(resolve_education.is_affiliated_candidate(["stanford"], "Stanford Continuing Studies"))
         self.assertFalse(resolve_education.is_affiliated_candidate(["stanford"], "Samford University"))
+
+    def test_without_alias_drops_the_alias_parenthetical(self) -> None:
+        self.assertEqual(resolve_education.without_alias("University of California, Los Angeles (UCLA / Bruins)"),
+                         "University of California, Los Angeles")
+        self.assertEqual(resolve_education.without_alias("KTH Royal Institute of Technology"), "KTH Royal Institute of Technology")
+
+    def test_resolve_name_adds_the_ids_people_are_filed_under(self) -> None:
+        # The schools index knows KTH only by its Swedish name under the id most people are filed under;
+        # the English name is a second id with a few people. The query must resolve both.
+        schools = [Row("368edcd5", school_name="KTH Royal Institute of Technology", person_count=32)]
+        people = [Row(f"e{i}", canonical_education_id="0819246e", school_name="KTH Royal Institute of Technology")
+                  for i in range(37)]
+        people += [Row(f"f{i}", canonical_education_id="368edcd5", school_name="KTH Royal Institute of Technology")
+                   for i in range(3)]
+        with FakeNamespaces({"schools": schools, "education": people}) as fake:
+            result = asyncio.run(resolve_education.resolve_name("KTH Royal Institute of Technology", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["368edcd5", "0819246e"])
+        self.assertEqual(fake.queries["education"], [("school_name", "In", ["KTH Royal Institute of Technology"])])
+        added = result["candidates"][-1]
+        self.assertEqual((added["id"], added["matched_rows"], added["included"], added["from_people"]),
+                         ("0819246e", 37, True, True))
+
+    def test_resolve_name_finds_a_school_missing_from_the_schools_index(self) -> None:
+        people = [Row(f"e{i}", canonical_education_id="5a42ef6e", school_name="Reichman University") for i in range(6)]
+        with FakeNamespaces({"schools": [], "education": people}):
+            result = asyncio.run(resolve_education.resolve_name("Reichman University", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["5a42ef6e"])
+        self.assertEqual(result["candidates"][0]["name"], "Reichman University")
+
+    def test_resolve_name_keeps_one_id_when_people_agree_with_the_index(self) -> None:
+        schools = [Row("acd99729", school_name="Stanford University (Stanford)", person_count=5000)]
+        people = [Row(f"e{i}", canonical_education_id="acd99729", school_name="Stanford University") for i in range(4)]
+        with FakeNamespaces({"schools": schools, "education": people}) as fake:
+            result = asyncio.run(resolve_education.resolve_name("Stanford University", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["acd99729"])
+        self.assertEqual(fake.queries["education"], [("school_name", "In", ["Stanford University"])])
+
+
+class Row:
+    def __init__(self, row_id: str, **attrs: object) -> None:
+        self.id = row_id
+        self.model_extra = attrs
+
+
+class _Response:
+    def __init__(self, rows: list[Row]) -> None:
+        self.rows = rows
+
+
+class _Namespace:
+    def __init__(self, logical: str, rows: list[Row], queries: dict[str, list[tuple]]) -> None:
+        self.logical, self.rows, self.queries = logical, rows, queries
+
+    def query(self, *, filters: tuple, top_k: int, include_attributes: list[str], consistency: dict) -> _Response:
+        self.queries.setdefault(self.logical, []).append(filters)
+        if self.logical == "education":
+            names = set(filters[2])
+            return _Response([row for row in self.rows if row.model_extra["school_name"] in names])
+        return _Response(self.rows)
+
+
+class FakeNamespaces:
+    """Stands in for turbopuffer_backend.namespace: rows per logical namespace, every filter recorded."""
+
+    def __init__(self, rows: dict[str, list[Row]]) -> None:
+        self.rows = rows
+        self.queries: dict[str, list[tuple]] = {}
+
+    def __enter__(self) -> "FakeNamespaces":
+        self._real = resolve_education.turbopuffer_backend.namespace
+        resolve_education.turbopuffer_backend.namespace = lambda logical: _Namespace(logical, self.rows[logical], self.queries)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        resolve_education.turbopuffer_backend.namespace = self._real
 
 
 if __name__ == "__main__":
