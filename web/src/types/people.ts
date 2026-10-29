@@ -152,6 +152,10 @@ export interface PersonDetail {
   phones: string[]
   /** Source family -> emails or messages, as the importer counted them. */
   interactions: Record<string, number>
+  /** The imported LinkedIn profile in the review card's lines; empty for a family without one. */
+  summary: string
+  experiences: string[]
+  education: string[]
 }
 
 /** POST /api/people/worth result row: one parent after the human's worth call. */
