@@ -5,6 +5,7 @@ import type { Person, PersonDetail } from "@/types/people"
 import { ConfidenceSection } from "./ConfidenceSection"
 import { DecisionSection } from "./DecisionSection"
 import { FactsSection } from "./FactsSection"
+import { ProfileSection } from "./ProfileSection"
 import { RelationshipSection } from "./RelationshipSection"
 import type { SectionState } from "./sections"
 
@@ -16,8 +17,16 @@ interface DetailSectionsProps {
 }
 
 // The drawer's sections in page order: the call (folded), then what we know, then how it reads.
-// A section with nothing to say is left out.
+// A section with nothing to say is left out. A LinkedIn-only person has no messages, so no
+// relationship to read: the call, then their profile.
 export function DetailSections({ row, detail, section, onRefresh }: DetailSectionsProps) {
+  if (row.linkedin_only)
+    return (
+      <>
+        <DecisionSection row={row} detail={detail} onRefresh={onRefresh} {...section("decision")} />
+        <ProfileSection detail={detail} />
+      </>
+    )
   return (
     <>
       <DecisionSection row={row} detail={detail} onRefresh={onRefresh} {...section("decision")} />
