@@ -1037,10 +1037,10 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
       .map((button) => button.textContent)
       .filter((text) => /logbook|Refresh signals/.test(text))
 
-  // The LinkedIn-only person: the call and the profile; no signals, logbook or relationship.
+  // The LinkedIn-only person: the profile alone; no decision, signals, logbook or relationship.
   fireEvent.click(row("Morgan Example"))
-  await within(drawer).findByRole("combobox", { name: "Edit decision" })
-  expect(within(drawer).getByRole("button", { name: "Rename" })).toBeTruthy()
+  await within(drawer).findByRole("button", { name: "Rename" })
+  expect(within(drawer).queryByRole("combobox", { name: "Edit decision" })).toBeNull()
   expect(messageActions(drawer)).toEqual([])
   expect(drawer.querySelector('[data-section="confidence"]')).toBeNull()
   expect(drawer.querySelector('[data-section="timeline"]')).toBeNull()
@@ -1051,9 +1051,7 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
     "Engineer @ Example Labs, 2020-present",
     "BS, CS — State",
   ])
-  pick("Edit decision", "Keep", drawer)
-  await waitFor(() => expect(picked("Edit decision", drawer)).toBe("Keep"))
-  expect(sent).toEqual([{ ids: ["li:7001"], worth: "yes" }])
+  expect(sent).toEqual([])
 
   // The family with messages keeps both.
   fireEvent.click(row("Jordan Bravo"))

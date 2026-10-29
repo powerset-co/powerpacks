@@ -17,16 +17,10 @@ interface DetailSectionsProps {
 }
 
 // The drawer's sections in page order: the call (folded), then what we know, then how it reads.
-// A section with nothing to say is left out. A LinkedIn-only person has no messages, so no
-// relationship to read: the call, then their profile.
+// A section with nothing to say is left out. A LinkedIn-only person has no messages, so nothing
+// to decide or read: their profile alone.
 export function DetailSections({ row, detail, section, onRefresh }: DetailSectionsProps) {
-  if (row.linkedin_only)
-    return (
-      <>
-        <DecisionSection row={row} detail={detail} onRefresh={onRefresh} {...section("decision")} />
-        <ProfileSection detail={detail} />
-      </>
-    )
+  if (row.linkedin_only) return <ProfileSection detail={detail} />
   return (
     <>
       <DecisionSection row={row} detail={detail} onRefresh={onRefresh} {...section("decision")} />
