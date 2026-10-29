@@ -81,13 +81,19 @@ def connect(dsn: str | None = None) -> Any:
 
 
 def picked_set_id(env_file: Path | None) -> str | None:
-    """The set the Search-in picker wrote to .env. The file wins over the process environment,
+    """The set the Search-in picker wrote to .env."""
+    return picked(env_file, "POWERPACKS_DEFAULT_SET_ID")
+
+
+def picked(env_file: Path | None, key: str) -> str | None:
+    """A key the Search-in picker wrote to .env (POWERPACKS_DEFAULT_SET_ID for a set,
+    POWERPACKS_LOCAL_SEARCH_DB for the local index). The file wins over the process environment,
     which keeps whatever value the agent's shell started with."""
     if not env_file or not env_file.exists():
         return None
     for raw in env_file.read_text().splitlines():
         line = raw.strip()
-        if line.startswith("POWERPACKS_DEFAULT_SET_ID="):
+        if line.startswith(key + "="):
             return line.split("=", 1)[1].strip().strip('"').strip("'") or None
     return None
 

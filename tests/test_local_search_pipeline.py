@@ -1468,3 +1468,29 @@ class AgeFilterPreviewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PickerBackendDefaultTests(unittest.TestCase):
+    """The Search-in picker's .env key is the pipeline's default backend, as the picked set is."""
+
+    def parse(self, env: str | None) -> tuple[str, str]:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        before = os.getcwd()
+        with tempfile.TemporaryDirectory() as temp:
+            os.chdir(temp)
+            try:
+                if env is not None:
+                    Path(".env").write_text(env)
+                args = pipeline.build_parser().parse_args(["run", "--query", "q"])
+            finally:
+                os.chdir(before)
+        return args.backend, args.db
+
+    def test_local_index_picked(self) -> None:
+        self.assertEqual(self.parse("OPENAI_API_KEY=x\nPOWERPACKS_LOCAL_SEARCH_DB=/idx/local-search.duckdb\n"),
+                         ("local", "/idx/local-search.duckdb"))
+
+    def test_set_picked_or_no_env(self) -> None:
+        self.assertEqual(self.parse("POWERPACKS_DEFAULT_SET_ID=abc\n")[0], "powerset")
+        self.assertEqual(self.parse(None)[0], "powerset")

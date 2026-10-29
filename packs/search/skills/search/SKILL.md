@@ -79,10 +79,9 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      (even if they also say "my network": "search my Powerset network" is `powerset`).
    - `local` — the user says "local", "offline", or "my imported network/contacts",
      even if remote credentials exist.
-   - Unstated → environment default: if `POWERPACKS_LOCAL_SEARCH_DB` is set, or
-     `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
-     configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
-     which you picked in one line so the user can flip it.
+   - Unstated → the Search-in picker's choice, which the pipeline also defaults to: `local`
+     when `POWERPACKS_LOCAL_SEARCH_DB` is in `.env`, otherwise `powerset`. Say which in one
+     line so the user can flip it.
    - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
@@ -116,15 +115,13 @@ and nothing else (no Python: the system interpreter has none of the project's pa
 
 ```bash
 mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.json <<'EOF'
-{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
+{"surface": "people", "backend": "<local or powerset>", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
 EOF
 ```
 
-The environment default for `backend` comes from one line that prints key names only, never
-values: `grep -o '^\(POWERPACKS_LOCAL_SEARCH_DB\|TURBOPUFFER_API_KEY\)=' .env; ls .powerpacks/search-index/local-search.duckdb`.
-`local` when `POWERPACKS_LOCAL_SEARCH_DB` is listed, or the index file exists and
-`TURBOPUFFER_API_KEY` is not listed; otherwise `powerset`.
+The environment default for `backend` comes from one line that prints the key name only, never
+its value: `grep -o '^POWERPACKS_LOCAL_SEARCH_DB=' .env`. Listed → `local`; otherwise `powerset`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.

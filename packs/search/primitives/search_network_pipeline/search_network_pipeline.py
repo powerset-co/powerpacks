@@ -1320,8 +1320,11 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_backend(p):
-    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = TurboPuffer + Postgres remote retrieval (default); local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
-    p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
+    # The Search-in picker's choice is the default, as the picked set is: an agent that leaves the
+    # flag off still runs where the picker points.
+    picked_db=pg.picked(Path(".env"),"POWERPACKS_LOCAL_SEARCH_DB")
+    p.add_argument("--backend",choices=("powerset","local"),default="local" if picked_db else "powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Default: the Search-in picker's choice")
+    p.add_argument("--db",default=picked_db or DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
 
 def add_run(p):
     add_backend(p)
