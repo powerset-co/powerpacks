@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.48.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.47.0...powerpacks-v3.48.0) (2026-10-29)
+
+
+### Features
+
+* **onboarding:** Skip for now, and Add sources in the nav ([#1016](https://github.com/powerset-co/powerpacks/issues/1016)) ([ec74118](https://github.com/powerset-co/powerpacks/commit/ec74118cef1f6dd225bdadefd5c65d4aa4b9d466))
+
+
+### Bug Fixes
+
+* **setup:** the LinkedIn run's Modal import shows on the index row ([#1018](https://github.com/powerset-co/powerpacks/issues/1018)) ([6cf1771](https://github.com/powerset-co/powerpacks/commit/6cf1771a9ba9576a11aa1a1e7f752f774252a5a7))
+
 ## [3.47.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.46.0...powerpacks-v3.47.0) (2026-10-29)
 
 
