@@ -114,15 +114,10 @@ it("starts setup by itself once a source is signed in", async () => {
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
 })
 
-it("with nothing signed in it starts nothing and sends the person to LinkedIn", async () => {
+it("with nothing signed in it starts nothing and goes back to the LinkedIn step", async () => {
   // A run now would skip every source and call Powerpacks installed with no one in it.
   state = { record: WAITING, signed: NONE, signedStatus: 200 }
   mount()
-  const connect = await screen.findByRole("button", { name: "Connect LinkedIn" })
-  expect(screen.getByText(/Nothing is connected yet/)).toBeTruthy()
-  expect(invoke).not.toHaveBeenCalled()
-
-  fireEvent.click(connect)
   await screen.findByRole("heading", { name: "Connect LinkedIn" })
   expect(invoke).not.toHaveBeenCalled()
 })
@@ -140,7 +135,6 @@ it("a sign-in check that fails is shown, not swallowed", async () => {
     </QueryClientProvider>,
   )
   await screen.findByText(/msgvault is not readable/)
-  expect(screen.queryByRole("button", { name: "Connect LinkedIn" })).toBeNull()
   expect(invoke).not.toHaveBeenCalled()
 })
 
@@ -161,6 +155,6 @@ it("a record a run is writing between steps is the run's, not a prompt to connec
   }
   mount()
   await screen.findByText("Sources selected")
-  expect(screen.queryByRole("button", { name: "Connect LinkedIn" })).toBeNull()
+  expect(screen.queryByRole("heading", { name: "Connect LinkedIn" })).toBeNull()
   expect(invoke).not.toHaveBeenCalled()
 })

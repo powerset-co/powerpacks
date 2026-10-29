@@ -193,10 +193,15 @@ export function SetUp() {
   // An idle record and a source signed in: this screen starts setup itself, once.
   const started = useRef(false)
   useEffect(() => {
-    if (!idle || started.current || connected !== true) return
+    if (!idle || started.current || connected === undefined) return
     started.current = true
+    // Nothing signed in: a run now would skip every source. Back to where setup starts.
+    if (!connected) {
+      void navigate(stepAt("linkedin").href, { replace: true })
+      return
+    }
     continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
-  }, [idle, connected])
+  }, [idle, connected, navigate])
 
   // People appear as the index is built; once there are some the first look takes the right column.
   const look = useQuery({
@@ -321,18 +326,6 @@ export function SetUp() {
             <div className="flex flex-col gap-2">
               <span className="text-xs text-bad">{data.message}</span>
               <Stopped data={data} retrying={retrying} retry={retry} />
-            </div>
-          ) : data && idle && connected === false ? (
-            // Nothing signed in: a run now would skip every source. LinkedIn is where setup starts.
-            <div className="flex flex-col gap-2">
-              <Note>Nothing is connected yet. Setup starts from your LinkedIn connections.</Note>
-              <Button
-                variant="primary"
-                className="self-start"
-                onClick={() => void navigate(stepAt("linkedin").href)}
-              >
-                Connect LinkedIn
-              </Button>
             </div>
           ) : (
             <Note>
