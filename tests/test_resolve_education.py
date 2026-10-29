@@ -71,6 +71,19 @@ class ResolveEducationTests(unittest.TestCase):
         self.assertEqual(result["resolved_ids"], ["5a42ef6e"])
         self.assertEqual(result["candidates"][0]["name"], "Reichman University")
 
+    def test_resolve_name_walks_every_page_so_a_minority_id_is_not_crowded_out(self) -> None:
+        # Ids sort before the majority rows on purpose: "a…" rows fill the first pages, the lone "z" row
+        # for the second id sits past them. One capped page would never see it.
+        people = [Row(f"a{i:03d}", canonical_education_id="majority", school_name="Harvard University") for i in range(10)]
+        people.append(Row("z", canonical_education_id="minority", school_name="Harvard University"))
+        schools = [Row("majority", school_name="Harvard University", person_count=9000)]
+        with FakeNamespaces({"schools": schools, "education": people}) as fake:
+            result = asyncio.run(resolve_education.resolve_name("Harvard University", limit=4))
+        self.assertEqual(result["resolved_ids"], ["majority", "minority"])
+        self.assertEqual(len(fake.queries["education"]), 3)  # 4 + 4 + 3 rows
+        self.assertEqual(fake.queries["education"][1],
+                         ("And", [("school_name", "In", ["Harvard University"]), ("id", "Gt", "a003")]))
+
     def test_resolve_name_keeps_one_id_when_people_agree_with_the_index(self) -> None:
         schools = [Row("acd99729", school_name="Stanford University (Stanford)", person_count=5000)]
         people = [Row(f"e{i}", canonical_education_id="acd99729", school_name="Stanford University") for i in range(4)]
@@ -95,12 +108,16 @@ class _Namespace:
     def __init__(self, logical: str, rows: list[Row], queries: dict[str, list[tuple]]) -> None:
         self.logical, self.rows, self.queries = logical, rows, queries
 
-    def query(self, *, filters: tuple, top_k: int, include_attributes: list[str], consistency: dict) -> _Response:
+    def query(self, *, filters: tuple, top_k: int, include_attributes: list[str], consistency: dict,
+              rank_by: tuple | None = None) -> _Response:
         self.queries.setdefault(self.logical, []).append(filters)
-        if self.logical == "education":
-            names = set(filters[2])
-            return _Response([row for row in self.rows if row.model_extra["school_name"] in names])
-        return _Response(self.rows)
+        if self.logical != "education":
+            return _Response(self.rows)
+        by_name, after = (filters[1][0], filters[1][1][2]) if filters[0] == "And" else (filters, None)
+        names = set(by_name[2])
+        rows = sorted((row for row in self.rows if row.model_extra["school_name"] in names), key=lambda row: row.id)
+        rows = [row for row in rows if after is None or row.id > after]
+        return _Response(rows[:top_k])
 
 
 class FakeNamespaces:

@@ -108,19 +108,29 @@ async def query_people_school_ids(names: list[str], *, limit: int) -> list[dict[
     The schools index can hold one school under two ids with two names (KTH is "Kungliga tekniska
     högskolan" there while its people wrote "KTH Royal Institute of Technology"), so a name match in
     the schools index alone leaves those people out of the education prefilter. Each row is one
-    person's education entry; the caller counts rows per id."""
+    person's education entry; a big school has more rows than one page, so pages are walked by id
+    until the last one is short: a minority id must not be crowded out by the majority one."""
     ns = turbopuffer_backend.namespace("education")
+    by_name: tuple = ("school_name", "In", names)
+    rows: list[dict[str, Any]] = []
+    last_id: str | None = None
+    while True:
+        filters = by_name if last_id is None else ("And", [by_name, ("id", "Gt", last_id)])
 
-    def run_query() -> Any:
-        return ns.query(
-            filters=("school_name", "In", names),
-            top_k=limit,
-            include_attributes=["canonical_education_id", "school_name"],
-            consistency=STRONG_CONSISTENCY,
-        )
+        def run_query() -> Any:
+            return ns.query(
+                filters=filters,
+                rank_by=("id", "asc"),
+                top_k=limit,
+                include_attributes=["canonical_education_id", "school_name"],
+                consistency=STRONG_CONSISTENCY,
+            )
 
-    response = await asyncio.to_thread(run_query)
-    return [row_attrs(row, ["canonical_education_id", "school_name"]) for row in (response.rows or [])]
+        page = [row_attrs(row, ["canonical_education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
+        rows.extend(page)
+        if len(page) < limit:
+            return rows
+        last_id = page[-1]["id"]
 
 
 async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
