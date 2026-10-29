@@ -78,8 +78,9 @@ class InstallPipelineTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
-        # A Gmail import is on disk: deep context has messages to read (without any, LinkedIn goes
-        # straight to the index; see test_linkedin_only_realizes_before_the_modal_index).
+        # The run selected Gmail, so deep context reads messages; a Gmail import is on disk for it. A run
+        # that selected LinkedIn alone goes straight to the index whatever is on disk
+        # (test_linkedin_only_realizes_before_the_modal_index).
         gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
         gmail.parent.mkdir(parents=True, exist_ok=True)
         gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
@@ -394,8 +395,10 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertCountEqual(self.paid_commands, ["index"])
 
     def test_linkedin_only_realizes_before_the_modal_index(self):
-        # No message sources: import LinkedIn families and realize without processing messages.
-        (self.root / ".powerpacks/network-import/import/gmail/people.csv").unlink()
+        # The run selected LinkedIn alone: import its families and realize without processing messages,
+        # even though an earlier run left a Gmail import on disk (the fixture writes one).
+        self.retry = "bin/onboard --source linkedin"
+        self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
         linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
         self.write(linkedin, "linkedin_url,full_name,primary_email,current_title,current_company,rapidapi_response\n")
         result = self.run_pipeline()
