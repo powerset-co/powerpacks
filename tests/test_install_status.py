@@ -108,31 +108,11 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(moved["step_started_at"], "2099-01-01T00:00:00Z")
         self.assertEqual(self.status.read()["step_started_at"], "2099-01-01T00:00:00Z")
 
-    def test_dead_installer_is_paused_with_resume_guidance(self) -> None:
-        self.status.write('tools.preparing', step=InstallStep.DEPENDENCIES, pid=99999999)
-        record = self.status.read()
-        self.assertEqual(record["status"], "waiting")
-        self.assertEqual(record["installer_pid"], 0)
-        self.assertEqual(record["action"]["command"], "bin/bootstrap")
-
     def test_human_wait_survives_installer_exit(self) -> None:
         self.status.write('step.waiting', step=InstallStep.GMAIL_TOOLS, pid=99999999, retry_command="bin/onboard --source gmail")
         record = self.status.read()
         self.assertEqual(record["status"], "waiting")
         self.assertEqual(record["retry_command"], "bin/onboard --source gmail")
-
-    def test_interrupted_browser_login_does_not_wait_forever(self) -> None:
-        self.status.write('account.signing_in', pid=99999999)
-        record = self.status.read()
-        self.assertEqual(record["status"], "waiting")
-        self.assertEqual(record["steps"]["account"]["status"], "waiting")
-        self.assertEqual(record["action"]["kind"], "resume")
-
-    def test_live_source_wait_is_interrupted_when_its_owner_dies(self) -> None:
-        for step in (InstallStep.GMAIL_LOGIN, InstallStep.IMESSAGE_ACCESS):
-            with self.subTest(step=step):
-                self.status.write('step.waiting', step=step, pid=99999999)
-                self.assertEqual(self.status.read()["action"]["kind"], "resume")
 
     def test_missing_configuration_wait_has_no_running_owner(self) -> None:
         self.status.write('gmail.which_accounts', pid=0)

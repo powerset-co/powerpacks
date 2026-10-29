@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -136,16 +135,6 @@ class InstallStatus:
             record["note"] = manifest.note
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return self._unwritten("install.unreadable")
-        if manifest.status is InstallState.RUNNING or (
-            manifest.status is InstallState.WAITING and manifest.installer_pid > 0
-        ):
-            try:
-                os.kill(manifest.installer_pid, 0)
-            except ProcessLookupError:
-                prose, message, _ = render("setup.paused", {})
-                record.update(status=prose.state.value, event="setup.paused", installer_pid=0, message=message,
-                              note="", action={"kind": prose.action, "command": manifest.retry_command})
-                record.setdefault("steps", {})[manifest.step.value] = {"status": prose.state.value, "message": message}
         return record
 
     def _unwritten(self, event: str) -> dict:

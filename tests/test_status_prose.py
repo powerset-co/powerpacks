@@ -116,7 +116,6 @@ class StatusProseTests(unittest.TestCase):
         for word in page_prose(desktop=True)["page"].values():
             self.assertIsNone(AGENT_VOICE.search(word), word)
         # The agent's own words are unchanged outside the app.
-        self.assertEqual(render("setup.paused", {}, desktop=False)[1], "Setup paused. I can resume it from here.")
 
     def test_the_page_test_fixture_is_this_script(self) -> None:
         fixture = ROOT / "web/src/pages/install/prose.fixture.json"
