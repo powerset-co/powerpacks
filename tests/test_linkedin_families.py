@@ -34,6 +34,7 @@ from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
 from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
 from packs.ingestion.primitives.share.person_labels import PersonLabels
+from packs.ingestion.primitives.share.store import share_rows
 from packs.ingestion.primitives.share.web.model import SharePeople
 from packs.ingestion.primitives.share.web.server import ShareRoutes, make_handler
 from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, PEOPLE_SCHEMA_COLUMNS
@@ -113,6 +114,9 @@ class LinkedInFamiliesTests(unittest.TestCase):
             self.assertEqual({r["id"] for r in csv.DictReader(handle)}, {"li:42", "li:43"})
         people = SharePeople(self.conn, self.root)
         self.assertEqual(len(people.load()), 2)
+        # A connection is on the upload list as is: no worth call, no labels.
+        self.assertEqual([(r.person_id, r.public_identifier, r.worth, r.labels_json) for r in share_rows(store_path(self.root))],
+                         [("li:42", "jordan-bravo", "yes", "{}"), ("li:43", "casey-delta", "yes", "{}")])
         for row in people.load():
             self.assertEqual((row.worth, row.worth_source, row.labels, row.channels), ("", "", (), ("linkedin",)))
             self.assertFalse(row.in_progress)

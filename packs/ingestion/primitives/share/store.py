@@ -45,7 +45,8 @@ class TagStore:
 
 
 def share_rows(store: Path) -> tuple[PersonLabelRow, ...]:
-    """The upload list: effective worth yes, excluding the owner and unreviewed family flags."""
+    """The upload list: effective worth yes, excluding the owner and unreviewed family flags, plus every
+    LinkedIn-only family: a connection is shared as is, with no worth call and no labels."""
     conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -70,6 +71,12 @@ def share_rows(store: Path) -> tuple[PersonLabelRow, ...]:
                 continue
             people.append(PersonLabelRow(parent_id, label.public_identifier, label.full_name, "yes", label.flag,
                                          label.labels_json, label.updated_at))
+        for row in conn.execute(
+            "SELECT parent_id, public_identifier, name FROM families WHERE source_channels = 'linkedin' "
+            "AND parent_id IN (SELECT parent_id FROM current_parent) "
+            "AND parent_id NOT IN (SELECT parent_id FROM deleted_parents) ORDER BY parent_id"
+        ):
+            people.append(PersonLabelRow(row["parent_id"], row["public_identifier"], row["name"], "yes", "", "{}", ""))
         return tuple(people)
     finally:
         conn.close()
