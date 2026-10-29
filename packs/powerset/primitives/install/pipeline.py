@@ -67,7 +67,6 @@ from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
 # Without message imports, only LinkedIn source families need loading before realization.
-_MESSAGE_SOURCES = {"gmail", "imessage", "whatsapp"}
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
@@ -255,7 +254,7 @@ class ProcessingOnboarding:
                 self._linkedin()
                 # What this run selected decides, never what earlier runs left on disk: a LinkedIn run
                 # imports its connections and builds the index, nothing else.
-                if not _MESSAGE_SOURCES & set(self.saved.source):
+                if self.saved.source == ["linkedin"]:
                     self._write("discover.linkedin_only")
                     self._write("enrich.linkedin_only")
                     self._index_linkedin()
