@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { InstallStatus } from "@/types/install"
 
+import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
+
 import { InstallPage } from "./InstallPage"
 import PROSE from "./prose.fixture.json"
 
@@ -97,10 +99,10 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { client } = mount()
-    await screen.findByText("Logging in to your accounts")
+    await screen.findByText("Signing you in")
     const current = () => screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent
-    expect(current()).toContain("Logging in to your accountsWaiting")
-    expect(screen.getByRole("list").textContent).toContain("Syncing LinkedIn")
+    expect(current()).toContain("Signing you inWaiting")
+    expect(screen.getByRole("list").textContent).toContain("Reading your connections")
 
     status = {
       ...status,
@@ -113,15 +115,15 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await waitFor(() => expect(current()).toContain("Syncing LinkedInWorking"))
-    expect(screen.getByText("Logging in to your accounts").closest("li")?.textContent).toContain("Done")
+    await waitFor(() => expect(current()).toContain("Reading your connectionsWorking"))
+    expect(screen.getByText("Signing you in").closest("li")?.textContent).toContain("Done")
 
     for (const step of SOURCE_PLAN) {
       status = { ...status, step, status: "failed", steps: {} }
       await act(() => client.invalidateQueries({ queryKey: ["install"] }))
       await waitFor(() => {
         expect(current()).toContain("Needs a fix")
-        expect(current()).toContain(LOGINS.includes(step) ? "Logging in" : "Syncing")
+        expect(current()).toContain(MAPPING.rows.find((row) => row.steps.includes(step))?.label)
       })
     }
   })
@@ -196,11 +198,11 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     mount()
-    await screen.findByText("Installing Powerpacks")
-    expect(screen.queryByText("Building your search index")).toBeNull()
+    await screen.findByText("Signing you in")
+    expect(screen.queryByText("Making your connections searchable")).toBeNull()
   })
 
-  it("shows the processing message, then switches to index progress and stops on failure", async () => {
+  it("shows the processing message, then Modal's words for the index, and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
       "fetch",
@@ -211,21 +213,15 @@ describe("installation progress", () => {
     status = {
       ...INSTALL,
       step: "index",
-      index_progress: {
-        status: "running",
-        progress: 0.4,
-        message: "Building search records",
-        payload: { contacts: 3 },
-      },
+      event: "index.building",
+      message: "Understanding companies",
+      action: { kind: "details", details: { done: 40, total: 111, left_seconds: 90 } },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("Building search records")
+    await screen.findByText("Understanding companies")
     // The task count stands in for any bar.
     expect(screen.queryByRole("progressbar")).toBeNull()
-    status = {
-      ...status,
-      index_progress: { status: "failed", message: "Index download failed", payload: {} },
-    }
+    status = { ...status, status: "failed", event: "step.failed", message: "Index download failed" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Setup needs a fix" })
   })
@@ -261,7 +257,8 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "2 tasks completed" })
+    // Eight rows, six done: the oldest folds, five done stay, then the current row and one next.
+    const history = await screen.findByRole("button", { name: "1 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -269,7 +266,7 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(9)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(8)
     expect(history.getAttribute("aria-expanded")).toBe("true")
   })
 
@@ -290,7 +287,7 @@ describe("installation progress", () => {
       ),
     )
     const { client } = mount()
-    await screen.findByText("Enriching your contacts")
+    await screen.findByText("Enriching people")
     status = {
       ...status,
       step: "validate",
@@ -304,7 +301,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() =>
       expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Building your search indexWorking",
+        "Making your connections searchableWorking",
       ),
     )
     status = {
@@ -320,7 +317,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() =>
       expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Building your search indexDone",
+        "Making your connections searchableDone",
       ),
     )
   })
@@ -442,7 +439,7 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("Installing Powerpacks")
+    await screen.findByText("Signing you in")
     // The account and network show in the sidebar footer, not here.
     expect(screen.queryByText("casey@example.com")).toBeNull()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()

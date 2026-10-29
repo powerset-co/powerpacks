@@ -13,6 +13,8 @@ import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
+import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
+
 import { DesktopSetup } from "./DesktopSetup"
 import { SetupKnot } from "./SetupKnot"
 
@@ -56,7 +58,7 @@ function useElapsed(startedAt: string | undefined, running: boolean): string {
 function installSteps(data?: InstallStatus) {
   if (!data) return []
   const plan = data.plan ?? []
-  return data.prose.rows.flatMap((row) => {
+  return MAPPING.rows.flatMap((row) => {
     const members = plan.filter((step) => row.steps.includes(step))
     if (!members.length || (row.needs && !plan.includes(row.needs))) return []
     const current = members.includes(data.step)
@@ -98,7 +100,7 @@ export function InstallPage() {
   // Before the first click: only the welcome and the choice, none of the progress furniture. Once
   // setup is done (an import counts) the choice never comes back, whatever the record says.
   const welcome = !done && !error && data?.event === "setup.ready"
-  const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
+  const failed = data?.status === "failed"
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
     ? OFFLINE.title
@@ -149,11 +151,7 @@ export function InstallPage() {
               : word("review.offer.many").replace("{count}", reviewLeft.toLocaleString()),
         }
       : (data?.action ?? undefined)
-  const message = error
-    ? OFFLINE.line
-    : data?.step === "index" && data.index_progress
-      ? data.index_progress.message
-      : (data?.message ?? OFFLINE.reading)
+  const message = error ? OFFLINE.line : (data?.message ?? OFFLINE.reading)
   const note = error ? "" : failed ? word("failed.note") : data?.note
   // The live line under a running step: how long it has run, beside the counts in its message.
   const elapsed = useElapsed(data?.step_started_at, !error && !failed && data?.status === "running")

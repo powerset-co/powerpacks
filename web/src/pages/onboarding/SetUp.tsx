@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
@@ -9,6 +9,8 @@ import { HOME } from "@/lib/nav"
 import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
+
+import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
 
 import { Frame, Info, Note } from "./Frame"
 import { stopDetail } from "@/pages/install/sources"
@@ -20,104 +22,61 @@ import { PageShot } from "./PageShot"
 const POLL_MS = 1_500
 const PEOPLE_POLL_MS = 5_000
 const KEY = ["onboarding", "install"] as const
-
-// The stages setup goes through (steps.py), as the person sees them. The source stages show only
-// once their source is connected: the first run is LinkedIn alone, the next adds what Sources linked.
-const STAGES = [
-  { steps: ["linkedin"], label: "Reading your connections", done: "Connections read", source: false },
-  {
-    steps: ["gmail_tools", "gmail_login", "gmail_sync", "gmail_import"],
-    label: "Syncing your Gmail",
-    done: "Gmail contacts added",
-    source: true,
-  },
-  {
-    steps: ["imessage_access", "imessage_import"],
-    label: "Reading your Messages",
-    done: "iMessage contacts added",
-    source: true,
-  },
-  {
-    steps: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import"],
-    label: "Syncing WhatsApp",
-    done: "WhatsApp contacts added",
-    source: true,
-  },
-  { steps: ["deep_context"], label: "Learning who they are", done: "Learned who they are", source: false },
-  { steps: ["enrich"], label: "Enriching people", done: "People enriched", source: false },
-  {
-    steps: ["index", "validate"],
-    label: "Building your search index",
-    done: "Search index built",
-    source: false,
-  },
-  { steps: ["ready"], label: "Search is ready", done: "Search is ready", source: false },
-] as const
-type Stage = (typeof STAGES)[number]
 const DONE = new Set(["completed", "skipped"])
-// The stages that read messages: only a run with a message source lists them.
-const MESSAGE_STAGES = new Set<string>(["deep_context", "enrich"])
+
+type Row = (typeof MAPPING.rows)[number]
+type Standing = "done" | "current" | "stopped" | "next"
 
 interface Progress {
   data: InstallStatus
   samples: Sample[]
 }
 
-/** The running step's count, from the event's details (workflow.py linkedin.reading.count writes
- *  read/total; pipeline.py's stage counters write done/total): a pace for the time left. The index
- *  has no count (Modal reports phases, not work done), so it shows its phase alone. */
+/** The running step's count from its event's details: {read, total} from the LinkedIn read,
+ *  {done, total} from Modal and the processing stages. */
 function counts(data: InstallStatus | undefined): { read: number; total: number } | null {
-  // The index build's counts come from the Modal run (index_progress.payload), the other steps' from
-  // their own events.
   const details = data?.action?.details
-  const source =
-    isRecord(details) && typeof details.total === "number" ? details : data?.index_progress?.payload
-  if (!isRecord(source)) return null
-  const read = source.read ?? source.done
-  const { total } = source
+  if (!isRecord(details)) return null
+  const read = details.read ?? details.done
+  const { total } = details
   return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
-/** The running step's line under its bar: the record's own sentence ("Enriching your contacts: 6 of
- *  16 researched"), with the count added when the sentence does not carry it. */
-function liveLine(data: InstallStatus, count: { read: number; total: number }): string {
-  const pair = `${count.read.toLocaleString()} of ${count.total.toLocaleString()}`
-  const message = data.index_progress?.message ?? data.message
-  return message.includes(pair) ? message : `${message}: ${pair}`
+/** Modal's own estimate of the seconds left, and when the record carrying it was written. */
+function estimateOf(data: InstallStatus | undefined): { seconds: number; at: number } | null {
+  const details = data?.action?.details
+  if (!data || !isRecord(details) || typeof details.left_seconds !== "number") return null
+  return { seconds: details.left_seconds, at: Date.parse(data.updated_at) }
 }
 
-type Standing = "done" | "skipped" | "current" | "stopped" | "next"
-
-/** Whether a stage has anything in the record: its step is running or has run. A source left
- *  unconnected writes its steps as skipped, which is not running. */
-function present(data: InstallStatus, stage: Stage): boolean {
-  return stage.steps.some(
-    (step) => step === data.step || (step in data.steps && data.steps[step]?.status !== "skipped"),
-  )
+/** The row's steps this run plans. */
+function planned(data: InstallStatus, row: Row): string[] {
+  return row.steps.filter((step) => data.plan?.includes(step))
 }
 
-/** Where one stage stands: done, the one under way, stopped there, or still to come. A source stage
- *  runs only the steps it needs (a tool already installed writes none), so its present steps decide. */
-function standingOf(data: InstallStatus, stage: Stage): Standing {
-  const current = stage.steps.some((step) => step === data.step)
-  if (current) {
-    if (data.status === "failed") return "stopped"
-    if (data.event === "search.ready" || (stage.steps[0] === "ready" && DONE.has(data.status))) return "done"
-    return "current"
-  }
-  const steps = stage.source ? stage.steps.filter((step) => step in data.steps) : stage.steps
-  const states = steps.map((step) => data.steps[step]?.status)
-  if (states.length === 0 || !states.every((state) => DONE.has(state ?? ""))) return "next"
-  return states.every((state) => state === "skipped") ? "skipped" : "done"
+/** Where a row stands: done once every planned step is completed or skipped, current while the
+ *  run is on one of its steps (stopped if that step failed), next otherwise. */
+function standingOf(data: InstallStatus, row: Row): Standing {
+  if (planned(data, row).every((step) => DONE.has(data.steps[step]?.status ?? ""))) return "done"
+  if (row.steps.includes(data.step)) return data.status === "failed" ? "stopped" : "current"
+  return "next"
 }
 
-/** What a finished stage says: the record's own line for its last step (e.g. "293 LinkedIn
- *  connections", "Your LinkedIn connections are in; nothing to learn from messages yet."). The index
- *  and ready stages say their own words: the record's line for both is the ready line. */
-function finishedLine(data: InstallStatus, stage: Stage): string {
-  if (stage.steps[0] === "index" || stage.steps[0] === "ready") return stage.done
-  const last = [...stage.steps].reverse().find((step) => data.steps[step]?.message)
-  return last ? (data.steps[last]?.message ?? stage.done) : stage.done
+/** A finished row says the record's line for its last planned step. */
+function finishedLine(data: InstallStatus, row: Row): string {
+  const last = planned(data, row).at(-1)
+  return last ? (data.steps[last]?.message ?? row.label) : row.label
+}
+
+/** The time now (ms), renewed every second while `ticking`, so an estimate counts down. */
+function useNow(ticking: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!ticking) return
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [ticking])
+  return now
 }
 
 /** A stop's way out: the record's note, Try again, the detail behind the stop, where the logs are. */
@@ -140,16 +99,16 @@ function Stopped({ data, retrying, retry }: { data: InstallStatus; retrying: boo
   )
 }
 
-/** Set up: the run LinkedIn's Continue started (bin/onboard, in the background). This screen only
- *  shows its record; the one thing it starts is Try again after a stop. The stages show as they go,
- *  the LinkedIn count with the time left, the index with Modal's progress. The first look opens
- *  once people are in. */
+/** Set up: the run LinkedIn's Continue started (or Sources', for Import), in the background. This
+ *  screen only shows its record as a checklist of the golden rows the run plans; the one thing it
+ *  starts is Try again after a stop. The first look opens once people are in. */
 export function SetUp() {
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
   const [retrying, setRetrying] = useState(false)
-  // The record, with the LinkedIn count sampled at every read: the pace so far gives the time left.
+  // The record, with the count sampled at every read: the pace so far gives the time left when
+  // the step has no estimate of its own.
   const install = useQuery({
     queryKey: KEY,
     queryFn: async ({ signal }): Promise<Progress> => {
@@ -179,7 +138,22 @@ export function SetUp() {
   const navigate = useNavigate()
   const ready = data?.event === "search.ready"
   const count = counts(data)
-  const left = count ? secondsLeft(install.data?.samples ?? [], count.total) : null
+  // The page picture's count is the LinkedIn read's alone, not a later step's.
+  const read = data?.step === "linkedin" ? count : null
+  // Modal's estimate counts down from when it was written; the LinkedIn read's comes from its pace.
+  const estimate = estimateOf(data)
+  const now = useNow(estimate !== null)
+  const modalLeft = estimate
+    ? Math.min(estimate.seconds, estimate.seconds - (now - estimate.at) / 1000)
+    : null
+  const left =
+    modalLeft !== null
+      ? modalLeft > 0
+        ? modalLeft
+        : null
+      : count
+        ? secondsLeft(install.data?.samples ?? [], count.total)
+        : null
   const processing = data !== undefined && data.step !== "linkedin" && !ready
 
   // People appear as the index is built; once there are some the first look takes the right column.
@@ -195,31 +169,21 @@ export function SetUp() {
   const retry = () => {
     setRetrying(true)
     setError(null)
-    continueSetup({}).catch((caught: unknown) => {
+    // Set up's run is LinkedIn alone (linkedin_setup.py); Import's is every source it saved.
+    continueSetup(step === "setup" ? { sources: ["linkedin"] } : {}).catch((caught: unknown) => {
       setError(errorText(caught))
       setRetrying(false)
     })
   }
 
-  // The run's first steps (account, keys, sources) carry the last run's stage entries until the
-  // selection starts them over: the list shows once the run is on a stage.
-  const underway =
-    data !== undefined && (ready || STAGES.some((stage) => stage.steps.some((step) => step === data.step)))
-  // The long run: a message source is in, so deep context reads it; it can take hours, so the app
-  // is one click away and setup keeps building behind it.
-  const long = data !== undefined && STAGES.some((stage) => stage.source && present(data, stage))
-  // With LinkedIn alone there is nothing to learn from messages: those stages are not listed.
-  const stages =
-    data && underway
-      ? STAGES.filter(
-          (stage) =>
-            (!stage.source || present(data, stage)) &&
-            (long || !MESSAGE_STAGES.has(stage.steps[0])) &&
-            standingOf(data, stage) !== "skipped",
-        )
-      : []
-  const current = data ? stages.find((stage) => standingOf(data, stage) === "current") : undefined
-  const indexProgress = data?.step === "index" ? data.index_progress : null
+  // The rows this run plans; a row with `needs` only when that step is planned.
+  const rows = data
+    ? MAPPING.rows.filter(
+        (row) =>
+          planned(data, row).length > 0 && (row.needs === "" || data.plan?.includes(row.needs) === true),
+      )
+    : []
+  const current = data ? rows.find((row) => row.steps.includes(data.step)) : undefined
   return (
     <Frame
       step={step}
@@ -229,28 +193,22 @@ export function SetUp() {
             {failed ? "Setup stopped" : ready ? "Search is ready" : (current?.label ?? "Setting up")}
           </h1>
           {install.error ? <Note bad>{errorText(install.error)}</Note> : null}
-          {data && underway ? (
+          {data && rows.length > 0 ? (
             <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Setup stages">
-              {stages.map((stage) => {
-                const standing = standingOf(data, stage)
+              {rows.map((row) => {
+                const standing = standingOf(data, row)
                 const live = standing === "current" || standing === "stopped"
                 return (
-                  <li key={stage.label} className="flex flex-col gap-2" data-stage={standing}>
+                  <li key={row.label} className="flex flex-col gap-2" data-stage={standing}>
                     <div
                       className={cn(
                         "flex items-center gap-3 text-[13px] transition-colors duration-med",
-                        standing === "next"
-                          ? "text-faint"
-                          : standing === "skipped"
-                            ? "text-muted-foreground"
-                            : "text-foreground",
+                        standing === "next" ? "text-faint" : "text-foreground",
                       )}
                     >
                       <span className="grid size-5 shrink-0 place-items-center" aria-hidden>
                         {standing === "done" ? (
                           <CheckIcon className="size-4 text-ok" />
-                        ) : standing === "skipped" ? (
-                          <CheckIcon className="size-4 text-faint" />
                         ) : standing === "current" ? (
                           <Spinner className="size-3.5 text-primary" />
                         ) : (
@@ -263,33 +221,22 @@ export function SetUp() {
                         )}
                       </span>
                       <span className={cn(live && "font-semibold")}>
-                        {standing === "done" || standing === "skipped"
-                          ? finishedLine(data, stage)
-                          : stage.label}
+                        {standing === "done" ? finishedLine(data, row) : row.label}
                       </span>
                     </div>
                     {live ? (
                       <div className="flex flex-col gap-2 pl-8">
                         {count ? (
-                          <>
-                            <ProgressBar label={stage.label} done={count.read} total={count.total} />
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{liveLine(data, count)}</span>
-                              <span>{left !== null ? leftText(left) : ""}</span>
-                            </div>
-                          </>
-                        ) : indexProgress ? (
-                          <span className="text-xs text-muted-foreground">{indexProgress.message}</span>
-                        ) : (
-                          <span
-                            className={cn(
-                              "text-xs",
-                              standing === "stopped" ? "text-bad" : "text-muted-foreground",
-                            )}
-                          >
+                          <ProgressBar label={row.label} done={count.read} total={count.total} />
+                        ) : null}
+                        <div className="flex justify-between gap-3 text-xs">
+                          <span className={standing === "stopped" ? "text-bad" : "text-muted-foreground"}>
                             {data.message}
                           </span>
-                        )}
+                          <span className="shrink-0 text-muted-foreground">
+                            {left !== null ? leftText(left) : ""}
+                          </span>
+                        </div>
                         {standing === "stopped" ? (
                           <Stopped data={data} retrying={retrying} retry={retry} />
                         ) : null}
@@ -299,22 +246,24 @@ export function SetUp() {
                 )
               })}
             </ol>
-          ) : data && failed ? (
-            // Stopped before any stage (sources, a sign-in): the stop itself, with its way out.
+          ) : null}
+          {data && failed && current === undefined ? (
+            // Stopped on a step no row lists: the stop itself, with its way out.
             <div className="flex flex-col gap-2">
               <span className="text-xs text-bad">{data.message}</span>
               <Stopped data={data} retrying={retrying} retry={retry} />
             </div>
-          ) : (
+          ) : null}
+          {!data || (rows.length === 0 && !failed) ? (
             <Note>
               <span className="inline-flex items-center gap-2">
                 <Spinner />{" "}
                 {data ? data.message : startedAt === undefined ? "Reading your progress…" : "Starting…"}
               </span>
             </Note>
-          )}
+          ) : null}
           {error ? <Note bad>{error}</Note> : null}
-          {(step === "import" || long) && processing ? (
+          {data?.plan?.includes("deep_context") && processing ? (
             <div className="mt-2 flex flex-col gap-2">
               <Button variant="primary" className="self-start" onClick={() => void navigate(HOME.href)}>
                 Start using Powerpacks now
@@ -336,16 +285,16 @@ export function SetUp() {
             ready={ready}
             sourcesNext={false}
           />
-        ) : data && (count !== null || processing || data.step === "linkedin") ? (
+        ) : data && (processing || data.step === "linkedin") ? (
           <>
             <h2 className="m-0 text-[15px] font-semibold">Your connections page, as I read it</h2>
             <PageShot
               url="/api/install/linkedin-page"
               address="linkedin.com/mynetwork/invite-connect/connections"
-              reading={count !== null}
+              reading={read !== null}
               caption={
-                count
-                  ? `${count.read.toLocaleString()} of ${count.total.toLocaleString()} read so far`
+                read
+                  ? `${read.read.toLocaleString()} of ${read.total.toLocaleString()} read so far`
                   : "Read. Building your network from it now."
               }
             />
