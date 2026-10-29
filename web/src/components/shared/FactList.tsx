@@ -3,6 +3,8 @@ import { useState } from "react"
 import { SHOW_FEWER, showMore } from "@/lib/review/copy"
 import { foldFacts } from "@/lib/review/person"
 
+import "./FactList.css"
+
 interface FactListProps {
   items: readonly string[]
 }

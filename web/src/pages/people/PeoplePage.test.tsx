@@ -995,6 +995,9 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
     relationship_kind_source: "",
     probabilities: {},
     relationship_to_owner: "",
+    summary: "Builds things.",
+    experiences: ["Engineer @ Example Labs, 2020-present"],
+    education: ["BS, CS — State"],
     events: [],
     topics: [],
     employers: [],
@@ -1034,21 +1037,23 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
       .map((button) => button.textContent)
       .filter((text) => /logbook|Refresh signals/.test(text))
 
-  // The LinkedIn-only person: the edits, no signals or logbook, no empty sections.
+  // The LinkedIn-only person: the call and the profile; no signals, logbook or relationship.
   fireEvent.click(row("Morgan Example"))
   await within(drawer).findByRole("combobox", { name: "Edit decision" })
   expect(within(drawer).getByRole("button", { name: "Rename" })).toBeTruthy()
   expect(messageActions(drawer)).toEqual([])
   expect(drawer.querySelector('[data-section="confidence"]')).toBeNull()
   expect(drawer.querySelector('[data-section="timeline"]')).toBeNull()
+  expect(drawer.querySelector('[data-section="relationship"]')).toBeNull()
+  expect(within(drawer).queryByRole("combobox", { name: "Edit relationship" })).toBeNull()
+  expect(drawer.querySelector(".profile")?.textContent).toContain("Builds things.")
+  expect([...drawer.querySelectorAll(".profile .fact-list li")].map((li) => li.textContent)).toEqual([
+    "Engineer @ Example Labs, 2020-present",
+    "BS, CS — State",
+  ])
   pick("Edit decision", "Keep", drawer)
   await waitFor(() => expect(picked("Edit decision", drawer)).toBe("Keep"))
-  pick("Edit relationship", "Colleague", drawer)
-  await waitFor(() => expect(picked("Edit relationship", drawer)).toBe("Colleague"))
-  expect(sent).toEqual([
-    { ids: ["li:7001"], worth: "yes" },
-    { parent_id: "li:7001", relationship_kind: "colleague" },
-  ])
+  expect(sent).toEqual([{ ids: ["li:7001"], worth: "yes" }])
 
   // The family with messages keeps both.
   fireEvent.click(row("Jordan Bravo"))

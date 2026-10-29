@@ -127,4 +127,7 @@ export const DETAIL: PersonDetail = {
   emails: [],
   phones: [],
   interactions: {},
+  summary: "",
+  experiences: [],
+  education: [],
 }

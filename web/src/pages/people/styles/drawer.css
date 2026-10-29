@@ -215,6 +215,11 @@
   color: var(--foreground);
   overflow-wrap: anywhere;
 }
+/* The profile's lists sit in the value column at the section's text size. */
+.profile .kv {
+  margin: 0;
+  font-size: 13px;
+}
 .kv dd small {
   color: var(--faint);
   font-size: smaller;

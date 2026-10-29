@@ -46,7 +46,9 @@ NOW = "2026-10-28T00:00:00Z"
 def linkedin_row(member_id: str, slug: str = "jordan-bravo") -> dict[str, str]:
     url = "https://www.linkedin.com/in/" + slug
     raw = {"member_id": member_id, "first_name": "Jordan", "last_name": "Bravo", "headline": "Engineer",
-           "experiences": [], "education": []}
+           "summary": "Builds things.", "experiences": [{"title": "Engineer", "company_name": "Example Labs",
+                                                           "starts_at": {"year": 2020}, "ends_at": {"year": 0}}],
+           "education": [{"degree": "BS", "fieldOfStudy": "CS", "schoolName": "State"}]}
     row = dict.fromkeys(PEOPLE_SCHEMA_COLUMNS, "")
     row.update(normalize_rapidapi(raw, slug, url))
     row.update(linkedin_url=url, public_identifier=slug, primary_email="jordan@example.com",
@@ -116,6 +118,8 @@ class LinkedInFamiliesTests(unittest.TestCase):
             self.assertFalse(row.in_progress)
             detail = people.detail(row.parent_id)
             self.assertEqual((detail.dossier_html, detail.probabilities, detail.emails, detail.phones), ("", {}, (), ()))
+            self.assertEqual((detail.summary, detail.experiences, detail.education),
+                             ("Builds things.", ("Engineer @ Example Labs, 2020-present",), ("BS, CS — State",)))
         for table in ("bundles", "facts", "worth", "person_labels"):
             self.assertEqual(self.count(table), 0, table)
         # A failed membership write cannot leave a candidate for dedupe to put onto p:.
