@@ -1,6 +1,6 @@
 ---
 name: search
-description: "Find and rank people in your network or search from a job description. Use for discovery, recruiting and shortlists. A named person's dossier is Deep Context's lookup. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
+description: "Find and rank people in your network or search from a job description. Use for discovery, recruiting and shortlists. A named person's dossier, or a list of people by relationship, label or tag (\"show me my family\"), is Deep Context's. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
 ---
 
 # Search
@@ -19,8 +19,10 @@ Use this for discovery and recruiting requests:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
-For a named person's dossier, labels or relationships, follow
-`packs/ingestion/skills/deep-context/SKILL.md` (its lookup and people reads) and stop here.
+For a named person's dossier, labels or relationships, or a list of people the user
+already knows by relationship, label, tag or worth ("show me my family", "who is tagged
+investor", "my close friends"), follow `packs/ingestion/skills/deep-context/SKILL.md`
+(its lookup and people reads) and stop here. Those are reads of the People list, not searches.
 Explicit shared-network requests and recruiting stay on this skill. Requests
 for people like someone continue through search below.
 

@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`. Also lists people the user knows by relationship, label, tag or worth ("show me my family", "who is tagged investor").
 ---
 
 # deep-context
@@ -164,10 +164,20 @@ relationship is one person per request. Never walk the store's tables for names:
 the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
 
+Every word that narrows the request is a filter, and a set write keeps all of them: "biz contacts marked
+no" is the people who are business contacts AND worth no, never everyone marked no. A relationship word
+matches the label or the `relationship_kind` column, as below; "biz", "business" or "work contacts" is
+`relationship_kind` `business_contact` or `colleague`, or `is_professional` in `labels` or `tags`. A word
+that maps to no column, label or tag is a question for the user, not a filter to drop; a filter that
+matches nobody changes nothing and says so. After the write, reply with the filter you used, the count,
+and the changed rows as a table.
+
 A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
 same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
 matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
-never the answer to "show me".
+never the answer to "show me". A relationship ("my family", "close friends") matches either side: the label in `labels` or
+`tags` (`is_family`, `is_close_friend`) or the `relationship_kind` column (`family`, `close_friend`);
+show `relationship_kind` so a mismatch is visible.
 
 | Ask | Write |
 |---|---|

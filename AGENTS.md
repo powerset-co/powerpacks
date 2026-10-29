@@ -63,6 +63,7 @@ Paths below are relative to the installed checkout.
 | Import iMessage or WhatsApp contacts | `packs/ingestion/skills/import-messages/SKILL.md` |
 | Import Twitter/X contacts | `packs/ingestion/skills/import-twitter/SKILL.md` |
 | Process contacts, build dossiers, duplicates, review, sharing | `packs/ingestion/skills/deep-context/SKILL.md` |
+| Show or list people already in the user's network by relationship, label, tag or worth ("show me my family", "who is tagged investor", "my close friends") | `packs/ingestion/skills/deep-context/SKILL.md` |
 | Build the local search index | `packs/indexing/skills/build-local-search-index/SKILL.md` |
 | Raw conversation archive | `packs/ingestion/skills/logbook/SKILL.md` |
 | Reset derived pipeline state | `packs/ingestion/skills/clean-slate/SKILL.md` |
