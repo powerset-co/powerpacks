@@ -3,7 +3,7 @@
 
 import { worthTab, type Person } from "@/types/people"
 
-import { facetOf, sortRows } from "./facets"
+import { facetOf, HIDES, sortRows } from "./facets"
 import type { PeopleView } from "./view"
 
 export interface FilterResult {
@@ -12,8 +12,12 @@ export interface FilterResult {
   kinds: Map<string, number>
 }
 
-export function filterRows(rows: readonly Person[], { tab, filters, text, sort }: PeopleView): FilterResult {
+export function filterRows(
+  rows: readonly Person[],
+  { tab, filters, hide, text, sort }: PeopleView,
+): FilterResult {
   const needle = text.trim().toLowerCase()
+  const hidden = HIDES.filter(({ key }) => hide.has(key))
   const active = [...filters]
     .filter(([, values]) => values.size)
     .map(([key, values]) => [facetOf(key), values] as const)
@@ -23,6 +27,7 @@ export function filterRows(rows: readonly Person[], { tab, filters, text, sort }
     if (tab !== "all" && worthTab(row.worth) !== tab) continue
     if (row.relationship_kind) kinds.set(row.relationship_kind, (kinds.get(row.relationship_kind) ?? 0) + 1)
     if (needle && !row.search.includes(needle)) continue
+    if (hidden.some(({ hides }) => hides(row))) continue
     if (active.every(([facet, values]) => facet.get(row).some((value) => values.has(value))))
       matching.push(row)
   }

@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 
-import { setEntries, type FacetSet, type SortKey } from "@/lib/people/facets"
+import { setEntries, type FacetSet, type HideKey, type SortKey } from "@/lib/people/facets"
 import { readView, type PeopleView, type Tab } from "@/lib/people/view"
 
 /** Tab, facet selections, search text and sort, initialized from the URL (All when it names none). */
@@ -16,6 +16,14 @@ export function useFilters(params: URLSearchParams) {
     setView((current) => ({ ...current, filters }))
   }, [])
 
+  const toggleHide = useCallback((key: HideKey) => {
+    setView((current) => {
+      const hide = new Set(current.hide)
+      if (!hide.delete(key)) hide.add(key)
+      return { ...current, hide }
+    })
+  }, [])
+
   const setText = useCallback((text: string) => setView((current) => ({ ...current, text })), [])
 
   // The same column flips direction; a new column starts ascending.
@@ -26,5 +34,5 @@ export function useFilters(params: URLSearchParams) {
     })
   }, [])
 
-  return { view, setTab, setFilters, setText, setSort }
+  return { view, setTab, setFilters, toggleHide, setText, setSort }
 }

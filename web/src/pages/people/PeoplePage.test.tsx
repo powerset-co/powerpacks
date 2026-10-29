@@ -913,6 +913,45 @@ it("saves a human relationship from the profile and refreshes its source", async
   expect(changed).toBe(true)
 })
 
+it("hides LinkedIn-only people from the Filters menu and keeps that in the URL", async () => {
+  const people: Partial<Cells>[] = [
+    {
+      parent_id: "li:7001",
+      name: "Morgan Example",
+      channels: ["linkedin"],
+      linkedin_only: true,
+      reason: "unjudged",
+    },
+    {
+      parent_id: "p1",
+      name: "Jordan Bravo",
+      channels: ["gmail"],
+      interactions: 40,
+      worth: "no",
+      reason: "worth_no",
+    },
+  ]
+  const payload: PeoplePayload = {
+    counts: { total: 2, upload: 0, private: 2 },
+    columns: [...PERSON_COLUMNS],
+    rows: people.map((person) => PERSON_COLUMNS.map((column) => ({ ...BASE, ...person })[column])),
+  }
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) =>
+      url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
+    ),
+  )
+  const { container } = renderPage()
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }))
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Hide LinkedIn-only people" }))
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(1))
+  expect(container.querySelector(".row")?.textContent).toContain("Jordan Bravo")
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toContain("Filters · 1")
+  expect(new URLSearchParams(must(at()).split("?")[1]).getAll("hide")).toEqual(["linkedin_only"])
+})
+
 it("keeps human edits and leaves out message actions for a LinkedIn-only person", async () => {
   // A LinkedIn import with no messages, no labels and no facts, beside a family with messages.
   const people: Partial<Cells>[] = [

@@ -6,7 +6,7 @@ import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { useFeatures } from "@/lib/features"
-import type { FacetSet } from "@/lib/people/facets"
+import type { FacetSet, HideKey } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
@@ -115,7 +115,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
   // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
-  const { setTab: pickTab, setFilters: pickFilters, setText: pickText } = filters
+  const { setTab: pickTab, setFilters: pickFilters, toggleHide: pickHide, setText: pickText } = filters
   const startOver = useCallback(() => {
     clearSelection()
     setFocus(-1)
@@ -144,7 +144,17 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     },
     [pickText, startOver],
   )
-  const clearFilters = useCallback(() => setFilters({}), [setFilters])
+  const toggleHide = useCallback(
+    (key: HideKey) => {
+      pickHide(key)
+      startOver()
+    },
+    [pickHide, startOver],
+  )
+  const clearFilters = useCallback(() => {
+    setFilters({})
+    for (const key of view.hide) pickHide(key)
+  }, [setFilters, view.hide, pickHide])
   const setRelationship = useCallback(
     (kind: string) => setFilters(kind ? { relationship_kind: [kind] } : {}),
     [setFilters],
@@ -211,6 +221,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             onText={setText}
             onTab={setTab}
             onRelationship={setRelationship}
+            hide={view.hide}
+            onHide={toggleHide}
             actions={actions}
             notice={
               catalog.error ? (
@@ -237,7 +249,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             empty={
               <EmptyText
                 hasPeople={rows.length > 0}
-                filtered={view.filters.size > 0 || view.text !== ""}
+                filtered={view.filters.size > 0 || view.hide.size > 0 || view.text !== ""}
                 tab={view.tab}
                 onClear={clearFilters}
               />
