@@ -21,6 +21,8 @@ vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: false, auto_reply
 vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: vi.fn(() => false) }))
 const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
 vi.mock("@/lib/api/install", () => install)
+const accounts = vi.hoisted(() => ({ fetchSignedIn: vi.fn() }))
+vi.mock("@/lib/api/accounts", () => accounts)
 vi.mock("@/pages/agent/Chats", () => ({ Chats: () => null }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
 
@@ -71,4 +73,36 @@ it("drops Setup once setup is done; Settings offers Repair setup instead", async
   mount()
   await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
   expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
+})
+
+it("offers Add sources once setup is done with no message source in, and drops it once one is", async () => {
+  vi.mocked(useSetupDone).mockReturnValue(true)
+  accounts.fetchSignedIn.mockResolvedValue({
+    linkedin: true,
+    gmail: false,
+    imessage: false,
+    whatsapp: false,
+    mailboxes: [],
+  })
+  mount()
+  const link = await screen.findByRole("link", { name: "Add sources" })
+  expect(link.getAttribute("href")).toBe("/onboarding/sources")
+  cleanup()
+  accounts.fetchSignedIn.mockResolvedValue({
+    linkedin: true,
+    gmail: true,
+    imessage: false,
+    whatsapp: false,
+    mailboxes: ["casey@example.com"],
+  })
+  mount()
+  await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
+  expect(screen.queryByRole("link", { name: "Add sources" })).toBeNull()
+})
+
+it("does not offer Add sources while setup is not done", async () => {
+  vi.mocked(useSetupDone).mockReturnValue(false)
+  mount()
+  await waitFor(() => expect(screen.getByRole("link", { name: "Setup" })).toBeTruthy())
+  expect(screen.queryByRole("link", { name: "Add sources" })).toBeNull()
 })
