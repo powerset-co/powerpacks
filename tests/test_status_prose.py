@@ -100,7 +100,7 @@ class StatusProseTests(unittest.TestCase):
             self.assertIn(_entry(item)[0], PROSE)
 
     def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
-        mapping = json.loads((ROOT / "web/src/pages/install/setup-steps-mapping.json").read_text())
+        mapping = json.loads((INSTALL / "setup-steps-mapping.json").read_text())
         codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
         self.assertCountEqual(codes, list(InstallStep))
         rows = [step for row in ROWS for step in row.steps]

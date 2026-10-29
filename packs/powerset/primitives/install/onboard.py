@@ -349,9 +349,7 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
         print("Powerset search is ready; local setup will continue.", flush=True)
     payload = flow.run()
     if (payload.get("action") or {}).get("kind") == "processing":
-        pipeline = ProcessingOnboarding(root)
-        # The handoff names the step that runs next: the index with LinkedIn alone, deep context otherwise.
-        payload = pipeline.run_linkedin() if payload["step"] == InstallStep.INDEX else pipeline.run()
+        payload = ProcessingOnboarding(root).run()
     return payload
 
 

@@ -270,18 +270,21 @@ class LinkedInFamiliesTests(unittest.TestCase):
         self.assertEqual(set(queries_dedupe.current_parents(self.conn).values()), {"li:42"})
 
     def test_initial_linkedin_install_realizes_without_an_owner_or_message_processing(self) -> None:
-        from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
-        from packs.powerset.primitives.install.status import InstallStatus
-        from packs.powerset.primitives.install.steps import InstallStep
+        from packs.powerset.primitives.install import linkedin_setup as setup
+
         project = self.root / "install"
         data = project / ".powerpacks"
         CsvIO.write_dict_rows(data / load.CONNECTIONS_CSV, PEOPLE_SCHEMA_COLUMNS, [linkedin_row("42")])
-        InstallStatus(project).write("step.waiting", step=InstallStep.DEEP_CONTEXT, pid=0,
-                                     retry_command="bin/onboard")
-        onboarding = ProcessingOnboarding(project)
-        with patch.object(onboarding, "_build_index") as build, patch.object(onboarding, "_modal", side_effect=AssertionError("paid call")):
-            onboarding._index_linkedin()
-        indexed = build.call_args.args[0]
+        with patch.object(setup, "load_env"), \
+             patch.object(setup.LinkedInConnections, "run", return_value={
+                 "status": "completed", "outcome": "read", "connections": 1, "added": 1}), \
+             patch.object(setup.api_runs, "upload", return_value="uploaded"), \
+             patch.object(setup.api_runs, "start", return_value="synthetic"), \
+             patch.object(setup.api_runs, "status", return_value={"status": "completed"}), \
+             patch.object(setup.api_runs, "download", return_value=100), \
+             patch.object(setup, "validate_search_index", return_value={"status": "ok", "total_people": 1}):
+            self.assertEqual(setup.main(["--root", str(project)]), 0)
+        indexed = data / "search-index/people.csv"
         self.assertEqual(indexed.read_bytes(), (data / "network-import/merged/people.csv").read_bytes())
         with indexed.open() as handle:
             self.assertEqual([r["id"] for r in csv.DictReader(handle)], ["li:42"])

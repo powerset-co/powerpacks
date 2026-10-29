@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.powerset.primitives.install.controller import InstallController, permission_app
-from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.shared.web import account, features, feedback, providers, search_scope
 from packs.shared.web.app import AppRoutes
@@ -282,8 +281,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/install":
                 record = InstallStatus(root).read()
-                if record["step"] == "index":
-                    record["index_progress"] = read_index_progress(root, record["updated_at"])
                 qr = install.qr(record)
                 if qr:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"

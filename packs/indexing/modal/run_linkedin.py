@@ -22,8 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
+import time
+from contextlib import redirect_stderr
 from pathlib import Path
 
 REPO = Path("/repo")
@@ -40,6 +43,34 @@ from packs.ingestion.primitives.imports.linkedin import network_import as linked
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 WORK = Path("/tmp/linkedin-import")
+_PROFILES = re.compile(r"LinkedIn profile enrichment progress: (\d+)/(\d+) processed")
+
+
+class _ImportProgress:
+    """Forward enrichment's stderr and put its existing counts in the run record."""
+
+    def __init__(self, run_vol: Path, status: dict) -> None:
+        self.run_vol = run_vol
+        self.status = status
+        self.started = time.monotonic()
+        self.pending = ""
+        self.stderr = sys.stderr
+
+    def write(self, text: str) -> int:
+        self.stderr.write(text)
+        self.pending += text
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            if match := _PROFILES.search(line):
+                done, total = int(match.group(1)), int(match.group(2))
+                left = (total - done) * (time.monotonic() - self.started) / done
+                write_status(self.run_vol, self.status | {
+                    "phase": "enrich", "message": f"Importing your connections: {done} of {total}",
+                    "done": done, "total": total, "left_seconds": left})
+        return len(text)
+
+    def flush(self) -> None:
+        self.stderr.flush()
 
 
 def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Namespace:
@@ -106,7 +137,8 @@ def main() -> int:
     write_status(run_vol, status | {"phase": "enrich", "message": "Importing your connections"})
     # RapidAPI is always approved on this path (approve_spend=True), so the single
     # `run` completes without a needs_approval stop — no approve/continue loop.
-    code = linkedin_import.LinkedInImport.command_run(ns)
+    with redirect_stderr(_ImportProgress(run_vol, status)):
+        code = linkedin_import.LinkedInImport.command_run(ns)
 
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     if code != 0 or manifest.get("status") != "completed":

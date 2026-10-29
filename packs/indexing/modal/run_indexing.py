@@ -33,8 +33,9 @@ from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS, STEP_WORDS  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import DEFAULT_COMPANY_MAX_RPM  # noqa: E402
 
+_STEP_START = re.compile(r"^\[build-processing\] start (\S+)")
 _STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
-_COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles")
+_COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles\s*$")
 _COMPANY_FETCH = re.compile(r"^\[enrich-companies\] fetching (\d+) company profiles at ([\d.]+) rpm")
 BUILD_SECONDS = 120
 
@@ -44,10 +45,8 @@ def progress_line(line: str, steps_done: int,
     """Return (message, done, total, steps_done, left_seconds), or None.
     Steps completed count across the whole build; the company fetch, the long one, reports its own
     count while it runs. Both land in status.json for the laptop's Set up screen."""
-    if _STEP_DONE.match(line):
-        steps_done += 1
-        position = min(steps_done + 1, len(STEPS))
-        message = f"{STEP_WORDS[STEPS[position - 1]]} ({position} of {len(STEPS)})"
+    if match := _STEP_START.match(line):
+        message = STEP_WORDS[match.group(1)]
         left_seconds = BUILD_SECONDS * (len(STEPS) - steps_done) / len(STEPS)
         return message, steps_done, len(STEPS), steps_done, left_seconds
     if match := _COMPANY_FETCH.match(line):
@@ -202,11 +201,19 @@ def main() -> int:
     pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
     steps_done = 0
     company_rpm = DEFAULT_COMPANY_MAX_RPM
+    company_done = company_total = 0
     assert pipeline.stderr is not None
     for line in pipeline.stderr:
         sys.stderr.write(line)
+        if _STEP_DONE.match(line):
+            steps_done += 1
         if match := _COMPANY_FETCH.match(line):
+            company_done, company_total = 0, int(match.group(1))
             company_rpm = float(match.group(2))
+        if match := _COMPANIES.match(line):
+            company_done, company_total = int(match.group(1)), int(match.group(2))
+        if company_done < company_total and _STEP_START.match(line):
+            continue
         if progress := progress_line(line, steps_done, company_rpm):
             message, done, total, steps_done, left_seconds = progress
             write_status(run_vol, status | {"phase": "pipeline", "message": message, "done": done,

@@ -1,41 +1,7 @@
-"""The two processing runs setup can start: run_linkedin (connections -> Modal index) and run (the
-import over connected sources: deep-context v2, enrichment, the Modal index, validation).
-
-The stages and their order are deep_context_v2/run.py's (`stages`); this walks them under the
-status page's events. Every paid stage estimates (into the install log) and runs: the install
-asks for nothing. A LinkedIn connections list newer than its import is imported on Modal first.
-Enrichment that fails is deferred and listed at the end; search is built without it. The index
-is built on Modal unless realize left people.csv as it was and an index is already there; only
-validation marks search ready.
+"""Process imported message sources: deep context, enrichment, Modal indexing and validation.
 
 Changelog:
-  2026-10-29: a run that selected no message source is LinkedIn only, whatever earlier imports left on
-      disk; the on-disk test sent every returning user's LinkedIn setup through deep context.
-  2026-10-28: LinkedIn-only setup imports verified source families and realizes the shared directory
-      before indexing; message processing remains optional.
-  2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
-      the Modal index; deep context and enrichment are marked as nothing to do, the follow-up names what
-      to connect for more. With messages, the index's people file (search-index/people.csv) is realize's
-      families plus every LinkedIn connection no family holds, so connections stay searchable.
-  2026-10-09: synthesize and enrich report their counts to the page as their paid calls come back
-      (Node.on_progress), so a long stage is never a static line.
-  2026-10-07: the stage order, realize (with the share list) and the index command come from
-      deep_context_v2/run.py. Gone: the $500 spend approval and --approve-spend (the install
-      budget always says yes), the Modal dispatch recovery and cap retry (a rerun builds again
-      against the Modal cache), and the review step.
-  2026-10-07: deep-context v2. The stages are load, collect, synthesize, dedupe, worth, enrich and
-      realize (packs/ingestion/primitives/deep_context_v2); a v1 store beside the v2 one is archived
-      first. Gone with v1: fan-in, seed, the readiness check, compose, validate-dossiers, parents,
-      profile prefetch and the workflow-state loop. The owner profile is built by v2's owner step
-      from the LinkedIn session and the Gmail address. The review is the page at `/`.
-  2026-10-05: every write names a status_prose event; what a run deferred is
-      listed with its reason in the ready step's details (`left_to_fix`).
-  2026-10-05: setup no longer waits on the LinkedIn review: matches the judges
-      could not settle are left for the user, the index builds, and the ready
-      step offers the review (count and link) for when they have time.
-  2026-10-05: enrichment that fails for any reason is deferred: search is built
-      without it, the ready message lists what is left to fix.
-  2026-10-03: import the scraped LinkedIn connections before fan-in.
+  2026-10-29: LinkedIn setup moves to linkedin_setup.py; this run processes message imports.
 """
 from __future__ import annotations
 
@@ -52,8 +18,7 @@ from typing import Callable
 
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
-from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.import_load.load import CONNECTIONS_CSV as LINKEDIN_CSV, write_connections
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
@@ -67,7 +32,6 @@ from packs.powerset.primitives.install.controller import LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
-# Without message imports, only LinkedIn source families need loading before realization.
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
@@ -171,15 +135,13 @@ class ProcessingOnboarding:
         print(result.stdout)
         return {"status": "failed" if result.returncode else "completed", "returncode": result.returncode}
 
-    def _linkedin(self, event: str) -> None:
-        """The scraped LinkedIn connections, imported on Modal when newer than their import. `event`
-        is the row the page shows it under: the index for the LinkedIn run, deep context for the
-        import over messages."""
+    def _linkedin(self) -> None:
+        """Import scraped connections on Modal when newer than their import."""
         connections, imported = self.root / CONNECTIONS_CSV, self.root / _LINKEDIN_PEOPLE
         if connections.is_file() and (not imported.is_file()
                                       or imported.stat().st_mtime_ns < connections.stat().st_mtime_ns):
             command = [*_MODAL, "import-linkedin", "--csv", str(CONNECTIONS_CSV), "--dest", _LINKEDIN_PEOPLE]
-            self._run(shlex.join(command), lambda: self._modal(command), event)
+            self._run(shlex.join(command), lambda: self._modal(command), "discover.linkedin")
 
     def _owner(self) -> None:
         """The owner profile, once: the LinkedIn scrape records the signed-in profile, else setup's saved
@@ -222,13 +184,6 @@ class ProcessingOnboarding:
                            "index.preparing")
         self._build_index(Path(result["people_csv"]))
 
-    def _index_linkedin(self) -> None:
-        """LinkedIn only: import verified families locally before realizing the shared directory."""
-        with closing(open_store(store_path(self.data_root))) as conn:
-            imported = write_connections(conn, self.data_root / LINKEDIN_CSV, now_iso())
-            print(f"LinkedIn: {imported.candidates} people; {imported.missing_member_id} missing member IDs")
-        self._index()
-
     def _build_index(self, people: Path) -> None:
         """The Modal index of `people` unless the index on disk was built from this very file (the
         fingerprint the download wrote beside it), then the search check."""
@@ -250,20 +205,12 @@ class ProcessingOnboarding:
         self._write("search.ready", people=validation["total_people"], follow_ups=" ".join(deferred),
                     details={"validation": validation, "left_to_fix": self.left_to_fix})
 
-    def run_linkedin(self) -> dict:
-        """The LinkedIn run: import the connections and build the index. No message processing."""
-        return self._guarded(self._linkedin_only)
-
     def run(self) -> dict:
         """The import run over the connected sources: owner, deep context, enrichment, the index."""
         return self._guarded(self._messages)
 
-    def _linkedin_only(self) -> None:
-        self._linkedin("index.linkedin")
-        self._index_linkedin()
-
     def _messages(self) -> None:
-        self._linkedin("discover.linkedin")
+        self._linkedin()
         archive_v1(self.data_root)
         with closing(open_store(store_path(self.data_root))) as conn:
             self._owner()

@@ -48,6 +48,10 @@ class SourceOnboardingTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.env = self.root / '.env'
         self.env.write_text('CUSTOM_SETTING=keep\n')
+        # The permission check uses the launching app, without inspecting the test runner's processes.
+        app = self.root / 'Synthetic.app'
+        app.mkdir()
+        patch.dict(os.environ, {'POWERPACKS_PERMISSION_APP': str(app)}).start()
         self.data = self.root / '.powerpacks/network-import/import/messages/people.csv'
         self.data.parent.mkdir(parents=True)
         self.data.write_text('person_id,name\ncandidate:phone:+15550100,Jordan Bravo\n')
@@ -96,14 +100,6 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertNotIn('--gmail-email', flow.retry_command)
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
         self.tools.assert_not_called()
-
-    def test_linkedin_only_plan_omits_message_processing(self):
-        for sources, skipped in ((('linkedin',), ()), (('linkedin', 'gmail'), ('gmail',))):
-            with self.subTest(sources=sources):
-                flow = SourceOnboarding(self.root, sources=sources, skip_sources=skipped)
-                self.assertEqual(flow.plan[-3:], ['index', 'validate', 'ready'])
-                self.assertNotIn('deep_context', flow.plan)
-                self.assertNotIn('enrich', flow.plan)
 
     def test_gmail_asks_which_accounts_only_without_a_powerset_login(self):
         with patch.object(accounts, 'status_payload', return_value={'accounts': []}), \
@@ -268,7 +264,7 @@ class SourceOnboardingTests(unittest.TestCase):
         saved = {path: path.read_bytes() for path in imported.parent.iterdir()}
         InstallStatus(self.root).write('gmail.import.current', pid=os.getpid(), plan=['skills', 'sources', 'gmail_import'])
         result = SourceOnboarding(self.root, sources=('gmail', 'linkedin'), skip_sources=('gmail',)).run()
-        self.assertEqual(result['step'], 'index')
+        self.assertEqual(result['step'], 'deep_context')
         self.assertEqual(result['steps']['gmail_import']['status'], 'skipped')
         self.assertEqual({path: path.read_bytes() for path in imported.parent.iterdir()}, saved)
         self.assert_preserved()
@@ -974,7 +970,7 @@ class SourceOnboardingTests(unittest.TestCase):
                 'status': 'completed', 'outcome': 'partial', 'read': 2, 'total': 3, 'connections': 2, 'added': 2}) as scrape:
             result = SourceOnboarding(self.root, sources=('linkedin',)).run()
         scrape.assert_called_once()
-        self.assertEqual(result['step'], 'index')
+        self.assertEqual(result['step'], 'deep_context')
         self.assertEqual(result['steps']['linkedin']['message'], '2 LinkedIn connections (2 new); LinkedIn shows 3')
         manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
         manifest.parent.mkdir(parents=True)
@@ -1016,9 +1012,9 @@ class SourceOnboardingTests(unittest.TestCase):
             original = (csv.read_bytes(), csv.stat().st_mtime_ns)
             for _ in range(2):
                 repeated = SourceOnboarding(self.root, sources=()).run()
-                self.assertEqual(repeated['step'], 'index')
+                self.assertEqual(repeated['step'], 'deep_context')
                 self.assertEqual((csv.read_bytes(), csv.stat().st_mtime_ns), original)
-            self.assertEqual(first['step'], 'index')
+            self.assertEqual(first['step'], 'deep_context')
             self.assertEqual(sum('--login-only' not in call.args for call in external.call_args_list), 1)
             SourceOnboarding(self.root, sources=(), refresh=True).run()
             SourceOnboarding(self.root, sources=()).run()
