@@ -13,6 +13,7 @@ export type PageKey =
   | "team"
   | "tasks"
   | "setup"
+  | "sources"
   | "settings"
 
 export interface Page {
@@ -35,6 +36,9 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "team", label: "Team", href: "/team" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away.
   { key: "setup", label: "Setup", href: "/install" },
+  // Once setup is done with LinkedIn alone: the onboarding's Sources screen, for Messages, Gmail
+  // and WhatsApp. Gone once a message source is in.
+  { key: "sources", label: "Add sources", href: "/onboarding/sources" },
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and

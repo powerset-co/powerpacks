@@ -213,7 +213,6 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     let setup = onboard::setup(&root);
     match setup {
         Setup::New => onboard::record_install(&root, &paths::project_python(&root))?,
-        Setup::Interrupted => onboard::record_paused(&root, &paths::project_python(&root))?,
         Setup::Paused | Setup::Done => {}
     }
     show_page(

@@ -272,6 +272,7 @@ PROSE: dict[str, Prose] = {
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
 
     # Building your search index
+    "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
     "index.building": Prose(InstallStep.INDEX, R, "Building your search index"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
@@ -282,6 +283,7 @@ PROSE: dict[str, Prose] = {
     # Any step
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
+    # bin/bootstrap writes this when the command-line install is interrupted (Ctrl-C, TERM).
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
     "setup.ready": Prose(None, C, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
 }

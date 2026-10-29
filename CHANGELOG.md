@@ -1,5 +1,41 @@
 # Changelog
 
+## [3.48.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.0...powerpacks-v3.48.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **onboarding:** Skip for now works in a release build ([#1019](https://github.com/powerset-co/powerpacks/issues/1019)) ([ba0494f](https://github.com/powerset-co/powerpacks/commit/ba0494fa782bc325c8c57676b4a3307842bcd90d))
+
+## [3.48.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.47.0...powerpacks-v3.48.0) (2026-10-29)
+
+
+### Features
+
+* **onboarding:** Skip for now, and Add sources in the nav ([#1016](https://github.com/powerset-co/powerpacks/issues/1016)) ([ec74118](https://github.com/powerset-co/powerpacks/commit/ec74118cef1f6dd225bdadefd5c65d4aa4b9d466))
+
+
+### Bug Fixes
+
+* **setup:** the LinkedIn run's Modal import shows on the index row ([#1018](https://github.com/powerset-co/powerpacks/issues/1018)) ([6cf1771](https://github.com/powerset-co/powerpacks/commit/6cf1771a9ba9576a11aa1a1e7f752f774252a5a7))
+
+## [3.47.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.46.0...powerpacks-v3.47.0) (2026-10-29)
+
+
+### Features
+
+* include LinkedIn-only people in families ([#1007](https://github.com/powerset-co/powerpacks/issues/1007)) ([098f08e](https://github.com/powerset-co/powerpacks/commit/098f08ea393cbe5ffe9d3c9a9b581c17766f0139))
+* **onboarding:** a create-account helper on the ChatGPT step ([#1005](https://github.com/powerset-co/powerpacks/issues/1005)) ([90ed8cb](https://github.com/powerset-co/powerpacks/commit/90ed8cb60cbad3b99df718b9429bd7eba5e22809))
+
+
+### Bug Fixes
+
+* **agent:** "show me my family" reads the People list, not a search ([#1008](https://github.com/powerset-co/powerpacks/issues/1008)) ([f73db53](https://github.com/powerset-co/powerpacks/commit/f73db53977b781d8186d9d9fd35e0f0a8e481fff))
+* **onboarding:** nothing happens by itself; a stop always has Try again ([#1012](https://github.com/powerset-co/powerpacks/issues/1012)) ([64e60b4](https://github.com/powerset-co/powerpacks/commit/64e60b467dbb9cd8847357325efd144c1d46d201))
+* **search:** resolve a school to every id its people are filed under ([#1009](https://github.com/powerset-co/powerpacks/issues/1009)) ([6ac8599](https://github.com/powerset-co/powerpacks/commit/6ac8599ac35db05fc2e74f4cd70e150d106b9258))
+* **setup:** a run that selected LinkedIn alone never runs deep context ([#1013](https://github.com/powerset-co/powerpacks/issues/1013)) ([f062206](https://github.com/powerset-co/powerpacks/commit/f062206cea02f8d8cb5ddae6693e7e437120dc80))
+* **setup:** no resume machinery; the pipeline names its two runs ([#1014](https://github.com/powerset-co/powerpacks/issues/1014)) ([bb92891](https://github.com/powerset-co/powerpacks/commit/bb92891cda1f779392eb96fba68f07f8d81b92e0))
+
 ## [3.46.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.4...powerpacks-v3.46.0) (2026-10-28)
 
 

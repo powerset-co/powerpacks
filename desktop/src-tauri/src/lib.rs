@@ -190,6 +190,14 @@ fn debug_state(boot: State<'_, Arc<Boot>>) -> DebugState {
     }
 }
 
+/// Skip for now on an onboarding screen: setup counts as done on later launches; Accounts and
+/// Add sources in the nav take it from there.
+#[tauri::command]
+fn setup_skip(boot: State<'_, Arc<Boot>>) -> Result<(), String> {
+    let root = boot::require_root(&boot)?;
+    onboard::set_skipped(&root, true)
+}
+
 /// Debug menu: skip setup (launch opens Chat), or stop skipping and resume it now.
 #[tauri::command]
 fn debug_skip_setup(boot: State<'_, Arc<Boot>>, skip: bool) -> Result<(), String> {
@@ -442,6 +450,7 @@ pub fn run() {
             debug_skip_setup,
             debug_reset_data,
             setup_done,
+            setup_skip,
             setup_import_source,
             setup_import,
             report_crash,

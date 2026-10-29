@@ -7,7 +7,6 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::children;
 use crate::paths;
 use crate::source;
 
@@ -24,15 +23,12 @@ const ONBOARD_MODULE: &str = "packs.powerset.primitives.install.onboard";
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
 /// The page shows a Start/Continue button for these (status_prose.py: action `resume`).
 const READY_EVENT: &str = "setup.ready";
-const PAUSED_EVENT: &str = "setup.paused";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Setup {
     /// Nothing has run yet.
     New,
-    /// A step is running or just finished; the process may have died with the last app run.
-    Interrupted,
-    /// Waiting on the user, or failed: the install page offers the next click.
+    /// Started and not done: running, waiting on the user, or failed.
     Paused,
     Done,
 }
@@ -55,16 +51,8 @@ pub fn setup(root: &Path) -> Setup {
     if field("event") == READY_EVENT {
         return Setup::Paused;
     }
-    // A wait the installer sat in (it records its pid; 0 once it stops for a click) died with
-    // the last app run when that pid is gone.
-    let installer = manifest
-        .get("installer_pid")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32;
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
-        ("running" | "completed", _) => Setup::Interrupted,
-        ("waiting", _) if installer != 0 && !children::is_alive(installer) => Setup::Interrupted,
         _ => Setup::Paused,
     }
 }
@@ -95,17 +83,6 @@ pub fn record_install(root: &Path, python: &Path) -> Result<(), String> {
         write_event(root, python, event, &retry_command)?;
     }
     write_event(root, python, READY_EVENT, &retry_command)
-}
-
-/// A run that died with the last app run waits for the user's click too.
-pub fn record_paused(root: &Path, python: &Path) -> Result<(), String> {
-    let text = fs::read_to_string(root.join(MANIFEST)).map_err(|error| error.to_string())?;
-    let manifest: serde_json::Value =
-        serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    let retry_command = manifest["retry_command"]
-        .as_str()
-        .ok_or("Setup has no retry command.")?;
-    write_event(root, python, PAUSED_EVENT, retry_command)
 }
 
 fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> Result<(), String> {
@@ -164,7 +141,7 @@ pub fn is_running(root: &Path) -> bool {
 
 /// Stop the setup process recorded in the manifest, if any: before a new run (its lock would
 /// refuse one, and a macOS permission granted meanwhile only reaches a new process), and when
-/// the app exits. Setup resumes from its saved step on the next launch.
+/// the app exits. The next run starts from the person's click.
 pub fn stop_running(root: &Path) {
     let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
         return;
@@ -269,43 +246,4 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn pause_preserves_saved_source_gmail_and_window_choices() {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let python = paths::project_python(&repo).canonicalize().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "powerpacks-onboard-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir(&root).unwrap();
-        std::os::unix::fs::symlink(
-            repo.join("packs").canonicalize().unwrap(),
-            root.join("packs"),
-        )
-        .unwrap();
-
-        record_install(&root, &python).unwrap();
-        let manifest_path = root.join(MANIFEST);
-        let mut manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        let retry = "bin/onboard --source gmail --source whatsapp --skip-source whatsapp \
-            --gmail-email casey@example.com --sync-after 2025-01-01 \
-            --wacli-store '/tmp/synthetic whatsapp' --harness codex --port 8899";
-        manifest["retry_command"] = retry.into();
-        manifest["step"] = "gmail_sync".into();
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-
-        record_paused(&root, &python).unwrap();
-        let paused: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        fs::remove_dir_all(&root).unwrap();
-        assert_eq!(paused["event"], PAUSED_EVENT);
-        assert_eq!(paused["installer_pid"], 0);
-        assert_eq!(paused["retry_command"], retry);
-        assert_eq!(paused["step"], "gmail_sync");
-    }
 }
