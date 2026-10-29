@@ -3,21 +3,28 @@ import { ChevronRight } from "lucide-react"
 import type { ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 
-import { DEBUG_KEY, fetchDebugState } from "@/lib/api/debug"
+import { DEBUG_KEY, fetchDebugState, skipSetup } from "@/lib/api/debug"
 import { isDesktop } from "@/lib/desktop"
+import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
 import { STEPS, type StepKey } from "./steps"
 
 /** The onboarding window: the steps across the top with a line under the ones reached, then two
- *  columns: what to do on the left, what it is about on the right. No Back and no Skip: each
- *  screen moves on by its own action. The steps are plain labels in a release build; a test build
- *  (the debug menu on) and the browser view make them links, a way around while working on them. */
+ *  columns: what to do on the left, what it is about on the right. No Back: each screen moves on
+ *  by its own action. Skip for now, at the foot of the left column, marks setup skipped and opens
+ *  the app; Accounts and Add sources in the nav take it from there. The Sources and Import screens
+ *  are off the bar (the nav opens them), so their foot says Back to the app. The steps are plain
+ *  labels in a release build; a test build (the debug menu on) and the browser view make them
+ *  links, a way around while working on them. */
 export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; right: ReactNode }) {
   const navigate = useNavigate()
   const index = STEPS.findIndex((item) => item.key === step)
   const debug = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState, enabled: isDesktop() })
   const linked = !isDesktop() || debug.data?.enabled === true
+  const leave = () => {
+    void (index >= 0 ? skipSetup(true) : Promise.resolve()).then(() => void navigate(HOME.href))
+  }
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground" data-onboarding={step}>
       <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-line">
@@ -54,12 +61,23 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
         <div
           aria-hidden
           className="absolute bottom-[-1px] left-0 h-[2px] bg-primary transition-[width] duration-slow ease-out"
-          style={{ width: `${((index + 1) / STEPS.length) * 100}%` }}
+          style={{ width: `${(Math.max(index + 1, 0) / STEPS.length) * 100}%` }}
         />
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-2 max-[720px]:grid-cols-1">
         <section className="relative flex min-h-0 flex-col overflow-y-auto px-10 py-8">
           <div className="mx-auto mt-[12vh] flex w-full max-w-[380px] flex-col gap-5 pb-12">{left}</div>
+          {isDesktop() ? (
+            <div className="mx-auto mt-auto w-full max-w-[380px] pb-2">
+              <button
+                type="button"
+                onClick={leave}
+                className="cursor-pointer border-0 bg-transparent p-0 text-xs text-faint hover:text-foreground"
+              >
+                {index >= 0 ? "Skip for now" : "Back to the app"}
+              </button>
+            </div>
+          ) : null}
         </section>
         <aside className="relative flex min-h-0 flex-col overflow-y-auto border-l border-line bg-card px-10 py-8">
           <div className="mx-auto mt-[12vh] flex min-h-0 w-full max-w-[380px] flex-1 flex-col gap-5 pb-12">
