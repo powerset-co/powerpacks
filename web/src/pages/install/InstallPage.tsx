@@ -111,22 +111,20 @@ export function InstallPage() {
             ? "title.failed"
             : data.event === "setup.ready"
               ? "title.welcome"
-              : data.action?.kind === "resume"
-                ? "title.paused"
-                : data.step === "ready" &&
-                    data.status === "completed" &&
-                    data.network_name &&
-                    (data.person_count ?? 0) > 0
-                  ? "title.ready"
-                  : data.status === "waiting" && data.step === "account"
-                    ? "title.signing_in"
-                    : data.status === "waiting" && data.action?.kind === "processing"
-                      ? "title.processing"
-                      : data.status === "completed" && data.step !== "ready"
+              : data.step === "ready" &&
+                  data.status === "completed" &&
+                  data.network_name &&
+                  (data.person_count ?? 0) > 0
+                ? "title.ready"
+                : data.status === "waiting" && data.step === "account"
+                  ? "title.signing_in"
+                  : data.status === "waiting" && data.action?.kind === "processing"
+                    ? "title.processing"
+                    : data.status === "completed" && data.step !== "ready"
+                      ? "title.running"
+                      : data.status === "skipped"
                         ? "title.running"
-                        : data.status === "skipped"
-                          ? "title.running"
-                          : `title.${data.status}`,
+                        : `title.${data.status}`,
         )
   // The matches left to check, counted by the review queue the review page reads.
   const ready = data?.step === "ready" && data.status === "completed"
@@ -292,8 +290,8 @@ export function InstallPage() {
                         {word(
                           current && data.event === "setup.ready"
                             ? "state.next"
-                            : current && (error || data.action?.kind === "resume")
-                              ? "state.paused"
+                            : current && error
+                              ? "state.waiting"
                               : current && failed
                                 ? "state.failed"
                                 : progress

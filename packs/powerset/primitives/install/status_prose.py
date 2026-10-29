@@ -282,6 +282,7 @@ PROSE: dict[str, Prose] = {
     # Any step
     "step.waiting": Prose(None, W, "This step needs you. I'll explain in chat.", action="error"),
     "step.failed": Prose(None, F, "This step stopped. I'm checking what happened.", action="error"),
+    # bin/bootstrap writes this when the command-line install is interrupted (Ctrl-C, TERM).
     "setup.paused": Prose(None, W, "Setup paused. I can resume it from here.", action="resume"),
     "setup.ready": Prose(None, C, "Ready to set up: sign in, import your contacts and build your network.", action="resume"),
 }
