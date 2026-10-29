@@ -8,6 +8,8 @@ is built on Modal unless realize left people.csv as it was and an index is alrea
 validation marks search ready.
 
 Changelog:
+  2026-10-28: LinkedIn-only setup imports verified source families and realizes the shared directory
+      before indexing; message processing remains optional.
   2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
       the Modal index; deep context and enrichment are marked as nothing to do, the follow-up names what
       to connect for more. With messages, the index's people file (search-index/people.csv) is realize's
@@ -47,8 +49,8 @@ from typing import Callable
 
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
-from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV
+from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV, CONNECTIONS_CSV as LINKEDIN_CSV, write_connections
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
@@ -58,11 +60,11 @@ from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
-from packs.powerset.primitives.install.controller import INDEXED_PEOPLE, LINKEDIN_PEOPLE
+from packs.powerset.primitives.install.controller import LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
-# The message imports deep context reads people from; without any, LinkedIn goes straight to search.
+# Without message imports, only LinkedIn source families need loading before realization.
 _MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
@@ -212,14 +214,16 @@ class ProcessingOnboarding:
 
     def _index(self) -> None:
         self.step = InstallStep.INDEX
-        self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
-                  "index.preparing")
-        self._build_index(self.root / INDEXED_PEOPLE)
+        result = self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
+                           "index.preparing")
+        self._build_index(Path(result["people_csv"]))
 
     def _index_linkedin(self) -> None:
-        """LinkedIn only: the enriched import is the people file, no deep context in between."""
-        self.step = InstallStep.INDEX
-        self._build_index(self.root / _LINKEDIN_PEOPLE)
+        """LinkedIn only: import verified families locally before realizing the shared directory."""
+        with closing(open_store(store_path(self.data_root))) as conn:
+            imported = write_connections(conn, self.data_root / LINKEDIN_CSV, now_iso())
+            print(f"LinkedIn: {imported.candidates} people; {imported.missing_member_id} missing member IDs")
+        self._index()
 
     def _build_index(self, people: Path) -> None:
         """The Modal index of `people` unless the index on disk was built from this very file (the
@@ -248,8 +252,7 @@ class ProcessingOnboarding:
             try:
                 self._linkedin()
                 if not any((self.data_root / relative).is_file() for relative in _MESSAGE_IMPORTS):
-                    # LinkedIn only: deep context has no messages to read, so the enriched import goes
-                    # straight to the index; the follow-up names what to connect for more.
+                    # Load verified LinkedIn families without message collection or paid processing.
                     self._write("discover.linkedin_only")
                     self._write("enrich.linkedin_only")
                     self._index_linkedin()

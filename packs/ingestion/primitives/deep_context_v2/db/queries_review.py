@@ -273,3 +273,12 @@ def insert_worth(conn: sqlite3.Connection, candidate_id: str, worth: str, reason
         "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
         (candidate_id, worth, DecidedBy.HUMAN.value, reason, now),
     )
+
+
+def imported_profile(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
+    """An imported profile also answers any of its previously verified URL aliases."""
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT c.import_json FROM candidate_linkedins l JOIN candidates c USING (candidate_id) "
+        "WHERE l.linkedin_url = ? AND c.candidate_id = 'candidate:linkedin:' || l.member_id "
+        "ORDER BY l.seq DESC LIMIT 1", (url,)).fetchone()
+    return row

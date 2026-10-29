@@ -1,6 +1,6 @@
 """Block 09 Realize: one people row per parent the owner has talked to, written to people.csv.
 
-A family is the candidates sharing a current parent; it is exported when any member has facts. Its
+A family is the candidates sharing a current parent; it is exported when a member has facts or is an imported LinkedIn source. Its
 members' emails, phones, channels and message counts are unioned into one row. The row's URL is the
 family's confirmed profile, and the profile columns come from its cache or research.
 A synthetic key is not a URL: that family is exported with no URL. No
@@ -17,12 +17,11 @@ Created: 2026-10-07
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from pathlib import Path
 from typing import Any
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_realize, queries_share, queries_worth
+from packs.ingestion.primitives.deep_context_v2.db import queries, queries_realize, queries_share, queries_worth
 from packs.ingestion.primitives.deep_context_v2.db.queries_realize import FamilyRow, Identifier, Member
 from packs.ingestion.primitives.deep_context_v2.db.queries_worth import MemberFacts
 from packs.ingestion.primitives.deep_context_v2.db.schema import SYNTHETIC_PROFILE_PREFIX, IdentifierKind, Worth
@@ -32,16 +31,12 @@ from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth.evidence import family_facts
 from packs.ingestion.primitives.enrich.profile_cache import profile_cache_path, read_usable_cached_profile
 from packs.ingestion.primitives.enrich.profile_transforms import current_position, normalize_rapidapi
-from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
+from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, PEOPLE_SCHEMA_COLUMNS, extract_public_identifier
 from packs.shared.csv_io import CsvIO
 from packs.ingestion.schemas.company_identity import rapidapi_experience_to_powerpacks
 
 # The file the index builder reads and hashes to decide on a re-index; replaced whole each run.
 PEOPLE_CSV_RELATIVE_PATH = Path("network-import") / "merged" / "people.csv"
-# The enriched LinkedIn import (the Modal import-linkedin step's output) and the people file the index
-# builds from: realize's families, then every connection the import has that no family holds.
-LINKEDIN_IMPORT_RELATIVE_PATH = Path("network-import") / "import" / "linkedin" / "people.csv"
-INDEX_PEOPLE_RELATIVE_PATH = Path("search-index") / "people.csv"
 # The people columns a LinkedIn profile fills.
 PROFILE_COLUMNS: tuple[str, ...] = (
     "first_name", "last_name", "full_name", "headline", "summary", "city", "state", "country",
@@ -60,37 +55,6 @@ def message_total(member: Member) -> int:
 def by_most_messages(members: list[Member]) -> list[Member]:
     """The family's members, most messages first; ties by candidate id so the order is stable."""
     return sorted(members, key=lambda member: (-message_total(member), member.candidate_id))
-
-
-def with_connections(data_root: Path) -> tuple[Path, int, int]:
-    """The index's people file: realize's families, then every LinkedIn connection the enriched import
-    has that no family holds, so the whole network is searchable as families form. Returns the path,
-    how many families, how many connections were added."""
-    people = data_root / PEOPLE_CSV_RELATIVE_PATH
-    connections = data_root / LINKEDIN_IMPORT_RELATIVE_PATH
-    indexed = data_root / INDEX_PEOPLE_RELATIVE_PATH
-    with people.open(encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    columns = list(rows[0].keys()) if rows else list(PEOPLE_SCHEMA_COLUMNS)
-    known = {row.get("public_identifier", "") for row in rows} - {""}
-    added = 0
-    if connections.is_file():
-        with connections.open(encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                if not row.get("public_identifier") or row["public_identifier"] in known:
-                    continue
-                for column in row:
-                    if column not in columns:
-                        columns.append(column)
-                rows.append(row)
-                added += 1
-    indexed.parent.mkdir(parents=True, exist_ok=True)
-    with indexed.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({column: row.get(column, "") for column in columns})
-    return indexed, len(rows) - added, added
 
 
 def fill_profile(row: dict[str, str], record: dict[str, Any]) -> None:
@@ -147,6 +111,7 @@ class Realize(Node):
         identifiers: dict[str, list[Identifier]] = queries_realize.identifiers_by_candidate(self.conn)
         channels: dict[str, list[str]] = queries_realize.channels_by_candidate(self.conn)
         profile_keys: dict[str, str] = queries_realize.profile_keys(self.conn)
+        imported = queries.imported_linkedins(self.conn)
         worth: dict[str, Worth] = queries_realize.worth_by_parent(self.conn)
         names: dict[str, str] = queries_share.names_by_parent(self.conn)
         research_profiles = {stored["parent_id"]: json.loads(stored["result_json"])["content"]
@@ -175,7 +140,7 @@ class Realize(Node):
             interaction_counts: dict[str, int] = {}
             last_interaction: str = ""
             for member in ordered:
-                for identifier in identifiers[member.candidate_id]:
+                for identifier in identifiers.get(member.candidate_id, []):
                     if identifier.kind == IdentifierKind.EMAIL and identifier.display_value not in emails:
                         emails.append(identifier.display_value)
                     if identifier.kind == IdentifierKind.PHONE and identifier.display_value not in phones:
@@ -205,13 +170,20 @@ class Realize(Node):
                 counts["with_url"] += 1
                 row["linkedin_url"] = key
                 row["public_identifier"] = extract_public_identifier(key)
-                record: dict[str, Any] | None = read_usable_cached_profile(
-                    profile_cache_path(cache_dir, row["public_identifier"]))
-                if record is None:
-                    counts["profiles_missing"] += 1
-                else:
-                    fill_profile(row, record)
+                source = imported.get(parent_id)
+                if source is not None:
+                    for column in PEOPLE_SCHEMA_COLUMNS:
+                        if column != "id" and column not in CONTACT_CARRY_COLUMNS:
+                            row[column] = source[column]
                     counts["profiles_filled"] += 1
+                else:
+                    record: dict[str, Any] | None = read_usable_cached_profile(
+                        profile_cache_path(cache_dir, row["public_identifier"]))
+                    if record is None:
+                        counts["profiles_missing"] += 1
+                    else:
+                        fill_profile(row, record)
+                        counts["profiles_filled"] += 1
 
             # A confirmed research representation can add context to the same verified LinkedIn.
             if key and not key.startswith(SYNTHETIC_PROFILE_PREFIX):
@@ -252,7 +224,8 @@ class Realize(Node):
         names: dict[str, str] = queries_share.names_by_parent(self.conn)
         families: list[FamilyRow] = []
         for row in rows:
-            facts: dict[str, Any] = family_facts(members[row["id"]]).to_payload()
+            family = members.get(row["id"], [])
+            facts: dict[str, Any] = family_facts(family).to_payload() if family else {}
             title, company = facts_title(facts)
             families.append((row["id"], row["public_identifier"], row["linkedin_url"],
                              names.get(row["id"]) or str(facts.get("canonical_name") or "") or row["full_name"], row["headline"],

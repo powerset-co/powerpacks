@@ -5,8 +5,8 @@ names, its one identifier and its channels; the id is minted from the identifier
 candidate:phone:+<digits>). A Gmail candidate's name is the one most often written
 for its address in the mail archive's headers (gmail_names.py); the importer's own name column is
 blank whenever two header spellings ever disagreed, which lost the name of people with hundreds of
-messages. The two files never share an id. LinkedIn rows
-become the `connections` lookup, never candidates. Shared mailboxes (role addresses such as
+messages. The two files never share an id. Verified LinkedIn rows become source candidates
+on their existing li: member-id families, and also fill the `connections` pre-match lookup. Shared mailboxes (role addresses such as
 office@ or billing@) are dropped here; every other keep rule ran in the per-source importer.
 owner.json fills the `owner` row and flags the operator's own candidates.
 
@@ -19,6 +19,7 @@ Created: 2026-10-06
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -26,11 +27,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from packs.ingestion.primitives.common.contact_fields import is_role_address, normalize_email, normalize_phone
+from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.queries import ConnectionRow
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, load_owner
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind, SourceChannel
+from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import append_parent_rows, current_parents
+from packs.ingestion.primitives.deep_context_v2.db.queries_enrich import insert_linkedin
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
+from packs.ingestion.schemas.people_schema import normalize_linkedin_url, extract_public_identifier
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.import_load.gmail_names import header_names
 from packs.ingestion.primitives.deep_context_v2.node import Node
@@ -129,21 +135,59 @@ def write_candidates(conn: sqlite3.Connection, candidates: list[Candidate], now:
     queries.insert_candidate_sources(conn, source_rows)
 
 
-def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> int:
-    """The LinkedIn export as a lookup keyed by URL: name, email when the export has one, position,
-    company. Returns how many were written."""
+@dataclass(frozen=True)
+class LinkedInImport:
+    connections: int
+    candidates: int
+    missing_member_id: int
+
+
+def write_connections(conn: sqlite3.Connection, path: Path, now: str) -> LinkedInImport:
+    """Refresh the lookup and atomically import verified source members with their self-profile and parent.
+    Missing/failed profile evidence never overwrites a previously verified source."""
     rows: list[ConnectionRow] = []
+    imported: dict[str, dict[str, str]] = {}
+    missing = 0
     for row in CsvIO.read_dict_rows(path):
-        rows.append((row["linkedin_url"], row["full_name"], row["primary_email"] or None,
+        url = normalize_linkedin_url(row["linkedin_url"])
+        rows.append((url, row["full_name"], row["primary_email"] or None,
                      row["current_title"], row["current_company"], now))
-    queries.upsert_connections(conn, rows)
-    return len(rows)
+        profile = normalize_linkedin_profile(parse_json_object(row.get("rapidapi_response")))
+        member_id = str(profile["member_id"] or "").strip()
+        if not profile["success"] or not member_id:
+            missing += 1
+            continue
+        row["linkedin_url"] = url
+        row["public_identifier"] = extract_public_identifier(url)
+        # The export can carry contact metadata; it is not evidence of messages with the owner.
+        row["source_channels"] = SourceChannel.LINKEDIN.value
+        row["interaction_counts"] = "{}"
+        row["last_interaction"] = ""
+        imported[member_id] = row
+    parents = current_parents(conn)
+    verdicts = queries.confirmed_linkedin_urls(conn)
+    with conn:
+        for member_id, row in imported.items():
+            candidate_id = "candidate:linkedin:" + member_id
+            url = row["linkedin_url"]
+            queries.upsert_candidates(conn, [(candidate_id, row["full_name"], 0,
+                                               json.dumps(row, ensure_ascii=False), now)])
+            queries.insert_candidate_sources(conn, [(candidate_id, SourceChannel.LINKEDIN.value)])
+            if (candidate_id, url) not in verdicts:
+                fingerprint = hashlib.sha256((member_id + "|" + url).encode()).hexdigest()
+                insert_linkedin(conn, (candidate_id, url, member_id, "linkedin_network", "confirmed", "machine",
+                                       fingerprint, None, "", now))
+            if candidate_id not in parents:
+                append_parent_rows(conn, [(candidate_id, "li:" + member_id, "singleton", None, now)])
+        queries.upsert_connections(conn, rows)
+    return LinkedInImport(len(rows), len(imported), missing)
 
 
 class ImportLoad(Node):
     name = "import_load"
-    reads = ()
-    writes = ("candidates", "candidate_identifiers", "candidate_sources", "connections", "owner")
+    reads = ("current_parent", "deleted_parents")
+    writes = ("candidates", "candidate_identifiers", "candidate_sources", "connections", "owner",
+              "candidate_linkedins", "candidate_parent")
 
     def required_files(self) -> tuple[Path, ...]:
         # Only the owner is required. Each channel's importer writes its file only when that
@@ -168,18 +212,19 @@ class ImportLoad(Node):
             phones = phone_candidates(self.data_root / MESSAGES_CSV, owner)
         candidates: list[Candidate] = gmail.candidates + phones
         write_candidates(conn, candidates, now)
-        # The LinkedIn export is a lookup for later stages, not a source of candidates.
-        connections: int = 0
+        linkedin = LinkedInImport(0, 0, 0)
         if (self.data_root / CONNECTIONS_CSV).exists():
-            connections = write_connections(conn, self.data_root / CONNECTIONS_CSV, now)
+            linkedin = write_connections(conn, self.data_root / CONNECTIONS_CSV, now)
 
         # The manifest counts come from what was just written, not from querying it back.
         counts: dict[str, int] = {
-            "candidates": len(candidates),
+            "candidates": len(candidates) + linkedin.candidates,
             "identifiers_email": len(gmail.candidates),
             "identifiers_phone": len(phones),
             "shared_mailboxes_dropped": gmail.shared_mailboxes_dropped,
-            "connections": connections,
+            "connections": linkedin.connections,
+            "source_linkedin": linkedin.candidates,
+            "linkedin_missing_member_id": linkedin.missing_member_id,
             "owner_flagged": 0,
             "source_gmail_msgvault": 0,
             "source_imessage": 0,

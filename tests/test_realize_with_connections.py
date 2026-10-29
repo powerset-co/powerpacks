@@ -1,46 +1,47 @@
-"""The index's people file: realize's families, then the LinkedIn connections no family holds."""
+"""Index input is an exact export of the realized directory, including deletions."""
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.realize.realize import (INDEX_PEOPLE_RELATIVE_PATH,
-                                                                        LINKEDIN_IMPORT_RELATIVE_PATH,
-                                                                        PEOPLE_CSV_RELATIVE_PATH, with_connections)
+from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
+from packs.ingestion.primitives.deep_context_v2.run import realize
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 
 
-class WithConnectionsTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
-        self.write(PEOPLE_CSV_RELATIVE_PATH, "id,full_name,public_identifier,worth\nf1,Jordan Bravo,jordan-bravo,yes\nf2,No Handle,,maybe\n")
-
-    def write(self, relative: Path, text: str) -> None:
-        path = self.root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-
-    def rows(self, path: Path) -> list[dict]:
-        with path.open(encoding="utf-8") as handle:
-            return list(csv.DictReader(handle))
-
-    def test_families_first_then_the_connections_no_family_holds(self) -> None:
-        self.write(LINKEDIN_IMPORT_RELATIVE_PATH, "id,full_name,public_identifier,headline\nl1,Jordan Bravo,jordan-bravo,CTO\nl2,Sam Li,sam-li,Founder\nl3,,,\n")
-        indexed, families, added = with_connections(self.root)
-        self.assertEqual((indexed, families, added), (self.root / INDEX_PEOPLE_RELATIVE_PATH, 2, 1))
-        rows = self.rows(indexed)
-        self.assertEqual([row["public_identifier"] for row in rows], ["jordan-bravo", "", "sam-li"])
-        # The family's row wins; the connection's columns are added, blank where a family has none.
-        self.assertEqual((rows[0]["worth"], rows[0]["headline"]), ("yes", ""))
-        self.assertEqual((rows[2]["worth"], rows[2]["headline"]), ("", "Founder"))
-
-    def test_without_a_linkedin_import_the_file_is_the_families(self) -> None:
-        indexed, families, added = with_connections(self.root)
-        self.assertEqual((families, added), (2, 0))
-        self.assertEqual(len(self.rows(indexed)), 2)
+class IndexDirectoryTests(unittest.TestCase):
+    def test_raw_linkedin_rows_do_not_bypass_the_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            conn = open_store(store_path(root))
+            source = dict.fromkeys(PEOPLE_SCHEMA_COLUMNS, "")
+            source["linkedin_url"] = "https://www.linkedin.com/in/jordan-bravo"
+            queries.upsert_candidates(conn, [("candidate:linkedin:42", "Jordan Bravo", 0,
+                json.dumps(source), "now")])
+            conn.execute("INSERT INTO candidate_sources VALUES ('candidate:linkedin:42', 'linkedin')")
+            conn.execute("INSERT INTO candidate_parent (candidate_id, parent_id, reason, created_at) "
+                         "VALUES ('candidate:linkedin:42', 'li:42', 'singleton', 'now')")
+            conn.commit()
+            raw = root / "network-import/import/linkedin/people.csv"
+            raw.parent.mkdir(parents=True)
+            raw.write_text("id,full_name,public_identifier\nraw,Missing ID,missing-id\n")
+            indexed = realize(root)
+            merged = root / "network-import/merged/people.csv"
+            self.assertEqual(indexed.read_bytes(), merged.read_bytes())
+            with indexed.open() as handle:
+                self.assertEqual([r["id"] for r in csv.DictReader(handle)], ["li:42"])
+            conn.execute("INSERT INTO deleted_parents VALUES ('li:42', 'now')")
+            conn.commit()
+            indexed = realize(root)
+            self.assertEqual(indexed.read_bytes(), merged.read_bytes())
+            with indexed.open() as handle:
+                self.assertEqual(list(csv.DictReader(handle)), [])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM families").fetchone()[0], 0)
+            conn.close()
 
 
 if __name__ == "__main__":

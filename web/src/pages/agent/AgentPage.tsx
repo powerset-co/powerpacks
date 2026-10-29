@@ -10,7 +10,6 @@ import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
-import { collapseSidebar } from "@/lib/sidebar"
 import { writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
@@ -232,16 +231,9 @@ function Workspace() {
       writeStored("local", `search-thread:${runId}`, agent.threadId)
   }, [runId, agent.threadId, listed])
 
-  // Results open beside the chat: the sidebar folds to its rail, once per search.
+  // Results open beside the chat, splitting the room 2:3; the results keep 380px at the narrowest
+  // window (960px).
   const showing = runId !== null && listed.has(runId)
-  const folded = useRef<string | null>(null)
-  useEffect(() => {
-    if (!showing || folded.current === runId) return
-    folded.current = runId
-    collapseSidebar()
-  }, [showing, runId])
-
-  // Chat and results split the room 2:3; the results keep 380px at the narrowest window (960px).
   return (
     <main
       className={cn(

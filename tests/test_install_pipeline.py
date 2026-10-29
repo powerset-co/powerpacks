@@ -6,7 +6,6 @@ Changelog:
 - 2026-10-07: v2 stages (load, collect, synthesize, dedupe, worth, enrich, realize); the v1 seed,
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
-import csv
 import hashlib
 import json
 import os
@@ -80,7 +79,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
         # A Gmail import is on disk: deep context has messages to read (without any, LinkedIn goes
-        # straight to the index; see test_linkedin_only_goes_straight_to_the_modal_index).
+        # straight to the index; see test_linkedin_only_realizes_before_the_modal_index).
         gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
         gmail.parent.mkdir(parents=True, exist_ok=True)
         gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
@@ -394,30 +393,28 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["index"])
 
-    def test_linkedin_only_goes_straight_to_the_modal_index(self):
-        # No Gmail or Messages import: nothing for deep context to read, so the enriched LinkedIn
-        # import is the people file the Modal index builds from; the stages are never run.
+    def test_linkedin_only_realizes_before_the_modal_index(self):
+        # No message sources: import LinkedIn families and realize without processing messages.
         (self.root / ".powerpacks/network-import/import/gmail/people.csv").unlink()
         linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
-        self.write(linkedin, self.csv)
+        self.write(linkedin, "linkedin_url,full_name,primary_email,current_title,current_company,rapidapi_response\n")
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"], result["event"]), ("ready", "completed", "search.ready"))
         self.assertTrue(self.indexed())
-        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "realize", "owner"):
+        self.assertTrue(self.did("realize"))
+        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "owner"):
             self.assertFalse(self.did(stage), stage)
         self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
         self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
         self.assertIn("Connect Messages or Gmail", result["note"])
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
-        self.assertTrue(any("index-people" in command and str(linkedin) in command for command in commands), commands)
+        self.assertTrue(any("index-people" in command and str(self.people) in command for command in commands), commands)
 
     def test_the_index_builds_from_the_file_realize_hands_back(self):
-        # With messages, realize hands back the index's people file (families plus the LinkedIn
-        # connections no family holds; realize.with_connections, tested on its own) and the index
-        # builds from it.
+        # The index builds from exactly the file returned by realize.
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
-        indexed = self.index / "people.csv"
+        indexed = self.people
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
         self.assertTrue(any("index-people" in command and str(indexed) in command for command in commands), commands)
 

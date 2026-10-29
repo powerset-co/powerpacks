@@ -116,6 +116,19 @@ export const FACETS: readonly FacetDef[] = [
 
 const FACET_BY_KEY: ReadonlyMap<string, FacetDef> = new Map(FACETS.map((facet) => [facet.key, facet]))
 
+/** The Filters menu: each entry hides the rows its `hides` matches. Add a line here for a new one. */
+export type HideKey = "linkedin_only"
+
+export interface HideDef {
+  key: HideKey
+  label: string
+  hides: (row: Person) => boolean
+}
+
+export const HIDES: readonly HideDef[] = [
+  { key: "linkedin_only", label: "Hide LinkedIn-only people", hides: (r) => r.linkedin_only },
+]
+
 export function isFacetKey(value: string): value is FacetKey {
   return FACET_BY_KEY.has(value)
 }

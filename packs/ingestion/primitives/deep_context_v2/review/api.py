@@ -164,8 +164,11 @@ class ReviewApi:
         """Route a GET: the dossier fragment, the page, or the next card."""
         params: Params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/api/dossier":
-            card: Card = load_card(self.conn, self.data_root, _value(params, "slug"))
-            _send(handler, payloads.dossier(card).encode(), "text/html; charset=utf-8", HTTPStatus.OK)
+            slug = _value(params, "slug")
+            ids = [m.candidate_id for m in queries_review.family_members(self.conn, slug)]
+            facts = queries_review.member_facts(self.conn, slug, ids)
+            dossier = payloads.dossier(load_card(self.conn, self.data_root, slug)) if facts else ""
+            _send(handler, dossier.encode(), "text/html; charset=utf-8", HTTPStatus.OK)
         elif parsed.path == "/api/review/page":
             _send_json(handler, asdict(payloads.page(self.linkedin_card({}).pending)))
         elif parsed.path == "/api/review/linkedin-card":
