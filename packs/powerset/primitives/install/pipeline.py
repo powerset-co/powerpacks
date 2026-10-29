@@ -247,27 +247,38 @@ class ProcessingOnboarding:
         self._write("search.ready", people=validation["total_people"], follow_ups=" ".join(deferred),
                     details={"validation": validation, "left_to_fix": self.left_to_fix})
 
+    def run_linkedin(self) -> dict:
+        """The LinkedIn run: import the connections and build the index. No message processing."""
+        return self._guarded(self._linkedin_only)
+
     def run(self) -> dict:
+        """The import run over the connected sources: owner, deep context, enrichment, the index."""
+        return self._guarded(self._messages)
+
+    def _linkedin_only(self) -> None:
+        self._linkedin()
+        self._write("discover.linkedin_only")
+        self._write("enrich.linkedin_only")
+        self._index_linkedin()
+
+    def _messages(self) -> None:
+        self._linkedin()
+        archive_v1(self.data_root)
+        with closing(open_store(store_path(self.data_root))) as conn:
+            self._owner()
+            *discover, (_, enrich) = stages(conn, self.data_root)
+            for name, build in discover:
+                self._stage(name, build())
+            self._write("discover.done")
+            self._enrich(enrich)
+        self._index()
+
+    def _guarded(self, work: Callable[[], None]) -> dict:
+        """`work` under the project root; a stop leaves its record, anything else fails the step."""
         with chdir(self.root):
             load_env()
             try:
-                self._linkedin()
-                # What this run selected decides, never what earlier runs left on disk: a LinkedIn run
-                # imports its connections and builds the index, nothing else.
-                if self.saved.source == ["linkedin"]:
-                    self._write("discover.linkedin_only")
-                    self._write("enrich.linkedin_only")
-                    self._index_linkedin()
-                else:
-                    archive_v1(self.data_root)
-                    with closing(open_store(store_path(self.data_root))) as conn:
-                        self._owner()
-                        *discover, (_, enrich) = stages(conn, self.data_root)
-                        for name, build in discover:
-                            self._stage(name, build())
-                        self._write("discover.done")
-                        self._enrich(enrich)
-                    self._index()
+                work()
                 keep_updated(self.root)
             except _Stopped:
                 pass
