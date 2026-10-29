@@ -272,6 +272,7 @@ PROSE: dict[str, Prose] = {
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
 
     # Building your search index
+    "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
     "index.building": Prose(InstallStep.INDEX, R, "Building your search index"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
