@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`. Also lists people the user knows by relationship, label, tag or worth ("show me my family", "who is tagged investor").
 ---
 
 # deep-context
@@ -167,7 +167,9 @@ tell the user the count and the names and wait for yes; the other writes just ha
 A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
 same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
 matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
-never the answer to "show me".
+never the answer to "show me". A relationship ("my family", "close friends") matches either side: the label in `labels` or
+`tags` (`is_family`, `is_close_friend`) or the `relationship_kind` column (`family`, `close_friend`);
+show `relationship_kind` so a mismatch is visible.
 
 | Ask | Write |
 |---|---|
