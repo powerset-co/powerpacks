@@ -8,6 +8,8 @@ is built on Modal unless realize left people.csv as it was and an index is alrea
 validation marks search ready.
 
 Changelog:
+  2026-10-29: a run that selected no message source is LinkedIn only, whatever earlier imports left on
+      disk; the on-disk test sent every returning user's LinkedIn setup through deep context.
   2026-10-28: LinkedIn-only setup imports verified source families and realizes the shared directory
       before indexing; message processing remains optional.
   2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
@@ -50,7 +52,7 @@ from typing import Callable
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV, CONNECTIONS_CSV as LINKEDIN_CSV, write_connections
+from packs.ingestion.primitives.deep_context_v2.import_load.load import CONNECTIONS_CSV as LINKEDIN_CSV, write_connections
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
@@ -65,7 +67,6 @@ from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
 # Without message imports, only LinkedIn source families need loading before realization.
-_MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
@@ -246,26 +247,38 @@ class ProcessingOnboarding:
         self._write("search.ready", people=validation["total_people"], follow_ups=" ".join(deferred),
                     details={"validation": validation, "left_to_fix": self.left_to_fix})
 
+    def run_linkedin(self) -> dict:
+        """The LinkedIn run: import the connections and build the index. No message processing."""
+        return self._guarded(self._linkedin_only)
+
     def run(self) -> dict:
+        """The import run over the connected sources: owner, deep context, enrichment, the index."""
+        return self._guarded(self._messages)
+
+    def _linkedin_only(self) -> None:
+        self._linkedin()
+        self._write("discover.linkedin_only")
+        self._write("enrich.linkedin_only")
+        self._index_linkedin()
+
+    def _messages(self) -> None:
+        self._linkedin()
+        archive_v1(self.data_root)
+        with closing(open_store(store_path(self.data_root))) as conn:
+            self._owner()
+            *discover, (_, enrich) = stages(conn, self.data_root)
+            for name, build in discover:
+                self._stage(name, build())
+            self._write("discover.done")
+            self._enrich(enrich)
+        self._index()
+
+    def _guarded(self, work: Callable[[], None]) -> dict:
+        """`work` under the project root; a stop leaves its record, anything else fails the step."""
         with chdir(self.root):
             load_env()
             try:
-                self._linkedin()
-                if not any((self.data_root / relative).is_file() for relative in _MESSAGE_IMPORTS):
-                    # Load verified LinkedIn families without message collection or paid processing.
-                    self._write("discover.linkedin_only")
-                    self._write("enrich.linkedin_only")
-                    self._index_linkedin()
-                else:
-                    archive_v1(self.data_root)
-                    with closing(open_store(store_path(self.data_root))) as conn:
-                        self._owner()
-                        *discover, (_, enrich) = stages(conn, self.data_root)
-                        for name, build in discover:
-                            self._stage(name, build())
-                        self._write("discover.done")
-                        self._enrich(enrich)
-                    self._index()
+                work()
                 keep_updated(self.root)
             except _Stopped:
                 pass
