@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query"
 import { ChevronRight } from "lucide-react"
-import type { ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 
-import { DEBUG_KEY, fetchDebugState, skipSetup } from "@/lib/api/debug"
+import { DEBUG_KEY, fetchDebugState } from "@/lib/api/debug"
+import { errorText } from "@/lib/api/http"
+import { setupSkip } from "@/lib/api/install"
 import { isDesktop } from "@/lib/desktop"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
@@ -22,8 +24,12 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
   const index = STEPS.findIndex((item) => item.key === step)
   const debug = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState, enabled: isDesktop() })
   const linked = !isDesktop() || debug.data?.enabled === true
+  const [leaveError, setLeaveError] = useState<string | null>(null)
   const leave = () => {
-    void (index >= 0 ? skipSetup(true) : Promise.resolve()).then(() => void navigate(HOME.href))
+    setLeaveError(null)
+    void (index >= 0 ? setupSkip() : Promise.resolve())
+      .then(() => void navigate(HOME.href))
+      .catch((caught: unknown) => setLeaveError(errorText(caught)))
   }
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground" data-onboarding={step}>
@@ -76,6 +82,7 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
               >
                 {index >= 0 ? "Skip for now" : "Back to the app"}
               </button>
+              {leaveError ? <Note bad>{leaveError}</Note> : null}
             </div>
           ) : null}
         </section>
