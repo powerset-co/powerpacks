@@ -14,7 +14,6 @@ import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
 import { DesktopSetup } from "./DesktopSetup"
-import { DesktopWelcome } from "./DesktopWelcome"
 import { SetupKnot } from "./SetupKnot"
 
 // Every other word comes with the status (status_prose.py); these show while the page cannot reach setup.
@@ -93,13 +92,12 @@ export function InstallPage() {
     refetchInterval: 1_500,
     retry: false,
   })
-  const [importing, setImporting] = useState(false)
   const done = useSetupDone()
   const [expanded, setExpanded] = useState(false)
   const [actionError, setActionError] = useState("")
   // Before the first click: only the welcome and the choice, none of the progress furniture. Once
   // setup is done (an import counts) the choice never comes back, whatever the record says.
-  const welcome = importing || (!done && !error && data?.event === "setup.ready")
+  const welcome = !done && !error && data?.event === "setup.ready"
   const failed = data?.status === "failed" || data?.index_progress?.status === "failed"
   const word = (key: string) => data?.prose.page[key] ?? ""
   const title = error
@@ -173,16 +171,6 @@ export function InstallPage() {
     } catch (caught) {
       setActionError(errorText(caught))
     }
-  }
-  // The desktop app's own first two screens; setup's progress below is the third.
-  if (welcome && isDesktop()) {
-    return (
-      <div className="review-page install-page overflow-y-auto" data-welcome>
-        <main className="install-main rise-in">
-          <DesktopWelcome onImport={setImporting} />
-        </main>
-      </div>
-    )
   }
   return (
     <div

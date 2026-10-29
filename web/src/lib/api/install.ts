@@ -119,17 +119,6 @@ export async function setupDone(): Promise<boolean> {
   return (await invoke("setup_done")) === true
 }
 
-/** The command-line install on this machine whose data the app can import, as a path to show. */
-export async function importSource(): Promise<string | null> {
-  const path = await invoke("setup_import_source")
-  return typeof path === "string" ? path : null
-}
-
-/** Import that install's data: the app then uses its network, imports and account. */
-export async function importData(): Promise<void> {
-  await invoke("setup_import")
-}
-
 /** One preflight item: whether it is ready, and its background install once one was asked for. */
 export interface PreflightInstall {
   status: "running" | "ok" | "failed"

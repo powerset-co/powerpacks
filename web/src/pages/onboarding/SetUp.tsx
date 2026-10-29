@@ -67,10 +67,14 @@ interface Progress {
  *  read/total; pipeline.py's stage counters write done/total): a pace for the time left. The index
  *  has no count (Modal reports phases, not work done), so it shows its phase alone. */
 function counts(data: InstallStatus | undefined): { read: number; total: number } | null {
+  // The index build's counts come from the Modal run (index_progress.payload), the other steps' from
+  // their own events.
   const details = data?.action?.details
-  if (!isRecord(details)) return null
-  const read = details.read ?? details.done
-  const { total } = details
+  const source =
+    isRecord(details) && typeof details.total === "number" ? details : data?.index_progress?.payload
+  if (!isRecord(source)) return null
+  const read = source.read ?? source.done
+  const { total } = source
   return typeof read === "number" && typeof total === "number" && total > 0 ? { read, total } : null
 }
 
@@ -78,7 +82,8 @@ function counts(data: InstallStatus | undefined): { read: number; total: number 
  *  16 researched"), with the count added when the sentence does not carry it. */
 function liveLine(data: InstallStatus, count: { read: number; total: number }): string {
   const pair = `${count.read.toLocaleString()} of ${count.total.toLocaleString()}`
-  return data.message.includes(pair) ? data.message : `${data.message}: ${pair}`
+  const message = data.index_progress?.message ?? data.message
+  return message.includes(pair) ? message : `${message}: ${pair}`
 }
 
 type Standing = "done" | "skipped" | "current" | "stopped" | "next"

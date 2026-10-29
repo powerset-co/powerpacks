@@ -3,7 +3,6 @@
 import { isDesktop } from "@/lib/desktop"
 
 export type PageKey =
-  | "home"
   | "agent"
   | "searches"
   | "people"
@@ -34,8 +33,9 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.
   { key: "team", label: "Team", href: "/team" },
-  // Setup runs for a while; it sits in the nav so the rest of the app is a click away.
-  { key: "setup", label: "Setup", href: "/install" },
+  // Setup runs for a while; it sits in the nav so the rest of the app is a click away. The app's
+  // is the onboarding's Set up screen; the browser's is the install page.
+  { key: "setup", label: "Setup", href: isDesktop() ? "/onboarding/setup" : "/install" },
   // Once setup is done with LinkedIn alone: the onboarding's Sources screen, for Messages, Gmail
   // and WhatsApp. Gone once a message source is in.
   { key: "sources", label: "Add sources", href: "/onboarding/sources" },
@@ -53,7 +53,6 @@ export const PAGES: readonly Page[] = isDesktop()
 /** The page a routed path belongs to: its href or a path under it; any other path is HOME,
  *  which the router's catch-all redirects to. */
 export function pageAt(pathname: string): Page {
-  if (pathname === "/home") return { key: "home", label: "Home", href: "/home" }
   // Out of the side nav for now; the debug menu opens it.
   if (pathname === "/settings") return { key: "settings", label: "Settings", href: "/settings" }
   if (pathname === AGENT.href || pathname.startsWith(`${AGENT.href}/`)) return AGENT

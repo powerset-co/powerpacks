@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,23 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS  # noqa: E402
+
+_STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
+_COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles")
+
+
+def progress_line(line: str, steps_done: int) -> tuple[str, int, int, int] | None:
+    """What a pipeline log line says about progress: (message, done, total, steps_done), or None.
+    Steps completed count across the whole build; the company fetch, the long one, reports its own
+    count while it runs. Both land in status.json for the laptop's Set up screen."""
+    if match := _STEP_DONE.match(line):
+        steps_done += 1
+        return f"Building search records: {steps_done} of {len(STEPS)} steps", steps_done, len(STEPS), steps_done
+    if match := _COMPANIES.match(line):
+        done, total = int(match.group(1)), int(match.group(2))
+        return f"Company profiles: {done} of {total}", done, total, steps_done
+    return None
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -166,7 +184,15 @@ def main() -> int:
         ]
 
     write_status(run_vol, status | {"phase": "pipeline"})
-    pipeline_code = subprocess.run(pipeline_cmd).returncode
+    pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
+    steps_done = 0
+    assert pipeline.stderr is not None
+    for line in pipeline.stderr:
+        sys.stderr.write(line)
+        if progress := progress_line(line, steps_done):
+            message, done, total, steps_done = progress
+            write_status(run_vol, status | {"phase": "pipeline", "message": message, "done": done, "total": total})
+    pipeline_code = pipeline.wait()
     if pipeline_code != 0:
         write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})
         return pipeline_code

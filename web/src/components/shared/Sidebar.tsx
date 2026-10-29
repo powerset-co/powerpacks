@@ -6,9 +6,8 @@ import { useFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
-import { fetchSignedIn } from "@/lib/api/accounts"
 import { fetchInstall } from "@/lib/api/install"
-import { PAGES, type Page, type PageKey } from "@/lib/nav"
+import { AGENT, PAGES, type Page, type PageKey } from "@/lib/nav"
 import { COLLAPSED_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
@@ -36,7 +35,6 @@ import { SidebarFooter } from "./SidebarFooter"
 const RAIL_ONLY_QUERY = "(max-width: 900px)"
 
 const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
-  home: SearchesIcon,
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
@@ -76,20 +74,16 @@ export function Sidebar() {
   const install = useQuery({
     queryKey: ["install"],
     queryFn: ({ signal }) => fetchInstall(signal),
-    enabled: isDesktop() && !done,
+    enabled: isDesktop(),
     refetchInterval: 5_000,
     retry: false,
   })
   const running = install.data?.status === "running" ? install.data.message : undefined
-  // Add sources shows once setup is done and no message source is signed in yet.
-  const signed = useQuery({
-    queryKey: ["signed-in"],
-    queryFn: ({ signal }) => fetchSignedIn(signal),
-    enabled: isDesktop() && done,
-    retry: false,
-  })
-  const moreSources =
-    done && signed.data !== undefined && !(signed.data.gmail || signed.data.imessage || signed.data.whatsapp)
+  // Add sources shows once setup is done, until a message import has run here.
+  const imported = ["gmail_import", "imessage_import", "whatsapp_import"].some(
+    (step) => install.data?.steps[step]?.status === "completed",
+  )
+  const moreSources = done && install.data !== undefined && !imported
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -118,7 +112,7 @@ export function Sidebar() {
         )}
       >
         <NavLink
-          to="/home"
+          to={AGENT.href}
           aria-label="Powerset home"
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-s)]"
         >

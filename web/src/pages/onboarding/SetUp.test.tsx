@@ -103,3 +103,24 @@ it("an idle record starts nothing", async () => {
   await screen.findByText(WAITING.message)
   expect(invoke).not.toHaveBeenCalled()
 })
+
+it("the index row shows the Modal run's counts as a bar", async () => {
+  state.record = {
+    ...WAITING,
+    status: "running",
+    installer_pid: 4242,
+    step: "index",
+    event: "index.building",
+    message: "Building your search index",
+    steps: { linkedin: { status: "completed", message: "1,075 LinkedIn connections" } },
+    index_progress: {
+      status: "running",
+      message: "Company profiles: 40 of 111",
+      progress: 0.36,
+      payload: { done: 40, total: 111 },
+    },
+  }
+  mount()
+  await screen.findByText("Company profiles: 40 of 111")
+  expect(screen.getByRole("progressbar")).toBeTruthy()
+})

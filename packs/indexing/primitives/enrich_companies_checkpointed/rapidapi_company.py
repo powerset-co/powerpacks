@@ -13,6 +13,7 @@ from __future__ import annotations
 import concurrent.futures
 import http.client
 import json
+import sys
 import os
 import random
 import time
@@ -189,9 +190,12 @@ def fetch_company_details_batch(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, cid): cid for cid in need_fetch}
-        for future in concurrent.futures.as_completed(futures):
+        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             cid, resp = future.result()
             results[cid] = resp
+            if done % 10 == 0 or done == len(need_fetch):
+                # The index run reads these lines for its progress (run_indexing.py progress_line).
+                sys.stderr.write(f"[enrich-companies] fetched {done}/{len(need_fetch)} company profiles\n")
     return results
 
 

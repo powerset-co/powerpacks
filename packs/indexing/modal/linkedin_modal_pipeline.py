@@ -406,19 +406,24 @@ def watch_run(read: Callable[[], dict | None], progress: PipelineProgress, stage
     """Poll a run's status (`read`: the volume's status.json, or the API's copy of it) and mirror it
     into the local stage."""
     deadline = time.time() + timeout_s
-    last_phase = None
+    last: tuple | None = None
     while time.time() < deadline:
         payload = read()
         if payload:
             phase = payload.get("phase")
-            if phase != last_phase:
-                last_phase = phase
-                message = {
-                    "seed": "Preparing your contacts", "estimate": "Checking what needs updating",
-                    "pipeline": "Building your search records", "refresh-cache": "Saving reusable results",
-                    "duckdb": "Preparing search", "persist": "Saving your search index", "done": "Finishing up",
-                }.get(phase, message_prefix)
-                progress.event(stage_id, message, payload={"phase": phase})
+            # The run's own line and counts when it has them (run_indexing.py progress_line), else
+            # the phase's words.
+            message = payload.get("message") or {
+                "seed": "Preparing your contacts", "estimate": "Checking what needs updating",
+                "pipeline": "Building your search records", "refresh-cache": "Saving reusable results",
+                "duckdb": "Preparing search", "persist": "Saving your search index", "done": "Finishing up",
+            }.get(phase, message_prefix)
+            done, total = payload.get("done"), payload.get("total")
+            if (phase, message, done) != last:
+                last = (phase, message, done)
+                counted = isinstance(done, int) and isinstance(total, int) and total > 0
+                progress.event(stage_id, message, progress=done / total if counted else None,
+                               payload={"phase": phase, **({"done": done, "total": total} if counted else {})})
             if payload.get("status") in ("completed", "failed"):
                 return payload
         time.sleep(3)

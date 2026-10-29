@@ -10,7 +10,6 @@ import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { TeamPage } from "./pages/team/TeamPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
-import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { MemoryPage } from "@/pages/memory/MemoryPage"
@@ -77,7 +76,6 @@ export function App() {
                 }
               />
             ) : null}
-            <Route path="/home" element={<HomePage />} />
             <Route path="/install" element={<InstallPage />} />
             <Route path="/agent" element={<AgentPage />} />
             <Route path="/people" element={<PeoplePage />}>
