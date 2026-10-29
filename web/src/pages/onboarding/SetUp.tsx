@@ -6,6 +6,7 @@ import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { HOME } from "@/lib/nav"
+import { fetchSignedIn } from "@/lib/api/accounts"
 import { continueSetup, fetchFirstLook, fetchInstall } from "@/lib/api/install"
 import { cn, isRecord } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
@@ -16,10 +17,12 @@ import { stopDetail } from "@/pages/install/sources"
 import { leftText, secondsLeft, type Sample } from "./pace"
 import { FirstLookPanel } from "./FirstLookPanel"
 import { PageShot } from "./PageShot"
+import { stepAt } from "./steps"
 
 const POLL_MS = 1_500
 const PEOPLE_POLL_MS = 5_000
 const KEY = ["onboarding", "install"] as const
+const SIGNED_IN = ["signed-in"] as const
 
 // The stages setup goes through (steps.py), as the person sees them. The source stages show only
 // once their source is connected: the first run is LinkedIn alone, the next adds what Sources linked.
@@ -115,6 +118,26 @@ function finishedLine(data: InstallStatus, stage: Stage): string {
   return last ? (data.steps[last]?.message ?? stage.done) : stage.done
 }
 
+/** A stop's way out: the record's note, Try again, the detail behind the stop, where the logs are. */
+function Stopped({ data, retrying, retry }: { data: InstallStatus; retrying: boolean; retry: () => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {data.note ? <Note>{data.note}</Note> : null}
+      <Button variant="primary" className="self-start" disabled={retrying} onClick={retry}>
+        {retrying ? (
+          <>
+            <Spinner /> Starting…
+          </>
+        ) : (
+          "Try again"
+        )}
+      </Button>
+      {stopDetail(data) ? <Note bad>{stopDetail(data)}</Note> : null}
+      <Note>Logs are in {data.log_path.replace(/\/[^/]*$/, "/")}</Note>
+    </div>
+  )
+}
+
 /** Set up: setup runs in the background (bin/onboard) from the moment this opens; the stages
  *  show as they go, the LinkedIn count with the time left, the index with Modal's progress. The
  *  first look opens once people are in. */
@@ -157,13 +180,24 @@ export function SetUp() {
   const left = count ? secondsLeft(install.data?.samples ?? [], count.total) : null
   const processing = data !== undefined && data.step !== "linkedin" && !ready
 
+  // Setup takes the sources signed in and skips the rest, so with nothing signed in a run would
+  // skip everything and call itself installed: this screen starts one only once something is.
+  const signed = useQuery({
+    queryKey: SIGNED_IN,
+    queryFn: ({ signal }) => fetchSignedIn(signal),
+    retry: false,
+  })
+  const connected = signed.data
+    ? signed.data.linkedin || signed.data.gmail || signed.data.imessage || signed.data.whatsapp
+    : undefined
+
   // Nothing running and nothing stopped: this screen starts setup itself, once.
   const started = useRef(false)
   useEffect(() => {
-    if (!data || running || failed || ready || started.current) return
+    if (!data || running || failed || ready || started.current || connected !== true) return
     started.current = true
     continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
-  }, [data, running, failed, ready])
+  }, [data, running, failed, ready, connected])
 
   // People appear as the index is built; once there are some the first look takes the right column.
   const look = useQuery({
@@ -274,25 +308,7 @@ export function SetUp() {
                           </span>
                         )}
                         {standing === "stopped" ? (
-                          <div className="flex flex-col gap-2">
-                            {data.note ? <Note>{data.note}</Note> : null}
-                            <Button
-                              variant="primary"
-                              className="self-start"
-                              disabled={retrying}
-                              onClick={retry}
-                            >
-                              {retrying ? (
-                                <>
-                                  <Spinner /> Starting…
-                                </>
-                              ) : (
-                                "Try again"
-                              )}
-                            </Button>
-                            {stopDetail(data) ? <Note bad>{stopDetail(data)}</Note> : null}
-                            <Note>Logs are in {data.log_path.replace(/\/[^/]*$/, "/")}</Note>
-                          </div>
+                          <Stopped data={data} retrying={retrying} retry={retry} />
                         ) : null}
                       </div>
                     ) : null}
@@ -300,6 +316,24 @@ export function SetUp() {
                 )
               })}
             </ol>
+          ) : data && failed ? (
+            // Stopped before any stage (sources, a sign-in): the stop itself, with its way out.
+            <div className="flex flex-col gap-2">
+              <span className="text-xs text-bad">{data.message}</span>
+              <Stopped data={data} retrying={retrying} retry={retry} />
+            </div>
+          ) : data && !running && connected === false ? (
+            // Nothing signed in: a run now would skip every source. LinkedIn is where setup starts.
+            <div className="flex flex-col gap-2">
+              <Note>Nothing is connected yet. Setup starts from your LinkedIn connections.</Note>
+              <Button
+                variant="primary"
+                className="self-start"
+                onClick={() => void navigate(stepAt("linkedin").href)}
+              >
+                Connect LinkedIn
+              </Button>
+            </div>
           ) : (
             <Note>
               <span className="inline-flex items-center gap-2">
