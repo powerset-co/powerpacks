@@ -97,6 +97,42 @@ async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
     return [row_attrs(row, ["school_name", "person_count"]) for row in (response.rows or [])]
 
 
+def without_alias(school_name: str) -> str:
+    """The schools index appends aliases in a trailing parenthetical ("… (UCLA / Bruins)"); people's rows don't."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", school_name).strip()
+
+
+async def query_people_school_ids(names: list[str], *, limit: int) -> list[dict[str, Any]]:
+    """The school ids people are actually filed under for these exact school names.
+
+    The schools index can hold one school under two ids with two names (KTH is "Kungliga tekniska
+    högskolan" there while its people wrote "KTH Royal Institute of Technology"), so a name match in
+    the schools index alone leaves those people out of the education prefilter. Each row is one
+    person's education entry; a big school has more rows than one page, so pages are walked by id
+    until the last one is short: a minority id must not be crowded out by the majority one."""
+    ns = turbopuffer_backend.namespace("education")
+    by_name: tuple = ("school_name", "In", names)
+    rows: list[dict[str, Any]] = []
+    last_id: str | None = None
+    while True:
+        filters = by_name if last_id is None else ("And", [by_name, ("id", "Gt", last_id)])
+
+        def run_query() -> Any:
+            return ns.query(
+                filters=filters,
+                rank_by=("id", "asc"),
+                top_k=limit,
+                include_attributes=["canonical_education_id", "school_name"],
+                consistency=STRONG_CONSISTENCY,
+            )
+
+        page = [row_attrs(row, ["canonical_education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
+        rows.extend(page)
+        if len(page) < limit:
+            return rows
+        last_id = page[-1]["id"]
+
+
 async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
     root_queries = affiliated_school_queries(name)
     query_rows: list[tuple[str, dict[str, Any]]] = []
@@ -131,6 +167,29 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
     resolved_ids = [candidate["id"] for candidate in candidates if candidate.get("included")]
     if not resolved_ids and candidates:
         resolved_ids = [candidates[0]["id"]]
+
+    # Every id people wrote one of the resolved names under, whatever the schools index calls it.
+    lookup_names = list(dict.fromkeys([name, *(without_alias(c["name"]) for c in candidates if c["id"] in resolved_ids)]))
+    people_counts: Counter[str] = Counter()
+    people_names: dict[str, str] = {}
+    for row in await query_people_school_ids(lookup_names, limit=limit):
+        school_id = str(row.get("canonical_education_id") or "")
+        if not school_id:
+            continue
+        people_counts[school_id] += 1
+        people_names.setdefault(school_id, str(row.get("school_name") or school_id))
+    for school_id, count in people_counts.most_common():
+        if school_id in resolved_ids:
+            continue
+        resolved_ids.append(school_id)
+        candidates.append({
+            "id": school_id,
+            "name": people_names[school_id],
+            "matched_rows": count,
+            "included": True,
+            "match_family": False,
+            "from_people": True,
+        })
     return {
         "query": name,
         "candidates": candidates,
