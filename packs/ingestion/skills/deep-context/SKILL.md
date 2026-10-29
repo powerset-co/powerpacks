@@ -164,6 +164,14 @@ relationship is one person per request. Never walk the store's tables for names:
 the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
 
+Every word that narrows the request is a filter, and a set write keeps all of them: "biz contacts marked
+no" is the people who are business contacts AND worth no, never everyone marked no. A relationship word
+matches the label or the `relationship_kind` column, as below; "biz", "business" or "work contacts" is
+`relationship_kind` `business_contact` or `colleague`, or `is_professional` in `labels` or `tags`. A word
+that maps to no column, label or tag is a question for the user, not a filter to drop; a filter that
+matches nobody changes nothing and says so. After the write, reply with the filter you used, the count,
+and the changed rows as a table.
+
 A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
 same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
 matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
