@@ -1,13 +1,16 @@
 {
   "rows": [
     {
-      "label": "Installing Powerpacks",
-      "steps": ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
-      "needs": ""
-    },
-    {
-      "label": "Logging in to your accounts",
+      "label": "Signing you in",
       "steps": [
+        "runtime",
+        "dependencies",
+        "skills",
+        "account",
+        "credentials",
+        "connection",
+        "network",
+        "sources",
         "linkedin_login",
         "gmail_tools",
         "gmail_login",
@@ -18,38 +21,56 @@
       "needs": ""
     },
     {
-      "label": "Syncing LinkedIn",
-      "steps": ["linkedin"],
+      "label": "Reading your connections",
+      "steps": [
+        "linkedin"
+      ],
       "needs": ""
     },
     {
       "label": "Syncing Gmail",
-      "steps": ["gmail_sync", "gmail_import"],
+      "steps": [
+        "gmail_sync",
+        "gmail_import"
+      ],
       "needs": ""
     },
     {
-      "label": "Syncing iMessage",
-      "steps": ["imessage_import"],
+      "label": "Reading your Messages",
+      "steps": [
+        "imessage_import"
+      ],
       "needs": ""
     },
     {
       "label": "Syncing WhatsApp",
-      "steps": ["whatsapp_sync", "whatsapp_import"],
+      "steps": [
+        "whatsapp_sync",
+        "whatsapp_import"
+      ],
       "needs": ""
     },
     {
-      "label": "Discovering your contacts",
-      "steps": ["deep_context"],
+      "label": "Learning who they are",
+      "steps": [
+        "deep_context"
+      ],
       "needs": ""
     },
     {
-      "label": "Enriching your contacts",
-      "steps": ["enrich"],
+      "label": "Enriching people",
+      "steps": [
+        "enrich"
+      ],
       "needs": ""
     },
     {
-      "label": "Building your search index",
-      "steps": ["index", "validate", "ready"],
+      "label": "Making your connections searchable",
+      "steps": [
+        "index",
+        "validate",
+        "ready"
+      ],
       "needs": "index"
     }
   ],

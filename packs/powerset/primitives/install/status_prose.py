@@ -31,8 +31,10 @@ Changelog:
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
 
@@ -61,23 +63,12 @@ class Row:
     needs: InstallStep | None = None  # shown only when this step is planned
 
 
-# The page's rows, top to bottom. Setup takes every login first, then each source's sync.
-ROWS = (
-    Row("Installing Powerpacks", (InstallStep.RUNTIME, InstallStep.DEPENDENCIES, InstallStep.SKILLS,
-                                  InstallStep.ACCOUNT, InstallStep.CREDENTIALS, InstallStep.CONNECTION,
-                                  InstallStep.NETWORK)),
-    Row("Logging in to your accounts", (InstallStep.LINKEDIN_LOGIN, InstallStep.GMAIL_TOOLS, InstallStep.GMAIL_LOGIN,
-                                        InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_TOOLS,
-                                        InstallStep.WHATSAPP_LOGIN)),
-    Row("Syncing LinkedIn", (InstallStep.LINKEDIN,)),
-    Row("Syncing Gmail", (InstallStep.GMAIL_SYNC, InstallStep.GMAIL_IMPORT)),
-    Row("Syncing iMessage", (InstallStep.IMESSAGE_IMPORT,)),
-    Row("Syncing WhatsApp", (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT)),
-    Row("Discovering your contacts", (InstallStep.DEEP_CONTEXT,)),
-    Row("Enriching your contacts", (InstallStep.ENRICH,)),
-    # A run whose every source is skipped ends ready without building an index.
-    Row("Building your search index", (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY),
-        needs=InstallStep.INDEX),
+# The page and Python read the same rows, top to bottom.
+ROWS = tuple(
+    Row(row["label"], tuple(InstallStep(step) for step in row["steps"]),
+        InstallStep(row["needs"]) if row["needs"] else None)
+    for row in json.loads((Path(__file__).resolve().parents[4] /
+                           "web/src/pages/install/setup-steps-mapping.json").read_text(encoding="utf-8"))["rows"]
 )
 
 # The page's fixed words: the title over each situation, the row states, buttons.

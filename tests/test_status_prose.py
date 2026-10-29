@@ -99,9 +99,15 @@ class StatusProseTests(unittest.TestCase):
         for item in _RUN:
             self.assertIn(_entry(item)[0], PROSE)
 
-    def test_every_step_but_choosing_sources_has_one_row(self) -> None:
+    def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
+        mapping = json.loads((ROOT / "web/src/pages/install/setup-steps-mapping.json").read_text())
+        codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
+        self.assertCountEqual(codes, list(InstallStep))
         rows = [step for row in ROWS for step in row.steps]
-        self.assertEqual(sorted(rows), sorted(step for step in InstallStep if step is not InstallStep.SOURCES))
+        self.assertEqual(rows, codes)
+        for row in mapping["rows"]:
+            if row["needs"]:
+                self.assertIn(InstallStep(row["needs"]), codes)
 
     def test_the_desktop_app_never_speaks_as_an_agent(self) -> None:
         self.assertEqual(sorted((set(DESKTOP_LINES) | set(DESKTOP_NOTES)) - set(PROSE)), [])

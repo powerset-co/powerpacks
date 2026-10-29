@@ -30,23 +30,38 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
-from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS  # noqa: E402
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS, STEP_WORDS  # noqa: E402
+from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import DEFAULT_COMPANY_MAX_RPM  # noqa: E402
 
 _STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
 _COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles")
+_COMPANY_FETCH = re.compile(r"^\[enrich-companies\] fetching (\d+) company profiles at ([\d.]+) rpm")
+BUILD_SECONDS = 120
 
 
-def progress_line(line: str, steps_done: int) -> tuple[str, int, int, int] | None:
-    """What a pipeline log line says about progress: (message, done, total, steps_done), or None.
+def progress_line(line: str, steps_done: int,
+                  company_rpm: float = DEFAULT_COMPANY_MAX_RPM) -> tuple[str, int, int, int, float] | None:
+    """Return (message, done, total, steps_done, left_seconds), or None.
     Steps completed count across the whole build; the company fetch, the long one, reports its own
     count while it runs. Both land in status.json for the laptop's Set up screen."""
-    if match := _STEP_DONE.match(line):
+    if _STEP_DONE.match(line):
         steps_done += 1
-        return f"Building search records: {steps_done} of {len(STEPS)} steps", steps_done, len(STEPS), steps_done
-    if match := _COMPANIES.match(line):
+        position = min(steps_done + 1, len(STEPS))
+        message = f"{STEP_WORDS[STEPS[position - 1]]} ({position} of {len(STEPS)})"
+        left_seconds = BUILD_SECONDS * (len(STEPS) - steps_done) / len(STEPS)
+        return message, steps_done, len(STEPS), steps_done, left_seconds
+    if match := _COMPANY_FETCH.match(line):
+        done, total = 0, int(match.group(1))
+        company_rpm = float(match.group(2))
+    elif match := _COMPANIES.match(line):
         done, total = int(match.group(1)), int(match.group(2))
-        return f"Company profiles: {done} of {total}", done, total, steps_done
-    return None
+    else:
+        return None
+    # A zero rpm disables pacing, leaving only the rest of the build to estimate.
+    left_seconds = (total - done) / company_rpm * 60 if company_rpm else 0
+    return f"Company profiles: {done} of {total}", done, total, steps_done, left_seconds + BUILD_SECONDS
+
+
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -186,12 +201,16 @@ def main() -> int:
     write_status(run_vol, status | {"phase": "pipeline"})
     pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
     steps_done = 0
+    company_rpm = DEFAULT_COMPANY_MAX_RPM
     assert pipeline.stderr is not None
     for line in pipeline.stderr:
         sys.stderr.write(line)
-        if progress := progress_line(line, steps_done):
-            message, done, total, steps_done = progress
-            write_status(run_vol, status | {"phase": "pipeline", "message": message, "done": done, "total": total})
+        if match := _COMPANY_FETCH.match(line):
+            company_rpm = float(match.group(2))
+        if progress := progress_line(line, steps_done, company_rpm):
+            message, done, total, steps_done, left_seconds = progress
+            write_status(run_vol, status | {"phase": "pipeline", "message": message, "done": done,
+                                           "total": total, "left_seconds": left_seconds})
     pipeline_code = pipeline.wait()
     if pipeline_code != 0:
         write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})

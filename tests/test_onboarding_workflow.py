@@ -97,6 +97,14 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertIn((date.today() - timedelta(days=365)).isoformat(), flow.retry_command)
         self.tools.assert_not_called()
 
+    def test_linkedin_only_plan_omits_message_processing(self):
+        for sources, skipped in ((('linkedin',), ()), (('linkedin', 'gmail'), ('gmail',))):
+            with self.subTest(sources=sources):
+                flow = SourceOnboarding(self.root, sources=sources, skip_sources=skipped)
+                self.assertEqual(flow.plan[-3:], ['index', 'validate', 'ready'])
+                self.assertNotIn('deep_context', flow.plan)
+                self.assertNotIn('enrich', flow.plan)
+
     def test_gmail_asks_which_accounts_only_without_a_powerset_login(self):
         with patch.object(accounts, 'status_payload', return_value={'accounts': []}), \
              patch.object(LinkedInConnections, 'login') as linkedin:

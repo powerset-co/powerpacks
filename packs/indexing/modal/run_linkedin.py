@@ -88,7 +88,7 @@ def main() -> int:
     cache_dir = Path(args.cache_root) / "profile_cache_v2"
     cache_dir.mkdir(parents=True, exist_ok=True)
     status = {"status": "running", "phase": "parse", "started_at": now_iso()}
-    write_status(run_vol, status)
+    write_status(run_vol, status | {"message": "Reading your connections"})
 
     if not os.environ.get("POWERSET_API_KEY"):
         write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
@@ -103,7 +103,7 @@ def main() -> int:
     # that manifest (not a ledger) is the source of truth for status + artifacts.
     manifest_path = resolve_discover_source_dir(Path(ns.output_dir), "linkedin") / "manifest.json"
 
-    write_status(run_vol, status | {"phase": "enrich"})
+    write_status(run_vol, status | {"phase": "enrich", "message": "Importing your connections"})
     # RapidAPI is always approved on this path (approve_spend=True), so the single
     # `run` completes without a needs_approval stop — no approve/continue loop.
     code = linkedin_import.LinkedInImport.command_run(ns)
@@ -113,7 +113,7 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
         return code or 1
 
-    write_status(run_vol, status | {"phase": "persist"})
+    write_status(run_vol, status | {"phase": "persist", "message": "Saving your connections"})
     people_csv = str((manifest.get("artifacts") or {}).get("people_csv") or "")
     if not people_csv or not Path(people_csv).exists():
         write_status(run_vol, status | {"status": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
@@ -127,7 +127,7 @@ def main() -> int:
     stats = enrichment_stats(manifest) | {"people": people_count}
     (run_vol / "import-stats.json").write_text(json.dumps(stats, indent=2))
     print(f"[run-linkedin] people={people_count} stats={json.dumps(stats)}", flush=True)
-    write_status(run_vol, status | {"status": "completed", "phase": "done", "stats": stats, "finished_at": now_iso()})
+    write_status(run_vol, status | {"status": "completed", "phase": "done", "message": "Your connections are imported", "stats": stats, "finished_at": now_iso()})
     return 0
 
 

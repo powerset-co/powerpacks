@@ -150,8 +150,11 @@ class SourceOnboarding:
         # Processing's owner step reads it from the saved command when LinkedIn's sign-in is unused.
         self.linkedin_url = linkedin_url or saved.linkedin_url
         self.step = InstallStep.SOURCES
-        if all(source in self.skip_sources for source in self.sources):
+        active = [source for source in self.sources if source not in self.skip_sources]
+        if not active:
             next_steps = (InstallStep.READY,)
+        elif active == [Source.LINKEDIN]:
+            next_steps = (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY)
         else:
             next_steps = PROCESSING_STEPS
         steps = [InstallStep.SOURCES.value,

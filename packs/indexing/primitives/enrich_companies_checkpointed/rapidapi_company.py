@@ -34,9 +34,9 @@ DEFAULT_CACHE_READ_WORKERS = 32
 # RapidAPI company-details rate limit. The 50-way fan-out below would otherwise
 # burst and trip RapidAPI's 429s (each one costs a retry + backoff), so we pace
 # request *starts* to a steady rpm via the shared StartRateLimiter — the same
-# pacer profile enrichment uses to sustain a clean 300 rpm.
+# pacer profile enrichment uses.
 # Override with POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM; 0 disables pacing.
-DEFAULT_COMPANY_MAX_RPM = float(os.getenv("POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM", "300"))
+DEFAULT_COMPANY_MAX_RPM = float(os.getenv("POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM", "700"))
 
 # Shared by the id- and slug-based fetches so their combined RapidAPI rate stays
 # within the limit.
@@ -184,6 +184,8 @@ def fetch_company_details_batch(
     if not need_fetch:
         return results
 
+    sys.stderr.write(f"[enrich-companies] fetching {len(need_fetch)} company profiles at {DEFAULT_COMPANY_MAX_RPM:g} rpm\n")
+
     def _fetch_one(cid: str) -> tuple[str, dict[str, Any]]:
         _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
         return cid, fetch_company_details(cid, api_key=api_key, host=host, timeout=timeout, cache_dir=cache_dir)
@@ -295,15 +297,19 @@ def fetch_company_details_batch_by_slug(
     if not need_fetch:
         return results
 
+    sys.stderr.write(f"[enrich-companies] fetching {len(need_fetch)} company profiles at {DEFAULT_COMPANY_MAX_RPM:g} rpm\n")
+
     def _fetch_one(s: str) -> tuple[str, dict[str, Any]]:
         _RATE_LIMITER.wait()  # pace the 50-way fan-out to a steady rpm
         return s, fetch_company_details_by_slug(s, api_key=api_key, host=host, timeout=timeout, cache_dir=cache_dir)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, s): s for s in need_fetch}
-        for future in concurrent.futures.as_completed(futures):
+        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
             s, resp = future.result()
             results[s] = resp
+            if done % 10 == 0 or done == len(need_fetch):
+                sys.stderr.write(f"[enrich-companies] fetched {done}/{len(need_fetch)} company profiles\n")
     return results
 
 

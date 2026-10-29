@@ -54,6 +54,26 @@ class InstallIndexProgressTests(unittest.TestCase):
         self.write(started_at="2026-10-03T09:59:59Z", updated_at="2026-10-03T10:01:00Z")
         self.assertIsNone(read_index_progress(self.root, ENTRY))
 
+    def test_watch_run_forwards_counts_and_estimates_including_estimate_only_changes(self):
+        producer = PipelineProgress(self.root / ".powerpacks/runs/setup-linkedin-modal")
+        remote = [
+            {"status": "running", "phase": "pipeline", "message": "Company profiles: 10 of 20",
+             "done": 10, "total": 20, "left_seconds": 121},
+            {"status": "running", "phase": "pipeline", "message": "Company profiles: 10 of 20",
+             "done": 10, "total": 20, "left_seconds": 120},
+            {"status": "completed", "phase": "pipeline", "message": "Company profiles: 10 of 20",
+             "done": 10, "total": 25, "left_seconds": 119},
+        ]
+        with patch.object(modal_pipeline.time, "sleep"):
+            modal_pipeline.watch_run(iter(remote).__next__, producer, "indexing", "Indexing")
+        events = [json.loads(line) for line in producer.events_path.read_text().splitlines()]
+        self.assertEqual([event["payload"] for event in events], [
+            {"phase": item["phase"], "done": item["done"], "total": item["total"],
+             "left_seconds": item["left_seconds"]} for item in remote
+        ])
+        self.assertEqual(read_index_progress(self.root, producer.status["started_at"])["payload"],
+                         events[-1]["payload"])
+
     def test_reads_newest_current_run_in_historical_gmail_path(self):
         self.write()
         self.write("setup-gmail-modal", started_at="2026-10-03T10:00:01Z", progress=0.75)

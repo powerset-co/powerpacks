@@ -406,7 +406,7 @@ def watch_run(read: Callable[[], dict | None], progress: PipelineProgress, stage
     """Poll a run's status (`read`: the volume's status.json, or the API's copy of it) and mirror it
     into the local stage."""
     deadline = time.time() + timeout_s
-    last: tuple | None = None
+    last: dict | None = None
     while time.time() < deadline:
         payload = read()
         if payload:
@@ -419,11 +419,13 @@ def watch_run(read: Callable[[], dict | None], progress: PipelineProgress, stage
                 "duckdb": "Preparing search", "persist": "Saving your search index", "done": "Finishing up",
             }.get(phase, message_prefix)
             done, total = payload.get("done"), payload.get("total")
-            if (phase, message, done) != last:
-                last = (phase, message, done)
+            left_seconds = payload.get("left_seconds")
+            if payload != last:
+                last = payload
                 counted = isinstance(done, int) and isinstance(total, int) and total > 0
                 progress.event(stage_id, message, progress=done / total if counted else None,
-                               payload={"phase": phase, **({"done": done, "total": total} if counted else {})})
+                               payload={"phase": phase, **({"done": done, "total": total} if counted else {}),
+                                        **({"left_seconds": left_seconds} if left_seconds is not None else {})})
             if payload.get("status") in ("completed", "failed"):
                 return payload
         time.sleep(3)
