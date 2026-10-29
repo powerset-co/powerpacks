@@ -1,4 +1,5 @@
-"""Resume imported contacts through deep-context v2, the Modal index, and validation.
+"""The two processing runs setup can start: run_linkedin (connections -> Modal index) and run (the
+import over connected sources: deep-context v2, enrichment, the Modal index, validation).
 
 The stages and their order are deep_context_v2/run.py's (`stages`); this walks them under the
 status page's events. Every paid stage estimates (into the install log) and runs: the install
