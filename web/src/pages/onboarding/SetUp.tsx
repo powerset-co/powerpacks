@@ -182,22 +182,21 @@ export function SetUp() {
 
   // Setup takes the sources signed in and skips the rest, so with nothing signed in a run would
   // skip everything and call itself installed: this screen starts one only once something is.
-  const signed = useQuery({
-    queryKey: SIGNED_IN,
-    queryFn: ({ signal }) => fetchSignedIn(signal),
-    retry: false,
-  })
+  const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
   const connected = signed.data
     ? signed.data.linkedin || signed.data.gmail || signed.data.imessage || signed.data.whatsapp
     : undefined
+  // A record no process owns: the launch's own (boot.rs writes pid 0), not one a run is writing
+  // between its steps (a step's completion carries the run's pid).
+  const idle = data !== undefined && !running && !failed && !ready && (data.installer_pid ?? 0) === 0
 
-  // Nothing running and nothing stopped: this screen starts setup itself, once.
+  // An idle record and a source signed in: this screen starts setup itself, once.
   const started = useRef(false)
   useEffect(() => {
-    if (!data || running || failed || ready || started.current || connected !== true) return
+    if (!idle || started.current || connected !== true) return
     started.current = true
     continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
-  }, [data, running, failed, ready, connected])
+  }, [idle, connected])
 
   // People appear as the index is built; once there are some the first look takes the right column.
   const look = useQuery({
@@ -246,6 +245,7 @@ export function SetUp() {
             {failed ? "Setup stopped" : ready ? "Search is ready" : (current?.label ?? "Setting up")}
           </h1>
           {install.error ? <Note bad>{errorText(install.error)}</Note> : null}
+          {signed.error ? <Note bad>{errorText(signed.error)}</Note> : null}
           {data && underway ? (
             <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Setup stages">
               {stages.map((stage) => {
@@ -322,7 +322,7 @@ export function SetUp() {
               <span className="text-xs text-bad">{data.message}</span>
               <Stopped data={data} retrying={retrying} retry={retry} />
             </div>
-          ) : data && !running && connected === false ? (
+          ) : data && idle && connected === false ? (
             // Nothing signed in: a run now would skip every source. LinkedIn is where setup starts.
             <div className="flex flex-col gap-2">
               <Note>Nothing is connected yet. Setup starts from your LinkedIn connections.</Note>

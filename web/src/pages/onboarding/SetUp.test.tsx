@@ -50,11 +50,11 @@ const WAITING: InstallStatus = {
 const NONE: SignedIn = { linkedin: false, gmail: false, imessage: false, whatsapp: false, mailboxes: [] }
 const LINKEDIN: SignedIn = { ...NONE, linkedin: true }
 
-let state: { record: InstallStatus; signed: SignedIn }
+let state: { record: InstallStatus; signed: SignedIn; signedStatus: number }
 
 beforeEach(() => {
   invoke.mockClear()
-  state = { record: STOPPED_ON_SOURCES, signed: LINKEDIN }
+  state = { record: STOPPED_ON_SOURCES, signed: LINKEDIN, signedStatus: 200 }
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string) =>
@@ -62,7 +62,12 @@ beforeEach(() => {
         url === "/api/install"
           ? new Response(JSON.stringify(state.record), { status: 200 })
           : url === "/accounts/api/signed-in"
-            ? new Response(JSON.stringify(state.signed), { status: 200 })
+            ? new Response(
+                JSON.stringify(
+                  state.signedStatus === 200 ? state.signed : { error: "msgvault is not readable" },
+                ),
+                { status: state.signedStatus },
+              )
             : new Response(JSON.stringify({ error: url }), { status: 404 }),
       ),
     ),
@@ -111,7 +116,7 @@ it("starts setup by itself once a source is signed in", async () => {
 
 it("with nothing signed in it starts nothing and sends the person to LinkedIn", async () => {
   // A run now would skip every source and call Powerpacks installed with no one in it.
-  state = { record: WAITING, signed: NONE }
+  state = { record: WAITING, signed: NONE, signedStatus: 200 }
   mount()
   const connect = await screen.findByRole("button", { name: "Connect LinkedIn" })
   expect(screen.getByText(/Nothing is connected yet/)).toBeTruthy()
@@ -119,5 +124,43 @@ it("with nothing signed in it starts nothing and sends the person to LinkedIn", 
 
   fireEvent.click(connect)
   await screen.findByRole("heading", { name: "Connect LinkedIn" })
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("a sign-in check that fails is shown, not swallowed", async () => {
+  state = { record: WAITING, signed: NONE, signedStatus: 500 }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/onboarding/setup"]}>
+        <Routes>
+          <Route path="/onboarding/:step" element={<SetUp />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+  await screen.findByText(/msgvault is not readable/)
+  expect(screen.queryByRole("button", { name: "Connect LinkedIn" })).toBeNull()
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("a record a run is writing between steps is the run's, not a prompt to connect", async () => {
+  // sources.selected: status completed on the sources step, carrying the run's pid. Nothing is
+  // signed in yet from this screen's point of view, but the run owns the record.
+  state = {
+    record: {
+      ...WAITING,
+      status: "completed",
+      installer_pid: 69310,
+      step: "sources",
+      event: "sources.selected",
+      message: "Sources selected",
+    },
+    signed: NONE,
+    signedStatus: 200,
+  }
+  mount()
+  await screen.findByText("Sources selected")
+  expect(screen.queryByRole("button", { name: "Connect LinkedIn" })).toBeNull()
   expect(invoke).not.toHaveBeenCalled()
 })
