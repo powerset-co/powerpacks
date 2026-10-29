@@ -171,13 +171,15 @@ class ProcessingOnboarding:
         print(result.stdout)
         return {"status": "failed" if result.returncode else "completed", "returncode": result.returncode}
 
-    def _linkedin(self) -> None:
-        """The scraped LinkedIn connections, imported on Modal when newer than their import."""
+    def _linkedin(self, event: str) -> None:
+        """The scraped LinkedIn connections, imported on Modal when newer than their import. `event`
+        is the row the page shows it under: the index for the LinkedIn run, deep context for the
+        import over messages."""
         connections, imported = self.root / CONNECTIONS_CSV, self.root / _LINKEDIN_PEOPLE
         if connections.is_file() and (not imported.is_file()
                                       or imported.stat().st_mtime_ns < connections.stat().st_mtime_ns):
             command = [*_MODAL, "import-linkedin", "--csv", str(CONNECTIONS_CSV), "--dest", _LINKEDIN_PEOPLE]
-            self._run(shlex.join(command), lambda: self._modal(command), "discover.linkedin")
+            self._run(shlex.join(command), lambda: self._modal(command), event)
 
     def _owner(self) -> None:
         """The owner profile, once: the LinkedIn scrape records the signed-in profile, else setup's saved
@@ -257,13 +259,13 @@ class ProcessingOnboarding:
         return self._guarded(self._messages)
 
     def _linkedin_only(self) -> None:
-        self._linkedin()
         self._write("discover.linkedin_only")
         self._write("enrich.linkedin_only")
+        self._linkedin("index.linkedin")
         self._index_linkedin()
 
     def _messages(self) -> None:
-        self._linkedin()
+        self._linkedin("discover.linkedin")
         archive_v1(self.data_root)
         with closing(open_store(store_path(self.data_root))) as conn:
             self._owner()
