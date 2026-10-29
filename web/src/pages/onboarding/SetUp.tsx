@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 
 import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
@@ -115,9 +115,30 @@ function finishedLine(data: InstallStatus, stage: Stage): string {
   return last ? (data.steps[last]?.message ?? stage.done) : stage.done
 }
 
-/** Set up: setup runs in the background (bin/onboard) from the moment this opens; the stages
- *  show as they go, the LinkedIn count with the time left, the index with Modal's progress. The
- *  first look opens once people are in. */
+/** A stop's way out: the record's note, Try again, the detail behind the stop, where the logs are. */
+function Stopped({ data, retrying, retry }: { data: InstallStatus; retrying: boolean; retry: () => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {data.note ? <Note>{data.note}</Note> : null}
+      <Button variant="primary" className="self-start" disabled={retrying} onClick={retry}>
+        {retrying ? (
+          <>
+            <Spinner /> Starting…
+          </>
+        ) : (
+          "Try again"
+        )}
+      </Button>
+      {stopDetail(data) ? <Note bad>{stopDetail(data)}</Note> : null}
+      <Note>Logs are in {data.log_path.replace(/\/[^/]*$/, "/")}</Note>
+    </div>
+  )
+}
+
+/** Set up: the run LinkedIn's Continue started (bin/onboard, in the background). This screen only
+ *  shows its record; the one thing it starts is Try again after a stop. The stages show as they go,
+ *  the LinkedIn count with the time left, the index with Modal's progress. The first look opens
+ *  once people are in. */
 export function SetUp() {
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -149,21 +170,12 @@ export function SetUp() {
   const record = install.data?.data
   const data =
     record && startedAt !== undefined && Date.parse(record.updated_at) < startedAt ? undefined : record
-  const running = data?.status === "running" || (data?.status === "waiting" && (data.installer_pid ?? 0) > 0)
   const failed = data?.status === "failed"
   const navigate = useNavigate()
   const ready = data?.event === "search.ready"
   const count = counts(data)
   const left = count ? secondsLeft(install.data?.samples ?? [], count.total) : null
   const processing = data !== undefined && data.step !== "linkedin" && !ready
-
-  // Nothing running and nothing stopped: this screen starts setup itself, once.
-  const started = useRef(false)
-  useEffect(() => {
-    if (!data || running || failed || ready || started.current) return
-    started.current = true
-    continueSetup({}).catch((caught: unknown) => setError(errorText(caught)))
-  }, [data, running, failed, ready])
 
   // People appear as the index is built; once there are some the first look takes the right column.
   const look = useQuery({
@@ -274,25 +286,7 @@ export function SetUp() {
                           </span>
                         )}
                         {standing === "stopped" ? (
-                          <div className="flex flex-col gap-2">
-                            {data.note ? <Note>{data.note}</Note> : null}
-                            <Button
-                              variant="primary"
-                              className="self-start"
-                              disabled={retrying}
-                              onClick={retry}
-                            >
-                              {retrying ? (
-                                <>
-                                  <Spinner /> Starting…
-                                </>
-                              ) : (
-                                "Try again"
-                              )}
-                            </Button>
-                            {stopDetail(data) ? <Note bad>{stopDetail(data)}</Note> : null}
-                            <Note>Logs are in {data.log_path.replace(/\/[^/]*$/, "/")}</Note>
-                          </div>
+                          <Stopped data={data} retrying={retrying} retry={retry} />
                         ) : null}
                       </div>
                     ) : null}
@@ -300,6 +294,12 @@ export function SetUp() {
                 )
               })}
             </ol>
+          ) : data && failed ? (
+            // Stopped before any stage (sources, a sign-in): the stop itself, with its way out.
+            <div className="flex flex-col gap-2">
+              <span className="text-xs text-bad">{data.message}</span>
+              <Stopped data={data} retrying={retrying} retry={retry} />
+            </div>
           ) : (
             <Note>
               <span className="inline-flex items-center gap-2">
@@ -329,7 +329,7 @@ export function SetUp() {
           <FirstLookPanel
             look={look.data ?? { people: [], total: 0, questions: [] }}
             ready={ready}
-            sourcesNext={step === "setup"}
+            sourcesNext={false}
           />
         ) : data && (count !== null || processing || data.step === "linkedin") ? (
           <>
