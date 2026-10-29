@@ -25,7 +25,7 @@ from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
 from packs.powerset.primitives.install import report
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
-from packs.powerset.primitives.install.workflow import Source, SourceOnboarding, _parser
+from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
 from packs.powerset.primitives.mcp_install import mcp_install
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 from packs.shared.web.server import start_server
@@ -348,9 +348,10 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
     if code == 0:
         print("Powerset search is ready; local setup will continue.", flush=True)
     payload = flow.run()
-    if payload["step"] == InstallStep.DEEP_CONTEXT and (payload.get("action") or {}).get("kind") == "processing":
+    if (payload.get("action") or {}).get("kind") == "processing":
         pipeline = ProcessingOnboarding(root)
-        payload = pipeline.run_linkedin() if flow.sources == (Source.LINKEDIN,) else pipeline.run()
+        # The handoff names the step that runs next: the index with LinkedIn alone, deep context otherwise.
+        payload = pipeline.run_linkedin() if payload["step"] == InstallStep.INDEX else pipeline.run()
     return payload
 
 

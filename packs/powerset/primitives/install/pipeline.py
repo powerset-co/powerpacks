@@ -259,8 +259,6 @@ class ProcessingOnboarding:
         return self._guarded(self._messages)
 
     def _linkedin_only(self) -> None:
-        self._write("discover.linkedin_only")
-        self._write("enrich.linkedin_only")
         self._linkedin("index.linkedin")
         self._index_linkedin()
 

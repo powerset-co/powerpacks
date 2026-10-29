@@ -400,6 +400,10 @@ class InstallPipelineTests(unittest.TestCase):
         # The run selected LinkedIn alone: import its families and realize without processing messages,
         # even though an earlier run left a Gmail import on disk (the fixture writes one).
         self.sources = ("linkedin",)
+        # The sources run starts the processing steps over and files its handoff under the index, the
+        # step that runs next with LinkedIn alone.
+        self.status.write('sources.selected', pid=os.getpid(), retry_command=self.retry)
+        self.status.write('step.waiting', step=InstallStep.INDEX, pid=os.getpid(), retry_command=self.retry)
         linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
         self.write(linkedin, "linkedin_url,full_name,primary_email,current_title,current_company,rapidapi_response\n")
         result = self.run_pipeline()
@@ -408,9 +412,8 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertTrue(self.did("realize"))
         for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "owner"):
             self.assertFalse(self.did(stage), stage)
-        self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
-        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
-        self.assertIn("Connect Messages or Gmail", result["note"])
+        self.assertNotIn("deep_context", result["steps"])
+        self.assertNotIn("enrich", result["steps"])
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
         self.assertTrue(any("index-people" in command and str(self.people) in command for command in commands), commands)
 

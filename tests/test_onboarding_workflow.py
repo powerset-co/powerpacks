@@ -260,7 +260,7 @@ class SourceOnboardingTests(unittest.TestCase):
         saved = {path: path.read_bytes() for path in imported.parent.iterdir()}
         InstallStatus(self.root).write('gmail.import.current', pid=os.getpid(), plan=['skills', 'sources', 'gmail_import'])
         result = SourceOnboarding(self.root, sources=('gmail', 'linkedin'), skip_sources=('gmail',)).run()
-        self.assertEqual(result['step'], 'deep_context')
+        self.assertEqual(result['step'], 'index')
         self.assertEqual(result['steps']['gmail_import']['status'], 'skipped')
         self.assertEqual({path: path.read_bytes() for path in imported.parent.iterdir()}, saved)
         self.assert_preserved()
@@ -966,7 +966,7 @@ class SourceOnboardingTests(unittest.TestCase):
                 'status': 'completed', 'outcome': 'partial', 'read': 2, 'total': 3, 'connections': 2, 'added': 2}) as scrape:
             result = SourceOnboarding(self.root, sources=('linkedin',)).run()
         scrape.assert_called_once()
-        self.assertEqual(result['step'], 'deep_context')
+        self.assertEqual(result['step'], 'index')
         self.assertEqual(result['steps']['linkedin']['message'], '2 LinkedIn connections (2 new); LinkedIn shows 3')
         manifest = self.root / '.powerpacks/network-import/discover/linkedin/connections.json'
         manifest.parent.mkdir(parents=True)
@@ -1008,9 +1008,9 @@ class SourceOnboardingTests(unittest.TestCase):
             original = (csv.read_bytes(), csv.stat().st_mtime_ns)
             for _ in range(2):
                 repeated = SourceOnboarding(self.root, sources=()).run()
-                self.assertEqual(repeated['step'], 'deep_context')
+                self.assertEqual(repeated['step'], 'index')
                 self.assertEqual((csv.read_bytes(), csv.stat().st_mtime_ns), original)
-            self.assertEqual(first['step'], 'deep_context')
+            self.assertEqual(first['step'], 'index')
             self.assertEqual(sum('--login-only' not in call.args for call in external.call_args_list), 1)
             SourceOnboarding(self.root, sources=(), refresh=True).run()
             SourceOnboarding(self.root, sources=()).run()
