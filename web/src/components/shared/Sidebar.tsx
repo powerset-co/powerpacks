@@ -8,7 +8,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { fetchInstall } from "@/lib/api/install"
 import { PAGES, type Page, type PageKey } from "@/lib/nav"
-import { COLLAPSE_EVENT, COLLAPSED_KEY } from "@/lib/sidebar"
+import { COLLAPSED_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
@@ -82,11 +82,6 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
-  useEffect(() => {
-    const collapse = () => setCollapsed(true)
-    window.addEventListener(COLLAPSE_EVENT, collapse)
-    return () => window.removeEventListener(COLLAPSE_EVENT, collapse)
-  }, [])
   const railOnly = useMedia(RAIL_ONLY_QUERY)
   const rail = collapsed || railOnly
   const toggle = () => {
