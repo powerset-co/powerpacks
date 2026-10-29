@@ -17,14 +17,14 @@ export const STEPS: Record<ConnectSource, readonly InstallStep[]> = {
 }
 
 // What a source's sign-in needs on this Mac first (preflight.py): a browser for LinkedIn's and
-// Google's sign-in pages, and Google's command-line tools for the Gmail app.
-export type Tool = "chromium" | "gcloud"
+// Google's sign-in pages. Google's command-line tools ship with the app.
+export type Tool = "chromium"
 export const NEEDS: Record<ConnectSource, readonly Tool[]> = {
   linkedin: ["chromium"],
-  gmail: ["chromium", "gcloud"],
+  gmail: ["chromium"],
   whatsapp: [],
 }
-export const TOOL = { chromium: "browser", gcloud: "gcloud" } as const
+export const TOOL = { chromium: "browser" } as const
 
 /** Whether the connect record is a sign-in still under way: each write carries its run's pid until
  *  the run hands back (0) or fails, and a read reports a run whose process is gone as stopped. */

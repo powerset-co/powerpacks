@@ -1,4 +1,4 @@
-"""Desktop prerequisite checks and installs run without Homebrew."""
+"""Desktop prerequisite checks and the Chromium install run without Homebrew."""
 from __future__ import annotations
 
 import json
@@ -14,24 +14,19 @@ from packs.powerset.primitives.install import preflight
 
 class PreflightTests(unittest.TestCase):
     @patch.object(preflight.subprocess, "run")
-    @patch.object(preflight.shutil, "which", return_value=None)
-    @patch.object(Path, "is_file", return_value=False)
-    def test_checks_missing(self, _file, _which, run):
+    def test_checks_missing(self, run):
         run.return_value.stdout = "null"
-        self.assertEqual(preflight.checks(), {"browser": {"ok": False, "name": None}, "gcloud": {"ok": False}})
+        self.assertEqual(preflight.checks(), {"browser": {"ok": False, "name": None}})
 
     @patch.object(preflight.subprocess, "run")
-    @patch.object(preflight.shutil, "which", return_value=None)
-    @patch.object(Path, "is_file", return_value=True)
-    def test_checks_browser_and_local_gcloud(self, _file, _which, run):
+    def test_checks_browser(self, run):
         run.return_value.stdout = json.dumps({"name": "Arc", "path": "/fixture/Arc"})
-        self.assertEqual(preflight.checks(), {"browser": {"ok": True, "name": "Arc"}, "gcloud": {"ok": True}})
+        self.assertEqual(preflight.checks(), {"browser": {"ok": True, "name": "Arc"}})
         self.assertEqual(run.call_args.args[0][-1], "--which")
 
     @patch.object(preflight.subprocess, "run", side_effect=FileNotFoundError("node"))
-    @patch.object(preflight.shutil, "which", return_value="/fixture/gcloud")
-    def test_checks_without_node(self, _which, _run):
-        self.assertEqual(preflight.checks(), {"browser": {"ok": False, "name": None}, "gcloud": {"ok": True}})
+    def test_checks_without_node(self, _run):
+        self.assertEqual(preflight.checks(), {"browser": {"ok": False, "name": None}})
 
     @patch.object(preflight, "ensure_chromium", return_value={"status": "ok", "installed": False, "node_path": "/n"})
     def test_chromium_streams_its_install(self, ensure):
@@ -43,25 +38,8 @@ class PreflightTests(unittest.TestCase):
     def test_chromium_failure(self, _ensure):
         self.assertEqual(preflight.install("chromium", Mock()), {"status": "failed", "message": "download failed"})
 
-    @patch.object(preflight, "_stream")
-    @patch.object(preflight.tarfile, "open")
-    @patch.object(preflight.urllib.request, "urlretrieve")
-    @patch.object(Path, "mkdir")
-    @patch.object(preflight.platform, "machine")
-    def test_gcloud_archives_and_no_installer(self, machine, _mkdir, download, archive, stream):
-        for arch, expected in [("arm64", "arm"), ("x86_64", "x86_64")]:
-            with self.subTest(arch=arch):
-                machine.return_value = arch
-                self.assertEqual(preflight.install("gcloud", Mock()), {"status": "ok"})
-                self.assertTrue(download.call_args.args[0].endswith(f"google-cloud-cli-darwin-{expected}.tar.gz"))
-                archive.return_value.__enter__.return_value.extractall.assert_called_with(
-                    preflight.GCLOUD_SDK.parent, filter="data")
-                self.assertEqual(stream.call_args.args[0], [str(preflight.GCLOUD_SDK / "bin/gcloud"), "--version"])
-
-    @patch.object(preflight.urllib.request, "urlretrieve", side_effect=OSError("offline"))
-    @patch.object(Path, "mkdir")
-    def test_gcloud_download_failure(self, _mkdir, _download):
-        self.assertEqual(preflight.install("gcloud", Mock()), {"status": "failed", "message": "offline"})
+    def test_only_chromium_installs_here(self) -> None:
+        self.assertEqual(preflight.install("gcloud", Mock()), {"status": "failed", "message": "Unknown prerequisite: gcloud"})
 
 
 class VendoredPlaywrightTests(unittest.TestCase):

@@ -66,7 +66,6 @@ it("lists the import's steps as the app reports them, then Connect for what did 
             })
           : reply({
               browser: { ok: true, name: "Chrome", install: null },
-              gcloud: { ok: true, install: null },
             }),
   )
   vi.stubGlobal("fetch", fetch)
