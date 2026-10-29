@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.48.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.0...powerpacks-v3.48.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **onboarding:** Skip for now works in a release build ([#1019](https://github.com/powerset-co/powerpacks/issues/1019)) ([ba0494f](https://github.com/powerset-co/powerpacks/commit/ba0494fa782bc325c8c57676b4a3307842bcd90d))
+
 ## [3.48.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.47.0...powerpacks-v3.48.0) (2026-10-29)
 
 
