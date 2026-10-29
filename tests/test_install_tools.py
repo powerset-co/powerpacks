@@ -46,7 +46,6 @@ class ImportToolsTests(unittest.TestCase):
         run.assert_not_called()
         msgvault.assert_called_once_with(install=True)
         self.assertIn(str(tools.Path.home() / ".powerpacks/google-cloud-sdk/bin"), os.environ["PATH"].split(os.pathsep))
-        self.assertEqual(os.environ["CLOUDSDK_PYTHON"], tools.sys.executable)
 
     @patch.dict(os.environ, {"POWERPACKS_DESKTOP": "1"})
     @patch("shutil.which", return_value=None)

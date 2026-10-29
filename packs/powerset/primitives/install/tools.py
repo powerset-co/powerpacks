@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import sys
 from enum import Enum
 from pathlib import Path
 
@@ -49,8 +48,6 @@ class ImportTools:
             *(str(path) for path in paths if path.is_dir()),
         ]))
         desktop = os.environ.get("POWERPACKS_DESKTOP") == "1"
-        if desktop:
-            os.environ["CLOUDSDK_PYTHON"] = sys.executable
         packages = []
         installed = {}
         # deep-context runs its pipeline in a tmux session under a second agent; the desktop app

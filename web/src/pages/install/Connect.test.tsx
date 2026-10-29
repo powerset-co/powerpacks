@@ -19,7 +19,7 @@ vi.mock("@/lib/agent/useCodexAccount", () => ({
 }))
 
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: null, picture: null }
-const READY = { browser: { ok: true, name: "Chrome", install: null }, gcloud: { ok: true, install: null } }
+const READY = { browser: { ok: true, name: "Chrome", install: null } }
 // A connect record as GET /api/install/connect returns it: nothing run yet.
 const NOTHING = { step: "runtime", status: "waiting", installer_pid: 0, message: "", steps: {}, action: null }
 // GET /accounts/api/signed-in on a fresh Mac: nothing signed in.
