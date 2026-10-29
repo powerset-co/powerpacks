@@ -26,6 +26,7 @@ use crate::crash::{self, Crash};
 use crate::onboard::{self, Setup};
 use crate::paths;
 use crate::source::{self, Plan};
+use crate::tools;
 
 pub const HOST: &str = "127.0.0.1";
 pub const PORT: u16 = 8765;
@@ -162,6 +163,11 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     // Codex's skills (~/.agents/skills) are links into the code just installed: this version's.
     if let Some(home) = dirs::home_dir() {
         source::link_skills(&root, &home, &version)?;
+        // The command-line tools the app ships, placed where Powerpacks looks for them.
+        if tools::stale(app, &home) {
+            boot.step(app, "Installing import tools", "");
+            tools::place(app, &home)?;
+        }
     }
 
     if first {

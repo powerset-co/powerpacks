@@ -140,7 +140,6 @@ export interface PreflightInstall {
 /** What the desktop app's first screen checks (packs/powerset/primitives/install/preflight.py). */
 export interface Preflight {
   browser: { ok: boolean; name: string | null; install: PreflightInstall | null }
-  gcloud: { ok: boolean; install: PreflightInstall | null }
 }
 
 export async function fetchPreflight(signal?: AbortSignal): Promise<Preflight> {
@@ -150,6 +149,6 @@ export async function fetchPreflight(signal?: AbortSignal): Promise<Preflight> {
 }
 
 /** Install a preflight item in the background; fetchPreflight follows it. */
-export function installPreflight(item: "chromium" | "gcloud"): Promise<void> {
+export function installPreflight(item: "chromium"): Promise<void> {
   return installAction("preflight", { item })
 }
