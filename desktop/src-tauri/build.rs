@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "debug_skip_setup",
     "debug_reset_data",
     "setup_done",
+    "setup_skip",
     "setup_import_source",
     "setup_import",
     "report_crash",
