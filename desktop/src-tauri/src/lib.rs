@@ -14,6 +14,7 @@ mod crash;
 mod onboard;
 mod paths;
 mod permission;
+mod qa;
 mod restart;
 mod source;
 mod update;
@@ -28,7 +29,7 @@ use tauri_plugin_opener::OpenerExt;
 use boot::{Boot, BootState};
 use codex::Codex;
 
-const MAIN_WINDOW: &str = "main";
+pub(crate) const MAIN_WINDOW: &str = "main";
 
 /// The app's build-time context (its config, capabilities and icons); minted once per crate.
 pub(crate) fn context() -> tauri::Context<tauri::Wry> {
@@ -90,6 +91,9 @@ fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     let parsed: Url = url.parse().map_err(|error| format!("Bad URL: {error}"))?;
     if parsed.scheme() != "https" {
         return Err("Only https pages open outside the app.".into());
+    }
+    if qa::record_opened(&parsed) {
+        return Ok(());
     }
     app.opener()
         .open_url(parsed.as_str(), None::<&str>)
@@ -172,7 +176,8 @@ async fn codex_threads(
 }
 
 /// Test builds show a debug menu (CI sets POWERPACKS_DEBUG_MENU; debug builds always do).
-const DEBUG_MENU: bool = cfg!(debug_assertions) || option_env!("POWERPACKS_DEBUG_MENU").is_some();
+pub(crate) const DEBUG_MENU: bool =
+    cfg!(debug_assertions) || option_env!("POWERPACKS_DEBUG_MENU").is_some();
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -317,7 +322,7 @@ fn is_local(url: &Url) -> bool {
 }
 
 fn open_outside(app: &AppHandle, url: &Url) {
-    if matches!(url.scheme(), "http" | "https" | "mailto") {
+    if matches!(url.scheme(), "http" | "https" | "mailto") && !qa::record_opened(url) {
         let _ = app.opener().open_url(url.as_str(), None::<&str>);
     }
 }
@@ -465,6 +470,7 @@ pub fn run() {
             boot::launch(app.handle().clone());
             auto_reply::launch(app.handle().clone());
             restart::launch(app.handle().clone());
+            qa::launch(app.handle().clone());
             Ok(())
         })
         .build(context())
