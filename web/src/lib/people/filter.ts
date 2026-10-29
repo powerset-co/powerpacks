@@ -17,7 +17,8 @@ export function filterRows(
   { tab, filters, hide, text, sort }: PeopleView,
 ): FilterResult {
   const needle = text.trim().toLowerCase()
-  const hidden = HIDES.filter(({ key }) => hide.has(key))
+  // A hide that would leave nobody (LinkedIn-only people on a LinkedIn-only install) does not apply.
+  const hidden = HIDES.filter(({ key, hides }) => hide.has(key) && rows.some((row) => !hides(row)))
   const active = [...filters]
     .filter(([, values]) => values.size)
     .map(([key, values]) => [facetOf(key), values] as const)

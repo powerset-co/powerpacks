@@ -29,6 +29,18 @@ describe("filterRows", () => {
     expect(matching.map((row) => row.name)).toEqual(["Casey Delta", "Jordan Bravo", "Riley Echo"])
   })
 
+  it("hides LinkedIn-only people only while there is anyone else to show", () => {
+    // DEFAULT_VIEW hides them. On a LinkedIn-only install that would leave nobody, so it does not apply.
+    const mixed = rows.map((row) => ({ ...row, linkedin_only: row.name === "Casey Delta" }))
+    expect(filterRows(mixed, view).matching.map((row) => row.name)).toEqual(["Jordan Bravo", "Riley Echo"])
+    const linkedinOnly = rows.map((row) => ({ ...row, linkedin_only: true }))
+    expect(filterRows(linkedinOnly, view).matching.map((row) => row.name)).toEqual([
+      "Casey Delta",
+      "Jordan Bravo",
+      "Riley Echo",
+    ])
+  })
+
   it("keeps the rows that match every held facet", () => {
     const filters = new Map<FacetKey, Set<string>>([
       ["relationship_kind", new Set(["family"])],

@@ -80,31 +80,3 @@ it("drops Setup once setup is done; Settings offers Repair setup instead", async
   await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
   expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
 })
-
-it("offers Add sources once setup is done, until a message import has run here", async () => {
-  vi.mocked(useSetupDone).mockReturnValue(true)
-  install.fetchInstall.mockResolvedValue({
-    status: "completed",
-    message: "Search is ready",
-    steps: { linkedin: { status: "completed" } },
-  })
-  mount()
-  const link = await screen.findByRole("link", { name: "Add sources" })
-  expect(link.getAttribute("href")).toBe("/onboarding/sources")
-  cleanup()
-  install.fetchInstall.mockResolvedValue({
-    status: "completed",
-    message: "Search is ready",
-    steps: { gmail_import: { status: "completed" } },
-  })
-  mount()
-  await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
-  expect(screen.queryByRole("link", { name: "Add sources" })).toBeNull()
-})
-
-it("does not offer Add sources while setup is not done", async () => {
-  vi.mocked(useSetupDone).mockReturnValue(false)
-  mount()
-  await waitFor(() => expect(screen.getByRole("link", { name: "Setup" })).toBeTruthy())
-  expect(screen.queryByRole("link", { name: "Add sources" })).toBeNull()
-})

@@ -3,17 +3,7 @@
 import { isDesktop } from "@/lib/desktop"
 
 export type PageKey =
-  | "agent"
-  | "searches"
-  | "people"
-  | "accounts"
-  | "memory"
-  | "sets"
-  | "team"
-  | "tasks"
-  | "setup"
-  | "sources"
-  | "settings"
+  "agent" | "searches" | "people" | "accounts" | "memory" | "sets" | "team" | "tasks" | "setup" | "settings"
 
 export interface Page {
   key: PageKey
@@ -36,9 +26,6 @@ const BROWSER_PAGES: readonly Page[] = [
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away. The app's
   // is the onboarding's Set up screen; the browser's is the install page.
   { key: "setup", label: "Setup", href: isDesktop() ? "/onboarding/setup" : "/install" },
-  // Once setup is done with LinkedIn alone: the onboarding's Sources screen, for Messages, Gmail
-  // and WhatsApp. Gone once a message source is in.
-  { key: "sources", label: "Add sources", href: "/onboarding/sources" },
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and

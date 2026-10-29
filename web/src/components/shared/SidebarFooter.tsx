@@ -3,6 +3,10 @@ import { useCallback, useRef, useState, type ReactNode, type SVGProps } from "re
 import { useNavigate } from "react-router-dom"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
+import { fetchInstall } from "@/lib/api/install"
+import { useSetupDone } from "@/hooks/useSetupDone"
+import { isDesktop } from "@/lib/desktop"
+import { readStored, writeStored } from "@/lib/storage"
 import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
@@ -23,6 +27,7 @@ import { Button } from "../ui/button"
 import { AppFeedback } from "./AppFeedback"
 import { Avatar } from "./Avatar"
 import { CLOSE_MARK } from "./icons/actions"
+import { CirclePlus } from "lucide-react"
 import { SettingsIcon } from "./icons/nav"
 import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
@@ -36,8 +41,75 @@ const SIGNED_OUT_POLL_MS = 5_000
 export function SidebarFooter({ rail }: { rail: boolean }) {
   return (
     <div className="mt-auto flex flex-col">
+      <SourcesPane rail={rail} />
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
+    </div>
+  )
+}
+
+// Remembered on this machine once dismissed; a message import ends it for good.
+const SOURCES_PROMPT_KEY = "sources-prompt-dismissed"
+const MESSAGE_IMPORTS = ["gmail_import", "imessage_import", "whatsapp_import"]
+
+/** Add sources: once setup is done with LinkedIn alone, a prompt for Gmail, Messages and WhatsApp,
+ *  opening the onboarding's Sources screen. Dismissable; gone once a message import has run. */
+function SourcesPane({ rail }: { rail: boolean }) {
+  const navigate = useNavigate()
+  const done = useSetupDone()
+  const install = useQuery({
+    queryKey: ["install"],
+    queryFn: ({ signal }) => fetchInstall(signal),
+    enabled: isDesktop() && done,
+    retry: false,
+  })
+  const [dismissed, setDismissed] = useState(
+    () => readStored("local", SOURCES_PROMPT_KEY, (raw) => (raw === true ? true : null)) ?? false,
+  )
+  const imported = MESSAGE_IMPORTS.some((step) => install.data?.steps[step]?.status === "completed")
+  if (!done || dismissed || install.data === undefined || imported) return null
+  const open = () => void navigate("/onboarding/sources")
+  const dismiss = () => {
+    writeStored("local", SOURCES_PROMPT_KEY, true)
+    setDismissed(true)
+  }
+  if (rail) {
+    return (
+      <div className="flex justify-center pb-1">
+        <button
+          type="button"
+          aria-label="Add sources"
+          onClick={open}
+          className="group relative grid size-9 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-primary transition-colors duration-fast ease-out hover:bg-secondary"
+        >
+          <CirclePlus className="size-[18px]" />
+          <Tip side="right">Add sources</Tip>
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="mx-2 mb-2 rounded-[var(--radius-m)] border border-line bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] p-2.5">
+      <div className="flex items-start gap-2">
+        <CirclePlus className="mt-px size-4 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1 leading-[1.25]">
+          <span className="block truncate text-[12px] font-semibold text-foreground">Add more sources</span>
+          <span className="block text-[11px] text-muted-foreground">
+            Gmail, Messages and WhatsApp add the people you talk to.
+          </span>
+        </span>
+        <button
+          type="button"
+          aria-label="Dismiss this prompt"
+          onClick={dismiss}
+          className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[15px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+        >
+          {CLOSE_MARK}
+        </button>
+      </div>
+      <Button variant="primary" size="sm" onClick={open} className="mt-2.5 w-full">
+        Add sources
+      </Button>
     </div>
   )
 }

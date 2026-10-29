@@ -14,6 +14,10 @@ const desktop = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true, invoke: desktop.invoke, listen: desktop.listen }))
 vi.mock("@/lib/api/relay", () => ({ connectRelay: vi.fn() }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
+const setup = vi.hoisted(() => ({ done: false }))
+vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: () => setup.done }))
+const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
+vi.mock("@/lib/api/install", () => install)
 
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: "Casey", picture: null }
 
@@ -33,6 +37,8 @@ function mount(rail = false) {
 }
 beforeEach(() => {
   desktop.invoke.mockResolvedValue({ current: "3.27.0", latest: "3.27.0", available: false })
+  setup.done = false
+  install.fetchInstall.mockResolvedValue({ status: "completed", message: "Search is ready", steps: {} })
 })
 afterEach(() => {
   cleanup()
@@ -257,4 +263,45 @@ it("ignores an old saved check and checks the installed version on launch", asyn
   cleanup()
   mount()
   await waitFor(() => expect(invoked("update_check")).toBe(2))
+})
+
+it("prompts for more sources once setup is done with LinkedIn alone, and opens the Sources screen", async () => {
+  setup.done = true
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/agent"]}>
+        <Routes>
+          <Route path="/onboarding/sources" element={<p>Sources screen</p>} />
+          <Route path="*" element={null} />
+        </Routes>
+        <SidebarFooter rail={false} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+  fireEvent.click(await screen.findByRole("button", { name: "Add sources" }))
+  await screen.findByText("Sources screen")
+})
+
+it("the prompt dismisses for good on this machine, and never shows once a message import ran", async () => {
+  setup.done = true
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "Dismiss this prompt" }))
+  expect(screen.queryByText("Add more sources")).toBeNull()
+  cleanup()
+  mount()
+  await waitFor(() => expect(auth.fetchAccount).toHaveBeenCalled())
+  expect(screen.queryByText("Add more sources")).toBeNull()
+  localStorage.clear()
+  cleanup()
+  install.fetchInstall.mockResolvedValue({
+    status: "completed",
+    message: "Search is ready",
+    steps: { gmail_import: { status: "completed" } },
+  })
+  mount()
+  await waitFor(() => expect(install.fetchInstall).toHaveBeenCalled())
+  expect(screen.queryByText("Add more sources")).toBeNull()
 })

@@ -26,7 +26,7 @@ import {
   TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
-import { CirclePlus, CircleUserRound } from "lucide-react"
+import { CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
 import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
@@ -43,7 +43,6 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   team: TeamIcon,
   tasks: TasksIcon,
   setup: SetupIcon,
-  sources: CirclePlus,
   settings: SettingsIcon,
   accounts: CircleUserRound,
 }
@@ -74,16 +73,11 @@ export function Sidebar() {
   const install = useQuery({
     queryKey: ["install"],
     queryFn: ({ signal }) => fetchInstall(signal),
-    enabled: isDesktop(),
+    enabled: isDesktop() && !done,
     refetchInterval: 5_000,
     retry: false,
   })
   const running = install.data?.status === "running" ? install.data.message : undefined
-  // Add sources shows once setup is done, until a message import has run here.
-  const imported = ["gmail_import", "imessage_import", "whatsapp_import"].some(
-    (step) => install.data?.steps[step]?.status === "completed",
-  )
-  const moreSources = done && install.data !== undefined && !imported
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -140,8 +134,7 @@ export function Sidebar() {
           (page) =>
             (page.key !== "sets" || features.sets) &&
             (page.key !== "team" || (onTeam && features.team)) &&
-            (page.key !== "setup" || !done) &&
-            (page.key !== "sources" || moreSources),
+            (page.key !== "setup" || !done),
         ).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} running={page.key === "setup" ? running : undefined} />

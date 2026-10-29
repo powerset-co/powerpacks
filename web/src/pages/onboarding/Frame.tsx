@@ -10,24 +10,27 @@ import { isDesktop } from "@/lib/desktop"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
-import { STEPS, type StepKey } from "./steps"
+import { SOURCE_STEPS, STEPS, type StepKey } from "./steps"
 
 /** The onboarding window: the steps across the top with a line under the ones reached, then two
  *  columns: what to do on the left, what it is about on the right. No Back: each screen moves on
  *  by its own action. Skip for now, at the foot of the left column, marks setup skipped and opens
  *  the app; Accounts and Add sources in the nav take it from there. The Sources and Import screens
- *  are off the bar (the nav opens them), so their foot says Back to the app. The steps are plain
+ *  have their own two-step bar (the Add sources prompt opens them); their foot says Back to the app. The steps are plain
  *  labels in a release build; a test build (the debug menu on) and the browser view make them
  *  links, a way around while working on them. */
 export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; right: ReactNode }) {
   const navigate = useNavigate()
-  const index = STEPS.findIndex((item) => item.key === step)
+  // The onboarding's four steps, or the Add sources flow's two.
+  const onboarding = STEPS.some((item) => item.key === step)
+  const bar = onboarding ? STEPS : SOURCE_STEPS
+  const index = bar.findIndex((item) => item.key === step)
   const debug = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState, enabled: isDesktop() })
   const linked = !isDesktop() || debug.data?.enabled === true
   const [leaveError, setLeaveError] = useState<string | null>(null)
   const leave = () => {
     setLeaveError(null)
-    void (index >= 0 ? setupSkip() : Promise.resolve())
+    void (onboarding ? setupSkip() : Promise.resolve())
       .then(() => void navigate(HOME.href))
       .catch((caught: unknown) => setLeaveError(errorText(caught)))
   }
@@ -38,7 +41,7 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
           aria-label="Onboarding steps"
           className="m-0 flex list-none items-center gap-3 p-0 text-[11px] font-semibold uppercase tracking-[.1em]"
         >
-          {STEPS.map((item, at) => (
+          {bar.map((item, at) => (
             <li key={item.key} className="flex items-center gap-3">
               {linked ? (
                 <button
@@ -60,14 +63,14 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
                   {item.label}
                 </span>
               )}
-              {at < STEPS.length - 1 ? <ChevronRight className="size-3.5 text-faint" aria-hidden /> : null}
+              {at < bar.length - 1 ? <ChevronRight className="size-3.5 text-faint" aria-hidden /> : null}
             </li>
           ))}
         </ol>
         <div
           aria-hidden
           className="absolute bottom-[-1px] left-0 h-[2px] bg-primary transition-[width] duration-slow ease-out"
-          style={{ width: `${(Math.max(index + 1, 0) / STEPS.length) * 100}%` }}
+          style={{ width: `${((index + 1) / bar.length) * 100}%` }}
         />
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-2 max-[720px]:grid-cols-1">
@@ -80,7 +83,7 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
                 onClick={leave}
                 className="cursor-pointer border-0 bg-transparent p-0 text-xs text-faint hover:text-foreground"
               >
-                {index >= 0 ? "Skip for now" : "Back to the app"}
+                {onboarding ? "Skip for now" : "Back to the app"}
               </button>
               {leaveError ? <Note bad>{leaveError}</Note> : null}
             </div>
