@@ -6,9 +6,10 @@ from pathlib import Path
 from unittest.mock import call, patch
 
 from packs.indexing.modal import api_runs
+from packs.ingestion.primitives.deep_context_v2.run import INDEX_MAX_USD
 from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
-from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
 from packs.powerset.primitives.install import linkedin_setup as setup
+from packs.powerset.primitives.install import report
 from packs.powerset.primitives.install.status import InstallStatus
 
 
@@ -37,6 +38,7 @@ class LinkedInSetupTests(unittest.TestCase):
             return value
 
         mock(InstallStatus, "write", autospec=True, side_effect=write)
+        self.report = mock(report, "install")
         self.connections = mock(LinkedInConnections, "run", side_effect=connections)
         mock(setup, "load_env")
         mock(setup, "open_store")
@@ -88,7 +90,7 @@ class LinkedInSetupTests(unittest.TestCase):
         self.assertEqual(building["action"]["details"], {"done": 15, "total": 15, "left_seconds": 0})
         self.assertEqual(self.start.call_args_list, [
             call("import-linkedin", "uploaded", source_user="linkedin"),
-            call("index-people", "uploaded", max_usd=0.0)])
+            call("index-people", "uploaded", max_usd=float(INDEX_MAX_USD))])
         self.assertEqual(self.download.call_args_list, [
             call("import-linkedin", "people.csv", self.root / ".powerpacks" / setup.LINKEDIN_CSV),
             call("index-people", "local-search.duckdb", self.people.parent / "local-search.duckdb"),
@@ -100,8 +102,15 @@ class LinkedInSetupTests(unittest.TestCase):
     def test_second_invocation_repeats_every_stage(self):
         payloads = list(self.payloads)
         self.assertEqual(self.run_setup(), 0)
+        first_run_count = len(self.records)
         self.payloads = payloads
         self.assertEqual(self.run_setup(), 0)
+        readings = self.records[first_run_count:first_run_count + 3]
+        self.assertEqual([record["event"] for record in readings], [
+            "linkedin.reading", "linkedin.reading.read", "linkedin.reading.count"])
+        for reading in readings:
+            self.assertEqual(reading["steps"], {
+                "linkedin": {"status": "running", "message": reading["message"]}})
         for operation in (self.connections, self.write_connections, self.realize, self.validate):
             self.assertEqual(operation.call_count, 2)
         self.assertEqual(self.start.call_count, 4)
@@ -117,16 +126,7 @@ class LinkedInSetupTests(unittest.TestCase):
                 self.assertEqual(self.records[-1]["event"], event)
                 self.assertEqual(self.records[-1]["installer_pid"], 0)
                 self.upload.assert_not_called()
-
-    def test_sign_in_exception_waits_but_other_blocked_operations_fail(self):
-        self.connections.side_effect = PrimitiveBlocked({"message": "Sign in"})
-        self.assertEqual(self.run_setup(), 20)
-        self.assertEqual(self.records[-1]["event"], "linkedin.waiting")
-        self.connections.side_effect = None
-        self.connections.return_value = {"status": "completed", "outcome": "read", "connections": 0, "added": 0}
-        self.upload.side_effect = PrimitiveBlocked({"message": "Missing config"})
-        self.assertEqual(self.run_setup(), 1)
-        self.assertEqual(self.records[-1]["event"], "step.failed")
+        self.assertEqual(self.report.call_args_list, [call(self.root), call(self.root)])
 
     def test_modal_failure_records_its_error_and_does_not_download(self):
         self.payloads = [{"status": "failed", "error": "Provider unavailable"}]
@@ -134,6 +134,10 @@ class LinkedInSetupTests(unittest.TestCase):
         self.assertEqual(self.records[-1]["step"], "index")
         self.assertEqual(self.records[-1]["event"], "step.failed")
         self.assertEqual(self.records[-1]["message"], "Provider unavailable")
+        self.report.assert_called_once_with(self.root)
+        log = (self.root / ".powerpacks/install/install.log").read_text()
+        self.assertIn("Traceback (most recent call last):", log)
+        self.assertIn("RuntimeError: Provider unavailable", log)
         self.download.assert_not_called()
         self.validate.assert_not_called()
 

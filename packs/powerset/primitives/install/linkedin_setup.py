@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+import traceback
 from contextlib import chdir, closing
 from pathlib import Path
 
@@ -16,9 +17,9 @@ from packs.indexing.primitives.validate_search_index.validate_search_index impor
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.import_load.load import CONNECTIONS_CSV as LINKEDIN_CSV, write_connections
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
-from packs.ingestion.primitives.deep_context_v2.run import realize
+from packs.ingestion.primitives.deep_context_v2.run import INDEX_MAX_USD, realize
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, LinkedInConnections
-from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
+from packs.powerset.primitives.install import report
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE
 from packs.powerset.primitives.install.steps import InstallStep
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args(argv)
     root = args.root.resolve()
+    report.install(root)
     data_root = root / ".powerpacks"
     index = data_root / "search-index"
     status = InstallStatus(root)
@@ -65,16 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     with chdir(root):
         try:
             load_env()
+            status.manifest_path.unlink(missing_ok=True)
             write("linkedin.reading", plan=["linkedin", "index", "validate", "ready"])
-            try:
-                result = LinkedInConnections(csv_path=root / CONNECTIONS_CSV).run(on_count=count)
-            except PrimitiveBlocked as error:
-                write("linkedin.waiting", pid=0, details=error.payload)
-                return 20
+            result = LinkedInConnections(csv_path=root / CONNECTIONS_CSV).run(on_count=count)
             values = {key: result[key] for key in result.keys() & {"connections", "added", "read", "total"}}
-            if result["status"] not in {"ok", "completed", "linked", "skipped"}:
-                event = dict.fromkeys(("needs_user_action", "blocked_user_action", "needs_approval"),
-                                      "linkedin.waiting").get(result["status"], "linkedin.failed")
+            if result["status"] != "completed":
+                event = {"needs_user_action": "linkedin.waiting", "failed": "linkedin.failed"}[result["status"]]
                 write(event, pid=0, details=result, **values)
                 return {"linkedin.waiting": 20, "linkedin.failed": 1}[event]
             write(f"linkedin.done.{result.get('outcome')}", details=result, **values)
@@ -92,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
 
             write("index.building")
             uploaded = api_runs.upload(people_csv, "people.csv")
-            label = api_runs.start("index-people", uploaded, max_usd=0.0)
+            label = api_runs.start("index-people", uploaded, max_usd=float(INDEX_MAX_USD))
             watch(label, "index.building")
             for name in ("local-search.duckdb", "manifest.json"):
                 download(label, name, index / name)
@@ -103,9 +101,12 @@ def main(argv: list[str] | None = None) -> int:
             if validation["status"] != "ok":
                 raise RuntimeError(validation["summary"])
             write("validate.done", people=validation["total_people"])
-            write("search.ready", pid=0, people=validation["total_people"])
+            write("search.ready", pid=0, people=validation["total_people"], follow_ups="")
             return 0
         except (Exception, SystemExit) as error:
+            status.directory.mkdir(parents=True, exist_ok=True)
+            with status.log_path.open("a", encoding="utf-8") as log:
+                traceback.print_exc(file=log)
             write("step.failed", pid=0, message=str(error), details={"error": str(error)})
             return 1
 

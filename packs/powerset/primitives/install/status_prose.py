@@ -343,9 +343,8 @@ def render(event: str, values: dict, *, desktop: bool = DESKTOP) -> tuple[Prose,
     line, note = prose.line, prose.note
     if desktop:
         line, note = _app_words(DESKTOP_LINES.get(event, line)), _app_words(DESKTOP_NOTES.get(event, note))
-    if event in {"index.linkedin", "index.building", "step.failed"}:
-        line = "{message}" if values.get("message") else line
-    return prose, line.format(**values), note.format(**{"follow_ups": "", **values})
+    line = "{message}" if values.get("message") else line
+    return prose, line.format(**values), note.format(**values)
 
 
 def page_prose(*, desktop: bool = DESKTOP) -> dict:

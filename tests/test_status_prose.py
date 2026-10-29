@@ -99,6 +99,12 @@ class StatusProseTests(unittest.TestCase):
         for item in _RUN:
             self.assertIn(_entry(item)[0], PROSE)
 
+    def test_a_message_replaces_any_events_line(self) -> None:
+        for desktop in (False, True):
+            with self.subTest(desktop=desktop):
+                _, line, _ = render("tools.preparing", {"message": "Provider progress"}, desktop=desktop)
+                self.assertEqual(line, "Provider progress")
+
     def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
         mapping = json.loads((INSTALL / "setup-steps-mapping.json").read_text())
         codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
