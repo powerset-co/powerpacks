@@ -74,7 +74,7 @@ export interface Run {
 
 /** The setup record when it is this screen's run (`mine`) and newer than the click that opened
  *  the screen; the record is the last run's until the new one writes. */
-export function useRun(mine: (data: InstallStatus) => boolean): Run {
+export function useRun(mine: (data: InstallStatus) => boolean, previous?: InstallStatus): Run {
   const client = useQueryClient()
   const [retryError, setRetryError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
@@ -101,7 +101,10 @@ export function useRun(mine: (data: InstallStatus) => boolean): Run {
   const startedAt = isRecord(state) && typeof state.startedAt === "number" ? state.startedAt : undefined
   const record = install.data?.data
   const data =
-    record && mine(record) && (startedAt === undefined || Date.parse(record.updated_at) >= startedAt)
+    record &&
+    mine(record) &&
+    record !== previous &&
+    (startedAt === undefined || Date.parse(record.updated_at) >= Math.floor(startedAt / 1000) * 1000)
       ? record
       : undefined
   const count = counts(data)
@@ -133,7 +136,7 @@ export function useRun(mine: (data: InstallStatus) => boolean): Run {
     left,
     ready: data?.event === "search.ready",
     failed: data?.status === "failed",
-    starting: data === undefined && startedAt !== undefined,
+    starting: data === undefined && (startedAt !== undefined || previous !== undefined),
     error: install.error,
     retry,
     retrying,

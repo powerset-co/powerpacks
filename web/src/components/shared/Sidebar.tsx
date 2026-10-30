@@ -116,8 +116,7 @@ export function Sidebar() {
       <ul className="m-0 flex shrink-0 list-none flex-col gap-0.5 p-2">
         {PAGES.filter(
           (page) =>
-            (page.key !== "sets" || features.sets) &&
-            (page.key !== "team" || (onTeam && features.team)),
+            (page.key !== "sets" || features.sets) && (page.key !== "team" || (onTeam && features.team)),
         ).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} />

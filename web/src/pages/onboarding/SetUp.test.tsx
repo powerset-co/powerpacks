@@ -5,7 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import type { InstallStatus } from "@/types/install"
 
-import { Import } from "./Import"
+import { Checklist } from "./Checklist"
+import { useRun } from "./run"
+function ImportProgress() {
+  return <Checklist run={useRun(() => true)} />
+}
 import { SetUp } from "./SetUp"
 
 const invoke = vi.fn((_command: string, _args?: unknown) => Promise.resolve(null))
@@ -88,7 +92,7 @@ function mount(path = "/onboarding/setup") {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/onboarding/setup" element={<SetUp />} />
-          <Route path="/onboarding/import" element={<Import />} />
+          <Route path="/accounts" element={<ImportProgress />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -236,7 +240,7 @@ it("Import lists every row in its run's plan, deep context with its count", asyn
     },
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
-  mount("/onboarding/import")
+  mount("/accounts")
   await screen.findByRole("heading", { name: "Learning who they are" })
   expect(rows()).toEqual([
     ["done", "whatsapp_login done"],
@@ -250,21 +254,9 @@ it("Import lists every row in its run's plan, deep context with its count", asyn
   ])
   expect(screen.getByText("Learning about your contacts: 40 of 298")).toBeTruthy()
   expect(screen.queryByRole("progressbar")).toBeNull()
-  expect(screen.getByRole("button", { name: "Start using Powerpacks now" })).toBeTruthy()
 })
 
-it("Import never shows a LinkedIn run's record, and Set up never shows an import run's", async () => {
-  state.record = {
-    ...READING,
-    status: "completed",
-    step: "ready",
-    event: "search.ready",
-    message: "Search is ready",
-  }
-  mount("/onboarding/import")
-  await screen.findByText("Reading your progress…")
-  expect(screen.queryByRole("list", { name: "Setup stages" })).toBeNull()
-  cleanup()
+it("Set up never shows an import run's record", async () => {
   state.record = { ...READING, plan: IMPORT_PLAN, step: "gmail_sync", message: "Syncing Gmail" }
   mount("/onboarding/setup")
   await screen.findByText("Reading your progress…")

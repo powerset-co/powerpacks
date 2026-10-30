@@ -10,27 +10,25 @@ import { isDesktop } from "@/lib/desktop"
 import { HOME } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
-import { SOURCE_STEPS, STEPS, type StepKey } from "./steps"
+import { STEPS, type StepKey } from "./steps"
 
 /** The onboarding window: the steps across the top, then two
  *  columns: what to do on the left, what it is about on the right. No Back: each screen moves on
  *  by its own action. Skip for now, at the foot of the left column, marks setup skipped and opens
- *  the app; Accounts and Add sources in the nav take it from there. The Sources and Import screens
- *  have their own two-step bar (the Add sources prompt opens them); their foot says Back to the app. The steps are plain
+ *  the app; Accounts takes it from there. The steps are plain
  *  labels in a release build; a test build (the debug menu on) and the browser view make them
  *  links, a way around while working on them. */
 export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; right: ReactNode }) {
   const navigate = useNavigate()
-  // The onboarding's four steps, or the Add sources flow's two.
-  const onboarding = STEPS.some((item) => item.key === step)
-  const bar = onboarding ? STEPS : SOURCE_STEPS
+  // The initial onboarding's four steps.
+  const bar = STEPS
   const index = bar.findIndex((item) => item.key === step)
   const debug = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState, enabled: isDesktop() })
   const linked = !isDesktop() || debug.data?.enabled === true
   const [leaveError, setLeaveError] = useState<string | null>(null)
   const leave = () => {
     setLeaveError(null)
-    void (onboarding ? setupSkip() : Promise.resolve())
+    void setupSkip()
       .then(() => void navigate(HOME.href))
       .catch((caught: unknown) => setLeaveError(errorText(caught)))
   }
@@ -78,7 +76,7 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
                 onClick={leave}
                 className="cursor-pointer border-0 bg-transparent p-0 text-xs text-faint hover:text-foreground"
               >
-                {onboarding ? "Skip for now" : "Back to the app"}
+                Skip for now
               </button>
               {leaveError ? <Note bad>{leaveError}</Note> : null}
             </div>

@@ -77,8 +77,8 @@ it("shows the import while it runs, with no dismiss, opening the Import screen",
   expect(await screen.findByText("Importing")).toBeTruthy()
   expect(screen.getByText("Building your search index")).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Dismiss this import" })).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: "Open import" }))
-  await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/onboarding/import"))
+  fireEvent.click(screen.getByRole("button", { name: "View in Accounts" }))
+  await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/accounts"))
 })
 
 it("keeps a stopped import, with no dismiss", async () => {

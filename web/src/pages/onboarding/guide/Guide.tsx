@@ -34,10 +34,11 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
     const demo = mountDemo(element, source, { person: { name: person.name, email: person.email } })
     // Beat 0 (the first sixth) is a still frame: start where the motion starts.
     elapsed.current = flow.duration / 6
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
     let last = performance.now()
     let handle = 0
     const tick = (now: number) => {
-      elapsed.current = (elapsed.current + (now - last) / 1000) % flow.duration
+      if (!reduced) elapsed.current = (elapsed.current + (now - last) / 1000) % flow.duration
       last = now
       const progress = elapsed.current / flow.duration
       demo.seek(progress)

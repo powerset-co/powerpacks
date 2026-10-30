@@ -61,7 +61,7 @@ function Stopped({ data, retrying, retry }: { data: InstallStatus; retrying: boo
 
 /** The heading and the rows the run plans; while there is no record of this screen's run yet,
  *  a spinner line. */
-export function Checklist({ run }: { run: Run }) {
+export function Checklist({ run, controls = true }: { run: Run; controls?: boolean }) {
   const { data, failed, ready, left, retrying, retry } = run
   // The rows this run plans; a row with `needs` only when that step is planned.
   const rows = data
@@ -119,7 +119,11 @@ export function Checklist({ run }: { run: Run }) {
                       </span>
                     </div>
                     {standing === "stopped" ? (
-                      <Stopped data={data} retrying={retrying} retry={retry} />
+                      controls ? (
+                        <Stopped data={data} retrying={retrying} retry={retry} />
+                      ) : (
+                        <Note bad>{stopDetail(data) ?? data.note}</Note>
+                      )
                     ) : null}
                   </div>
                 ) : null}
@@ -132,7 +136,11 @@ export function Checklist({ run }: { run: Run }) {
         // Stopped on a step no row lists: the stop itself, with its way out.
         <div className="flex flex-col gap-2">
           <span className="text-xs text-bad">{data.message}</span>
-          <Stopped data={data} retrying={retrying} retry={retry} />
+          {controls ? (
+            <Stopped data={data} retrying={retrying} retry={retry} />
+          ) : (
+            <Note bad>{stopDetail(data) ?? data.note}</Note>
+          )}
         </div>
       ) : null}
       {!data || (rows.length === 0 && !failed) ? (

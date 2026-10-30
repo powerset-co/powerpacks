@@ -9,6 +9,7 @@ import { isDesktop } from "@/lib/desktop"
 import { readStored, writeStored } from "@/lib/storage"
 import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
+import { isRecord } from "@/lib/utils"
 import { errorText } from "@/lib/api/http"
 import { useFeatures } from "@/lib/features"
 import type { InstallStatus } from "@/types/install"
@@ -55,8 +56,8 @@ export function SidebarFooter({ rail }: { rail: boolean }) {
 // The finished run whose pane was dismissed (its record's updated_at); a later run shows again.
 const IMPORT_DISMISSED_KEY = "import-pane-dismissed"
 const IMPORT_POLL_MS = 5_000
-// The app's import screen; the browser's is the install page.
-const IMPORT_HREF = isDesktop() ? "/onboarding/import" : "/install"
+// Accounts owns later imports and their progress.
+const IMPORT_HREF = "/accounts?view=sync"
 
 /** The setup run the import pane shows, with its dismiss; null once a finished run is dismissed
  *  (or before any run). No dismissing while it runs or is stopped, so the way back is always there. */
@@ -71,7 +72,8 @@ function useImport(): { data: InstallStatus; dismiss: () => void } | null {
     readStored("local", IMPORT_DISMISSED_KEY, (raw) => (typeof raw === "string" ? raw : null)),
   )
   const data = install.data
-  if (data === undefined || (finished(data) && dismissed === data.updated_at)) return null
+  if (data === undefined || data.event === "setup.ready" || (finished(data) && dismissed === data.updated_at))
+    return null
   const dismiss = () => {
     writeStored("local", IMPORT_DISMISSED_KEY, data.updated_at)
     setDismissed(data.updated_at)
@@ -89,6 +91,10 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
   const done = finished(data)
   const stopped = data.status === "failed"
   const title = done ? "Import done" : stopped ? "Import stopped" : "Importing"
+  const counts = isRecord(data.action?.details) ? data.action.details : {}
+  const total = typeof counts.total === "number" ? counts.total : 0
+  const count = counts.done ?? counts.read
+  const completed = typeof count === "number" ? count : 0
   const open = () => void navigate(IMPORT_HREF)
   const icon = done ? (
     <CheckIcon className="size-4 shrink-0 text-ok" />
@@ -133,9 +139,18 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
           </button>
         ) : null}
       </div>
-      <Button variant={done ? "ghost" : "primary"} size="sm" onClick={open} className="mt-2.5 w-full">
-        {done ? "View import" : "Open import"}
-      </Button>
+      {!done && !stopped ? (
+        <div className="mt-2">
+          <ProgressBar label="Current import stage" done={completed} total={total} />
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={open}
+        className="mt-2 border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
+      >
+        View in Accounts
+      </button>
     </div>
   )
 }
@@ -145,7 +160,7 @@ const SOURCES_PROMPT_KEY = "sources-prompt-dismissed"
 const MESSAGE_IMPORTS = ["gmail_import", "imessage_import", "whatsapp_import"]
 
 /** Add sources: once setup is done with LinkedIn alone, a prompt for Gmail, Messages and WhatsApp,
- *  opening the onboarding's Sources screen. Dismissable; gone once a message import has run. */
+ *  opening Accounts. Dismissable; gone once a message import has run. */
 function SourcesPane({ rail }: { rail: boolean }) {
   const navigate = useNavigate()
   const done = useSetupDone()
@@ -160,7 +175,7 @@ function SourcesPane({ rail }: { rail: boolean }) {
   )
   const imported = MESSAGE_IMPORTS.some((step) => install.data?.steps[step]?.status === "completed")
   if (!done || dismissed || install.data === undefined || imported) return null
-  const open = () => void navigate("/onboarding/sources")
+  const open = () => void navigate("/accounts")
   const dismiss = () => {
     writeStored("local", SOURCES_PROMPT_KEY, true)
     setDismissed(true)

@@ -2,9 +2,7 @@
 // the Codex sign-in the chat runs on. The first
 // look is the Set up screen's right column once people are in, not a step of its own.
 
-// Sources and Import are off the bar: screens of their own at their URLs, Sources then Import (the
-// Set up screen again, over every connected source, which can take hours).
-export type StepKey = "signup" | "codex" | "linkedin" | "setup" | "sources" | "import"
+export type StepKey = "signup" | "codex" | "linkedin" | "setup"
 
 export interface Step {
   key: StepKey
@@ -21,18 +19,12 @@ export const STEPS: readonly Step[] = [
   { key: "setup", label: "Set up", href: "/onboarding/setup" },
 ]
 
-/** The Add sources flow, from the app: Sources, then Import (the Set up screen over them). */
-export const SOURCE_STEPS: readonly Step[] = [
-  { key: "sources", label: "Sources", href: "/onboarding/sources" },
-  { key: "import", label: "Import", href: "/onboarding/import" },
-]
-
 export function stepAt(key: string | undefined): Step {
-  return [...STEPS, ...SOURCE_STEPS].find((step) => step.key === key) ?? SIGNUP
+  return STEPS.find((step) => step.key === key) ?? SIGNUP
 }
 
-/** The screen after this one in its own sequence: the bar's steps end at Set up, Sources leads to Import. */
+/** The screen after this one; initial onboarding ends at Set up. */
 export function after(key: StepKey): Step | undefined {
-  const steps = STEPS.some((step) => step.key === key) ? STEPS : SOURCE_STEPS
+  const steps = STEPS
   return steps[steps.findIndex((step) => step.key === key) + 1]
 }

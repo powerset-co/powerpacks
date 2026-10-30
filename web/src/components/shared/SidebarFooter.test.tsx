@@ -287,7 +287,7 @@ it("prompts for more sources once setup is done with LinkedIn alone, and opens t
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/agent"]}>
         <Routes>
-          <Route path="/onboarding/sources" element={<p>Sources screen</p>} />
+          <Route path="/accounts" element={<p>Sources screen</p>} />
           <Route path="*" element={null} />
         </Routes>
         <SidebarFooter rail={false} />
