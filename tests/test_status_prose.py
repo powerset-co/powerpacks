@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from packs.powerset.primitives.install.prose_cli import _RUN, _SAMPLE, _entry
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
 from packs.powerset.primitives.install.status_prose import (
     DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, page_prose, render)
 from packs.powerset.primitives.install.steps import InstallStep
@@ -52,8 +53,20 @@ def _python_events(path: Path) -> tuple[set[str], set[str]]:
     return literals, prefixes
 
 
+def _modal_codes() -> dict[str, set[str]]:
+    """The codes each Modal runner writes to status.json (`"code": "..."` literals, the code a
+    progress line returns, and `step.<name>` for every pipeline step), under the event base
+    linkedin_setup.py watches it with."""
+    modal = ROOT / "packs/indexing/modal"
+    pattern = r'"code": "([a-z_.-]+)"|return "([a-z_.-]+)", '
+    indexing = {a or b for a, b in re.findall(pattern, (modal / "run_indexing.py").read_text())}
+    importing = {a or b for a, b in re.findall(pattern, (modal / "run_linkedin.py").read_text())}
+    return {"index.building": indexing | {f"step.{step}" for step in STEPS}, "index.linkedin": importing}
+
+
 def _written() -> tuple[set[str], set[str]]:
     literals, prefixes = set(), set()
+    literals |= {f"{base}.{code}" for base, codes in _modal_codes().items() for code in codes}
     for path in WRITERS:
         found, heads = _python_events(path)
         literals |= found

@@ -50,13 +50,10 @@ class LinkedInSetupTests(unittest.TestCase):
         self.start = mock(api_runs, "start", side_effect=lambda kind, *_args, **_kwargs: kind)
         self.payloads = [
             None,
-            {"status": "running", "message": "Importing your connections: 1 of 2", "done": 1,
-             "total": 2, "left_seconds": 3},
-            {"status": "running", "message": "Importing your connections: 1 of 2", "done": 1,
-             "total": 2, "left_seconds": 3},
-            {"status": "completed", "message": "Importing your connections: 2 of 2", "done": 2,
-             "total": 2, "left_seconds": 0},
-            {"status": "completed", "message": "Understanding companies", "done": 15, "total": 15,
+            {"status": "running", "code": "enrich.count", "done": 1, "total": 2, "left_seconds": 3},
+            {"status": "running", "code": "enrich.count", "done": 1, "total": 2, "left_seconds": 3},
+            {"status": "completed", "code": "enrich.count", "done": 2, "total": 2, "left_seconds": 0},
+            {"status": "completed", "code": "step.embed_companies", "done": 15, "total": 15,
              "left_seconds": 0},
         ]
         self.poll = mock(api_runs, "status", side_effect=lambda _label: self.payloads.pop(0))
@@ -71,8 +68,9 @@ class LinkedInSetupTests(unittest.TestCase):
         events = list(dict.fromkeys(record["event"] for record in self.records))
         self.assertEqual(events, [
             "linkedin.reading", "linkedin.reading.read", "linkedin.reading.count", "linkedin.done.read",
-            "index.linkedin", "index.preparing", "index.building", "index.done", "validate.checking",
-            "validate.done", "search.ready"])
+            "index.linkedin", "index.linkedin.enrich.count", "index.preparing", "index.building",
+            "index.building.step.embed_companies", "index.done", "validate.checking", "validate.done",
+            "search.ready"])
         for record in self.records:
             self.assertEqual(record["plan"], ["linkedin", "index", "validate", "ready"])
             self.assertEqual(record["retry_command"], "bin/linkedin-setup")

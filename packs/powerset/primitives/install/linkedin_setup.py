@@ -49,10 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         previous = None
         while True:
             payload = api_runs.status(label) or {}
-            current = tuple(payload.get(key) for key in ("message", "done", "total", "left_seconds"))
+            current = tuple(payload.get(key) for key in ("code", "done", "total", "left_seconds"))
             if current != previous:
+                # Modal writes a code and numbers; the words are status_prose.py's ("<event>.<code>").
                 details = {key: payload[key] for key in payload.keys() & {"done", "total", "left_seconds"}}
-                write(event, message=payload.get("message"), details=details)
+                write(f"{event}.{payload['code']}" if payload.get("code") else event,
+                      **{key: payload[key] for key in payload.keys() & {"done", "total"}}, details=details)
                 previous = current
             if payload.get("status") == "failed":
                 raise RuntimeError(payload.get("error") or f"Modal run {label} failed")

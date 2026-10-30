@@ -10,33 +10,48 @@ from unittest.mock import patch
 from packs.indexing.modal import run_indexing, run_linkedin
 
 from packs.indexing.modal.run_indexing import progress_line
-from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS, STEP_WORDS
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
+from packs.powerset.primitives.install.status_prose import PROSE
 
 
 class ProgressLineTests(unittest.TestCase):
-    def test_every_step_has_words(self):
-        self.assertEqual(set(STEPS), set(STEP_WORDS))
+    def test_every_step_and_phase_has_words_in_the_prose_table(self):
+        for step in STEPS:
+            self.assertIn(f"index.building.step.{step}", PROSE)
+        for code in ("seed", "estimate", "pipeline", "companies", "refresh-cache", "duckdb", "persist"):
+            self.assertIn(f"index.building.{code}", PROSE)
+        for code in ("parse", "enrich", "enrich.count", "persist", "done"):
+            self.assertIn(f"index.linkedin.{code}", PROSE)
 
     def test_started_steps_use_the_logged_name_even_when_parallel(self):
         for position, step in enumerate(reversed(STEPS)):
-            message, done, total, steps, left = progress_line(f"[build-processing] start {step}\n", position)
-            self.assertEqual(message, STEP_WORDS[step])
-            self.assertEqual((done, total, steps), (position, len(STEPS), position))
-            self.assertGreater(left, 0)
+            self.assertEqual(progress_line(f"[build-processing] start {step}\n", position),
+                             (f"step.{step}", position, len(STEPS), 0.0))
         self.assertIsNone(progress_line("[build-processing] completed build_company_corpus in 1s", 3))
 
     def test_fetch_start_and_counts_use_the_logged_rate(self):
         self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 700 rpm\n", 3),
-                         ("Company profiles: 0 of 700", 0, 700, 3, 240))
+                         ("companies", 0, 700, 60))
         self.assertEqual(progress_line("[enrich-companies] fetched 350/700 company profiles\n", 3, 700),
-                         ("Company profiles: 350 of 700", 350, 700, 3, 210))
+                         ("companies", 350, 700, 30))
         self.assertEqual(progress_line("[enrich-companies] fetched 700/700 company profiles\n", 3, 700),
-                         ("Company profiles: 700 of 700", 700, 700, 3, 180))
-        self.assertEqual(progress_line("[enrich-companies] fetched 40/111 company profiles\n", 3, 600)[-1],
-                         187.1)
+                         ("companies", 700, 700, 0))
+        self.assertEqual(progress_line("[enrich-companies] fetched 40/111 company profiles\n", 3, 600)[-1], 7.1)
 
-    def test_disabled_rate_limit_has_only_the_remaining_build_estimate(self):
-        self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 0 rpm", 3)[-1], 180)
+    def test_the_time_left_is_the_whole_build_and_only_falls(self):
+        people = 1000
+        start = run_indexing.seconds_left("estimate", people)
+        build = run_indexing.seconds_left("pipeline", people, company_seconds=120, steps_done=0)
+        later = run_indexing.seconds_left("pipeline", people, company_seconds=0, steps_done=10)
+        cache = run_indexing.seconds_left("refresh-cache", people)
+        self.assertEqual(start, 60 + 180 + 200 + 30 + 30)
+        self.assertEqual(build, 120 + 180 + 200 + 30 + 30)
+        self.assertEqual(later, 60 + 200 + 30 + 30)
+        self.assertEqual(cache, 200 + 30 + 30)
+        self.assertEqual(run_indexing.seconds_left("persist", people), 30)
+
+    def test_disabled_rate_limit_needs_no_fetch_time(self):
+        self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 0 rpm", 3)[-1], 0.0)
 
     def test_other_lines_say_nothing(self):
         self.assertIsNone(progress_line("[enrich-companies] fetched 4/111 company profiles by slug\n", 3))
@@ -48,6 +63,7 @@ class ModalProgressTests(unittest.TestCase):
     def test_company_fetch_keeps_its_line_until_finished(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / "people.csv").write_text("id,full_name\n1,Jordan Bravo\n2,Sam Li\n")
             lines = io.StringIO(
                 "[build-processing] start build_roles\n"
                 "[enrich-companies] fetching 700 company profiles at 700 rpm\n"
@@ -61,7 +77,7 @@ class ModalProgressTests(unittest.TestCase):
             def path(value):
                 return root / "work" if value == "/tmp/run/search-index" else original_path(value)
 
-            with patch.object(sys, "argv", ["run_indexing", "--people-csv", "people.csv", "--cache-root", str(root),
+            with patch.object(sys, "argv", ["run_indexing", "--people-csv", str(root / "people.csv"), "--cache-root", str(root),
                                            "--run-vol", str(root), "--operator-id", "synthetic", "--no-refresh-cache"]), \
                  patch.object(run_indexing, "Path", side_effect=path), \
                  patch.object(run_indexing.subprocess, "Popen") as process, \
@@ -71,12 +87,12 @@ class ModalProgressTests(unittest.TestCase):
                 process.return_value.wait.return_value = 0
                 duckdb.return_value.returncode = 0
                 self.assertEqual(run_indexing.main(), 0)
-            messages = [item.args[1]["message"] for item in write.call_args_list if "message" in item.args[1]]
-            self.assertEqual(messages, ["Starting the sandbox", "Starting the build",
-                                        STEP_WORDS["build_roles"], "Company profiles: 0 of 700",
-                                        "Company profiles: 350 of 700", "Company profiles: 700 of 700",
-                                        STEP_WORDS["build_company_corpus"],
-                                        "Preparing search", "Saving your search index"])
+            codes = [item.args[1]["code"] for item in write.call_args_list if "code" in item.args[1]]
+            self.assertEqual(codes, ["seed", "pipeline", "step.build_roles", "companies", "companies", "companies",
+                                     "step.build_company_corpus", "duckdb", "persist"])
+            counts = [(item.args[1]["done"], item.args[1]["total"]) for item in write.call_args_list
+                      if item.args[1].get("code") == "companies"]
+            self.assertEqual(counts, [(0, 700), (350, 700), (700, 700)])
 
     def test_import_counts_reach_status_json_from_enrichment_stderr(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(sys, "stderr", io.StringIO()), \
@@ -85,7 +101,7 @@ class ModalProgressTests(unittest.TestCase):
             progress.write("[enrich-people] LinkedIn profile enrichment progress: 10/20 processed (10 cached")
             progress.write(").\n")
             record = json.loads((Path(tmp) / "status.json").read_text())
-            self.assertEqual(record["message"], "Importing your connections: 10 of 20")
+            self.assertEqual(record["code"], "enrich.count")
             self.assertEqual((record["done"], record["total"], record["left_seconds"]), (10, 20, 10))
             progress.write("[enrich-people] LinkedIn profile enrichment progress: 20/20 processed (20 cached).\n")
             record = json.loads((Path(tmp) / "status.json").read_text())

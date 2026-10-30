@@ -67,24 +67,6 @@ STEPS = [
     "validate_contracts",
 ]
 
-STEP_WORDS = {
-    "flatten_people": "Reading your connections",
-    "build_roles": "Listing every role",
-    "embed_role_positions": "Understanding job titles",
-    "build_company_corpus": "Collecting companies",
-    "embed_companies": "Understanding companies",
-    "build_education_corpus": "Collecting schools",
-    "build_location_corpus": "Collecting locations",
-    "detect_ceo_founders": "Finding founders and CEOs",
-    "infer_ages": "Estimating career stage",
-    "build_people_records": "Writing people records",
-    "build_unified_profiles": "Combining profiles",
-    "build_summary_records": "Writing summaries",
-    "embed_summaries": "Understanding summaries",
-    "build_vectors": "Building search vectors",
-    "validate_contracts": "Checking the index",
-}
-
 STEP_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "flatten_people": (),
     "build_roles": ("flatten_people",),
