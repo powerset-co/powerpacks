@@ -7,11 +7,13 @@ export function searchRunKey(runId: string | null) {
 }
 
 /** One saved run; idle while no run is picked. Read again whenever its pane opens (the cached
- *  one shows meanwhile): a search can finish while its pane is closed. */
+ *  one shows meanwhile): a search can finish while its pane is closed. The 2 s keeps the pane's
+ *  mount after the fade from reading it a second time. */
 export function useSearchRun(runId: string | null) {
   return useQuery({
     queryKey: searchRunKey(runId),
     queryFn: ({ signal }) => fetchSearchRun(runId ?? "", signal),
     enabled: runId !== null,
+    staleTime: 2_000,
   })
 }
