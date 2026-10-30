@@ -34,7 +34,11 @@
     ],
     "resources": {
       "resources/powerpacks.tar.gz": "powerpacks.tar.gz",
-      "resources/powerpacks.version": "powerpacks.version"
+      "resources/powerpacks.version": "powerpacks.version",
+      "resources/wacli": "wacli",
+      "resources/wacli.version": "wacli.version",
+      "resources/google-cloud-sdk.tar.gz": "google-cloud-sdk.tar.gz",
+      "resources/google-cloud-sdk.version": "google-cloud-sdk.version"
     },
     "macOS": {
       "infoPlist": "Info.plist",
@@ -47,7 +51,8 @@
       "binaries/node",
       "binaries/codex",
       "binaries/codex-code-mode-host",
-      "binaries/rg"
+      "binaries/rg",
+      "binaries/msgvault"
     ],
     "windows": {
       "nsis": {

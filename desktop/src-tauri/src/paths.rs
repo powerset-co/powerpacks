@@ -73,11 +73,20 @@ pub fn which(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// Bundled binaries first, then the login shell's PATH, then the usual install folders.
+/// Bundled binaries first, then the tools the app places under `~/.powerpacks` (tools.rs), then
+/// the login shell's PATH, then the usual install folders. The Google Cloud CLI runs on the
+/// project's Python, never the system stub that asks for the developer tools.
 pub fn adopt_path() {
     let mut entries: Vec<PathBuf> = Vec::new();
     if let Some(app_dir) = app_dir() {
         entries.push(app_dir);
+    }
+    if let Some(home) = dirs::home_dir() {
+        entries.push(crate::tools::bin_dir(&home));
+        entries.push(crate::tools::gcloud_dir(&home).join("bin"));
+    }
+    if let Ok(root) = root() {
+        std::env::set_var("CLOUDSDK_PYTHON", project_python(&root));
     }
     let inherited = login_shell_path()
         .or_else(|| std::env::var("PATH").ok())

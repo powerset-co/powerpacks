@@ -15,6 +15,8 @@ Changelog:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from dataclasses import asdict, astuple, dataclass, fields
 from pathlib import Path
@@ -24,12 +26,14 @@ from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
+from packs.ingestion.primitives.deep_context_v2.enrich.profiles import profile_from_record
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
 from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 # A people.csv channel name -> the channel the page shows (one icon per family).
@@ -130,6 +134,10 @@ class PersonDetail:
     emails: tuple[str, ...]
     phones: tuple[str, ...]
     interactions: dict[str, int]  # source family -> emails or messages, as the importer counted them
+    # The imported LinkedIn profile, in the review card's lines; empty for a family without one.
+    summary: str
+    experiences: tuple[str, ...]
+    education: tuple[str, ...]
 
 
 def _events(facts: dict[str, Any]) -> tuple[FactEvent, ...]:
@@ -245,6 +253,7 @@ class SharePeople:
         relationships = queries_share.relationships_by_parent(self.conn, (parent_id,))
         held = queries_share.current_tags(self.conn, (parent_id,)).get(parent_id)
         worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
+        imported = self._imported_profile(parent_id, row["linkedin_url"])
         name = row["name"]
         known_as = (str(facts.get("canonical_name") or ""), *(member.display_name for member in members),
                     *(str(alias) for alias in facts.get("aliases") or []))
@@ -277,7 +286,25 @@ class SharePeople:
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),
             interactions=_family_counts(parse_interaction_counts(row["interaction_counts"])),
+            summary=imported.get("summary", ""),
+            experiences=imported.get("experiences", ()),
+            education=imported.get("education", ()),
         )
+
+    def _imported_profile(self, parent_id: str, url: str) -> dict[str, Any]:
+        """The family's imported LinkedIn profile as the review card draws it (review/decisions.py
+        `fetch_profile` builds the same lines): the About text, the work lines, the education lines."""
+        if not parent_id.startswith("li:"):
+            return {}
+        row = self.conn.execute("SELECT import_json FROM candidates WHERE candidate_id = ?",
+                                ("candidate:linkedin:" + parent_id[3:],)).fetchone()
+        if row is None:
+            return {}
+        normalized = normalize_linkedin_profile(json.loads(json.loads(row["import_json"])["rapidapi_response"]))
+        record = {"normalized_profile": normalized, "fetched_at": hashlib.sha256(row["import_json"].encode()).hexdigest()}
+        profile = profile_from_record(url, record)
+        return {"summary": str(normalized.get("summary") or "").strip(), "experiences": profile.experiences,
+                "education": profile.education}
 
 
 def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:

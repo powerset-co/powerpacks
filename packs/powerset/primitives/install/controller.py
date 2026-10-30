@@ -76,11 +76,10 @@ class InstallController:
 
     def preflight(self) -> dict:
         checks = preflight.checks()
-        return {"browser": {**checks["browser"], "install": self.installs.get("chromium")},
-                "gcloud": {**checks["gcloud"], "install": self.installs.get("gcloud")}}
+        return {"browser": {**checks["browser"], "install": self.installs.get("chromium")}}
 
     def install(self, item: object) -> dict:
-        if item not in ("chromium", "gcloud"):
+        if item != "chromium":
             raise ValueError("Unknown preflight item")
         if (self.installs.get(item) or {}).get("status") == "running":
             return {"status": "running"}

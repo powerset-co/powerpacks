@@ -34,6 +34,7 @@ from packs.ingestion.primitives.deep_context_v2.worth import luna
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
 from packs.ingestion.primitives.enrich.profile_transforms import normalize_rapidapi
 from packs.ingestion.primitives.share.person_labels import PersonLabels
+from packs.ingestion.primitives.share.store import share_rows
 from packs.ingestion.primitives.share.web.model import SharePeople
 from packs.ingestion.primitives.share.web.server import ShareRoutes, make_handler
 from packs.ingestion.schemas.people_schema import CONTACT_CARRY_COLUMNS, PEOPLE_SCHEMA_COLUMNS
@@ -46,7 +47,9 @@ NOW = "2026-10-28T00:00:00Z"
 def linkedin_row(member_id: str, slug: str = "jordan-bravo") -> dict[str, str]:
     url = "https://www.linkedin.com/in/" + slug
     raw = {"member_id": member_id, "first_name": "Jordan", "last_name": "Bravo", "headline": "Engineer",
-           "experiences": [], "education": []}
+           "summary": "Builds things.", "experiences": [{"title": "Engineer", "company_name": "Example Labs",
+                                                           "starts_at": {"year": 2020}, "ends_at": {"year": 0}}],
+           "education": [{"degree": "BS", "fieldOfStudy": "CS", "schoolName": "State"}]}
     row = dict.fromkeys(PEOPLE_SCHEMA_COLUMNS, "")
     row.update(normalize_rapidapi(raw, slug, url))
     row.update(linkedin_url=url, public_identifier=slug, primary_email="jordan@example.com",
@@ -111,11 +114,16 @@ class LinkedInFamiliesTests(unittest.TestCase):
             self.assertEqual({r["id"] for r in csv.DictReader(handle)}, {"li:42", "li:43"})
         people = SharePeople(self.conn, self.root)
         self.assertEqual(len(people.load()), 2)
+        # A connection is on the upload list as is: no worth call, no labels.
+        self.assertEqual([(r.person_id, r.public_identifier, r.worth, r.labels_json) for r in share_rows(store_path(self.root))],
+                         [("li:42", "jordan-bravo", "yes", "{}"), ("li:43", "casey-delta", "yes", "{}")])
         for row in people.load():
             self.assertEqual((row.worth, row.worth_source, row.labels, row.channels), ("", "", (), ("linkedin",)))
             self.assertFalse(row.in_progress)
             detail = people.detail(row.parent_id)
             self.assertEqual((detail.dossier_html, detail.probabilities, detail.emails, detail.phones), ("", {}, (), ()))
+            self.assertEqual((detail.summary, detail.experiences, detail.education),
+                             ("Builds things.", ("Engineer @ Example Labs, 2020-present",), ("BS, CS — State",)))
         for table in ("bundles", "facts", "worth", "person_labels"):
             self.assertEqual(self.count(table), 0, table)
         # A failed membership write cannot leave a candidate for dedupe to put onto p:.

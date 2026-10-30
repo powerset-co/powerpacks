@@ -301,29 +301,6 @@
   color: var(--foreground);
 }
 
-/* Work / Education bullet lists inside dd cells. */
-.review-page .fact-list {
-  margin: 0;
-  padding-left: 18px;
-  list-style: disc;
-}
-.review-page .fact-list li + li {
-  margin-top: 4px;
-}
-.review-page .show-more {
-  margin-top: 6px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.review-page .show-more:hover {
-  text-decoration: underline;
-}
-
 /* Review history: the same carousel arrows, outside the card. */
 .review-page .carousel-shell {
   position: relative;

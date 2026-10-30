@@ -16,6 +16,7 @@ mod paths;
 mod permission;
 mod restart;
 mod source;
+mod tools;
 mod update;
 
 use std::sync::Arc;

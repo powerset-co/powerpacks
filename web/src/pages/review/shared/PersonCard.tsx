@@ -5,7 +5,7 @@ import { displayName, profileUrl, summaryOf } from "@/lib/review/person"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
 import { Dossier } from "./Dossier"
-import { FactList } from "./FactList"
+import { FactList } from "@/components/shared"
 import { LabelBadges } from "./LabelBadges"
 import { LinkedinLink } from "./LinkedinLink"
 import { ReviewAvatar } from "./ReviewAvatar"
