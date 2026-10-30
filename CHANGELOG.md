@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.50.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.1...powerpacks-v3.50.0) (2026-10-30)
+
+
+### Features
+
+* **accounts:** connection guides and inline resync progress ([#1028](https://github.com/powerset-co/powerpacks/issues/1028)) ([6cacaf5](https://github.com/powerset-co/powerpacks/commit/6cacaf5f852c1ce21f9f05d2eb5916f4978c93cb))
+* **chat:** a chat's search scope is pinned through Codex, not .env ([#1024](https://github.com/powerset-co/powerpacks/issues/1024)) ([19fbb7b](https://github.com/powerset-co/powerpacks/commit/19fbb7b6bde963a05d608c343293e2548eb2fbe0))
+* **setup:** every status word in one status.json; deep-context progress reads it ([#1026](https://github.com/powerset-co/powerpacks/issues/1026)) ([ae5497f](https://github.com/powerset-co/powerpacks/commit/ae5497fe20fadc21913eb7ffd3650271bb9ccc61))
+
+
+### Bug Fixes
+
+* **accounts:** remove duplicate Powerset account row ([#1038](https://github.com/powerset-co/powerpacks/issues/1038)) ([0b01fd4](https://github.com/powerset-co/powerpacks/commit/0b01fd438dc90b6bd6a06056921c29d85044787f))
+* **bootstrap:** a local-only install no longer records the retired connection step ([#1035](https://github.com/powerset-co/powerpacks/issues/1035)) ([4e87a53](https://github.com/powerset-co/powerpacks/commit/4e87a53d73fefce43bc47effb4913b07e9c4aa16))
+* **searches:** skeleton rows while a search runs; results re-read when their pane opens ([#1031](https://github.com/powerset-co/powerpacks/issues/1031)) ([69d3947](https://github.com/powerset-co/powerpacks/commit/69d394750111967ee192b6bb554025154c62c16e))
+
 ## [3.49.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.0...powerpacks-v3.49.1) (2026-10-30)
 
 
