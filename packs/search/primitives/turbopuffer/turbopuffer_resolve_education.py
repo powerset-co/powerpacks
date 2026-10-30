@@ -151,7 +151,7 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
         school_name = str(row.get("school_name") or school_id)
         names_by_id.setdefault(school_id, Counter())[school_name] += 1
         # An alias names a child of this school, so it doesn't put the school in another's family.
-        if is_affiliated_candidate(root_queries, school_name) or (query in root_queries and query in school_tokens(without_alias(school_name))):
+        if is_affiliated_candidate(root_queries, school_name) or (query in root_queries and any(word.startswith(query) for word in school_tokens(without_alias(school_name)))):
             family_ids.add(school_id)
 
     # The index matches the last word as a prefix: a school holding the word itself beats a larger
@@ -161,8 +161,7 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
         return any(query_words <= set(school_tokens(school_name)) for school_name in names_by_id[school_id])
 
     candidates = []
-    for school_id in sorted(counts, key=lambda school_id: (not has_query_words(school_id), -counts[school_id]))[:10]:
-        count = counts[school_id]
+    for school_id, count in sorted(counts.most_common(10), key=lambda item: not has_query_words(item[0])):
         display_name = names_by_id[school_id].most_common(1)[0][0]
         include = school_id in family_ids or (not candidates and not root_queries)
         candidates.append({
