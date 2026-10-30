@@ -1,4 +1,4 @@
-"""The chat's search picker: the user's Powerset sets from Postgres, the local index, and the choice in .env."""
+"""The chat's search picker: the user's Powerset sets from Postgres and the local index."""
 
 import json
 import tempfile
@@ -36,59 +36,28 @@ class SearchScopeTests(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/api/search/scope"
 
-    def request(self, payload: object = None, *, origin: str = "") -> tuple[int, dict]:
-        request = urllib.request.Request(
-            self.url, data=json.dumps(payload).encode() if payload is not None else None,
-            headers={"Content-Type": "application/json", **({"Origin": origin} if origin else {})},
-        )
+    def request(self) -> tuple[int, dict]:
         try:
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.urlopen(self.url, timeout=5) as response:
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
 
-    def env(self) -> str:
-        return (self.root / ".env").read_text()
-
-    def test_with_no_pick_searches_default_to_the_local_index(self) -> None:
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "local"}))
+    def test_lists_the_sets_and_the_local_index_when_this_mac_has_one(self) -> None:
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local_db": None}))
         self.fetch_member_sets.assert_called_with("auth0|me", "postgresql://db")
-        self.assertIn("POWERPACKS_LOCAL_SEARCH_DB=", self.env())
-        self.assertNotIn("POWERPACKS_DEFAULT_SET_ID", self.env())
-        (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=p-1\n")
-        self.assertEqual(self.request()[1]["selected"], "p-1")
-
-    def test_picking_the_local_index_then_a_set_rewrites_env(self) -> None:
         index = self.root / ".powerpacks/search-index/local-search.duckdb"
         index.parent.mkdir(parents=True)
         index.write_bytes(b"")
-        status, scope = self.request({"selected": "local"})
-        self.assertEqual((status, scope["local"], scope["selected"]), (HTTPStatus.OK, True, "local"))
-        self.assertIn(f"POWERPACKS_LOCAL_SEARCH_DB={index}", self.env())
-        status, scope = self.request({"selected": "p-1"})
-        self.assertEqual((status, scope["selected"]), (HTTPStatus.OK, "p-1"))
-        self.assertIn("POWERPACKS_DEFAULT_SET_ID=p-1", self.env())
-        self.assertNotIn("POWERPACKS_LOCAL_SEARCH_DB", self.env())
-        self.assertIn("DATABASE_URL=postgresql://db", self.env())
-
-    def test_a_set_in_env_that_is_not_yours_gives_way_to_the_local_index(self) -> None:
-        (self.root / ".env").write_text("DATABASE_URL=postgresql://db\nPOWERPACKS_DEFAULT_SET_ID=elsewhere\n")
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": SETS, "local": False, "selected": "local"}))
-        self.assertIn("POWERPACKS_LOCAL_SEARCH_DB=", self.env())
+        self.assertEqual(self.request()[1]["local_db"], str(index))
+        # Nothing is written: the chat pins its pick through Codex.
+        self.assertEqual((self.root / ".env").read_text(), "DATABASE_URL=postgresql://db\n")
 
     def test_signed_out_has_no_sets(self) -> None:
         self.credentials_subject.return_value = None
-        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local": False, "selected": "local"}))
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local_db": None}))
         self.fetch_member_sets.assert_not_called()
 
-    def test_postgres_failure_and_bad_requests_answer_with_an_error(self) -> None:
-        self.fetch_member_sets.side_effect = RuntimeError("could not connect")
-        self.assertEqual(self.request(), (HTTPStatus.BAD_GATEWAY, {"error": "could not connect"}))
-        for payload in ({}, {"selected": ""}, {"selected": 3}, ["local"]):
-            self.assertEqual(self.request(payload)[0], HTTPStatus.BAD_REQUEST, payload)
-        self.assertEqual(self.request({"selected": "local"}, origin="http://evil.example")[0], HTTPStatus.FORBIDDEN)
-        self.assertEqual(self.env(), "DATABASE_URL=postgresql://db\n")
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_postgres_failure_answers_with_an_error(self) -> None:
+        self.fetch_member_sets.side_effect = RuntimeError("pooler down")
+        self.assertEqual(self.request(), (HTTPStatus.BAD_GATEWAY, {"error": "pooler down"}))

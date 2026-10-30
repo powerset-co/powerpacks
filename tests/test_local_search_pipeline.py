@@ -1468,36 +1468,31 @@ class AgeFilterPreviewTests(unittest.TestCase):
 
 
 class PickerBackendDefaultTests(unittest.TestCase):
-    """The Search-in picker's .env key is the pipeline's default backend, as the picked set is."""
+    """The chat's pinned scope, in the environment, is the pipeline's default backend."""
 
-    def parse(self, env: str | None, *flags: str) -> tuple[str, str, str]:
+    def parse(self, env: dict[str, str], *flags: str) -> tuple[str, str]:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 
-        with tempfile.TemporaryDirectory() as temp:
-            env_file = Path(temp) / "picked.env"
-            if env is not None:
-                env_file.write_text(env)
-            args = pipeline.build_parser().parse_args(["run", "--query", "q", "--env-file", str(env_file), *flags])
+        with mock.patch.dict(os.environ, env, clear=False):
+            for key in ("POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_DEFAULT_SET_ID"):
+                if key not in env:
+                    os.environ.pop(key, None)
+            args = pipeline.build_parser().parse_args(["run", "--query", "q", *flags])
             pipeline.resolve_backend(args)
-            command = pipeline.uv_python_command(args, "continue", Path("ledger.json"))
-        return args.backend, args.db, command
+        return args.backend, args.db
 
-    def test_local_index_picked(self) -> None:
-        backend, db, command = self.parse("OPENAI_API_KEY=x\nPOWERPACKS_LOCAL_SEARCH_DB=/idx/local-search.duckdb\n")
-        self.assertEqual((backend, db), ("local", "/idx/local-search.duckdb"))
-        self.assertIn(" continue --ledger ledger.json --backend local --db /idx/local-search.duckdb", command)
+    def test_local_index_pinned(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}),
+                         ("local", "/idx/local-search.duckdb"))
 
-    def test_set_picked_or_no_env(self) -> None:
-        self.assertEqual(self.parse("POWERPACKS_DEFAULT_SET_ID=abc\n")[0], "powerset")
-        backend, _, command = self.parse(None)
-        self.assertEqual(backend, "powerset")
-        self.assertIn(" --backend powerset", command)
+    def test_set_pinned_or_nothing(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_DEFAULT_SET_ID": "abc", "POWERPACKS_LOCAL_SEARCH_DB": ""})[0], "powerset")
+        self.assertEqual(self.parse({})[0], "powerset")
 
     def test_explicit_flags_win(self) -> None:
-        backend, db, _ = self.parse("POWERPACKS_LOCAL_SEARCH_DB=/idx/local-search.duckdb\n", "--backend", "powerset")
-        self.assertEqual(backend, "powerset")
-        backend, db, _ = self.parse(None, "--backend", "local", "--db", "/other.duckdb")
-        self.assertEqual((backend, db), ("local", "/other.duckdb"))
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}, "--backend", "powerset")[0],
+                         "powerset")
+        self.assertEqual(self.parse({}, "--backend", "local", "--db", "/other.duckdb"), ("local", "/other.duckdb"))
 
 
 if __name__ == "__main__":

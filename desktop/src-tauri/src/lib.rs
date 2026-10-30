@@ -15,6 +15,7 @@ mod onboard;
 mod paths;
 mod permission;
 mod restart;
+mod scopes;
 mod source;
 mod tools;
 mod update;
@@ -124,8 +125,11 @@ async fn codex_start_thread(
     app: AppHandle,
     boot: State<'_, Arc<Boot>>,
     codex: State<'_, Codex>,
+    scope: Value,
 ) -> Result<Value, String> {
-    codex.start_thread(&app, &boot::require_root(&boot)?).await
+    codex
+        .start_thread(&app, &boot::require_root(&boot)?, scope)
+        .await
 }
 
 #[tauri::command]

@@ -79,9 +79,9 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      (even if they also say "my network": "search my Powerset network" is `powerset`).
    - `local` — the user says "local", "offline", or "my imported network/contacts",
      even if remote credentials exist.
-   - Unstated → the Search-in picker's choice, which the pipeline also defaults to: `local`
-     when `POWERPACKS_LOCAL_SEARCH_DB` is in `.env`, otherwise `powerset`. Say which in one
-     line so the user can flip it.
+   - Unstated → the chat's scope, which the pipeline also defaults to: `local` when
+     `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment, otherwise `powerset`. Say which in
+     one line.
    - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
@@ -120,8 +120,8 @@ mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.j
 EOF
 ```
 
-The environment default for `backend` comes from one line that prints the key name only, never
-its value: `grep -o '^POWERPACKS_LOCAL_SEARCH_DB=' .env`. Listed → `local`; otherwise `powerset`.
+The environment default for `backend` is one check that prints nothing secret:
+`test -n "$POWERPACKS_LOCAL_SEARCH_DB" && echo local || echo powerset`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.

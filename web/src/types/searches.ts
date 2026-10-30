@@ -281,8 +281,9 @@ export interface SearchSet {
 
 export interface SearchScope {
   sets: SearchSet[]
-  /** This Mac has a local index to search. */
-  local: boolean
-  /** A set_id, or "local"; "" only with no sets (signed out) and the local index unpicked. */
-  selected: string
+  /** This Mac's local index, when it has one. */
+  local_db: string | null
 }
+
+/** Where one chat searches, pinned at its first message: a set, or this Mac's local index. */
+export type ChatScope = { set_id: string } | { local_db: string }

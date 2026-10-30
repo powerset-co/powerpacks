@@ -16,6 +16,7 @@ import {
 import { errorText } from "@/lib/api/http"
 import { readStored, writeStored } from "@/lib/storage"
 import type { AgentEvent, Approval, ApprovalChoice, Entry } from "@/types/agent"
+import type { ChatScope } from "@/types/searches"
 
 export interface AgentState {
   threadId: string | null
@@ -32,6 +33,9 @@ export interface AgentState {
   /** The model and effort the next turn runs with; null is Codex's default. Remembered on this Mac. */
   model: string | null
   effort: string | null
+  /** Where this chat searches, pinned at its first message: a set or this Mac's local index. Null
+   *  until picked (a new chat takes the last pick), or for a chat from before scopes. */
+  scope: ChatScope | null
 }
 
 export const EMPTY_AGENT: AgentState = {
@@ -45,6 +49,7 @@ export const EMPTY_AGENT: AgentState = {
   searchRun: null,
   model: null,
   effort: null,
+  scope: null,
 }
 
 let localIds = 0
@@ -108,6 +113,21 @@ const MODEL_KEY = "powerpacks.agent.model"
 const EFFORT_KEY = "powerpacks.agent.effort"
 // The open chat, so leaving the page or relaunching the app reopens it.
 const OPEN_CHAT_KEY = "powerpacks.agent.openChat"
+// The last chat's scope, so a new chat starts where the last one searched.
+const SCOPE_KEY = "powerpacks.agent.scope"
+
+function recalledScope(): ChatScope | null {
+  try {
+    const raw: unknown = JSON.parse(recalled(SCOPE_KEY) || "null")
+    if (raw && typeof raw === "object" && "set_id" in raw && typeof raw.set_id === "string")
+      return { set_id: raw.set_id }
+    if (raw && typeof raw === "object" && "local_db" in raw && typeof raw.local_db === "string")
+      return { local_db: raw.local_db }
+  } catch {
+    // An unreadable pick is no pick.
+  }
+  return null
+}
 
 function remember(key: string, value: string): void {
   try {
@@ -128,6 +148,7 @@ function recalled(key: string): string {
 let state: AgentState = {
   ...EMPTY_AGENT,
   fullAccess: recalled(FULL_ACCESS_KEY) === "1",
+  scope: recalledScope(),
   model: recalled(MODEL_KEY) || null,
   effort: recalled(EFFORT_KEY) || null,
 }
@@ -178,7 +199,7 @@ export async function send(message: string): Promise<void> {
       : message
   set({ ...state, running: true, entries: [...state.entries, { kind: "user", id: localId("user"), text }] })
   try {
-    const threadId = state.threadId ?? (await startThread())
+    const threadId = state.threadId ?? (await startThread(state.scope))
     set({ ...state, threadId })
     remember(OPEN_CHAT_KEY, threadId)
     if (state.searchRun) writeStored("local", `search-thread:${state.searchRun}`, threadId)
@@ -222,15 +243,22 @@ export async function setFullAccess(on: boolean): Promise<void> {
   for (const approval of waiting) await answer(approval, "session")
 }
 
+/** Where the next chat searches; a chat that has started keeps its scope. */
+export function setScope(scope: ChatScope): void {
+  if (state.threadId !== null) return
+  set({ ...state, scope })
+  remember(SCOPE_KEY, JSON.stringify(scope))
+}
+
 /** Clears the screen; the next message starts a new thread. A running turn carries on in Codex. */
 export function newChat(): void {
-  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess })
+  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, scope: recalledScope() })
   remember(OPEN_CHAT_KEY, "")
 }
 
 /** Shows a saved search beside a new chat about it. */
 export function openSearch(runId: string): void {
-  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, searchRun: runId })
+  set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, searchRun: runId, scope: recalledScope() })
   remember(OPEN_CHAT_KEY, "")
   const saved = readStored("local", `search-thread:${runId}`, (value) =>
     typeof value === "string" ? value : null,
@@ -245,8 +273,8 @@ export async function openChat(threadId: string, searchRun: string | null = null
   set({ ...EMPTY_AGENT, fullAccess: state.fullAccess, threadId, searchRun, loading: true })
   remember(OPEN_CHAT_KEY, threadId)
   try {
-    const entries = await openThread(threadId)
-    if (state.threadId === threadId) set({ ...state, entries, loading: false })
+    const { entries, scope } = await openThread(threadId)
+    if (state.threadId === threadId) set({ ...state, entries, scope, loading: false })
   } catch (error: unknown) {
     if (state.threadId === threadId) set(failed(state, errorText(error)))
   }
