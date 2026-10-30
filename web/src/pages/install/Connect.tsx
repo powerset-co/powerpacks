@@ -8,6 +8,14 @@ import {
   type ConnectionRowProps,
 } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
 import { fetchSignedIn } from "@/lib/api/accounts"
@@ -48,11 +56,38 @@ const TODO: Record<ConnectSource, string> = {
 }
 
 /** WhatsApp's code, in a box of its own size from the start, so nothing moves when it arrives. */
+/** The WhatsApp code, with a larger copy on a light card: a phone reads a big, sharp code before
+ *  it changes (every 20 seconds). Both follow the same polled url. */
 function CodeBox({ url }: { url?: string }) {
+  const code = url ? (
+    <img src={url} alt="WhatsApp code to scan" className="size-full [image-rendering:pixelated]" />
+  ) : (
+    <Spinner />
+  )
   return (
-    <span className="mt-1 grid size-40 place-items-center rounded-[var(--radius-s)] bg-white p-2 text-muted-foreground">
-      {url ? <img src={url} alt="WhatsApp code to scan" className="size-full" /> : <Spinner />}
-    </span>
+    <Dialog>
+      <span className="mt-1 flex flex-col items-start gap-1">
+        <DialogTrigger
+          aria-label="Show the WhatsApp code larger"
+          className="grid size-40 cursor-zoom-in place-items-center rounded-[var(--radius-s)] border-0 bg-white p-2 text-muted-foreground"
+        >
+          {code}
+        </DialogTrigger>
+        <DialogTrigger className={LINK}>Show larger</DialogTrigger>
+      </span>
+      <DialogContent className="w-[min(420px,100%)] items-center border-0 bg-[#f2f2f2] p-6 text-[#111]">
+        <DialogHeader className="w-full">
+          <DialogTitle>Scan with WhatsApp</DialogTitle>
+          <DialogDescription className="text-[#555]">
+            On your phone: Settings → Linked devices → Link a device. The code changes every 20 seconds; this
+            one updates by itself.
+          </DialogDescription>
+        </DialogHeader>
+        <span className="grid size-80 place-items-center rounded-[var(--radius-s)] bg-white p-3 text-[#555]">
+          {code}
+        </span>
+      </DialogContent>
+    </Dialog>
   )
 }
 
