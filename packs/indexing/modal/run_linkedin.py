@@ -64,8 +64,7 @@ class _ImportProgress:
             if match := _PROFILES.search(line):
                 done, total = int(match.group(1)), int(match.group(2))
                 left = (total - done) * (time.monotonic() - self.started) / done
-                write_status(self.run_vol, self.status | {
-                    "phase": "enrich", "code": "enrich.count",
+                write_status(self.run_vol, self.status | {"phase": "enrich", "code": "enrich.count",
                     "done": done, "total": total, "left_seconds": left})
         return len(text)
 
@@ -122,10 +121,10 @@ def main() -> int:
     write_status(run_vol, status | {"code": "parse"})
 
     if not os.environ.get("POWERSET_API_KEY"):
-        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
         return 2
     if not Path(args.connections_csv).exists():
-        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": f"missing connections csv: {args.connections_csv}", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "parse", "error": f"missing connections csv: {args.connections_csv}", "finished_at": now_iso()})
         return 2
 
     WORK.mkdir(parents=True, exist_ok=True)
@@ -142,13 +141,13 @@ def main() -> int:
 
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     if code != 0 or manifest.get("status") != "completed":
-        write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
         return code or 1
 
     write_status(run_vol, status | {"phase": "persist", "code": "persist"})
     people_csv = str((manifest.get("artifacts") or {}).get("people_csv") or "")
     if not people_csv or not Path(people_csv).exists():
-        write_status(run_vol, status | {"status": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
         return 1
     people_out = Path(args.people_out)
     people_out.parent.mkdir(parents=True, exist_ok=True)

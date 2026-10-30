@@ -200,12 +200,12 @@ def main() -> int:
         except (json.JSONDecodeError, IndexError, ValueError):
             pass
         if estimated_usd is None:
-            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
+            write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
             print(dry.stdout[-2000:] if dry.stdout else dry.stderr[-2000:], flush=True)
             return 2
         print(f"[run-in-sandbox] enrich estimate: ${estimated_usd:.2f} (cap ${args.max_usd:.2f})", flush=True)
         if estimated_usd > args.max_usd:
-            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
+            write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
             return 2
         pipeline_cmd += [
             "--allow-paid-role-provider",
@@ -238,7 +238,7 @@ def main() -> int:
                                            "total": total, "left_seconds": left})
     pipeline_code = pipeline.wait()
     if pipeline_code != 0:
-        write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "pipeline", "exit_code": pipeline_code, "error": f"the search build stopped (exit {pipeline_code})", "finished_at": now_iso()})
         return pipeline_code
 
     # Refresh the shared caches BEFORE the duckdb build so the expensive
@@ -274,7 +274,7 @@ def main() -> int:
         "--force",
     ]).returncode
     if duckdb_code != 0:
-        write_status(run_vol, status | {"status": "failed", "phase": "duckdb", "exit_code": duckdb_code, "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "duckdb", "exit_code": duckdb_code, "error": f"the search build stopped (exit {duckdb_code})", "finished_at": now_iso()})
         return duckdb_code
 
     write_status(run_vol, status | {"phase": "persist", "code": "persist", "left_seconds": seconds_left("persist", people)})
@@ -291,7 +291,7 @@ def main() -> int:
     if args.persist_artifacts and (work / "records").exists():
         shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
 
-    write_status(run_vol, status | {"status": "completed", "phase": "done", "finished_at": now_iso()})
+    write_status(run_vol, status | {"status": "completed", "phase": "done", "code": "done", "finished_at": now_iso()})
     print("[run-in-sandbox] completed", flush=True)
     return 0
 

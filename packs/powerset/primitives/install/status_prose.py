@@ -262,15 +262,18 @@ PROSE: dict[str, Prose] = {
     # Building your search index
     "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
     # The Modal import of the connections (run_linkedin.py codes)
+    "index.linkedin.queued": Prose(InstallStep.INDEX, R, "Starting the sandbox for importing your connections"),
     "index.linkedin.parse": Prose(InstallStep.INDEX, R, "Reading your connections file"),
     "index.linkedin.enrich": Prose(InstallStep.INDEX, R, "Importing your connections"),
     "index.linkedin.enrich.count": Prose(InstallStep.INDEX, R, "Importing your connections: {done:,} of {total:,}"),
     "index.linkedin.persist": Prose(InstallStep.INDEX, R, "Saving your connections"),
     "index.linkedin.done": Prose(InstallStep.INDEX, R, "Your connections are imported"),
+    "index.linkedin.failed": Prose(InstallStep.INDEX, F, "The import stopped"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
-    "index.building": Prose(InstallStep.INDEX, R, "Starting the index build"),
+    "index.building": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
     # The Modal index build (run_indexing.py codes: its phases and the pipeline steps)
-    "index.building.seed": Prose(InstallStep.INDEX, R, "Starting the sandbox"),
+    "index.building.queued": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
+    "index.building.seed": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
     "index.building.estimate": Prose(InstallStep.INDEX, R, "Estimating the cost"),
     "index.building.pipeline": Prose(InstallStep.INDEX, R, "Starting the build"),
     "index.building.companies": Prose(InstallStep.INDEX, R, "Company profiles: {done:,} of {total:,}"),
@@ -292,6 +295,8 @@ PROSE: dict[str, Prose] = {
     "index.building.refresh-cache": Prose(InstallStep.INDEX, R, "Saving reusable results"),
     "index.building.duckdb": Prose(InstallStep.INDEX, R, "Preparing search"),
     "index.building.persist": Prose(InstallStep.INDEX, R, "Saving your search index"),
+    "index.building.done": Prose(InstallStep.INDEX, R, "Your search index is built"),
+    "index.building.failed": Prose(InstallStep.INDEX, F, "The index build stopped"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
     "validate.checking": Prose(InstallStep.VALIDATE, R, "Checking your search"),
     "validate.done": Prose(InstallStep.VALIDATE, C, "Search is ready: {people:,} people searchable."),
@@ -377,7 +382,5 @@ def render(event: str, values: dict, *, desktop: bool = DESKTOP) -> tuple[Prose,
 
 
 def page_prose(*, desktop: bool = DESKTOP) -> dict:
-    """The page's rows and fixed words, sent with every status read."""
-    return {"rows": [{"label": row.label, "steps": [step.value for step in row.steps],
-                      "needs": row.needs.value if row.needs else ""} for row in ROWS],
-            "page": {**PAGE, **DESKTOP_PAGE} if desktop else PAGE}
+    """The page's fixed words, sent with every status read."""
+    return {"page": {**PAGE, **DESKTOP_PAGE} if desktop else PAGE}

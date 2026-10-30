@@ -150,7 +150,9 @@ it("a LinkedIn-only run lists its two rows, Modal's words with a count and time 
     ["current", `Reading your connections${READING.message}`],
     ["next", "Making your connections searchable"],
   ])
-  expect(screen.getByRole("progressbar", { name: "Reading your connections" })).toBeTruthy()
+  // The line carries the count in words; one read gives no pace yet, so no time left.
+  expect(screen.getByText(READING.message)).toBeTruthy()
+  expect(screen.queryByRole("progressbar")).toBeNull()
 
   const read = { status: "completed", message: "1,075 LinkedIn connections (12 new)" } as const
   state.record = {
@@ -167,7 +169,9 @@ it("a LinkedIn-only run lists its two rows, Modal's words with a count and time 
     ["done", "1,075 LinkedIn connections (12 new)"],
     ["current", "Making your connections searchableUnderstanding companiesabout 10 min left"],
   ])
-  expect(screen.getByRole("progressbar", { name: "Making your connections searchable" })).toBeTruthy()
+  expect(screen.getByText("Understanding companies")).toBeTruthy()
+  expect(screen.getByText("about 10 min left")).toBeTruthy()
+  expect(screen.queryByRole("progressbar")).toBeNull()
 
   const done = (message: string) => ({ status: "completed", message }) as const
   state.record = {
@@ -240,6 +244,7 @@ it("an import run lists every row in its plan, deep context with its count", asy
     ["next", "Enriching people"],
     ["next", "Making your connections searchable"],
   ])
-  expect(screen.getByRole("progressbar", { name: "Learning who they are" })).toBeTruthy()
+  expect(screen.getByText("Learning about your contacts: 40 of 298")).toBeTruthy()
+  expect(screen.queryByRole("progressbar")).toBeNull()
   expect(screen.getByRole("button", { name: "Start using Powerpacks now" })).toBeTruthy()
 })

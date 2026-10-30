@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 
 import { SOURCE_STEPS, STEPS, type StepKey } from "./steps"
 
-/** The onboarding window: the steps across the top with a line under the ones reached, then two
+/** The onboarding window: the steps across the top, then two
  *  columns: what to do on the left, what it is about on the right. No Back: each screen moves on
  *  by its own action. Skip for now, at the foot of the left column, marks setup skipped and opens
  *  the app; Accounts and Add sources in the nav take it from there. The Sources and Import screens
@@ -36,7 +36,7 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
   }
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground" data-onboarding={step}>
-      <header className="relative flex h-[52px] shrink-0 items-center justify-center border-b border-line">
+      <header className="flex h-[52px] shrink-0 items-center justify-center border-b border-line">
         <ol
           aria-label="Onboarding steps"
           className="m-0 flex list-none items-center gap-3 p-0 text-[11px] font-semibold uppercase tracking-[.1em]"
@@ -67,11 +67,6 @@ export function Frame({ step, left, right }: { step: StepKey; left: ReactNode; r
             </li>
           ))}
         </ol>
-        <div
-          aria-hidden
-          className="absolute bottom-[-1px] left-0 h-[2px] bg-primary transition-[width] duration-slow ease-out"
-          style={{ width: `${((index + 1) / bar.length) * 100}%` }}
-        />
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-2 max-[720px]:grid-cols-1">
         <section className="relative flex min-h-0 flex-col overflow-y-auto px-10 py-8">

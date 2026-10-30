@@ -1,13 +1,14 @@
 """The index run's human-readable progress and time estimates."""
 import io
 import json
+import runpy
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.indexing.modal import run_indexing, run_linkedin
+from packs.indexing.modal import linkedin_modal_pipeline, run_indexing, run_linkedin
 
 from packs.indexing.modal.run_indexing import progress_line
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
@@ -60,6 +61,40 @@ class ProgressLineTests(unittest.TestCase):
 
 
 class ModalProgressTests(unittest.TestCase):
+    def test_crashing_child_replaces_unfinished_status_and_preserves_reported_failure(self):
+        with patch("modal.App"), patch("modal.Volume.from_name"), patch("modal.Secret.from_name"), \
+             patch.object(linkedin_modal_pipeline, "build_image"), \
+             patch.object(linkedin_modal_pipeline, "powerset_api_secret"):
+            wrapper = runpy.run_path(str(Path(run_indexing.__file__).with_name("app.py")))["_run"]
+        for state in (None, "running", "completed", "failed"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                reported = {"status": state, "code": state, "error": "Provider unavailable"}
+                child = "import sys; sys.exit(7)"
+                if state:
+                    child = (f"from pathlib import Path; Path({str(root / 'status.json')!r})"
+                             f".write_text({json.dumps(reported)!r}); " + child)
+                with patch.dict(wrapper.__globals__, {"Path": lambda _path: root}), \
+                     patch.object(wrapper.__globals__["time"], "sleep"):
+                    wrapper("index", "synthetic", [sys.executable, "-c", child])
+                record = json.loads((root / "status.json").read_text())
+                self.assertEqual(record["status"], "failed")
+                self.assertEqual(record["code"], "failed")
+                self.assertEqual(record["error"], "Provider unavailable" if state == "failed"
+                                 else "the Modal run exited with code 7")
+
+    def test_watcher_prints_changed_statuses_and_returns_the_terminal_payload(self):
+        for state in ("completed", "failed"):
+            with self.subTest(state=state):
+                running = {"status": "running", "code": "enrich.count", "done": 1, "total": 2}
+                terminal = {"status": state, "code": "done" if state == "completed" else "failed"}
+                payloads = iter([None, running, running, terminal])
+                with patch.object(linkedin_modal_pipeline.time, "sleep") as sleep, \
+                     patch.object(sys, "stdout", io.StringIO()) as output:
+                    self.assertEqual(linkedin_modal_pipeline.watch_run(lambda: next(payloads)), terminal)
+                self.assertEqual(output.getvalue().splitlines(), ["enrich.count 1/2", f"{terminal['code']} None/None"])
+                self.assertEqual(sleep.call_count, 3)
+
     def test_company_fetch_keeps_its_line_until_finished(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -87,9 +122,9 @@ class ModalProgressTests(unittest.TestCase):
                 process.return_value.wait.return_value = 0
                 duckdb.return_value.returncode = 0
                 self.assertEqual(run_indexing.main(), 0)
-            codes = [item.args[1]["code"] for item in write.call_args_list if "code" in item.args[1]]
+            codes = [item.args[1]["code"] for item in write.call_args_list]
             self.assertEqual(codes, ["seed", "pipeline", "step.build_roles", "companies", "companies", "companies",
-                                     "step.build_company_corpus", "duckdb", "persist"])
+                                     "step.build_company_corpus", "duckdb", "persist", "done"])
             counts = [(item.args[1]["done"], item.args[1]["total"]) for item in write.call_args_list
                       if item.args[1].get("code") == "companies"]
             self.assertEqual(counts, [(0, 700), (350, 700), (700, 700)])

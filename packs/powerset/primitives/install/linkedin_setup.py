@@ -49,19 +49,17 @@ def main(argv: list[str] | None = None) -> int:
         previous = None
         while True:
             payload = api_runs.status(label) or {}
-            # The run's end carries no code: return before writing, so the row never falls back
-            # to the step's opening line.
+            current = tuple(payload.get(key) for key in ("code", "done", "total", "left_seconds"))
+            if payload.get("code") and current != previous:
+                # Modal writes a code and numbers; the words are status_prose.py's ("<event>.<code>").
+                details = {key: payload[key] for key in payload.keys() & {"done", "total", "left_seconds"}}
+                write(f"{event}.{payload['code']}",
+                      **{key: payload[key] for key in payload.keys() & {"done", "total"}}, details=details)
+                previous = current
             if payload.get("status") == "failed":
                 raise RuntimeError(payload.get("error") or f"Modal run {label} failed")
             if payload.get("status") == "completed":
                 return payload
-            current = tuple(payload.get(key) for key in ("code", "done", "total", "left_seconds"))
-            if current != previous:
-                # Modal writes a code and numbers; the words are status_prose.py's ("<event>.<code>").
-                details = {key: payload[key] for key in payload.keys() & {"done", "total", "left_seconds"}}
-                write(f"{event}.{payload['code']}" if payload.get("code") else event,
-                      **{key: payload[key] for key in payload.keys() & {"done", "total"}}, details=details)
-                previous = current
             time.sleep(3)
 
     def download(label: str, name: str, dest: Path) -> None:
@@ -111,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             status.directory.mkdir(parents=True, exist_ok=True)
             with status.log_path.open("a", encoding="utf-8") as log:
                 traceback.print_exc(file=log)
-            write("step.failed", pid=0, message=str(error), details={"error": str(error)})
+            write("step.failed", pid=0, details={"error": str(error)})
             return 1
 
 

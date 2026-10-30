@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 
-import { CheckIcon, ProgressBar, Spinner } from "@/components/shared"
+import { CheckIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { HOME } from "@/lib/nav"
@@ -225,9 +225,6 @@ export function SetUp() {
                     </div>
                     {live ? (
                       <div className="flex flex-col gap-2 pl-8">
-                        {count ? (
-                          <ProgressBar label={row.label} done={count.read} total={count.total} />
-                        ) : null}
                         <div className="flex justify-between gap-3 text-xs">
                           <span className={standing === "stopped" ? "text-bad" : "text-muted-foreground"}>
                             {data.message}

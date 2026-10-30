@@ -61,7 +61,9 @@ def _modal_codes() -> dict[str, set[str]]:
     pattern = r'"code": "([a-z_.-]+)"|return "([a-z_.-]+)", '
     indexing = {a or b for a, b in re.findall(pattern, (modal / "run_indexing.py").read_text())}
     importing = {a or b for a, b in re.findall(pattern, (modal / "run_linkedin.py").read_text())}
-    return {"index.building": indexing | {f"step.{step}" for step in STEPS}, "index.linkedin": importing}
+    shared = {a or b for a, b in re.findall(pattern, (modal / "app.py").read_text())}
+    return {"index.building": indexing | shared | {f"step.{step}" for step in STEPS},
+            "index.linkedin": importing | shared}
 
 
 def _written() -> tuple[set[str], set[str]]:
@@ -80,6 +82,18 @@ def _written() -> tuple[set[str], set[str]]:
 
 
 class StatusProseTests(unittest.TestCase):
+    def test_every_modal_status_write_has_a_code(self) -> None:
+        for name in ("app.py", "run_indexing.py", "run_linkedin.py"):
+            tree = ast.parse((ROOT / "packs/indexing/modal" / name).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "write_status":
+                    with self.subTest(file=name, line=node.lineno):
+                        keys = []
+                        for value in ast.walk(node.args[1]):
+                            if isinstance(value, ast.Dict):
+                                keys.extend(key.value for key in value.keys if isinstance(key, ast.Constant))
+                        self.assertIn("code", keys)
+
     def test_every_event_the_installer_writes_is_in_the_script(self) -> None:
         literals, prefixes = _written()
         self.assertEqual(sorted(literals - set(PROSE)), [])

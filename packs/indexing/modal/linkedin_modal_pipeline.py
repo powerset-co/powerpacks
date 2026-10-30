@@ -2,8 +2,8 @@
 """LinkedIn -> searchable index pipeline on Modal sandboxes.
 
 Local machine = dispatcher/aggregator: upload inputs to the team Modal Volume,
-dispatch per-vertical sandboxes, mirror progress to the onboarding status
-files, download the finished local-search.duckdb.
+dispatch per-vertical sandboxes, poll their status, and download the finished
+local-search.duckdb.
 
 Run via the repo environment (modal is a project dependency, and the Modal
 token comes from .env via `$powerset env pull` — no `modal token set` needed):
@@ -20,9 +20,7 @@ Volume layout (shared workspace volume, multi-operator):
 Commands:
   pipeline  the one-shot: --csv Connections.csv -> Importing (run_linkedin.py,
             RapidAPI always approved) -> Indexing (run_indexing.py) ->
-            auto-download. Emits onboarding-v2-format progress to
-            .powerpacks/runs/setup-linkedin-modal/. Re-dropping an unchanged
-            csv is a no-op.
+            auto-download. Re-dropping an unchanged csv is a no-op.
   upload    push this operator's people.csv (--seed-cache bootstraps /data/cache)
   amplify   build the synthetic Jake-scale dataset in-sandbox (no paid calls)
   run       client-driven benchmark run (streams per-phase, exec per step)
@@ -280,86 +278,8 @@ def cmd_upload(args: argparse.Namespace) -> int:
     return 0
 
 
-PIPELINE_VERTICAL = "linkedin_modal"
-PIPELINE_STAGES = [
-    {"id": "importing", "label": "Importing contacts"},
-    {"id": "indexing", "label": "Building search index"},
-]
-PROGRESS_DIR = LOCAL_POWERPACKS / "runs/setup-linkedin-modal"
 IMPORT_LABEL = "linkedin-import"
 INDEX_LABEL = "linkedin-index"
-
-
-class PipelineProgress:
-    """Onboarding-v2-format progress files the console polls.
-
-    Same schema as setup_linkedin_csv.RunContext (status.json + events.jsonl,
-    atomic writes), collapsed to the two user-facing stages.
-    """
-
-    def __init__(self, progress_dir: Path = PROGRESS_DIR, stages: list[dict] = PIPELINE_STAGES,
-                 vertical: str = PIPELINE_VERTICAL) -> None:
-        self.run_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-        self.stages = stages
-        self.vertical = vertical
-        progress_dir.mkdir(parents=True, exist_ok=True)
-        self.status_path = progress_dir / "status.json"
-        self.events_path = progress_dir / "events.jsonl"
-        self.events_path.write_text("")
-        self.status: dict = {
-            "schema_version": 1,
-            "vertical": vertical,
-            "run_id": self.run_id,
-            "status": "running",
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "progress": 0.0,
-            "current_stage": stages[0]["id"],
-            "stages": {},
-            "stage_order": stages,
-        }
-        self._write()
-
-    def _write(self) -> None:
-        self.status["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        tmp = self.status_path.with_name(self.status_path.name + ".tmp")
-        tmp.write_text(json.dumps(self.status, indent=2, sort_keys=True) + "\n")
-        tmp.replace(self.status_path)
-
-    def event(self, stage_id: str, message: str, *, status: str = "running",
-              progress: float | None = None, payload: dict | None = None) -> None:
-        index = next((i for i, s in enumerate(self.stages) if s["id"] == stage_id), 0) + 1
-        label = self.stages[index - 1]["label"]
-        if progress is None:
-            progress = index / len(self.stages) if status == "completed" else (index - 1) / len(self.stages)
-        record = {
-            "vertical": self.vertical,
-            "run_id": self.run_id,
-            "stage": stage_id,
-            "stage_label": label,
-            "stage_index": index,
-            "stage_total": len(self.stages),
-            "status": status,
-            "message": message,
-            "progress": round(progress, 3),
-            "payload": payload or {},
-            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
-        with self.events_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
-        self.status["current_stage"] = stage_id
-        self.status["progress"] = record["progress"]
-        self.status["stages"][stage_id] = {
-            "status": status, "label": label, "message": message,
-            "updated_at": record["updated_at"], "payload": payload or {},
-        }
-        if status == "failed":
-            self.status["status"] = "failed"
-        self._write()
-        print(f"[{stage_id}] {message}", flush=True)
-
-    def finish(self, result: dict) -> None:
-        self.status |= {"status": "completed", "progress": 1.0, "result": result}
-        self._write()
 
 
 def csv_connection_rows(path: Path) -> int:
@@ -375,12 +295,6 @@ def csv_connection_rows(path: Path) -> int:
             if line.strip():
                 count += 1
     return count
-
-
-def estimate_seconds(rows: int, misses: int | None = None) -> int:
-    """Rough wall-time estimate; misses defaults to rows (cold worst case)."""
-    rapid = (misses if misses is not None else rows) / 3.3  # 200/min RapidAPI
-    return int(100 + rapid + 0.15 * rows)  # dispatch/download overhead + import + index
 
 
 def reset_run_status(vol: modal.Volume, label: str) -> None:
@@ -401,31 +315,16 @@ def read_run_status(label: str) -> dict | None:
         return None
 
 
-def watch_run(read: Callable[[], dict | None], progress: PipelineProgress, stage_id: str, message_prefix: str,
-              timeout_s: int = 7200) -> dict | None:
-    """Poll a run's status (`read`: the volume's status.json, or the API's copy of it) and mirror it
-    into the local stage."""
+def watch_run(read: Callable[[], dict | None], timeout_s: int = 7200) -> dict | None:
+    """Poll the run's status and print each changed code and count."""
     deadline = time.time() + timeout_s
     last: dict | None = None
     while time.time() < deadline:
         payload = read()
         if payload:
-            phase = payload.get("phase")
-            # The run's own line and counts when it has them (run_indexing.py progress_line), else
-            # the phase's words.
-            message = payload.get("message") or {
-                "seed": "Preparing your contacts", "estimate": "Checking what needs updating",
-                "pipeline": "Building your search records", "refresh-cache": "Saving reusable results",
-                "duckdb": "Preparing search", "persist": "Saving your search index", "done": "Finishing up",
-            }.get(phase, message_prefix)
-            done, total = payload.get("done"), payload.get("total")
-            left_seconds = payload.get("left_seconds")
             if payload != last:
                 last = payload
-                counted = isinstance(done, int) and isinstance(total, int) and total > 0
-                progress.event(stage_id, message, progress=done / total if counted else None,
-                               payload={"phase": phase, **({"done": done, "total": total} if counted else {}),
-                                        **({"left_seconds": left_seconds} if left_seconds is not None else {})})
+                print(f"{payload.get('code')} {payload.get('done')}/{payload.get('total')}", flush=True)
             if payload.get("status") in ("completed", "failed"):
                 return payload
         time.sleep(3)
@@ -446,7 +345,6 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     csv_sha = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     vol = get_volume()
     op_prefix = f"operators/{DEFAULT_OPERATOR_ID}"
-    progress = PipelineProgress()
 
     # No-op when the same csv was already fully processed for this operator.
     try:
@@ -454,7 +352,6 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         last_sha = ""
     if last_sha == csv_sha and not args.force:
-        progress.event("importing", "Connections.csv unchanged - already imported", status="completed")
         # Remote is already up to date, but a clean/fresh local workspace may have
         # no local-search.duckdb. Hydrate it from the existing run instead of
         # finishing with empty local artifacts.
@@ -462,34 +359,20 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         local_duckdb = dest / "local-search.duckdb"
         downloaded = False
         if not local_duckdb.exists() or local_duckdb.stat().st_size == 0:
-            progress.event("indexing", "Downloading existing search index")
             code = cmd_download(argparse.Namespace(label=INDEX_LABEL, dest=args.dest, wait=False))
             if code != 0:
-                progress.event("indexing", "Could not download existing search index", status="failed")
                 return code
             downloaded = True
-        progress.event(
-            "indexing",
-            "Search index is ready" if downloaded else "Search index already up to date",
-            status="completed",
-            progress=1.0,
-        )
-        result = {"noop": True, "csv": str(csv_path), "connections": rows,
-                  "downloaded": downloaded, "duckdb": str(local_duckdb)}
-        progress.finish(result)
         print(json.dumps({"status": "noop", "connections": rows, "downloaded": downloaded}))
         return 0
 
-    eta = estimate_seconds(rows)
-    progress.event("importing", f"Uploading {csv_path.name} ({rows} connections, ~{eta // 60 + 1} min estimated)",
-                   payload={"connections": rows, "estimated_seconds": eta})
     with vol.batch_upload(force=True) as batch:
         batch.put_file(csv_path, f"{op_prefix}/input/connections.csv")
 
     app = modal.App.lookup(APP_NAME, create_if_missing=True)
     import_vol = run_vol_path(IMPORT_LABEL)
     reset_run_status(vol, IMPORT_LABEL)
-    sb = modal.Sandbox.create(
+    modal.Sandbox.create(
         "python", "/repo/packs/indexing/modal/bench_wrapper.py", f"{import_vol}/bench-import.json",
         "python", "/repo/packs/indexing/modal/run_linkedin.py",
         "--connections-csv", f"{OPERATOR_ROOT}/input/connections.csv",
@@ -506,22 +389,17 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         memory=4096,
         timeout=args.timeout,
     )
-    progress.event("importing", "Importing and enriching contacts", payload={"sandbox": sb.object_id})
-    payload = watch_run(lambda: read_run_status(IMPORT_LABEL), progress, "importing", "Importing")
+    payload = watch_run(lambda: read_run_status(IMPORT_LABEL))
     if not payload or payload.get("status") != "completed":
-        progress.event("importing", f"Import failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
     stats = payload.get("stats") or {}
-    progress.event("importing", f"Imported {stats.get('people')} contacts "
-                   f"({stats.get('cache_hit_count') or 0} cached, {stats.get('paid_call_count') or 0} fetched)",
-                   status="completed", payload=stats)
 
     # Indexing: same server-side runner as `process`, with paid enrichment
     # allowed for genuinely-new roles/companies (estimate-capped).
     index_vol = run_vol_path(INDEX_LABEL)
     people_csv, cache_root = dataset_paths("real")
     reset_run_status(vol, INDEX_LABEL)
-    sb2 = modal.Sandbox.create(
+    modal.Sandbox.create(
         "python", "/repo/packs/indexing/modal/run_indexing.py",
         "--people-csv", people_csv,
         "--cache-root", cache_root,
@@ -539,34 +417,21 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         memory=16384,
         timeout=args.timeout,
     )
-    progress.event("indexing", "Building search records", payload={"sandbox": sb2.object_id})
-    payload = watch_run(lambda: read_run_status(INDEX_LABEL), progress, "indexing", "Indexing")
+    payload = watch_run(lambda: read_run_status(INDEX_LABEL))
     if not payload or payload.get("status") != "completed":
-        progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
 
     dl = argparse.Namespace(label=INDEX_LABEL, dest=args.dest, wait=False)
     code = cmd_download(dl)
     if code != 0:
-        progress.event("indexing", "Download failed", status="failed")
         return code
     with vol.batch_upload(force=True) as batch:
         batch.put_file(io.BytesIO(csv_sha.encode()), f"{op_prefix}/runs/last-input.sha")
     dest = Path(args.dest) if args.dest else LOCAL_POWERPACKS / "search-index"
     result = {"csv": str(csv_path), "connections": rows, "import": stats,
               "duckdb": str(dest / "local-search.duckdb")}
-    progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
-    progress.finish(result)
     print(json.dumps({"status": "completed", **result}))
     return 0
-
-
-GMAIL_VERTICAL = "gmail_modal"
-GMAIL_STAGES = [
-    {"id": "enriching", "label": "Enriching contacts"},
-    {"id": "importing", "label": "Loading enriched contacts"},
-    {"id": "indexing", "label": "Building search index"},
-]
 
 
 def people_csv_rows(path: Path) -> int:
@@ -593,18 +458,12 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     if not people_path.exists():
         raise SystemExit(f"missing people.csv: {people_path}")
     rows = people_csv_rows(people_path)
-    progress = PipelineProgress(Path.cwd() / ".powerpacks/runs/setup-gmail-modal", GMAIL_STAGES, GMAIL_VERTICAL)
     # Enrich already happened locally (Parallel) before this command runs.
-    progress.event("enriching", "Enriched contacts locally", status="completed", payload={"contacts": rows})
-    progress.event("importing", f"Uploading {rows} enriched contacts", payload={"contacts": rows})
     uploaded = api_runs.upload(people_path, "people.csv")
-    progress.event("importing", f"Loaded {rows} contacts", status="completed", payload={"contacts": rows})
 
     label = api_runs.start("index-people", uploaded, max_usd=args.max_usd)
-    progress.event("indexing", "Building search records", payload={"run": label})
-    payload = watch_run(lambda: api_runs.status(label), progress, "indexing", "Indexing")
+    payload = watch_run(lambda: api_runs.status(label))
     if not payload or payload.get("status") != "completed":
-        progress.event("indexing", f"Indexing failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
 
     dest = Path(args.dest).expanduser() if args.dest else Path.cwd() / ".powerpacks/search-index"
@@ -612,7 +471,6 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     for name in ("local-search.duckdb", "manifest.json"):
         written = api_runs.download(label, name, dest / name)
         if written < 0:
-            progress.event("indexing", f"{name} missing from the run", status="failed")
             return 1
         print(f"downloaded {label}/{name} -> {dest / name} ({written / 1e6:.0f} MB, {written / 1e6 / max(time.time() - started, 0.001):.0f} MB/s)")
         started = time.time()
@@ -621,8 +479,6 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     (dest / "people.sha256").write_text(hashlib.sha256(people_path.read_bytes()).hexdigest(), encoding="utf-8")
     result = {"people_csv": str(people_path), "contacts": rows,
               "duckdb": str(dest / "local-search.duckdb")}
-    progress.event("indexing", "Search index is ready", status="completed", progress=1.0, payload=result)
-    progress.finish(result)
     print(json.dumps({"status": "completed", **result}))
     return 0
 
@@ -778,35 +634,22 @@ def cmd_import_linkedin(args: argparse.Namespace) -> int:
     if not csv_path.exists():
         raise SystemExit(f"missing csv: {csv_path}")
     rows = csv_connection_rows(csv_path)
-    progress = PipelineProgress()
 
-    eta = estimate_seconds(rows)
-    progress.event("importing", f"Uploading {csv_path.name} ({rows} connections, ~{eta // 60 + 1} min estimated)",
-                   payload={"connections": rows, "estimated_seconds": eta})
     uploaded = api_runs.upload(csv_path, "connections.csv")
     label = api_runs.start("import-linkedin", uploaded, source_user=args.source_user)
-    progress.event("importing", "Importing and enriching contacts", payload={"run": label})
-    payload = watch_run(lambda: api_runs.status(label), progress, "importing", "Importing")
+    payload = watch_run(lambda: api_runs.status(label))
     if not payload or payload.get("status") != "completed":
-        progress.event("importing", f"Import failed: {(payload or {}).get('error') or (payload or {}).get('phase')}", status="failed", payload=payload or {})
         return 1
     stats = payload.get("stats") or {}
-    progress.event("importing", f"Imported {stats.get('people')} contacts "
-                   f"({stats.get('cache_hit_count') or 0} cached, {stats.get('paid_call_count') or 0} fetched)",
-                   payload=stats)
 
     # Pull the enriched people.csv to the canonical LinkedIn import path so the fan-in merge can pick it up.
     dest = Path(args.dest).expanduser() if args.dest else LOCAL_POWERPACKS / "network-import/import/linkedin/people.csv"
     written = api_runs.download(label, "people.csv", dest)
     if written < 0:
-        progress.event("importing", "Enriched people.csv missing from the run", status="failed")
         print(json.dumps({"status": "failed", "error": "people.csv missing from the run"}))
         return 1
-    progress.event("importing", "Enriched people.csv downloaded", status="completed", progress=1.0,
-                   payload={"people_csv": str(dest), "bytes": written})
     result = {"status": "completed", "csv": str(csv_path), "connections": rows,
               "people": stats.get("people"), "people_csv": str(dest), "bytes": written}
-    progress.finish(result)
     print(json.dumps(result))
     return 0
 
