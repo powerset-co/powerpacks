@@ -48,6 +48,10 @@ class SourceOnboardingTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.env = self.root / '.env'
         self.env.write_text('CUSTOM_SETTING=keep\n')
+        # The permission check uses the launching app, without inspecting the test runner's processes.
+        app = self.root / 'Synthetic.app'
+        app.mkdir()
+        patch.dict(os.environ, {'POWERPACKS_PERMISSION_APP': str(app)}).start()
         self.data = self.root / '.powerpacks/network-import/import/messages/people.csv'
         self.data.parent.mkdir(parents=True)
         self.data.write_text('person_id,name\ncandidate:phone:+15550100,Jordan Bravo\n')

@@ -6,9 +6,8 @@ import { useFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
-import { fetchSignedIn } from "@/lib/api/accounts"
 import { fetchInstall } from "@/lib/api/install"
-import { PAGES, type Page, type PageKey } from "@/lib/nav"
+import { AGENT, PAGES, type Page, type PageKey } from "@/lib/nav"
 import { COLLAPSED_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
 import { useSetupDone } from "@/hooks/useSetupDone"
@@ -27,7 +26,7 @@ import {
   TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
-import { CirclePlus, CircleUserRound } from "lucide-react"
+import { CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
 import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
@@ -36,7 +35,6 @@ import { SidebarFooter } from "./SidebarFooter"
 const RAIL_ONLY_QUERY = "(max-width: 900px)"
 
 const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
-  home: SearchesIcon,
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
@@ -45,7 +43,6 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   team: TeamIcon,
   tasks: TasksIcon,
   setup: SetupIcon,
-  sources: CirclePlus,
   settings: SettingsIcon,
   accounts: CircleUserRound,
 }
@@ -81,15 +78,6 @@ export function Sidebar() {
     retry: false,
   })
   const running = install.data?.status === "running" ? install.data.message : undefined
-  // Add sources shows once setup is done and no message source is signed in yet.
-  const signed = useQuery({
-    queryKey: ["signed-in"],
-    queryFn: ({ signal }) => fetchSignedIn(signal),
-    enabled: isDesktop() && done,
-    retry: false,
-  })
-  const moreSources =
-    done && signed.data !== undefined && !(signed.data.gmail || signed.data.imessage || signed.data.whatsapp)
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -118,7 +106,7 @@ export function Sidebar() {
         )}
       >
         <NavLink
-          to="/home"
+          to={AGENT.href}
           aria-label="Powerset home"
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-s)]"
         >
@@ -146,8 +134,7 @@ export function Sidebar() {
           (page) =>
             (page.key !== "sets" || features.sets) &&
             (page.key !== "team" || (onTeam && features.team)) &&
-            (page.key !== "setup" || !done) &&
-            (page.key !== "sources" || moreSources),
+            (page.key !== "setup" || !done),
         ).map((page) => (
           <li key={page.key}>
             <Item page={page} rail={rail} running={page.key === "setup" ? running : undefined} />

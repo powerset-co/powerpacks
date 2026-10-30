@@ -35,7 +35,7 @@ from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E40
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 from packs.indexing.lib.llm_config import (  # noqa: E402
-    DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    DEFAULT_MODEL, DEFAULT_OPENAI_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
     openai_price_multiplier,
 )
@@ -1025,7 +1025,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_ids)} new company profiles from RapidAPI\n")
             rapidapi_lookup = rapidapi_company.fetch_company_details_batch(missing_ids)
             ok = sum(1 for v in rapidapi_lookup.values() if not v.get("error"))
-            sys.stderr.write(f"[enrich-companies] fetched {ok}/{len(missing_ids)} company profiles\n")
+            sys.stderr.write(f"[enrich-companies] finished fetching company profiles: {ok}/{len(missing_ids)} successful\n")
         # Free disk-cache backfill for the rest (reused companies) — never hits the network.
         cache_only_ids = [rid for rid in unique_ids if rid not in rapidapi_lookup]
         if cache_only_ids:
@@ -1055,7 +1055,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             sys.stderr.write(f"[enrich-companies] fetching {len(missing_slugs)} new company profiles by slug from RapidAPI\n")
             by_slug = rapidapi_company.fetch_company_details_batch_by_slug(missing_slugs)
             ok_slug = sum(1 for v in by_slug.values() if not v.get("error"))
-            sys.stderr.write(f"[enrich-companies] fetched {ok_slug}/{len(missing_slugs)} company profiles by slug\n")
+            sys.stderr.write(f"[enrich-companies] finished fetching company profiles by slug: {ok_slug}/{len(missing_slugs)} successful\n")
             for slug, resp in by_slug.items():
                 rapidapi_lookup[f"slug:{slug}"] = resp
         # Free cache backfill for the rest (reused slug-companies) — never hits the network.

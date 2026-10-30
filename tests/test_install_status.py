@@ -6,7 +6,6 @@ import gzip
 import logging
 import os
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 
@@ -194,7 +193,6 @@ class InstallStatusTests(unittest.TestCase):
         self.assertEqual(record["status"], "waiting")
         self.assertIn("I’ll continue here", record["note"])
         self.assertEqual(record["action"], {"kind": "gmail", "details": {"email": "casey@example.com"}})
-        self.assertEqual(self.status.read()["prose"]["rows"][1]["label"], "Logging in to your accounts")
 
     def test_an_event_without_its_own_step_lands_on_the_current_one(self) -> None:
         self.status.write("gmail.syncing", pid=os.getpid())

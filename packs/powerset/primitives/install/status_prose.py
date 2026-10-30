@@ -31,8 +31,10 @@ Changelog:
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
 
@@ -61,23 +63,11 @@ class Row:
     needs: InstallStep | None = None  # shown only when this step is planned
 
 
-# The page's rows, top to bottom. Setup takes every login first, then each source's sync.
-ROWS = (
-    Row("Installing Powerpacks", (InstallStep.RUNTIME, InstallStep.DEPENDENCIES, InstallStep.SKILLS,
-                                  InstallStep.ACCOUNT, InstallStep.CREDENTIALS, InstallStep.CONNECTION,
-                                  InstallStep.NETWORK)),
-    Row("Logging in to your accounts", (InstallStep.LINKEDIN_LOGIN, InstallStep.GMAIL_TOOLS, InstallStep.GMAIL_LOGIN,
-                                        InstallStep.IMESSAGE_ACCESS, InstallStep.WHATSAPP_TOOLS,
-                                        InstallStep.WHATSAPP_LOGIN)),
-    Row("Syncing LinkedIn", (InstallStep.LINKEDIN,)),
-    Row("Syncing Gmail", (InstallStep.GMAIL_SYNC, InstallStep.GMAIL_IMPORT)),
-    Row("Syncing iMessage", (InstallStep.IMESSAGE_IMPORT,)),
-    Row("Syncing WhatsApp", (InstallStep.WHATSAPP_SYNC, InstallStep.WHATSAPP_IMPORT)),
-    Row("Discovering your contacts", (InstallStep.DEEP_CONTEXT,)),
-    Row("Enriching your contacts", (InstallStep.ENRICH,)),
-    # A run whose every source is skipped ends ready without building an index.
-    Row("Building your search index", (InstallStep.INDEX, InstallStep.VALIDATE, InstallStep.READY),
-        needs=InstallStep.INDEX),
+# The page and Python read the same rows, top to bottom.
+ROWS = tuple(
+    Row(row["label"], tuple(InstallStep(step) for step in row["steps"]),
+        InstallStep(row["needs"]) if row["needs"] else None)
+    for row in json.loads(Path(__file__).with_name("setup-steps-mapping.json").read_text(encoding="utf-8"))["rows"]
 )
 
 # The page's fixed words: the title over each situation, the row states, buttons.
@@ -246,11 +236,10 @@ PROSE: dict[str, Prose] = {
     "whatsapp.importing": Prose(InstallStep.WHATSAPP_IMPORT, R, "Adding WhatsApp contacts"),
     "whatsapp.imported": Prose(InstallStep.WHATSAPP_IMPORT, C, "WhatsApp contacts added"),
     "whatsapp.import.failed": Prose(InstallStep.WHATSAPP_IMPORT, F, "WhatsApp contacts could not be added. I'm checking what happened."),
-    "sources.ready": Prose(InstallStep.DEEP_CONTEXT, W, "{counts}", action="processing"),  # see source_counts
+    "sources.ready": Prose(None, W, "{counts}", action="processing"),  # on the step that runs next; see source_counts
 
     # Discovering your contacts (pipeline.py, the stages of deep_context_v2/run.py)
     "discover.linkedin": Prose(InstallStep.DEEP_CONTEXT, R, "Adding your LinkedIn connections"),
-    "discover.linkedin_only": Prose(InstallStep.DEEP_CONTEXT, C, "Your LinkedIn connections are in; nothing to learn from messages yet."),
     "discover.people": Prose(InstallStep.DEEP_CONTEXT, R, "Discovering your contacts"),
     "discover.owner_needed": Prose(InstallStep.DEEP_CONTEXT, W, "Add your LinkedIn profile to continue. I'll ask in chat.", action="owner"),
     "discover.owner": Prose(InstallStep.DEEP_CONTEXT, R, "Preparing your profile"),
@@ -268,13 +257,46 @@ PROSE: dict[str, Prose] = {
     "enrich.researching.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} researched"),
     "enrich.judging.count": Prose(InstallStep.ENRICH, R, "Enriching your contacts: {done:,} of {total:,} LinkedIn matches checked"),
     "enrich.done": Prose(InstallStep.ENRICH, C, "Your contacts are enriched"),
-    "enrich.linkedin_only": Prose(InstallStep.ENRICH, S, "Connect Messages or Gmail to learn more about these people."),
     "enrich.deferred": Prose(InstallStep.ENRICH, S, "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."),
 
     # Building your search index
     "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
+    # The Modal import of the connections (run_linkedin.py codes)
+    "index.linkedin.queued": Prose(InstallStep.INDEX, R, "Starting the sandbox for importing your connections"),
+    "index.linkedin.parse": Prose(InstallStep.INDEX, R, "Reading your connections file"),
+    "index.linkedin.enrich": Prose(InstallStep.INDEX, R, "Importing your connections"),
+    "index.linkedin.enrich.count": Prose(InstallStep.INDEX, R, "Importing your connections: {done:,} of {total:,}"),
+    "index.linkedin.persist": Prose(InstallStep.INDEX, R, "Saving your connections"),
+    "index.linkedin.done": Prose(InstallStep.INDEX, R, "Your connections are imported"),
+    "index.linkedin.failed": Prose(InstallStep.INDEX, R, "The import stopped"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
-    "index.building": Prose(InstallStep.INDEX, R, "Building your search index"),
+    "index.building": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
+    # The Modal index build (run_indexing.py codes: its phases and the pipeline steps)
+    "index.building.queued": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
+    "index.building.seed": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
+    "index.building.estimate": Prose(InstallStep.INDEX, R, "Estimating the cost"),
+    "index.building.pipeline": Prose(InstallStep.INDEX, R, "Starting the build"),
+    "index.building.companies": Prose(InstallStep.INDEX, R, "Company profiles: {done:,} of {total:,}"),
+    "index.building.step.flatten_people": Prose(InstallStep.INDEX, R, "Loading your people"),
+    "index.building.step.build_roles": Prose(InstallStep.INDEX, R, "Listing every role"),
+    "index.building.step.embed_role_positions": Prose(InstallStep.INDEX, R, "Understanding job titles"),
+    "index.building.step.build_company_corpus": Prose(InstallStep.INDEX, R, "Collecting companies"),
+    "index.building.step.embed_companies": Prose(InstallStep.INDEX, R, "Understanding companies"),
+    "index.building.step.build_education_corpus": Prose(InstallStep.INDEX, R, "Collecting schools"),
+    "index.building.step.build_location_corpus": Prose(InstallStep.INDEX, R, "Collecting locations"),
+    "index.building.step.detect_ceo_founders": Prose(InstallStep.INDEX, R, "Finding founders and CEOs"),
+    "index.building.step.infer_ages": Prose(InstallStep.INDEX, R, "Estimating career stage"),
+    "index.building.step.build_people_records": Prose(InstallStep.INDEX, R, "Writing people records"),
+    "index.building.step.build_unified_profiles": Prose(InstallStep.INDEX, R, "Combining profiles"),
+    "index.building.step.build_summary_records": Prose(InstallStep.INDEX, R, "Writing summaries"),
+    "index.building.step.embed_summaries": Prose(InstallStep.INDEX, R, "Understanding summaries"),
+    "index.building.step.build_vectors": Prose(InstallStep.INDEX, R, "Building search vectors"),
+    "index.building.step.validate_contracts": Prose(InstallStep.INDEX, R, "Checking the index"),
+    "index.building.refresh-cache": Prose(InstallStep.INDEX, R, "Saving reusable results"),
+    "index.building.duckdb": Prose(InstallStep.INDEX, R, "Preparing search"),
+    "index.building.persist": Prose(InstallStep.INDEX, R, "Saving your search index"),
+    "index.building.done": Prose(InstallStep.INDEX, R, "Your search index is built"),
+    "index.building.failed": Prose(InstallStep.INDEX, R, "The index build stopped"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
     "validate.checking": Prose(InstallStep.VALIDATE, R, "Checking your search"),
     "validate.done": Prose(InstallStep.VALIDATE, C, "Search is ready: {people:,} people searchable."),
@@ -355,11 +377,10 @@ def render(event: str, values: dict, *, desktop: bool = DESKTOP) -> tuple[Prose,
     line, note = prose.line, prose.note
     if desktop:
         line, note = _app_words(DESKTOP_LINES.get(event, line)), _app_words(DESKTOP_NOTES.get(event, note))
+    line = "{message}" if values.get("message") else line
     return prose, line.format(**values), note.format(**values)
 
 
 def page_prose(*, desktop: bool = DESKTOP) -> dict:
-    """The page's rows and fixed words, sent with every status read."""
-    return {"rows": [{"label": row.label, "steps": [step.value for step in row.steps],
-                      "needs": row.needs.value if row.needs else ""} for row in ROWS],
-            "page": {**PAGE, **DESKTOP_PAGE} if desktop else PAGE}
+    """The page's fixed words, sent with every status read."""
+    return {"page": {**PAGE, **DESKTOP_PAGE} if desktop else PAGE}

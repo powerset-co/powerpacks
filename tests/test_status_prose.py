@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from packs.powerset.primitives.install.prose_cli import _RUN, _SAMPLE, _entry
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
 from packs.powerset.primitives.install.status_prose import (
     DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, page_prose, render)
 from packs.powerset.primitives.install.steps import InstallStep
@@ -52,8 +53,22 @@ def _python_events(path: Path) -> tuple[set[str], set[str]]:
     return literals, prefixes
 
 
+def _modal_codes() -> dict[str, set[str]]:
+    """The codes each Modal runner writes to status.json (`"code": "..."` literals, the code a
+    progress line returns, and `step.<name>` for every pipeline step), under the event base
+    linkedin_setup.py watches it with."""
+    modal = ROOT / "packs/indexing/modal"
+    pattern = r'"code": "([a-z_.-]+)"|return "([a-z_.-]+)", '
+    indexing = {a or b for a, b in re.findall(pattern, (modal / "run_indexing.py").read_text())}
+    importing = {a or b for a, b in re.findall(pattern, (modal / "run_linkedin.py").read_text())}
+    shared = {a or b for a, b in re.findall(pattern, (modal / "app.py").read_text())}
+    return {"index.building": indexing | shared | {f"step.{step}" for step in STEPS},
+            "index.linkedin": importing | shared}
+
+
 def _written() -> tuple[set[str], set[str]]:
     literals, prefixes = set(), set()
+    literals |= {f"{base}.{code}" for base, codes in _modal_codes().items() for code in codes}
     for path in WRITERS:
         found, heads = _python_events(path)
         literals |= found
@@ -67,6 +82,18 @@ def _written() -> tuple[set[str], set[str]]:
 
 
 class StatusProseTests(unittest.TestCase):
+    def test_every_modal_status_write_has_a_code(self) -> None:
+        for name in ("app.py", "run_indexing.py", "run_linkedin.py"):
+            tree = ast.parse((ROOT / "packs/indexing/modal" / name).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "write_status":
+                    with self.subTest(file=name, line=node.lineno):
+                        keys = []
+                        for value in ast.walk(node.args[1]):
+                            if isinstance(value, ast.Dict):
+                                keys.extend(key.value for key in value.keys if isinstance(key, ast.Constant))
+                        self.assertIn("code", keys)
+
     def test_every_event_the_installer_writes_is_in_the_script(self) -> None:
         literals, prefixes = _written()
         self.assertEqual(sorted(literals - set(PROSE)), [])
@@ -99,9 +126,21 @@ class StatusProseTests(unittest.TestCase):
         for item in _RUN:
             self.assertIn(_entry(item)[0], PROSE)
 
-    def test_every_step_but_choosing_sources_has_one_row(self) -> None:
+    def test_a_message_replaces_any_events_line(self) -> None:
+        for desktop in (False, True):
+            with self.subTest(desktop=desktop):
+                _, line, _ = render("tools.preparing", {"message": "Provider progress"}, desktop=desktop)
+                self.assertEqual(line, "Provider progress")
+
+    def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
+        mapping = json.loads((INSTALL / "setup-steps-mapping.json").read_text())
+        codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
+        self.assertCountEqual(codes, list(InstallStep))
         rows = [step for row in ROWS for step in row.steps]
-        self.assertEqual(sorted(rows), sorted(step for step in InstallStep if step is not InstallStep.SOURCES))
+        self.assertEqual(rows, codes)
+        for row in mapping["rows"]:
+            if row["needs"]:
+                self.assertIn(InstallStep(row["needs"]), codes)
 
     def test_the_desktop_app_never_speaks_as_an_agent(self) -> None:
         self.assertEqual(sorted((set(DESKTOP_LINES) | set(DESKTOP_NOTES)) - set(PROSE)), [])

@@ -21,17 +21,18 @@ export const STEPS: readonly Step[] = [
   { key: "setup", label: "Set up", href: "/onboarding/setup" },
 ]
 
-const MORE_SOURCES: readonly Step[] = [
+/** The Add sources flow, from the app: Sources, then Import (the Set up screen over them). */
+export const SOURCE_STEPS: readonly Step[] = [
   { key: "sources", label: "Sources", href: "/onboarding/sources" },
   { key: "import", label: "Import", href: "/onboarding/import" },
 ]
 
 export function stepAt(key: string | undefined): Step {
-  return [...STEPS, ...MORE_SOURCES].find((step) => step.key === key) ?? SIGNUP
+  return [...STEPS, ...SOURCE_STEPS].find((step) => step.key === key) ?? SIGNUP
 }
 
 /** The screen after this one in its own sequence: the bar's steps end at Set up, Sources leads to Import. */
 export function after(key: StepKey): Step | undefined {
-  const steps = STEPS.some((step) => step.key === key) ? STEPS : MORE_SOURCES
+  const steps = STEPS.some((step) => step.key === key) ? STEPS : SOURCE_STEPS
   return steps[steps.findIndex((step) => step.key === key) + 1]
 }

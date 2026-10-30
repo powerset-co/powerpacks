@@ -33,8 +33,6 @@
     "allow-report-crash",
     "allow-setup-done",
     "allow-setup-skip",
-    "allow-setup-import-source",
-    "allow-setup-import",
     "allow-app-focus",
     "allow-permission-begin",
     "allow-permission-end",

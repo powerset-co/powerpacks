@@ -18,8 +18,10 @@ drop other operators' cached rows.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,6 +31,48 @@ REPO = Path("/repo")
 sys.path.insert(0, str(REPO))
 
 from packs.indexing.modal.sandbox_common import merge_cache_file, now_iso, write_status  # noqa: E402
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS  # noqa: E402
+from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import DEFAULT_COMPANY_MAX_RPM  # noqa: E402
+
+_STEP_START = re.compile(r"^\[build-processing\] start (\S+)")
+_STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
+_COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles\s*$")
+_COMPANY_FETCH = re.compile(r"^\[enrich-companies\] fetching (\d+) company profiles at ([\d.]+) rpm")
+# Seconds each phase takes, measured on 378 (Arthur) and 1,071 (Patrick) people, 2026-10-29/30.
+# The company fetch is misses / rpm; the cache merge grows with the network; the rest did not.
+PHASE_SECONDS = {"estimate": 60, "steps": 180, "cache_per_person": 0.2, "duckdb": 30, "persist": 30}
+PHASES = ("estimate", "pipeline", "refresh-cache", "duckdb", "persist")
+
+
+def seconds_left(phase: str, people: int, *, company_seconds: float = 0.0, steps_done: int = 0) -> float:
+    """The time to the end of the build from `phase`: what is left of this phase plus every phase
+    after it. One number for the row that only falls."""
+    cost = {"estimate": PHASE_SECONDS["estimate"],
+            "pipeline": company_seconds + PHASE_SECONDS["steps"] * (len(STEPS) - steps_done) / len(STEPS),
+            "refresh-cache": PHASE_SECONDS["cache_per_person"] * people,
+            "duckdb": PHASE_SECONDS["duckdb"], "persist": PHASE_SECONDS["persist"]}
+    return sum(cost[name] for name in PHASES[PHASES.index(phase):])
+
+
+def progress_line(line: str, steps_done: int,
+                  company_rpm: float = DEFAULT_COMPANY_MAX_RPM) -> tuple[str, int, int, float] | None:
+    """What a pipeline log line says: (code, done, total, company_seconds), or None. A step's start
+    is `step.<name>` with the steps done so far; the company fetch, the long one, is `companies`
+    with its own count and the seconds its misses still need at the paced rpm (zero rpm: pacing
+    is off). The laptop turns the code into words (status_prose.py)."""
+    if match := _STEP_START.match(line):
+        return f"step.{match.group(1)}", steps_done, len(STEPS), 0.0
+    if match := _COMPANY_FETCH.match(line):
+        done, total = 0, int(match.group(1))
+        company_rpm = float(match.group(2))
+    elif match := _COMPANIES.match(line):
+        done, total = int(match.group(1)), int(match.group(2))
+    else:
+        return None
+    company_seconds = (total - done) / company_rpm * 60 if company_rpm else 0.0
+    return "companies", done, total, company_seconds
+
+
 PIPELINE = REPO / "packs/indexing/primitives/build_processing_pipeline/build_processing_pipeline.py"
 DUCKDB_SHIM = REPO / "scripts/build-local-duckdb-shim.py"
 BENCH = REPO / "packs/indexing/modal/bench_wrapper.py"
@@ -97,7 +141,11 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_DUCKDB_THREADS", str(max(1, args.compute_threads)))
     os.environ.setdefault("POWERPACKS_CACHE_THREADS", "8")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
-    write_status(run_vol, status)
+    # CSV rows, not lines: profile fields carry newlines (378 people were 993 lines).
+    csv.field_size_limit(sys.maxsize)
+    with open(args.people_csv, encoding="utf-8", errors="replace", newline="") as handle:
+        people = sum(1 for _ in csv.DictReader(handle))
+    write_status(run_vol, status | {"code": "seed", "left_seconds": seconds_left("estimate", people)})
 
     (work / "unified/roles").mkdir(parents=True, exist_ok=True)
     seed_map = {
@@ -142,7 +190,7 @@ def main() -> int:
         # Estimate gate: dry-run the same command, persist the estimate, and
         # refuse to spend past --max-usd. The paid run itself still only pays
         # for cache misses; covered rows replay free.
-        write_status(run_vol, status | {"phase": "estimate"})
+        write_status(run_vol, status | {"phase": "estimate", "code": "estimate", "left_seconds": seconds_left("estimate", people)})
         dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
         estimated_usd = None
         try:
@@ -152,12 +200,12 @@ def main() -> int:
         except (json.JSONDecodeError, IndexError, ValueError):
             pass
         if estimated_usd is None:
-            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
+            write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "estimate", "error": "could not parse dry-run estimate", "finished_at": now_iso()})
             print(dry.stdout[-2000:] if dry.stdout else dry.stderr[-2000:], flush=True)
             return 2
         print(f"[run-in-sandbox] enrich estimate: ${estimated_usd:.2f} (cap ${args.max_usd:.2f})", flush=True)
         if estimated_usd > args.max_usd:
-            write_status(run_vol, status | {"status": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
+            write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "estimate", "estimated_usd": estimated_usd, "max_usd": args.max_usd, "error": "estimate exceeds --max-usd cap", "finished_at": now_iso()})
             return 2
         pipeline_cmd += [
             "--allow-paid-role-provider",
@@ -165,10 +213,32 @@ def main() -> int:
             "--allow-paid-company-provider",
         ]
 
-    write_status(run_vol, status | {"phase": "pipeline"})
-    pipeline_code = subprocess.run(pipeline_cmd).returncode
+    write_status(run_vol, status | {"phase": "pipeline", "code": "pipeline",
+                                   "left_seconds": seconds_left("pipeline", people)})
+    pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
+    steps_done = 0
+    company_rpm = DEFAULT_COMPANY_MAX_RPM
+    company_done = company_total = 0
+    assert pipeline.stderr is not None
+    for line in pipeline.stderr:
+        sys.stderr.write(line)
+        if _STEP_DONE.match(line):
+            steps_done += 1
+        if match := _COMPANY_FETCH.match(line):
+            company_done, company_total = 0, int(match.group(1))
+            company_rpm = float(match.group(2))
+        if match := _COMPANIES.match(line):
+            company_done, company_total = int(match.group(1)), int(match.group(2))
+        if company_done < company_total and _STEP_START.match(line):
+            continue
+        if progress := progress_line(line, steps_done, company_rpm):
+            code, done, total, company_seconds = progress
+            left = seconds_left("pipeline", people, company_seconds=company_seconds, steps_done=steps_done)
+            write_status(run_vol, status | {"phase": "pipeline", "code": code, "done": done,
+                                           "total": total, "left_seconds": left})
+    pipeline_code = pipeline.wait()
     if pipeline_code != 0:
-        write_status(run_vol, status | {"status": "failed", "phase": "pipeline", "exit_code": pipeline_code, "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "pipeline", "exit_code": pipeline_code, "error": f"the search build stopped (exit {pipeline_code})", "finished_at": now_iso()})
         return pipeline_code
 
     # Refresh the shared caches BEFORE the duckdb build so the expensive
@@ -176,7 +246,7 @@ def main() -> int:
     # volume even if the heavy duckdb build fails — we never want to re-pay the
     # LLM enrichment because of a downstream packaging failure.
     if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache"})
+        write_status(run_vol, status | {"phase": "refresh-cache", "code": "refresh-cache", "left_seconds": seconds_left("refresh-cache", people)})
         for rel_src, rel_cache in WORK_TO_CACHE.items():
             src = work / rel_src
             if not src.exists() or src.stat().st_size == 0:
@@ -188,7 +258,7 @@ def main() -> int:
             )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
-    write_status(run_vol, status | {"phase": "duckdb"})
+    write_status(run_vol, status | {"phase": "duckdb", "code": "duckdb", "left_seconds": seconds_left("duckdb", people)})
     # Feed the same people.csv that fed the processing pipeline as the
     # person-profiles source so the shim also builds local_person_profiles
     # (the denormalized contacts table the /contacts UI reads). It is loaded
@@ -204,10 +274,10 @@ def main() -> int:
         "--force",
     ]).returncode
     if duckdb_code != 0:
-        write_status(run_vol, status | {"status": "failed", "phase": "duckdb", "exit_code": duckdb_code, "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "duckdb", "exit_code": duckdb_code, "error": f"the search build stopped (exit {duckdb_code})", "finished_at": now_iso()})
         return duckdb_code
 
-    write_status(run_vol, status | {"phase": "persist"})
+    write_status(run_vol, status | {"phase": "persist", "code": "persist", "left_seconds": seconds_left("persist", people)})
     keep = ["ledger.json", "manifest.json", "stats", "local-search.duckdb"]
     for name in keep:
         src = work / name
@@ -221,7 +291,7 @@ def main() -> int:
     if args.persist_artifacts and (work / "records").exists():
         shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
 
-    write_status(run_vol, status | {"status": "completed", "phase": "done", "finished_at": now_iso()})
+    write_status(run_vol, status | {"status": "completed", "phase": "done", "code": "done", "finished_at": now_iso()})
     print("[run-in-sandbox] completed", flush=True)
     return 0
 

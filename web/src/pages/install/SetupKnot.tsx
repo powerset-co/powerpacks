@@ -1,4 +1,4 @@
-import { AsciiForm } from "@/pages/home/AsciiForm"
+import { AsciiForm } from "./AsciiForm"
 
 /** The home page's knot on setup's screens: drawn in fewer characters, and smaller. */
 export function SetupKnot() {

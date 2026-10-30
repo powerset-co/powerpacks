@@ -1,3 +1,4 @@
+import io
 import json
 import tempfile
 import threading
@@ -198,22 +199,27 @@ class CachedCompanyBatchTests(unittest.TestCase):
 
     def test_fetch_batch_only_sends_cache_misses_to_network(self) -> None:
         def read_cache(key: str, _cache_dir: object = None) -> dict | None:
-            return {"data": {"name": "Cached"}} if key == "cached" else None
+            return {"data": {"name": "Cached"}} if key in {"cached", "slug__cached"} else None
 
-        with mock.patch.object(rapidapi_company, "_read_cache", side_effect=read_cache), \
-                mock.patch.object(rapidapi_company._RATE_LIMITER, "wait"), \
-                mock.patch.object(
-                    rapidapi_company,
-                    "fetch_company_details",
-                    return_value={"data": {"name": "Fetched"}},
-                ) as fetch:
-            result = rapidapi_company.fetch_company_details_batch(
-                ["cached", "missing", "missing"], api_key="test-key", max_workers=2
-            )
+        for batch, fetch_name in (
+            (rapidapi_company.fetch_company_details_batch, "fetch_company_details"),
+            (rapidapi_company.fetch_company_details_batch_by_slug, "fetch_company_details_by_slug"),
+        ):
+            with self.subTest(batch=batch.__name__), \
+                    mock.patch.object(rapidapi_company, "_read_cache", side_effect=read_cache), \
+                    mock.patch.object(rapidapi_company._RATE_LIMITER, "wait"), \
+                    mock.patch.object(rapidapi_company.sys, "stderr", new_callable=io.StringIO) as log, \
+                    mock.patch.object(rapidapi_company, fetch_name,
+                                      return_value={"data": {"name": "Fetched"}}) as fetch:
+                result = batch(["cached", "missing", "missing"], api_key="test-key", max_workers=2)
 
-        self.assertEqual(set(result), {"cached", "missing"})
-        fetch.assert_called_once()
-        self.assertEqual(fetch.call_args.args[0], "missing")
+            self.assertEqual(set(result), {"cached", "missing"})
+            fetch.assert_called_once()
+            self.assertEqual(fetch.call_args.args[0], "missing")
+            self.assertEqual(log.getvalue().splitlines(), [
+                f"[enrich-companies] fetching 1 company profiles at {rapidapi_company.DEFAULT_COMPANY_MAX_RPM:g} rpm",
+                "[enrich-companies] fetched 1/1 company profiles",
+            ])
 
 
 if __name__ == "__main__":

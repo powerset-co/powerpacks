@@ -150,7 +150,8 @@ class SourceOnboarding:
         # Processing's owner step reads it from the saved command when LinkedIn's sign-in is unused.
         self.linkedin_url = linkedin_url or saved.linkedin_url
         self.step = InstallStep.SOURCES
-        if all(source in self.skip_sources for source in self.sources):
+        active = [source for source in self.sources if source not in self.skip_sources]
+        if not active:
             next_steps = (InstallStep.READY,)
         else:
             next_steps = PROCESSING_STEPS
@@ -459,8 +460,8 @@ class SourceOnboarding:
         imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
         counts = {item.source: item.stats["people"] for item in imports
                   if item.status == "completed" and "people" in item.stats}
-        return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context-v2 run"},
-                           details={"counts": counts}, handed_back=True)
+        return self._write("sources.ready", step=InstallStep.DEEP_CONTEXT, counts=source_counts(counts),
+                           action={"command": "bin/deep-context-v2 run"}, details={"counts": counts}, handed_back=True)
 
 
 def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:

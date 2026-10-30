@@ -78,10 +78,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
-        # The run selected Gmail, so deep context reads messages; a Gmail import is on disk for it. A run
-        # that selected LinkedIn alone goes straight to the index whatever is on disk
-        # (test_linkedin_only_realizes_before_the_modal_index).
-        self.sources = ("gmail",)
+        # This import run reads messages from the Gmail import on disk.
         gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
         gmail.parent.mkdir(parents=True, exist_ok=True)
         gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
@@ -167,8 +164,7 @@ class InstallPipelineTests(unittest.TestCase):
         return self.people
 
     def run_pipeline(self):
-        pipeline = ProcessingOnboarding(self.root)
-        return pipeline.run_linkedin() if self.sources == ("linkedin",) else pipeline.run()
+        return ProcessingOnboarding(self.root).run()
 
     def did(self, stage):
         return any(name == stage for name, _ in self.calls)
@@ -395,24 +391,6 @@ class InstallPipelineTests(unittest.TestCase):
         self.calls.clear()
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["index"])
-
-    def test_linkedin_only_realizes_before_the_modal_index(self):
-        # The run selected LinkedIn alone: import its families and realize without processing messages,
-        # even though an earlier run left a Gmail import on disk (the fixture writes one).
-        self.sources = ("linkedin",)
-        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
-        self.write(linkedin, "linkedin_url,full_name,primary_email,current_title,current_company,rapidapi_response\n")
-        result = self.run_pipeline()
-        self.assertEqual((result["step"], result["status"], result["event"]), ("ready", "completed", "search.ready"))
-        self.assertTrue(self.indexed())
-        self.assertTrue(self.did("realize"))
-        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "owner"):
-            self.assertFalse(self.did(stage), stage)
-        self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
-        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
-        self.assertIn("Connect Messages or Gmail", result["note"])
-        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
-        self.assertTrue(any("index-people" in command and str(self.people) in command for command in commands), commands)
 
     def test_the_index_builds_from_the_file_realize_hands_back(self):
         # The index builds from exactly the file returned by realize.

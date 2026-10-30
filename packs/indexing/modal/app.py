@@ -18,6 +18,7 @@ Created: 2026-10-26
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -38,16 +39,17 @@ image = build_image()
 
 def _run(label: str, operator_id: str, command: list[str]) -> None:
     """The entrypoint as a subprocess, the volume committed every few seconds so the API can follow
-    status.json; a non-zero exit with no final status is recorded as failed."""
+    status.json; a non-zero exit without a reported failure is recorded as failed."""
     run_vol = Path(f"/data/operators/{operator_id}/runs/{label}")
-    write_status(run_vol, {"status": "running", "phase": "queued"})
+    write_status(run_vol, {"status": "running", "phase": "queued", "code": "queued"})
     volume.commit()
     process = subprocess.Popen(command)
     while process.poll() is None:
         time.sleep(5)
         volume.commit()
-    if process.returncode != 0 and not (run_vol / "status.json").is_file():
-        write_status(run_vol, {"status": "failed", "phase": "start", "exit_code": process.returncode})
+    if process.returncode != 0 and json.loads((run_vol / "status.json").read_text())["status"] != "failed":
+        write_status(run_vol, {"status": "failed", "code": "failed",
+                               "error": f"the Modal run exited with code {process.returncode}"})
     volume.commit()
 
 
