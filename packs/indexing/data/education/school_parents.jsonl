@@ -53,7 +53,7 @@
 {"id": "009150b9-8284-5801-82c5-de1a99a974c0", "key": "name:university of california at santa cruz", "parent_id": "0924a208-8e1f-5ce0-a14a-76977a742f8c", "school_name": "University of California at Santa Cruz", "source": "llm"}
 {"id": "00935460-8386-50d3-a349-eedc84067914", "key": "name:concepcion integrated school", "parent_id": null, "school_name": "Concepcion Integrated School", "source": "llm"}
 {"id": "00955c4c-81e8-57e5-b752-2d7992f5521b", "key": "name:key realty school", "parent_id": "93c850a3-c619-5176-8344-d4781427e625", "school_name": "Key Realty School", "source": "name"}
-{"id": "009a2566-230e-5870-b40d-63e86dbb3f7f", "key": "name:university of the phippines diliman", "parent_id": "a82d46eb-cf12-5f58-8920-68b62cba1616", "school_name": "University of the Phippines Diliman", "source": "llm"}
+{"id": "009a2566-230e-5870-b40d-63e86dbb3f7f", "key": "name:university of the phippines diliman", "parent_id": null, "school_name": "University of the Phippines Diliman", "source": "manual"}
 {"id": "009d795d-fab9-532b-9afc-aa9712ad79b4", "key": "name:concordia university", "parent_id": "051255f3-201d-55cf-a421-37851350d89a", "school_name": "Concordia University", "source": "seed"}
 {"id": "00a3d8bb-7a54-578c-bc90-4aac67d6bcf1", "key": "provider:9104993", "parent_id": null, "school_name": "Semmelweis Egyetem", "source": "llm"}
 {"id": "00a57af8-8568-56fd-9d5a-7a2d4c8b98a4", "key": "name:jules verne", "parent_id": null, "school_name": "Jules Verne", "source": "llm"}
@@ -1087,7 +1087,7 @@
 {"id": "0ac39ba4-f219-582c-902b-f2ca134b029e", "key": "provider:6458758", "parent_id": null, "school_name": "Startup Ignition", "source": "llm"}
 {"id": "0ac4778a-9733-5ff2-8cd9-c09e65e9973e", "key": "provider:15092688", "parent_id": null, "school_name": "Hei - Hautes Etudes D'ingénieur", "source": "llm"}
 {"id": "0aca8ac7-8c58-55b9-ba7b-49a60eb7bdfe", "key": "provider:979527", "parent_id": null, "school_name": "Jadavpur University", "source": "llm"}
-{"id": "0ad980e5-ae1e-5594-a9ac-2da431fd706d", "key": "name:research science institute (rsi, mit)", "parent_id": "f12c9e49-9ae6-50f3-9a05-bc518dd8b3b1", "school_name": "Research Science Institute (RSI, MIT)", "source": "name"}
+{"id": "0ad980e5-ae1e-5594-a9ac-2da431fd706d", "key": "name:research science institute (rsi, mit)", "parent_id": null, "school_name": "Research Science Institute (RSI, MIT)", "source": "manual"}
 {"id": "0ada02df-0e1a-52bf-9721-bf16319d3c2a", "key": "name:columbia | sipa", "parent_id": "a7c482df-1449-5c42-8a71-0320b040ef10", "school_name": "Columbia | SIPA", "source": "llm"}
 {"id": "0ade29e5-a51d-54b2-9966-a1be6ce453d8", "key": "name:northmont high school", "parent_id": null, "school_name": "Northmont High school", "source": "llm"}
 {"id": "0adebdff-bfba-5009-9a92-f0440fd206c9", "key": "name:computer skills centres, london", "parent_id": null, "school_name": "Computer Skills Centres, London", "source": "llm"}
@@ -1772,7 +1772,7 @@
 {"id": "118de2b9-9158-5121-8506-1de2e9e2d470", "key": "name:ward melville high school", "parent_id": null, "school_name": "Ward Melville High School", "source": "llm"}
 {"id": "118ed25f-0004-5120-853d-c3c3f7816d9c", "key": "provider:13551", "parent_id": null, "school_name": "Jewish Theological Seminary of America", "source": "llm"}
 {"id": "118fcc71-5ebf-527c-83d7-9628a28ebe82", "key": "provider:18076190", "parent_id": null, "school_name": "Sato Academy of Mathematics and Science", "source": "llm"}
-{"id": "11900d7c-a58f-5429-b482-058e013890dc", "key": "name:middle college program at the college of san mateo", "parent_id": "51b24f6b-b71a-58a5-9e36-a7a1e81bb843", "school_name": "Middle College Program at the College of San Mateo", "source": "llm"}
+{"id": "11900d7c-a58f-5429-b482-058e013890dc", "key": "name:middle college program at the college of san mateo", "parent_id": null, "school_name": "Middle College Program at the College of San Mateo", "source": "manual"}
 {"id": "1191aa4a-d0c3-5009-902a-f331ba99d0c8", "key": "name:instytut komunikacji i rozwoju mukoid", "parent_id": null, "school_name": "Instytut Komunikacji i Rozwoju Mukoid", "source": "llm"}
 {"id": "1198af84-8b6f-59da-a254-b768d7cad45c", "key": "name:boston university henry m. goldman school of dental medicine", "parent_id": "91ce4801-b291-5484-bd22-76b446e0115e", "school_name": "Boston University Henry M. Goldman School of Dental Medicine", "source": "seed"}
 {"id": "11a66c44-a6e5-57ba-bda5-b410f353dd00", "key": "provider:33307943", "parent_id": null, "school_name": "Mclean High School", "source": "seed"}
@@ -2021,7 +2021,7 @@
 {"id": "141a031d-719e-50c6-8552-41771746cecc", "key": "provider:15131730", "parent_id": null, "school_name": "Leeward Community College", "source": "llm"}
 {"id": "141a6f0a-16c4-5f67-b7a3-f55276786d96", "key": "name:leysin american school", "parent_id": null, "school_name": "Leysin American School", "source": "llm"}
 {"id": "141b4788-6c53-5128-a2f6-05fa286c8a6c", "key": "name:saint charles east high school", "parent_id": null, "school_name": "Saint Charles East High School", "source": "llm"}
-{"id": "141c9664-2f09-522d-8048-b33332424123", "key": "provider:476723", "parent_id": "f1bb06e5-47f8-5330-807e-b3d83d937391", "school_name": "Lincoln University of Missouri", "source": "llm"}
+{"id": "141c9664-2f09-522d-8048-b33332424123", "key": "provider:476723", "parent_id": null, "school_name": "Lincoln University of Missouri", "source": "manual"}
 {"id": "141ccda4-38be-5393-9ec5-c0eaa4cb6d40", "key": "name:hong kong international school", "parent_id": "04fc59d5-c78a-5c72-9a4d-45ce1daafeff", "school_name": "Hong Kong International School", "source": "seed"}
 {"id": "14222e75-1e49-5a79-93dd-03d0984193f0", "key": "name:phi kappa psi", "parent_id": null, "school_name": "Phi Kappa Psi", "source": "llm"}
 {"id": "14278b9b-75ee-5a96-ab9a-4cb0f5a0c8ee", "key": "name:latrobe university", "parent_id": "ff135c0e-7c62-5fe2-8d4c-c60d399dd812", "school_name": "Latrobe University", "source": "llm"}
@@ -2357,7 +2357,7 @@
 {"id": "176f7b29-0505-5520-8012-1a3bbb854a8c", "key": "provider:412715", "parent_id": null, "school_name": "Kyiv School of Economics", "source": "llm"}
 {"id": "176f8e10-445f-5db0-b1e1-b0fb20feea82", "key": "name:codecademy", "parent_id": null, "school_name": "Codecademy", "source": "llm"}
 {"id": "17707b66-ac11-5abf-b42f-83e096b6384a", "key": "provider:41003", "parent_id": null, "school_name": "Milken Community Schools", "source": "llm"}
-{"id": "17707dfa-5abe-5edf-85b3-17b0848231ab", "key": "name:penn university", "parent_id": "96051267-74e9-551d-971f-25141a74c0d7", "school_name": "Penn University", "source": "llm"}
+{"id": "17707dfa-5abe-5edf-85b3-17b0848231ab", "key": "name:penn university", "parent_id": null, "school_name": "Penn University", "source": "manual"}
 {"id": "1773de3c-4b39-5c7a-90e2-0d67e5327c7f", "key": "name:beihang university", "parent_id": "8f87c033-e372-57b5-b181-8e9893640dce", "school_name": "Beihang University", "source": "name"}
 {"id": "1776c86b-3058-5ac1-93bb-a55bfbf628e2", "key": "provider:484887", "parent_id": null, "school_name": "Delhi Business School", "source": "llm"}
 {"id": "17772483-52ad-5b19-b3f5-5160610ecab5", "key": "provider:77974042", "parent_id": null, "school_name": "Hvitfeldtska gymnasiet", "source": "llm"}
@@ -3287,7 +3287,7 @@
 {"id": "1ffa1476-a8c1-52e8-9baa-5b2d465412a2", "key": "name:s.t.johns senior secondary school", "parent_id": null, "school_name": "S.T.Johns Senior Secondary School", "source": "llm"}
 {"id": "20020de8-0bba-56bb-b094-9ea717b0e50a", "key": "name:bell leadership institute", "parent_id": null, "school_name": "Bell Leadership Institute", "source": "llm"}
 {"id": "200920f8-8ccc-5725-b0ba-57606b330657", "key": "name:ponciano bernardo elementary school", "parent_id": null, "school_name": "Ponciano Bernardo Elementary School", "source": "llm"}
-{"id": "200a5ba4-2bce-5e59-9d75-5c813c364b73", "key": "name:salesforce - northwestern university", "parent_id": "813f85f9-9647-5f31-8288-a6f62a8b4f72", "school_name": "Salesforce - Northwestern University", "source": "llm"}
+{"id": "200a5ba4-2bce-5e59-9d75-5c813c364b73", "key": "name:salesforce - northwestern university", "parent_id": null, "school_name": "Salesforce - Northwestern University", "source": "manual"}
 {"id": "200a611f-567f-5eb1-9bdd-9533bb59a46c", "key": "name:gzaat", "parent_id": null, "school_name": "GZAAT", "source": "llm"}
 {"id": "20112e3c-5023-5f8e-9abd-9abc2ccdc4a3", "key": "name:delbarton", "parent_id": "771a0510-1097-5821-9a10-9302d3432fd7", "school_name": "Delbarton", "source": "llm"}
 {"id": "20124ab8-10cc-5e82-889c-65ce57598536", "key": "name:buckinghamshire chilterns university college", "parent_id": "65749eb3-68e8-5454-864f-34b8af7f89d6", "school_name": "Buckinghamshire Chilterns University College", "source": "llm"}
@@ -3784,7 +3784,7 @@
 {"id": "248e46f7-6e4f-5f89-b394-e3987ea10dd3", "key": "name:skidmore college", "parent_id": "8a1bfa57-33f2-5e91-8fdd-e996e03c1de5", "school_name": "Skidmore College", "source": "seed"}
 {"id": "248f1121-e094-5f65-9bf5-9c95915d2b80", "key": "provider:18310616", "parent_id": null, "school_name": "AKAD", "source": "llm"}
 {"id": "2491a38c-5091-50a6-b9c5-e5f4c642b395", "key": "name:campbell hall", "parent_id": "affeb1de-0630-5ac7-a529-e3c833a21ead", "school_name": "Campbell Hall", "source": "seed"}
-{"id": "24972327-efa3-5fae-aed7-92142790238a", "key": "provider:271091", "parent_id": "ca010a64-834c-523a-bce2-5c991d0a35f5", "school_name": "University of St. Thomas (TX)", "source": "llm"}
+{"id": "24972327-efa3-5fae-aed7-92142790238a", "key": "provider:271091", "parent_id": null, "school_name": "University of St. Thomas (TX)", "source": "manual"}
 {"id": "249751cd-c7fa-514a-bfdb-6808e0369373", "key": "name:aquincum institute of technology, budapest, hungary", "parent_id": "edf88c9f-4127-5ab6-86f0-8407e03fa0fa", "school_name": "Aquincum Institute of Technology, Budapest, Hungary", "source": "name"}
 {"id": "24986935-eaa4-5775-9c07-4047c00d8b8a", "key": "name:shawnee state university", "parent_id": null, "school_name": "Shawnee State University", "source": "llm"}
 {"id": "249c3091-2d86-5ee2-b232-4c03017bfaf7", "key": "name:amhsi", "parent_id": null, "school_name": "AMHSI", "source": "llm"}
@@ -4707,7 +4707,7 @@
 {"id": "2d596822-3bfc-5fda-a234-d22dbf9cb698", "key": "name:saint francis xavier junior seminary, wa, ghana", "parent_id": null, "school_name": "Saint Francis Xavier Junior Seminary, Wa, Ghana", "source": "llm"}
 {"id": "2d62888f-b730-501d-b075-e1b37332a004", "key": "provider:15097268", "parent_id": null, "school_name": "Pamantasan ng Lungsod ng Maynila", "source": "llm"}
 {"id": "2d6563ba-f1a0-5e20-b7e5-9a655ad41411", "key": "name:technische universität münchen", "parent_id": "1852d914-56b8-57c9-be9d-2b4f53f20086", "school_name": "Technische Universität München", "source": "seed"}
-{"id": "2d679789-4b1e-53dd-9e86-561ab88dc305", "key": "name:tampa jesuit high school", "parent_id": "d9406d1e-c89b-5f4c-8f48-3a7ee24f4f76", "school_name": "Tampa Jesuit High School", "source": "llm"}
+{"id": "2d679789-4b1e-53dd-9e86-561ab88dc305", "key": "name:tampa jesuit high school", "parent_id": null, "school_name": "Tampa Jesuit High School", "source": "manual"}
 {"id": "2d68221f-bb8e-58c2-b255-a4e7e7d472a6", "key": "name:green fields school", "parent_id": null, "school_name": "Green Fields School", "source": "llm"}
 {"id": "2d6dd654-0a10-532d-9e78-3239acd468ea", "key": "name:un inter-agency standing committee (iasc)", "parent_id": null, "school_name": "UN Inter-Agency Standing Committee (IASC)", "source": "llm"}
 {"id": "2d709899-1202-5a64-befb-2f349b842061", "key": "provider:15251133", "parent_id": null, "school_name": "New College of California", "source": "llm"}
@@ -6042,7 +6042,7 @@
 {"id": "3ad21165-5d72-5011-8215-3cd46264f919", "key": "provider:28760", "parent_id": null, "school_name": "Monterey Peninsula College", "source": "llm"}
 {"id": "3ad288e5-958b-502e-bacd-db2f8b42ac24", "key": "provider:15098267", "parent_id": "8c898bcc-fc06-5b9a-93ee-695d94f8a47b", "school_name": "Syracuse University College of Engineering and Computer Science", "source": "llm"}
 {"id": "3ad3b489-fd2c-5d98-a71d-cf21ab3ebf83", "key": "provider:4133040", "parent_id": null, "school_name": "Serrano High School", "source": "llm"}
-{"id": "3ad6406a-5da2-5781-8eb1-4ee35292e702", "key": "name:ucla and loyola university chicago: loyola university school of dentistry", "parent_id": "7e742649-84df-5cd1-b4e2-547ffff77699", "school_name": "UCLA and Loyola University Chicago: Loyola University school of Dentistry", "source": "llm"}
+{"id": "3ad6406a-5da2-5781-8eb1-4ee35292e702", "key": "name:ucla and loyola university chicago: loyola university school of dentistry", "parent_id": null, "school_name": "UCLA and Loyola University Chicago: Loyola University school of Dentistry", "source": "manual"}
 {"id": "3ad95b83-10da-5076-9999-d4c176deeaad", "key": "provider:5527901", "parent_id": "67cbba0b-0a55-5a16-8296-1221093875d0", "school_name": "Yale School of the Environment", "source": "seed"}
 {"id": "3ad998f3-b693-570b-9e3b-1ae619b6cccb", "key": "name:cornell dyson school of applied economics & management", "parent_id": "623b56d4-caf0-5d7b-93b2-ecd4577f8214", "school_name": "Cornell Dyson School of Applied Economics & Management", "source": "llm"}
 {"id": "3adae8c2-fc0b-5195-8c29-e28a6de0af27", "key": "provider:18844273", "parent_id": null, "school_name": "Institut de Formation Bancaire Luxembourg", "source": "llm"}
@@ -7400,7 +7400,7 @@
 {"id": "4762a657-288f-5e68-8fb5-01ec544c9b25", "key": "name:the art institute of california-orange county", "parent_id": null, "school_name": "The Art Institute of California-Orange County", "source": "llm"}
 {"id": "47641bdd-4bb8-5faa-82a2-585c302c5985", "key": "name:marshall bridge workshop", "parent_id": null, "school_name": "Marshall Bridge Workshop", "source": "llm"}
 {"id": "4764bbbb-c344-5a72-a4a4-51e4cf947cb9", "key": "provider:15140529", "parent_id": null, "school_name": "Johan Cruyff Institute", "source": "llm"}
-{"id": "476a5bb2-355a-5c44-baee-8278184befc7", "key": "provider:2677812", "parent_id": "e7e3fba0-5bb2-5853-b4c1-e99dec94d665", "school_name": "City University of New York Graduate Center", "source": "llm"}
+{"id": "476a5bb2-355a-5c44-baee-8278184befc7", "key": "provider:2677812", "parent_id": null, "school_name": "City University of New York Graduate Center", "source": "manual"}
 {"id": "476e488d-e457-57f0-84cc-59658f7b5686", "key": "name:california polytechnic state university-san luis obispo", "parent_id": "ae8eda45-c3c0-5590-9c3f-0fae0d1700be", "school_name": "California Polytechnic State University-San Luis Obispo", "source": "seed"}
 {"id": "47716144-8a66-5841-a480-7d0a3a785808", "key": "name:colegio anglo colombiano", "parent_id": "0866697f-a49c-5c43-8df0-33d26105264e", "school_name": "Colegio Anglo Colombiano", "source": "name"}
 {"id": "4772efe7-fd4d-5e46-96fe-6e6e2fc8af51", "key": "name:the cathedral & john connon school", "parent_id": null, "school_name": "The Cathedral & John Connon School", "source": "llm"}
@@ -7852,7 +7852,7 @@
 {"id": "4ba9f890-5397-5dc2-bbd3-3ee81034f04f", "key": "name:tripleten latam", "parent_id": null, "school_name": "TripleTen LatAm", "source": "llm"}
 {"id": "4bb214b3-f649-57f8-bac8-74df72278514", "key": "provider:494056", "parent_id": "647b928a-eb72-5469-9f6e-9eee78d58c09", "school_name": "Medizinische Universität Innsbruck", "source": "llm"}
 {"id": "4bb2e6b0-db67-57af-a81a-48c52f09437d", "key": "name:climatebase fellowship cohort 7", "parent_id": null, "school_name": "Climatebase Fellowship Cohort 7", "source": "llm"}
-{"id": "4bb3871e-a905-59bd-bd5e-fcb2a7a98c57", "key": "name:new horizons", "parent_id": "f3e150dc-51a0-5611-95f2-39d4e45c9495", "school_name": "New Horizons", "source": "name"}
+{"id": "4bb3871e-a905-59bd-bd5e-fcb2a7a98c57", "key": "name:new horizons", "parent_id": null, "school_name": "New Horizons", "source": "manual"}
 {"id": "4bb3a99f-eefe-506f-913c-69ec292893f9", "key": "name:salisbury school, connecticut, usa", "parent_id": null, "school_name": "Salisbury School, Connecticut, USA", "source": "llm"}
 {"id": "4bbebc78-e9fd-51d5-8d81-12ac4c3f36d5", "key": "provider:16199124", "parent_id": "91ce4801-b291-5484-bd22-76b446e0115e", "school_name": "Boston University School of Medicine, Division of Graduate Medical Sciences", "source": "seed"}
 {"id": "4bc667e5-e77e-552f-a6af-999eaa628e99", "key": "name:roswell high school", "parent_id": null, "school_name": "Roswell High School", "source": "llm"}
@@ -10401,7 +10401,7 @@
 {"id": "652ace40-8f56-5bee-bec1-a6122fe7f3fd", "key": "name:king david", "parent_id": null, "school_name": "King David", "source": "llm"}
 {"id": "652ae476-f6ab-548f-9072-d7898a90c832", "key": "name:sacred heart school , moga", "parent_id": null, "school_name": "Sacred Heart School , Moga", "source": "llm"}
 {"id": "652fb7a8-037b-59b6-af6a-810750055852", "key": "name:西华师范大学", "parent_id": "46ad9f1c-e769-53e6-8eb0-2baa0f069acf", "school_name": "西华师范大学", "source": "llm"}
-{"id": "65306ea8-bb3e-5eac-ad2e-e1b421bd6485", "key": "name:soochow university (cn)", "parent_id": "e79ad9f4-ecea-5837-9c2f-2993393c1603", "school_name": "Soochow University (CN)", "source": "name"}
+{"id": "65306ea8-bb3e-5eac-ad2e-e1b421bd6485", "key": "name:soochow university (cn)", "parent_id": null, "school_name": "Soochow University (CN)", "source": "manual"}
 {"id": "653265da-80e7-5eb2-bf53-2c8607bd66c0", "key": "name:national institute of technology hamirpur", "parent_id": "7771f05b-885e-55ea-a186-98f7ee00827b", "school_name": "National Institute of technology Hamirpur", "source": "name"}
 {"id": "6533004b-f4b0-573a-972c-4b9b43acdeee", "key": "name:raffles girls'​ school", "parent_id": "486ecb7b-589f-576a-8006-aeec66537b15", "school_name": "Raffles Girls'​ School", "source": "name"}
 {"id": "6538e1f7-0025-54d1-b4d2-eb40f8cb46e3", "key": "name:fundación de la universidad de oriente", "parent_id": null, "school_name": "Fundación de la Universidad de Oriente", "source": "llm"}
@@ -10614,8 +10614,8 @@
 {"id": "6742b35c-1a5f-5059-92c8-a3fd81925a2c", "key": "provider:15145713", "parent_id": "bca19ca8-a113-5edb-8292-b3e0c728b672", "school_name": "Belaruski Dzjaržauny Universitet Informatyki i Radyjoelektroniki", "source": "llm"}
 {"id": "6744d83a-2dbf-5413-8704-8451f2ea61b1", "key": "name:wharton school, university of pennsylvania", "parent_id": "96051267-74e9-551d-971f-25141a74c0d7", "school_name": "Wharton School, University of Pennsylvania", "source": "seed"}
 {"id": "6746b58d-d657-5c32-9367-806ab924f61a", "key": "name:sinai academy", "parent_id": null, "school_name": "Sinai Academy", "source": "llm"}
-{"id": "6746bf6a-a737-509b-a450-0132d4c9df45", "key": "name:la salle graduate school", "parent_id": "b0620a74-a7bb-5a7d-a73e-8ff715c3a3eb", "school_name": "La Salle Graduate School", "source": "llm"}
-{"id": "674b7c52-6fa7-5b57-bd5a-a07650152fa7", "key": "name:the episcopal high school at alexandria, va", "parent_id": "532516a3-e7ef-58af-8f1b-e1b158f8d4c3", "school_name": "The Episcopal High School at Alexandria, VA", "source": "llm"}
+{"id": "6746bf6a-a737-509b-a450-0132d4c9df45", "key": "name:la salle graduate school", "parent_id": null, "school_name": "La Salle Graduate School", "source": "manual"}
+{"id": "674b7c52-6fa7-5b57-bd5a-a07650152fa7", "key": "name:the episcopal high school at alexandria, va", "parent_id": null, "school_name": "The Episcopal High School at Alexandria, VA", "source": "manual"}
 {"id": "674c26b0-95ea-5557-8890-dbae92778d4c", "key": "name:southeastern oklahoma state university", "parent_id": "d670f97a-311f-5b5c-be58-22318a7f24ca", "school_name": "Southeastern Oklahoma State University", "source": "name"}
 {"id": "674ea381-715e-567d-90ae-752c97427e14", "key": "name:walt whitman high school, bethesda, md", "parent_id": null, "school_name": "Walt Whitman High School, Bethesda, MD", "source": "llm"}
 {"id": "6751e2d8-f062-5c17-b46b-b3dc7d785e35", "key": "name:university of nottingham malaysia campus", "parent_id": "90a1c9df-ff99-52d5-8508-a16b2f566f14", "school_name": "University of Nottingham Malaysia Campus", "source": "name"}
@@ -10932,7 +10932,7 @@
 {"id": "6a048351-47ac-55f7-93f4-d7f00b33cb40", "key": "provider:68488919", "parent_id": null, "school_name": "Azubi Africa", "source": "llm"}
 {"id": "6a06b7b3-e818-53ea-8a66-2dd148c6689e", "key": "name:university of michigan - rackham graduate school", "parent_id": "bf5fae2e-c2fc-5971-8b94-ff8f05f73aee", "school_name": "University of Michigan - Rackham Graduate School", "source": "name"}
 {"id": "6a09b233-92d6-5643-a114-b05a8666c711", "key": "name:narayana junior college", "parent_id": null, "school_name": "Narayana Junior College", "source": "llm"}
-{"id": "6a0a05b1-7f5c-5d96-ace3-ddba56dd1f51", "key": "name:kcjs: kyoto consortium for japanese studies", "parent_id": "a7c482df-1449-5c42-8a71-0320b040ef10", "school_name": "KCJS: Kyoto Consortium for Japanese Studies", "source": "llm"}
+{"id": "6a0a05b1-7f5c-5d96-ace3-ddba56dd1f51", "key": "name:kcjs: kyoto consortium for japanese studies", "parent_id": null, "school_name": "KCJS: Kyoto Consortium for Japanese Studies", "source": "manual"}
 {"id": "6a0ac421-054b-5f8a-b1c1-0d0a8e935361", "key": "name:ingrid jespersens gymnasie skole", "parent_id": null, "school_name": "Ingrid Jespersens Gymnasie skole", "source": "llm"}
 {"id": "6a0e3785-6bcf-527d-97c6-87773f88dc54", "key": "provider:7148280", "parent_id": null, "school_name": "Fachhochschule Stuttgart - Hochschule der Medien", "source": "llm"}
 {"id": "6a0e8976-718c-5760-b3fe-c57ecc10a238", "key": "provider:1690733", "parent_id": null, "school_name": "Daystar University", "source": "llm"}
@@ -11034,7 +11034,7 @@
 {"id": "6ae5e799-f661-52b3-8bb8-1e5096d04deb", "key": "name:chatfield high school", "parent_id": "3e14d35a-2975-5875-9ec9-b562da91997d", "school_name": "Chatfield High School", "source": "name"}
 {"id": "6ae6db05-b7d4-5746-b271-d114607569ac", "key": "provider:293007", "parent_id": "2aa240b0-2559-5078-90dc-29e03cd416d8", "school_name": "Henley Management College", "source": "llm"}
 {"id": "6ae7f481-b18d-5e02-b5eb-c0d939803a5b", "key": "name:copenhagen international school, international baccalaureat in french language", "parent_id": "dcb4c063-2118-5b2d-b91a-b62e564dd497", "school_name": "Copenhagen International School, International Baccalaureat in French Language", "source": "llm"}
-{"id": "6ae891f1-f903-51d2-b755-8f7be5989ef2", "key": "name:mahindra college", "parent_id": "57d3270f-b6b2-588d-87d0-6d45f376a7e0", "school_name": "Mahindra college", "source": "llm"}
+{"id": "6ae891f1-f903-51d2-b755-8f7be5989ef2", "key": "name:mahindra college", "parent_id": null, "school_name": "Mahindra college", "source": "manual"}
 {"id": "6aed3bc7-43b9-5cd3-9115-da944adaa636", "key": "name:uludag university", "parent_id": null, "school_name": "Uludag University", "source": "llm"}
 {"id": "6aeffb1e-895e-5ca0-ac0f-248f123eb11e", "key": "name:western illinois university", "parent_id": "c8bf65af-68dc-5102-9516-0ff06fcfdb97", "school_name": "Western Illinois University", "source": "seed"}
 {"id": "6af0b316-f9a5-5859-b8b8-70e5574d1cda", "key": "name:sciences po", "parent_id": "e1bd5281-8da0-58ff-9a74-c231df7f4580", "school_name": "Sciences PO", "source": "seed"}
@@ -12216,7 +12216,7 @@
 {"id": "76818f41-39a9-5a31-ac57-9ca6585d37c7", "key": "provider:1198948", "parent_id": null, "school_name": "University of Nigeria", "source": "llm"}
 {"id": "7686133f-6f94-5889-a11e-19ebcbde406b", "key": "name:transformative technology academy, palo alto, california, united states", "parent_id": null, "school_name": "Transformative Technology Academy, Palo Alto, California, United States", "source": "llm"}
 {"id": "768727b9-078c-5e5e-b1c6-0e96c2ed5d19", "key": "provider:33308109", "parent_id": null, "school_name": "Billings West High School", "source": "llm"}
-{"id": "768a1eab-2f99-5064-a9a2-892a5647b70b", "key": "name:saint peter's college", "parent_id": "133e855d-2341-5d39-af17-386f017912d4", "school_name": "Saint Peter's College", "source": "llm"}
+{"id": "768a1eab-2f99-5064-a9a2-892a5647b70b", "key": "name:saint peter's college", "parent_id": null, "school_name": "Saint Peter's College", "source": "manual"}
 {"id": "768c06e6-950e-58b5-83a0-cfbd00d56e26", "key": "name:st. michaels high school", "parent_id": null, "school_name": "St. Michaels High School", "source": "llm"}
 {"id": "768d07c1-2b6f-5a7d-96d7-e85a5ada20b2", "key": "name:gladstone high school", "parent_id": null, "school_name": "Gladstone High School", "source": "llm"}
 {"id": "768f603f-bc42-5b84-9066-133002346ec1", "key": "name:stanford university department of computer science", "parent_id": "55eaed1a-b431-581c-89eb-74be014e73c7", "school_name": "Stanford University Department of Computer Science", "source": "name"}
@@ -12479,7 +12479,7 @@
 {"id": "78ff7af5-d171-55af-9cec-3a11aba072cb", "key": "provider:33304858", "parent_id": null, "school_name": "West Lafayette Jr/Sr High School", "source": "llm"}
 {"id": "7900dd42-53c0-5128-b1b2-7d8eee33bed3", "key": "name:sandford park school", "parent_id": null, "school_name": "Sandford Park School", "source": "llm"}
 {"id": "79022f34-06e7-5015-989f-b335d296a83a", "key": "provider:33449392", "parent_id": null, "school_name": "South Iredell High School", "source": "llm"}
-{"id": "79088395-8074-50fc-951e-53bfa4e5a272", "key": "name:pennsylvania governor's school for business - the wharton school", "parent_id": "96051267-74e9-551d-971f-25141a74c0d7", "school_name": "Pennsylvania Governor's School for Business - The Wharton School", "source": "llm"}
+{"id": "79088395-8074-50fc-951e-53bfa4e5a272", "key": "name:pennsylvania governor's school for business - the wharton school", "parent_id": null, "school_name": "Pennsylvania Governor's School for Business - The Wharton School", "source": "manual"}
 {"id": "7908fd8b-5588-5969-943f-24bb0b427ae4", "key": "provider:78824350", "parent_id": null, "school_name": "Zhangjiagang Foreign Language School", "source": "llm"}
 {"id": "791049d4-6f5b-531a-9068-576ed9ca555c", "key": "provider:564399", "parent_id": null, "school_name": "NSU University School", "source": "llm"}
 {"id": "7918da06-a28a-53fd-8fb6-06e52a665902", "key": "name:holy cross high school", "parent_id": "f5f88a87-c467-5bd7-966c-982536abbc68", "school_name": "Holy Cross High School", "source": "name"}
@@ -16663,7 +16663,7 @@
 {"id": "a1428c1b-995a-5c88-a562-7d38664326e5", "key": "provider:33438948", "parent_id": null, "school_name": "Judge Barefoot Sanders Law Magnet", "source": "llm"}
 {"id": "a145f08e-dca4-5adc-aac3-6d9170176e63", "key": "provider:5199936", "parent_id": null, "school_name": "Psychodidact", "source": "llm"}
 {"id": "a1467611-a492-5f8a-8c92-4ff4b77fe17f", "key": "name:lycée du mont blanc", "parent_id": null, "school_name": "Lycée du Mont Blanc", "source": "llm"}
-{"id": "a14688a6-5514-574f-bbad-5f73ffebce3e", "key": "name:lille 2 university / skema business school", "parent_id": "6f7b60af-5b71-51f6-92a8-3e284f659b32", "school_name": "Lille 2 University / Skema Business School", "source": "seed"}
+{"id": "a14688a6-5514-574f-bbad-5f73ffebce3e", "key": "name:lille 2 university / skema business school", "parent_id": null, "school_name": "Lille 2 University / Skema Business School", "source": "manual"}
 {"id": "a14bcaea-be0a-56fb-8abf-e282fa419a6c", "key": "provider:33451038", "parent_id": null, "school_name": "Downingtown High School East Campus", "source": "llm"}
 {"id": "a14f6b4b-ffe5-53fd-a4ac-b5ca211ff080", "key": "name:dublin business school", "parent_id": "ae5678e0-458c-5d0d-89ec-c70d7087ac40", "school_name": "Dublin Business School", "source": "name"}
 {"id": "a152ef92-50ce-57d1-907e-1ef9d194df7b", "key": "name:i̇zmir atatürk lisesi", "parent_id": null, "school_name": "İzmir Atatürk Lisesi", "source": "llm"}
@@ -17301,7 +17301,7 @@
 {"id": "a70a958f-ba6e-55db-8061-9905e54f8e92", "key": "provider:15115539", "parent_id": null, "school_name": "Jalangi B.Ed. College", "source": "llm"}
 {"id": "a70e7218-a35f-56a7-8168-83dd445c05ce", "key": "name:upright citizens brigade theatre", "parent_id": null, "school_name": "Upright Citizens Brigade Theatre", "source": "llm"}
 {"id": "a7116bd3-027d-599d-929b-98b95f81479f", "key": "name:parkland high school", "parent_id": null, "school_name": "Parkland High School", "source": "llm"}
-{"id": "a712dabe-b284-5f67-9d31-9ee95cb2d6ef", "key": "provider:15096451", "parent_id": "b22013ef-6c5c-58c7-8a55-eabd45f4e64a", "school_name": "National University (PH)", "source": "llm"}
+{"id": "a712dabe-b284-5f67-9d31-9ee95cb2d6ef", "key": "provider:15096451", "parent_id": null, "school_name": "National University (PH)", "source": "manual"}
 {"id": "a7138ac4-38a7-5f02-937a-c9641c638bbf", "key": "provider:33238900", "parent_id": "91ce4801-b291-5484-bd22-76b446e0115e", "school_name": "Boston University College of Fine Arts", "source": "seed"}
 {"id": "a71cb1d7-971c-510d-bf15-8af2b62566db", "key": "name:lycée gustave flaubert, la marsa", "parent_id": null, "school_name": "Lycée Gustave Flaubert, La Marsa", "source": "llm"}
 {"id": "a71dbf87-5f8a-5a12-be5b-7b2698cfff50", "key": "name:international center for studies in creativity - state university of new york", "parent_id": "68127811-72f0-58dc-869c-982446622dc5", "school_name": "International Center for Studies in Creativity - State University of New York", "source": "llm"}
@@ -17375,7 +17375,7 @@
 {"id": "a7d877d9-c640-52b7-b844-2e2423d13435", "key": "name:st. georges school", "parent_id": null, "school_name": "St. Georges School", "source": "llm"}
 {"id": "a7de1244-8549-5929-a316-7a08eaef505c", "key": "name:hec paris", "parent_id": "49b452fa-e1d4-57ab-b116-a0e66b9d9bff", "school_name": "HEC Paris", "source": "name"}
 {"id": "a7e419e0-732b-5ba0-bd6c-f577cdd73bf5", "key": "provider:15100254", "parent_id": "c93ef111-97db-56e9-9ba7-0d1a09abf0e4", "school_name": "University of California, Davis - Graduate School of Management", "source": "seed"}
-{"id": "a7e4a3e3-ca54-51dc-9aab-aa35d04294f2", "key": "name:university of california, san diego university of california, berkeley extension", "parent_id": "7aea2180-c22b-5ea6-b27a-f0a1cca3e3d0", "school_name": "University of California, San Diego                          University of California, Berkeley Extension", "source": "llm"}
+{"id": "a7e4a3e3-ca54-51dc-9aab-aa35d04294f2", "key": "name:university of california, san diego university of california, berkeley extension", "parent_id": null, "school_name": "University of California, San Diego                          University of California, Berkeley Extension", "source": "manual"}
 {"id": "a7e6f6ec-5d4e-5503-a078-3c7d96b6b48a", "key": "provider:945459", "parent_id": null, "school_name": "Mitchell Community College", "source": "llm"}
 {"id": "a7e928c2-81bf-5ef9-9ccd-208feecad42b", "key": "name:regina coeli", "parent_id": null, "school_name": "Regina Coeli", "source": "llm"}
 {"id": "a7eeb942-f954-5c51-8079-09a0ced07835", "key": "name:usaf test pilot school", "parent_id": null, "school_name": "USAF Test Pilot School", "source": "llm"}
@@ -17506,7 +17506,7 @@
 {"id": "a8f35220-efc3-56b8-bd1c-725e657de9ab", "key": "name:kyiv university of law the national academy of sciences of ukraine", "parent_id": null, "school_name": "Kyiv University of Law the National Academy of Sciences of Ukraine", "source": "llm"}
 {"id": "a8f786a4-87fd-5a19-98f4-6c2b9b8e9d4c", "key": "name:haftr", "parent_id": "ca1ff1b2-28a9-5a00-96d4-9f7ea0553079", "school_name": "HAFTR", "source": "llm"}
 {"id": "a8f81484-3968-57a7-88ea-ecfb79399f44", "key": "name:college board: advanced placement program", "parent_id": null, "school_name": "College Board: Advanced Placement Program", "source": "llm"}
-{"id": "a8f85d19-9e4f-5400-98e9-f0bf8c0609d5", "key": "name:gainesville community college", "parent_id": "14a2b9a6-082d-5682-a065-a3d3eaa65622", "school_name": "Gainesville Community College", "source": "llm"}
+{"id": "a8f85d19-9e4f-5400-98e9-f0bf8c0609d5", "key": "name:gainesville community college", "parent_id": null, "school_name": "Gainesville Community College", "source": "manual"}
 {"id": "a8fb0f9e-728b-53d0-97eb-44dcc4e0f026", "key": "provider:3998098", "parent_id": null, "school_name": "Universidad Miguel de Cervantes", "source": "llm"}
 {"id": "a8fd5bb8-b680-567a-9c3c-80ed2ce9c10c", "key": "name:greenhills", "parent_id": null, "school_name": "Greenhills", "source": "llm"}
 {"id": "a9001df2-960f-5413-9084-eaeaa17d74a1", "key": "name:ramakrishna mission vidyapith, deoghar", "parent_id": "93c1c2eb-b38e-57e3-9b62-0e17d74b1114", "school_name": "Ramakrishna Mission Vidyapith, Deoghar", "source": "name"}
@@ -19152,7 +19152,7 @@
 {"id": "b8ad0554-0e87-5aa2-bbf4-69ba4bbbe52b", "key": "name:volodymyr dahl east ukrainian national university", "parent_id": null, "school_name": "Volodymyr Dahl East Ukrainian National University", "source": "llm"}
 {"id": "b8b06ce3-4efe-544f-881c-8d5cb0541b5e", "key": "name:louisiana state university and agricultural and mechanical college", "parent_id": "aef61f08-2323-5587-9eff-707101910b6e", "school_name": "Louisiana State University and Agricultural and Mechanical College", "source": "llm"}
 {"id": "b8b2422a-1107-54f3-855c-9a9b379ff7f4", "key": "name:jaypee institue of information technology, noida", "parent_id": "7340afce-59cc-564e-803b-6b5d764a5917", "school_name": "JayPee Institue of Information Technology, Noida", "source": "llm"}
-{"id": "b8b24e6e-bb3f-5efb-ba5e-4505b15b19b4", "key": "name:saint francis college", "parent_id": "4d39289b-346f-5b99-adcf-2e10cd31f81f", "school_name": "Saint Francis College", "source": "llm"}
+{"id": "b8b24e6e-bb3f-5efb-ba5e-4505b15b19b4", "key": "name:saint francis college", "parent_id": null, "school_name": "Saint Francis College", "source": "manual"}
 {"id": "b8b2f179-14de-5c49-a3fc-750567e6e2cf", "key": "name:zeppelin university", "parent_id": null, "school_name": "Zeppelin University", "source": "llm"}
 {"id": "b8b424f4-8c13-588e-b4d6-2e9db25e3f8f", "key": "provider:2541494", "parent_id": null, "school_name": "Kellenberg Memorial High School", "source": "llm"}
 {"id": "b8b44650-80ea-5f6c-9b6d-cf9f0309b2ab", "key": "name:edgemont junior-senior high school", "parent_id": "1e1f967b-5972-5a5d-9219-a01b0882e9e7", "school_name": "Edgemont Junior-Senior High School", "source": "name"}
@@ -21795,7 +21795,7 @@
 {"id": "d2d44a92-30de-57e3-8fdc-2b4bf48bd44f", "key": "name:ncti", "parent_id": null, "school_name": "NCTI", "source": "llm"}
 {"id": "d2d49cb1-00d4-53ad-992d-5495ad56b4f0", "key": "name:martin high school", "parent_id": null, "school_name": "Martin High School", "source": "llm"}
 {"id": "d2d98679-5c8a-57e3-bfe7-5e1dfdeca429", "key": "name:american writers and artists institute", "parent_id": null, "school_name": "American Writers and Artists Institute", "source": "llm"}
-{"id": "d2da9189-9cd5-5f6c-8fb8-0e933fb58c36", "key": "name:modern montessori school - jordan", "parent_id": "21c4d960-9cb1-5e1e-a60f-44286b705271", "school_name": "Modern Montessori School - Jordan", "source": "llm"}
+{"id": "d2da9189-9cd5-5f6c-8fb8-0e933fb58c36", "key": "name:modern montessori school - jordan", "parent_id": null, "school_name": "Modern Montessori School - Jordan", "source": "manual"}
 {"id": "d2dabaa5-0016-5782-a714-d8f3202ab468", "key": "name:columbia university - columbia college", "parent_id": "a7c482df-1449-5c42-8a71-0320b040ef10", "school_name": "Columbia University - Columbia College", "source": "llm"}
 {"id": "d2def36b-6cdf-50a3-add5-5b62c7da3a31", "key": "provider:18886859", "parent_id": null, "school_name": "Royal University of Dhaka (RUD)", "source": "llm"}
 {"id": "d2e0e12a-acf0-5b30-b403-9ac1f6377588", "key": "provider:6127981", "parent_id": "bf5fae2e-c2fc-5971-8b94-ff8f05f73aee", "school_name": "University of Michigan College of Engineering", "source": "seed"}
@@ -21952,7 +21952,7 @@
 {"id": "d432bc52-f246-597b-99ad-9920a8689215", "key": "name:escola superior de comunicação social", "parent_id": null, "school_name": "Escola Superior de Comunicação Social", "source": "llm"}
 {"id": "d43595ae-0023-5a98-b8fe-49d2f6d2db98", "key": "name:bnu-hkbu united international college", "parent_id": "c8b04b93-3235-52f5-8160-4e74537f17b1", "school_name": "BNU-HKBU United International College", "source": "seed"}
 {"id": "d439961e-ba41-570b-be83-0f2635e9601c", "key": "provider:45476", "parent_id": "50a555c0-a7e7-5d1b-ab8a-e79b884da3bf", "school_name": "Universidad Nacional  Andrés Bello", "source": "llm"}
-{"id": "d43ada62-1137-560b-90d0-1b52383a0b43", "key": "name:fremont high, oakland, ca", "parent_id": "25d19add-b442-5312-91ef-5f3ef0091619", "school_name": "Fremont High, Oakland, CA", "source": "llm"}
+{"id": "d43ada62-1137-560b-90d0-1b52383a0b43", "key": "name:fremont high, oakland, ca", "parent_id": null, "school_name": "Fremont High, Oakland, CA", "source": "manual"}
 {"id": "d43d7d90-f8f6-5ab4-85c1-49205b70659f", "key": null, "parent_id": "876121cf-155f-5076-b148-83d1ab0cd68c", "school_name": "Hack Reactor", "source": "name"}
 {"id": "d446cf46-25b9-58c8-999e-e0bcff2a8fec", "key": "name:tec lyngby htx", "parent_id": null, "school_name": "TEC Lyngby HTX", "source": "llm"}
 {"id": "d4476a79-828f-50ce-8f34-462e4ea5a663", "key": "name:imep - paris college of music", "parent_id": null, "school_name": "IMEP - Paris College of Music", "source": "llm"}
@@ -22713,7 +22713,7 @@
 {"id": "db97bc7a-d251-5354-89a8-28464017757e", "key": "name:yale mba, indian institute of technology and penn state university", "parent_id": null, "school_name": "Yale MBA, Indian Institute of Technology and Penn State University", "source": "llm"}
 {"id": "db98ba9a-0823-5b80-9ca9-991f2a827394", "key": "provider:391723", "parent_id": null, "school_name": "Colégio Bandeirantes", "source": "llm"}
 {"id": "db9af63a-6b2e-55f7-aa33-483c2c130674", "key": "name:cal state dominguez hills", "parent_id": "105e9a48-78bc-5e68-aed4-7e9edf5d4499", "school_name": "Cal State Dominguez Hills", "source": "llm"}
-{"id": "db9b0aec-787c-51db-99cc-cf7b1b1012ce", "key": "name:transition school", "parent_id": "c99e1260-4a38-54ee-ad8d-e887d10d4820", "school_name": "Transition School", "source": "llm"}
+{"id": "db9b0aec-787c-51db-99cc-cf7b1b1012ce", "key": "name:transition school", "parent_id": null, "school_name": "Transition School", "source": "manual"}
 {"id": "db9e4581-ea0d-5c75-8598-e89efd51a1b2", "key": "name:lourdes high school", "parent_id": null, "school_name": "Lourdes High School", "source": "llm"}
 {"id": "db9e936b-f38e-52f4-b6da-4bfdea1d9609", "key": "name:the open university", "parent_id": "41b90ba5-e103-5dd4-8a92-97859ee42af0", "school_name": "The Open university", "source": "seed"}
 {"id": "dba09d45-bdd3-5d12-9208-597f6f3b7325", "key": "provider:213448", "parent_id": null, "school_name": "Otago Polytechnic", "source": "llm"}
@@ -23014,7 +23014,7 @@
 {"id": "de5100da-06b1-5dea-bd10-731335294f20", "key": "name:mujahid high lycee", "parent_id": null, "school_name": "Mujahid High lycee", "source": "llm"}
 {"id": "de518aec-5953-5f9b-8d12-0310d654e74e", "key": "name:long beach memorial medical center", "parent_id": null, "school_name": "Long Beach Memorial Medical Center", "source": "llm"}
 {"id": "de540b4f-269a-5798-8a90-3f41eb98204b", "key": "provider:15249478", "parent_id": "4f0cf408-ce4f-5c58-95f4-b66a1339f072", "school_name": "University of Washington Bothell School of Business", "source": "llm"}
-{"id": "de57846b-b149-539a-8b9c-b106d2ac32de", "key": "name:saint david's school", "parent_id": "cac2f69c-1d0f-5f20-9423-6b217e078a73", "school_name": "Saint David's School", "source": "seed"}
+{"id": "de57846b-b149-539a-8b9c-b106d2ac32de", "key": "name:saint david's school", "parent_id": null, "school_name": "Saint David's School", "source": "manual"}
 {"id": "de588ae8-fa6a-5dc9-9e17-ebe6b843bee2", "key": "provider:15105582", "parent_id": "de278ee7-4a9d-5b10-b1a7-39e9ae1b1066", "school_name": "IGNOU", "source": "llm"}
 {"id": "de592e91-3f79-5156-8771-b11263b28884", "key": "provider:53424452", "parent_id": null, "school_name": "NUC University", "source": "llm"}
 {"id": "de5a2cf3-5ce6-5f12-8997-7864f82f8c04", "key": "name:birla institute of technology and science, pilani", "parent_id": "ccdfae5a-b419-53e8-8423-05263e0dc109", "school_name": "Birla Institute of Technology and Science, Pilani", "source": "seed"}
@@ -23722,10 +23722,10 @@
 {"id": "e58cbcdd-658d-5eda-b0ca-9b5ca98d291d", "key": "name:st. joseph's nudgee college", "parent_id": null, "school_name": "St. Joseph's Nudgee College", "source": "llm"}
 {"id": "e590d54e-6260-58cf-85fc-8e12ae869f32", "key": "provider:64708075", "parent_id": null, "school_name": "IAP Career College", "source": "llm"}
 {"id": "e591b9e6-aa1b-5578-9e0c-b6a0ab05412a", "key": "provider:26569", "parent_id": null, "school_name": "East Stroudsburg University of Pennsylvania", "source": "llm"}
-{"id": "e594de00-ed37-558a-bd90-7a6039e4d201", "key": "name:st albans", "parent_id": "5b2f609a-388b-505b-83e9-fc41a7361cc2", "school_name": "St Albans", "source": "name"}
+{"id": "e594de00-ed37-558a-bd90-7a6039e4d201", "key": "name:st albans", "parent_id": null, "school_name": "St Albans", "source": "manual"}
 {"id": "e596635b-bc11-5071-bf45-b082d7b73f5c", "key": "provider:34215204", "parent_id": null, "school_name": "Booker T. Washington High School", "source": "llm"}
 {"id": "e5966ff9-616e-556d-91c8-23d562e835de", "key": "name:the school for the work of byron katie", "parent_id": null, "school_name": "The School for The Work of Byron Katie", "source": "llm"}
-{"id": "e59c9f0d-3cb4-59f1-ab2f-f891e8b38d0d", "key": "name:rochester lourdes", "parent_id": "db9e4581-ea0d-5c75-8598-e89efd51a1b2", "school_name": "Rochester Lourdes", "source": "llm"}
+{"id": "e59c9f0d-3cb4-59f1-ab2f-f891e8b38d0d", "key": "name:rochester lourdes", "parent_id": null, "school_name": "Rochester Lourdes", "source": "manual"}
 {"id": "e59e632c-17d3-5ea0-a3d1-2abe13feb0c7", "key": "provider:15135804", "parent_id": "e79ad9f4-ecea-5837-9c2f-2993393c1603", "school_name": "Suzhou University", "source": "llm"}
 {"id": "e5a2cd28-83d8-56d7-a5e2-9af283bc8f06", "key": "name:national institute of technology raipur", "parent_id": "fef987b3-89fa-51c2-9ebb-64267c1a5784", "school_name": "National Institute of Technology Raipur", "source": "seed"}
 {"id": "e5a36cce-f697-5048-b3d0-bc266a57b206", "key": "name:werribee secondary college", "parent_id": null, "school_name": "Werribee Secondary College", "source": "llm"}
@@ -23916,7 +23916,7 @@
 {"id": "e76efe3f-7f0e-5461-9a56-634c4ba9edb0", "key": "name:instituto sagrado corazon de jesus de hurlingham", "parent_id": null, "school_name": "Instituto Sagrado Corazon de Jesus de Hurlingham", "source": "llm"}
 {"id": "e770404e-2ba7-5f14-82a9-3bb4610f18de", "key": "provider:15129898", "parent_id": null, "school_name": "IBS Hyderabad", "source": "llm"}
 {"id": "e770a1b2-fb2c-571f-b1d4-5cbb6ba872cb", "key": "provider:16042798", "parent_id": null, "school_name": "MAGNOLIA SCIENCE ACADEMY", "source": "llm"}
-{"id": "e7716b4d-68f9-503a-9a33-1d34e46b0c5a", "key": "provider:15099364", "parent_id": "c2ec0d8f-6557-5688-9357-ec92cb4fcf21", "school_name": "Asia-Pacific International University", "source": "seed"}
+{"id": "e7716b4d-68f9-503a-9a33-1d34e46b0c5a", "key": "provider:15099364", "parent_id": null, "school_name": "Asia-Pacific International University", "source": "manual"}
 {"id": "e771f8f4-45a5-583c-a2e5-08260885d1ca", "key": "provider:11549", "parent_id": null, "school_name": "The University of Salford", "source": "llm"}
 {"id": "e773745e-2379-5b65-a940-d6895aabaf17", "key": "name:scotch plains fanwood high school", "parent_id": null, "school_name": "Scotch Plains Fanwood High School", "source": "llm"}
 {"id": "e775eaca-c104-5e2c-a27f-89be04fed7ce", "key": "provider:6026234", "parent_id": "fce5236b-588b-5de8-8ad1-327446417a72", "school_name": "The University of Alabama School of Law", "source": "seed"}
@@ -25885,7 +25885,7 @@
 {"id": "fa7490f3-a8ca-5886-bd78-d9eabe4df3d0", "key": "name:institute of chemical physics, russian academy of sciences, moscow, russia", "parent_id": null, "school_name": "Institute of Chemical Physics, Russian Academy of Sciences, Moscow, Russia", "source": "llm"}
 {"id": "fa749bb0-1a56-51fb-894c-bf68266fa889", "key": "name:nova high school", "parent_id": null, "school_name": "Nova High School", "source": "llm"}
 {"id": "fa7acd86-b57f-5234-a599-5f9d14ca5478", "key": "provider:15117819", "parent_id": null, "school_name": "J.D. Birla Institute", "source": "llm"}
-{"id": "fa804db9-8b59-5c7f-b71a-442088a87999", "key": "name:robert morris college", "parent_id": "2614ba2f-430b-5e51-85c5-c60a3ca1a544", "school_name": "Robert Morris College", "source": "name"}
+{"id": "fa804db9-8b59-5c7f-b71a-442088a87999", "key": "name:robert morris college", "parent_id": null, "school_name": "Robert Morris College", "source": "manual"}
 {"id": "fa82c8e3-9caf-571e-a764-7d8a4b8d0b3d", "key": "name:st. pauls senior secondary school", "parent_id": null, "school_name": "St. Pauls Senior Secondary School", "source": "llm"}
 {"id": "fa83c20c-21dc-54ab-b174-1fe3bcf2797f", "key": "name:i-shou international school", "parent_id": null, "school_name": "I-Shou International School", "source": "llm"}
 {"id": "fa8ca72e-cc5f-5ebe-a478-6b66efd0ab5e", "key": "name:universidad del este", "parent_id": null, "school_name": "Universidad Del Este", "source": "llm"}
@@ -25900,7 +25900,7 @@
 {"id": "faa22d22-ef43-5f08-bdda-6831b567568b", "key": "name:johnston high school, iowa", "parent_id": null, "school_name": "Johnston High School, Iowa", "source": "llm"}
 {"id": "faa3909c-5491-5172-a692-23d9c3a0fdbf", "key": "provider:2204861", "parent_id": null, "school_name": "ZHAW School of Management and Law", "source": "llm"}
 {"id": "faa4968e-e661-5d60-9b92-0ee3a98b0676", "key": "provider:407128", "parent_id": "bc1bd08e-ad50-5600-a997-c24177852777", "school_name": "Forest Hills High School", "source": "seed"}
-{"id": "faa7d1d5-a967-543f-80a4-4bd0564e6a6a", "key": "provider:15130790", "parent_id": "89913fb2-f38a-5dbc-b109-23a45b825181", "school_name": "Bethel College-North Newton", "source": "llm"}
+{"id": "faa7d1d5-a967-543f-80a4-4bd0564e6a6a", "key": "provider:15130790", "parent_id": null, "school_name": "Bethel College-North Newton", "source": "manual"}
 {"id": "faa8c696-a98e-52cb-9499-b690ef178a53", "key": "name:nopany", "parent_id": null, "school_name": "Nopany", "source": "llm"}
 {"id": "faa8cc41-34c0-512f-a49f-ed972ae68fd0", "key": "name:symbiosis institute of computer studies and research", "parent_id": "a9054aec-275a-5e25-89b3-ca6693dc1911", "school_name": "Symbiosis Institute of Computer Studies and Research", "source": "seed"}
 {"id": "faab8e9e-f172-5c1e-a575-6e6054cefd8b", "key": "provider:33310076", "parent_id": null, "school_name": "Cactus Shadows High School", "source": "llm"}
@@ -26361,7 +26361,7 @@
 {"id": "fee0e939-117a-5335-9bb2-539ebb169b6f", "key": "name:lycée françois magendie", "parent_id": null, "school_name": "Lycée François Magendie", "source": "llm"}
 {"id": "fee2195f-4991-51bc-a409-a1aa53a2284f", "key": "name:kitchener waterloo collegiate and vocational school", "parent_id": null, "school_name": "Kitchener Waterloo Collegiate and Vocational School", "source": "llm"}
 {"id": "fee4bfb9-76bc-5f5a-8c6a-575ea5b83c60", "key": "provider:13689779", "parent_id": "224dc8e7-62d0-505f-b984-957f354314b9", "school_name": "Kirori Mal College, University of Delhi", "source": "seed"}
-{"id": "fee726b6-47e3-5689-97d9-7e7ce8a86823", "key": "provider:15098025", "parent_id": "f1bb06e5-47f8-5330-807e-b3d83d937391", "school_name": "Lincoln University (NZ)", "source": "llm"}
+{"id": "fee726b6-47e3-5689-97d9-7e7ce8a86823", "key": "provider:15098025", "parent_id": null, "school_name": "Lincoln University (NZ)", "source": "manual"}
 {"id": "fee826e1-4657-56e8-86f4-ebef7c2188e0", "key": "provider:15101724", "parent_id": "28858b1a-c6e6-5e8c-a2b3-655220e4d7a1", "school_name": "The College of William and Mary - The Mason School of Business", "source": "llm"}
 {"id": "fee9d5ea-bcf4-5469-bde5-fd5e4751feee", "key": "name:university of richmond school of law", "parent_id": "e80670a4-4abb-5935-956e-61937f799c36", "school_name": "University of Richmond School of Law", "source": "name"}
 {"id": "feea2664-17c8-595d-af42-5a8a4e34f184", "key": "name:ies rome", "parent_id": null, "school_name": "IES Rome", "source": "llm"}
