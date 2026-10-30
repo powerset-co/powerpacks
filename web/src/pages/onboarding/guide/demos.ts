@@ -19,16 +19,16 @@ export const flows: Record<GuideSource, Flow> = {
   chrome: {
     title: "Skip the sign-ins.",
     eyebrow: "CHROME · ON THIS MAC",
-    intro: "Powerpacks reads LinkedIn and Google in a browser of its own. That browser starts empty, so one of your Chrome profiles fills it in.",
+    intro: "Powerpacks keeps a copy of one Chrome profile on this Mac, so it can sync for you in the background without asking you to sign in.",
     steps: [
       "Powerpacks' browser starts empty.",
       "Pick the profile you already use.",
-      "LinkedIn and Google open signed in.",
+      "Powerpacks syncs in the background.",
     ],
     captions: [
       "Without a profile, you would sign in to everything again with no saved passwords.",
-      "Its logins and saved passwords are copied into Powerpacks' browser.",
-      "No sign-in, and Powerpacks can read your connections without opening a window.",
+      "A copy of its logins and saved passwords is saved on this Mac.",
+      "Powerpacks uses that copy to keep your network up to date, with no window and no sign-in.",
     ],
     note: "The copy stays on this Mac. Your Chrome isn't changed and can stay open.",
     duration: 15,
@@ -151,7 +151,7 @@ function chrome(person: Person) {
   const tileFor = (name: string, cls: string) =>
     `<div class="profile-tile ${cls}"><b class="avatar">${name.slice(0, 1).toUpperCase()}</b><span>${name}</span></div>`
   const rows = ["72%", "58%", "66%"].map((width) => `<div class="connection"><b class="avatar plain"></b><i style="width:${width}"></i></div>`)
-  return `<div class="browser">${bar}<div class="google-page empty-page"><h2>Sign in</h2><p>Stay updated on your professional world</p><div class="empty-field">Email</div><div class="empty-field">Password</div><div class="sign-in-button">Sign in</div></div><div class="google-page pick-page"><h2>Who's using Chrome?</h2><div class="profile-grid">${tileFor(person.email, "picked")}${tileFor("Work", "")}${tileFor("Guest", "")}</div></div><div class="google-page signed-page"><div class="signed-note">✓ Signed in</div><h2>Your connections</h2>${rows.join("")}</div></div>${cursor}`
+  return `<div class="browser">${bar}<div class="google-page empty-page"><h2>Sign in</h2><p>Stay updated on your professional world</p><div class="empty-field">Email</div><div class="empty-field">Password</div><div class="sign-in-button">Sign in</div></div><div class="google-page pick-page"><h2>Who's using Chrome?</h2><div class="profile-grid">${tileFor(person.email, "picked")}${tileFor("Work", "")}${tileFor("Guest", "")}</div></div><div class="google-page signed-page"><div class="signed-note">✓ Syncing in the background</div><h2>Your connections</h2>${rows.join("")}</div></div>${cursor}`
 }
 function gmail(person: Person) {
   return `<div class="browser"><div class="browser-bar"><div class="lights"><i></i><i></i><i></i></div><span>🔒 accounts.google.com</span></div><div class="google-page account-page">${tiles.googleG}<h2>Choose an account</h2><p>to continue to <b>Powerpacks</b></p><div class="account"><b class="avatar">${person.name.slice(0, 1)}</b><div>${person.name}<small>${person.email}</small></div></div><div class="other-account"><b class="avatar plain">⊕</b>Use another account</div><p class="google-foot">To continue, Google will share your name, email address, language preference, and profile picture with Powerpacks.</p></div><div class="google-page verify-page">${tiles.googleG}<h2>Verify it’s you</h2><p>To help keep your account safe, Google wants to make sure it’s really you trying to sign in.</p><div class="verify-phone"><span class="verify-icon">📱</span><span>Tap <b>Yes</b> on your phone or type the code Google sent you.</span></div><small>Not every account asks for this.</small></div><div class="google-page consent-page">${tiles.googleG}<h2>Powerpacks wants access to your Google Account</h2><p class="consent-email"><b class="avatar small">${person.name.slice(0, 1)}</b>${person.email}</p><p class="consent-lead">Select what Powerpacks can access</p><div class="scope select-all"><span class="checkbox">✓</span><span>Select all</span></div><div class="scope"><span class="checkbox">✓</span><span>See your email messages and settings</span></div><div class="scope"><span class="checkbox">✓</span><span>Read, compose, and send emails from your Gmail account</span></div><p class="scope-note">Make sure you trust Powerpacks. You may be sharing sensitive info with this site or app.</p><div class="google-actions"><span>Cancel</span><div class="google-button">Continue</div></div></div><div class="google-page complete-page"><span class="success-check">✓</span><h2>You’re connected.</h2><p>Back to Powerpacks.</p><div class="connected-mail">${mark}<span>Gmail <small>${person.email}</small></span><b>Connected</b></div></div></div>${cursor}`

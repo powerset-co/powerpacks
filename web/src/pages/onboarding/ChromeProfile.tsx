@@ -40,7 +40,7 @@ export function ChromeProfile() {
       step="chrome"
       left={
         <>
-          <Heading title="Start from your Chrome" line="Pick the profile you use for LinkedIn and Google." />
+          <Heading title="Start from your Chrome" line="Pick the profile you use for LinkedIn and Google. A copy stays on this Mac so Powerpacks can sync in the background." />
           <ul className="m-0 flex max-h-72 list-none flex-col gap-1.5 overflow-y-auto p-0">
             {profiles.data?.map((profile) => (
               <li key={profile.folder}>
