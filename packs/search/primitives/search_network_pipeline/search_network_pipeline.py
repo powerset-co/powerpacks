@@ -21,7 +21,7 @@ Changelog:
 """
 from __future__ import annotations
 
-import argparse, hashlib, json, os, re, shlex, subprocess, sys, threading, time
+import argparse, asyncio, hashlib, json, os, re, shlex, subprocess, sys, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -740,17 +740,33 @@ def configure_local_backend_mode(db_path: Path) -> None:
     search_backend_mode.configure_local_backend(db_path)
 
 def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
-    """Cheap filter-eligibility count so breadth is visible before LLM spend."""
+    """Count eligible people, resolving company names before LLM spend.
+
+    Company semantic/sector queries are excluded, so this is an upper bound.
+    """
     if not db_path.exists():
         return {"status": "skipped_no_db"}
     try:
         configure_local_backend_mode(db_path)
         from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
+        from local_resolve_companies import company_rows_for_names  # type: ignore
+        import local_search_backend  # type: ignore
         from search_common import filters_from_role_payload  # type: ignore
 
-        store = LocalDuckDBSearchStore(str(db_path))
+        role_filters = payload_filters(payload)
+        count_filter = filters_from_role_payload(role_filters)
+        if role_filters.get("company_names") and not role_filters.get("company_ids"):
+            local_search_backend.configure_local_backend(db_path)
+            rows = asyncio.run(company_rows_for_names(
+                role_filters["company_names"], None, top_k=20,
+            ))
+            role_filters["company_ids"] = [str(row["id"]) for row in rows if row.get("id")]
+            count_filter = filters_from_role_payload(role_filters)
+            company_filter = ("company_id", "In", role_filters["company_ids"])
+            count_filter = ("And", [count_filter, company_filter]) if count_filter else company_filter
+        store = LocalDuckDBSearchStore(str(db_path), read_only=True)
         try:
-            counts = store.filtered_people_count(filters_from_role_payload(payload_filters(payload)))
+            counts = store.filtered_people_count(count_filter)
         finally:
             store.conn.close()
         return {"status": "completed", **counts}

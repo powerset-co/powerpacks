@@ -1023,6 +1023,30 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         )))
         self.assertEqual(out["education_ids"], ["school-stanford"])
 
+    def test_pool_estimate_resolves_company_names(self) -> None:
+        pipeline = load_module(
+            "company_count_pipeline",
+            PRIMITIVES / "search_network_pipeline/search_network_pipeline.py",
+        )
+        for name in ["InfraDB", "UnknownZzzCompany"]:
+            with self.subTest(company=name):
+                payload = {
+                    "role_search_filters": {
+                        "company_names": [name],
+                        "is_current_company": True,
+                    },
+                }
+                before = json.dumps(payload, sort_keys=True)
+                expected = query_duckdb(
+                    Path(self.db_path),
+                    "select count(distinct person_id) from local_people_positions "
+                    f"where is_current and company_name = '{name}'",
+                )[0][0]
+                count = pipeline.local_pool_estimate(payload, Path(self.db_path))
+                self.assertEqual(count["status"], "completed")
+                self.assertEqual(count["matched_people"], expected)
+                self.assertEqual(json.dumps(payload, sort_keys=True), before)
+
     def test_local_company_namespace_and_resolver_use_duckdb(self) -> None:
         response = local_backend.namespace("companies").query(
             rank_by=("name_aliases_text", "BM25", "InfraDB"),
