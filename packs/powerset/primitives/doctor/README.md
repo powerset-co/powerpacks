@@ -16,7 +16,7 @@ python packs/powerset/primitives/doctor/doctor.py run \
 ```
 
 `search-core` is the default profile. The doctor checks Auth0, local runtime
-keys pulled from the Powerset API, and MCP registration. Modal handles hosted
+keys pulled from the Powerset API. Modal handles hosted
 processing for provisioned Powerset users.
 
 ## Checks (in order)
@@ -28,7 +28,6 @@ processing for provisioned Powerset users.
 | `auth0_login` | a valid Auth0 JWT is cached at `~/.powerpacks/credentials.json` |
 | `auth0_role` | the JWT carries a `user` or `admin` role (warn if neither) |
 | `runtime_keys` | `.env` has the Modal token, OpenAI key, Parallel key, and RapidAPI key needed locally |
-| `mcp_powerset_search` | the `powerset-search` MCP is registered in a local host |
 
 ## Statuses
 

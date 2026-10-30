@@ -3,7 +3,7 @@
 // `primitive` rather than by the command line, which the agent may wrap in a script. The query is
 // at its top; the filters, the role intent and the traits sit under `preview`; the local index adds
 // the runtime notes. A prepare blocked on its extraction (`blocked_user_action`) carries its
-// `runtime_blockers`. The company fast path prints no preview and is no search card.
+// `runtime_blockers`.
 
 import { isRecord } from "@/lib/utils"
 import type { Entry } from "@/types/agent"
@@ -98,7 +98,7 @@ export function ranSearch(entry: Entry): boolean {
   return value !== null && !("preview" in value) && "summary" in value
 }
 
-/** The command's search, or null for any other command, a fast path, or output still arriving. */
+/** The command's search, or null for any other command or output still arriving. */
 export function preparedSearch(entry: Entry): PreparedSearch | null {
   const value = printed(entry)
   if (value === null || typeof value.query !== "string" || !isRecord(value.preview)) return null

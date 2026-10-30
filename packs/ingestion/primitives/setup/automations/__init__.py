@@ -7,7 +7,6 @@ Single-concern modules behind the thin CLI entry
 - msgvault_home:  msgvault home state, config.toml, client secrets, msgvault binary.
 - gcloud_project: gcloud auth/context, project create-choose-validate, Gmail API,
                   console URLs.
-- mcp:            Codex MCP registration for the msgvault server.
 - oauth_browser:  playwright-driven Google Console automation
                   (google_oauth_browser.js lives here with its driver).
 - accounts:       account authorization, OAuth health checks, status payloads.

@@ -90,19 +90,15 @@ class OnboardingTests(unittest.TestCase):
         self.thread.start()
         base = f"http://127.0.0.1:{self.server.server_port}"
         (self.root / ".env").write_text(
-            f"POWERSET_API_URL={base}\nPOWERPACKS_MCP_URL={base}/mcp/\n"
+            f"POWERSET_API_URL={base}\n"
             f"POWERPACKS_CREDENTIALS_PATH={self.credentials}\n"
             f"POWERPACKS_AUTH0_DOMAIN={base}\nPOWERPACKS_AUTH0_CLIENT_ID=mock-client\n"
             "POWERPACKS_AUTH0_AUDIENCE=mock-audience\n")
         self.save_credentials()
         self.environment = patch.dict(os.environ, {}, clear=True)
         self.environment.start()
-        self.mcp = patch("packs.powerset.primitives.install.onboard.mcp_install.codex_install",
-                         return_value={"ok": True})
-        self.mcp.start()
 
     def tearDown(self):
-        self.mcp.stop()
         self.environment.stop()
         self.server.shutdown()
         self.server.server_close()
@@ -116,7 +112,7 @@ class OnboardingTests(unittest.TestCase):
     def run_onboarding(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            code = Onboarding(self.root, harnesses=["codex"], pid=os.getpid(),
+            code = Onboarding(self.root, pid=os.getpid(),
                               retry_command="bin/bootstrap --powerset --no-tools").run()
         manifest = json.loads((self.root / ".powerpacks/install/manifest.json").read_text())
         self.assertNotIn("old-token", output.getvalue())
@@ -228,7 +224,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
 
     def run_install_command(self, *source_args):
-        argv = ["onboard", "--root", str(self.root), "--harness", "codex", *source_args]
+        argv = ["onboard", "--root", str(self.root), *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                 patch("packs.powerset.primitives.install.onboard.SourceOnboarding") as sources, \
                 patch("packs.powerset.primitives.install.onboard.start_server",
@@ -293,13 +289,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 10)
         self.assertIn("profiles are not ready", state["message"])
         self.assertEqual(state["person_count"], 120)
-
-    def test_mcp_registration_failure_uses_verified_direct_connection(self):
-        with patch("packs.powerset.primitives.install.onboard.mcp_install.codex_install",
-                   return_value={"ok": False}):
-            code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 0)
-        self.assertEqual(state["steps"]["connection"]["status"], "skipped")
 
     def test_missing_required_access_waits_but_optional_providers_do_not(self):
         self.missing_keys = {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "PARALLEL_API_KEY"}

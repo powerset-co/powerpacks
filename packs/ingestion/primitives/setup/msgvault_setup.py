@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Set up msgvault for local Gmail archive access (thin CLI entry).
 
-Guided setup for msgvault Gmail OAuth and Codex MCP registration. The Google
+Guided setup for msgvault Gmail OAuth. The Google
 Cloud console still owns classic installed-app OAuth client creation for Gmail
 scopes; this primitive automates the local pieces around that step:
-install/status, Gmail API enabling, config.toml updates, account auth, and
-Codex MCP registration. Flow logic lives in `setup/automations/`; this module
-is argparse plus the exit-code policy.
+install/status, Gmail API enabling, config.toml updates, and account auth. Flow logic lives in `setup/automations/`;
+this module is argparse plus the exit-code policy.
 
 Flow: parse argv -> build the subcommand's frozen request from the namespace
 (the one place paths are expanded and names validated) -> run it -> emit its
@@ -22,11 +21,9 @@ Usage (run from the repo root):
     uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email you@gmail.com
     uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users other@gmail.com
     uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py auth-check --email you@gmail.com
-    uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py mcp-install
 
 Secrets are stored only under `~/.msgvault/`: the primitive updates
-`~/.msgvault/config.toml`, runs `msgvault init-db`, and can register the Codex
-MCP server with `codex mcp add msgvault -- msgvault mcp`. `browser-setup`
+`~/.msgvault/config.toml`, and runs `msgvault init-db`. `browser-setup`
 opens Google Console in a persistent Chrome profile, lets the user finish
 Google login/security screens, then attempts to create a project, enable the
 Gmail API, configure the OAuth screen, create a Desktop OAuth client named
@@ -42,7 +39,7 @@ Changelog:
     and the status-to-exit-code decision happen once, here, in EXIT_CODES.
   2026-07-23 (audit):
     - Decomposed the 1,770-line driver into setup/automations/ (shell,
-      msgvault_home, gcloud_project, mcp, oauth_browser, accounts,
+      msgvault_home, gcloud_project, oauth_browser, accounts,
       setup_flows, browser_flows); this entry keeps the same path,
       subcommands, and flags. google_oauth_browser.js moved next to its
       driver in automations/.
@@ -63,7 +60,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.setup.automations import accounts, mcp  # noqa: E402
+from packs.ingestion.primitives.setup.automations import accounts  # noqa: E402
 from packs.ingestion.primitives.setup.automations.browser_flows import (  # noqa: E402
     BrowserSetup,
     TestUsers,
@@ -87,10 +84,10 @@ from packs.ingestion.primitives.setup.automations.shell import expand  # noqa: E
 from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 
-# Exit-code policy, first rule wins. `status` and `mcp-install` are probes: they
-# report what they found and always exit 0. Every other subcommand maps its
+# Exit-code policy, first rule wins. `status` is a probe: it
+# reports what it found and always exits 0. Every other subcommand maps its
 # payload status; anything unrecognized is a failure.
-PROBE_COMMANDS = frozenset({"status", "mcp-install"})
+PROBE_COMMANDS = frozenset({"status"})
 EXIT_CODES = {
     "ok": 0,
     "configured": 0,
@@ -123,8 +120,6 @@ def add_setup_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-install", action="store_true", help="Do not install msgvault if it is missing")
     parser.add_argument("--no-init-db", dest="init_db", action="store_false", help="Skip msgvault init-db")
     parser.set_defaults(init_db=True)
-    parser.add_argument("--no-install-mcp", dest="install_mcp", action="store_false", help="Skip Codex MCP registration")
-    parser.set_defaults(install_mcp=True)
     parser.add_argument("--no-enable-gmail-api", dest="enable_gmail_api", action="store_false", help="Skip gcloud services enable")
     parser.set_defaults(enable_gmail_api=True)
     parser.add_argument("--no-open-console", dest="open_console", action="store_false", help="Do not open Google Console URLs")
@@ -150,7 +145,7 @@ def add_browser_setup_args(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the msgvault setup CLI parser with all subcommands."""
-    parser = argparse.ArgumentParser(description="Set up msgvault Gmail OAuth and MCP access")
+    parser = argparse.ArgumentParser(description="Set up msgvault Gmail OAuth access")
     sub = parser.add_subparsers(dest="command", required=True)
 
     status = sub.add_parser("status", help="Check local msgvault setup")
@@ -202,7 +197,6 @@ def build_parser() -> argparse.ArgumentParser:
     test_users.add_argument("--timeout-seconds", type=int, default=300, help="Browser automation timeout")
     test_users.add_argument("--no-open-browser", action="store_true", help="Do not open a browser for gcloud login")
 
-    sub.add_parser("mcp-install", help="Install the msgvault MCP server in Codex")
     return parser
 
 
@@ -226,8 +220,6 @@ def main(argv: list[str] | None = None) -> int:
             payload = AccountAuthorization.from_args(args).run()
         elif args.command == "add-test-users":
             payload = TestUsers.from_args(args).run()
-        elif args.command == "mcp-install":
-            payload = mcp.install_mcp()
         else:  # unreachable: argparse subcommands are required
             raise ValueError(f"unknown command: {args.command}")
     except ValueError as exc:

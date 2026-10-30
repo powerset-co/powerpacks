@@ -292,21 +292,19 @@ files on the happy path. Start a fresh run for every search request.
    Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
    profile searches pass their own output dir; follow the engine's instructions there.)
 
-2. If `prepare` returns `status: company_directory_fast_path`, follow the
-   returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, say exactly this and nothing else (the chat shows the
+2. If `prepare` returns a preview, say exactly this and nothing else (the chat shows the
    prepared search as a card):
 
    `Search prepared. Execute or modify?`
 
-4. Apply the reply using **Execute or modify the preview** below.
+3. Apply the reply using **Execute or modify the preview** below.
    `execute_command` already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user
      searches, do not add a limit unless the user asks for one.
-5. Follow **Execution progress** below until the command finishes or emits a
+4. Follow **Execution progress** below until the command finishes or emits a
    concrete `blocked_approval` / `blocked_user_action`.
 
 ## Execute or modify the preview

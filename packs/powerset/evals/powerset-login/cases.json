@@ -2,7 +2,7 @@
  {
   "id": "explicit-login-fresh-machine-backcompat",
   "query": "I explicitly want to run $powerset login on a fresh MacBook with my @powerset.co Google account. Refresh everything.",
-  "expected_behavior": "The legacy explicit-login alias still walks the supported first-run sequence: Auth0 PKCE login via the auth primitive when needed, provisioned runtime key pull via pull_runtime_keys/Powerset API, MCP install, and a final doctor check. It must never offer to skip consent, fabricate credentials, ask for a password in chat, or route Powerset setup through legacy cloud secret tooling."
+  "expected_behavior": "The legacy explicit-login alias still walks the supported first-run sequence: Auth0 PKCE login via the auth primitive when needed, provisioned runtime key pull via pull_runtime_keys/Powerset API, and a final doctor check. It must never offer to skip consent, fabricate credentials, ask for a password in chat, or route Powerset setup through legacy cloud secret tooling."
  },
  {
   "id": "non-powerset-google-account",
@@ -12,11 +12,11 @@
  {
   "id": "already-logged-in-verify",
   "query": "I think I already ran powerset-login a while back. Can you verify everything is still healthy?",
-  "expected_behavior": "Verification only: run the doctor health check, auth whoami, and MCP status. The plan must NOT proactively re-run a fresh login or re-pull secrets when the existing state is healthy \u2014 verification and re-provisioning are different operations."
+  "expected_behavior": "Verification only: run the doctor health check and auth whoami. The plan must NOT proactively re-run a fresh login or re-pull secrets when the existing state is healthy \u2014 verification and re-provisioning are different operations."
  },
  {
   "id": "expired-token-refresh",
-  "query": "My MCP suddenly stopped working. claude mcp list says powerset-search failed to connect.",
-  "expected_behavior": "Diagnose before destroying: the most likely cause is Auth0 access-token expiry (~24h), so the plan refreshes the bearer token via the auth primitive's token path (which auto-refreshes from the stored refresh token) and reinstalls/refreshes the MCP registration. It must not delete credentials, uninstall things, or restart from a full login as the first move."
+  "query": "My Powerset commands suddenly stopped working with an expired credentials error.",
+  "expected_behavior": "Diagnose before destroying: the most likely cause is Auth0 access-token expiry (~24h), so the plan refreshes the bearer token via the auth primitive's token path (which auto-refreshes from the stored refresh token) and verifies authenticated API access. It must not delete credentials, uninstall things, or restart from a full login as the first move."
  }
 ]

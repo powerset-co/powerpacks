@@ -2,7 +2,7 @@
   "rows": [
     {
       "label": "Signing you in",
-      "steps": ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network", "sources", "linkedin_login", "gmail_tools", "gmail_login", "imessage_access", "whatsapp_tools", "whatsapp_login"],
+      "steps": ["runtime", "dependencies", "skills", "account", "credentials", "network", "sources", "linkedin_login", "gmail_tools", "gmail_login", "imessage_access", "whatsapp_tools", "whatsapp_login"],
       "needs": ""
     },
     {"label": "Reading your connections", "steps": ["linkedin"], "needs": ""},

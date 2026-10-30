@@ -22,9 +22,7 @@ import json
 import os
 import subprocess
 import sys
-import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -151,7 +149,7 @@ def write_local_profile(
         [
             "",
             "When the user asks only for the remembered/current/default Powerset user or set, answer from this section directly.",
-            "Do not run doctor checks, MCP set listing, or skill workflows for that narrow question unless the user asks to verify live or change the set.",
+            "Do not run doctor checks, set listing, or skill workflows for that narrow question unless the user asks to verify live or change the set.",
             "Prefer these local defaults unless `.env` or `.powerpacks/memory/set_ids.json` says otherwise.",
             "Never paste secret env values into chat.",
             "",
@@ -265,11 +263,6 @@ DEFAULT_API_BASE = "https://search-api-7wk4uhe77q-uw.a.run.app"
 def api_base_from_env(values: dict[str, str]) -> str:
     if values.get(API_BASE_ENV_KEY):
         return values[API_BASE_ENV_KEY].rstrip("/")
-    mcp_url = values.get("POWERPACKS_MCP_URL")
-    if mcp_url:
-        parsed = urllib.parse.urlparse(mcp_url)
-        if parsed.scheme and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
     return DEFAULT_API_BASE
 
 

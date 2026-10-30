@@ -1,7 +1,7 @@
 [
   { "id": "net-staff-backend-sf", "query": "staff backend engineers in San Francisco", "surface": "people", "backend": "powerset", "depth": "fast" },
   { "id": "net-who-is-person", "query": "who is Jane Doe", "surface": "people", "backend": "powerset", "depth": "fast", "note": "bare person lookup is people, not company" },
-  { "id": "net-people-at-openai", "query": "find people who work at OpenAI", "surface": "people", "backend": "powerset", "depth": "fast", "note": "company-directory fast path is INTERNAL to the people search" },
+  { "id": "net-people-at-openai", "query": "find people who work at OpenAI", "surface": "people", "backend": "powerset", "depth": "fast", "note": "a company question is a plain people search" },
   { "id": "net-pms-nyc-fintech", "query": "product managers in NYC with fintech experience", "surface": "people", "backend": "powerset", "depth": "fast" },
   { "id": "net-local-imported", "query": "local: senior data engineers in my imported network", "surface": "people", "backend": "local", "depth": "fast" },
   { "id": "net-powerset-set", "query": "search my Powerset set for ML researchers", "surface": "people", "backend": "powerset", "depth": "fast", "note": "'Powerset' beats 'my'" },

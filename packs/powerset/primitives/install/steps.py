@@ -18,7 +18,6 @@ class InstallStep(str, Enum):
     SKILLS = "skills"
     ACCOUNT = "account"
     CREDENTIALS = "credentials"
-    CONNECTION = "connection"
     NETWORK = "network"
     SOURCES = "sources"
     LINKEDIN_LOGIN = "linkedin_login"
@@ -40,7 +39,7 @@ class InstallStep(str, Enum):
     READY = "ready"
 
 
-DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"]
+DEFAULT_PLAN = ["runtime", "dependencies", "skills", "account", "credentials", "network"]
 PROCESSING_STEPS = (InstallStep.DEEP_CONTEXT, InstallStep.ENRICH, InstallStep.INDEX, InstallStep.VALIDATE,
                     InstallStep.READY)
 # One run's sources: each run's selection starts these over, so the record shows that run's sources.

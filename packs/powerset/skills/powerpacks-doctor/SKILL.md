@@ -1,6 +1,6 @@
 ---
 name: powerpacks-doctor
-description: Diagnose Powerpacks installation, Python, login, credentials, and agent connection problems. Use for a requested health check or when a Powerpacks workflow fails with an unclear setup error. Repair within the user's requested scope; not for routine preflight or product development.
+description: Diagnose Powerpacks installation, Python, login, and credentials problems. Use for a requested health check or when a Powerpacks workflow fails with an unclear setup error. Repair within the user's requested scope; not for routine preflight or product development.
 ---
 
 # Powerpacks Doctor

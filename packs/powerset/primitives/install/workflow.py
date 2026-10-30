@@ -230,7 +230,7 @@ class SourceOnboarding:
         if not local["config"]["oauth_configured"]:
             self._write("gmail.app.starting")
             created = BrowserSetup.from_args(msgvault_parser().parse_args(
-                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"]),
+                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0]]),
                 on_stage=self._gmail_stage).run()
             # A stop in Google Cloud is the agent's to fix; the user is not handed its steps.
             if not self._result(created, "gmail.app.ready", waiting="gmail.app.stopped", failed="gmail.app.failed"):
