@@ -6,11 +6,9 @@ import { useFeatures } from "@/lib/features"
 import { useQuery } from "@tanstack/react-query"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
-import { fetchInstall } from "@/lib/api/install"
 import { AGENT, PAGES, type Page, type PageKey } from "@/lib/nav"
 import { COLLAPSED_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
-import { useSetupDone } from "@/hooks/useSetupDone"
 import { cn } from "@/lib/utils"
 import { Chats } from "@/pages/agent/Chats"
 
@@ -21,14 +19,12 @@ import {
   PeopleIcon,
   SearchesIcon,
   SettingsIcon,
-  SetupIcon,
   TasksIcon,
   TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
 import { CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
-import { Spinner } from "./Spinner"
 import { SidebarFooter } from "./SidebarFooter"
 
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
@@ -42,7 +38,6 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   sets: HiveIcon,
   team: TeamIcon,
   tasks: TasksIcon,
-  setup: SetupIcon,
   settings: SettingsIcon,
   accounts: CircleUserRound,
 }
@@ -58,8 +53,8 @@ function useMedia(query: string): boolean {
   return matches
 }
 
-/** The app's side nav: the brand with the collapse toggle, one item per page (Setup only until
- *  it is done; Settings then offers Repair setup), the desktop app's chats, and at the bottom the
+/** The app's side nav: the brand with the collapse toggle, one item per page, the desktop app's
+ *  chats, and at the bottom the import pane while an import runs (Settings offers Repair setup), the
  *  update pane and who is signed in. Collapsed it is an icon rail with the labels as tooltips;
  *  the choice is remembered on this machine. */
 export function Sidebar() {
@@ -67,17 +62,6 @@ export function Sidebar() {
   // The Team page is the Powerset team's: shown to a signed-in @powerset.co account.
   const account = useQuery({ queryKey: ACCOUNT_KEY, queryFn: ({ signal }) => fetchAccount(signal) })
   const onTeam = account.data?.email?.toLowerCase().endsWith("@powerset.co") ?? false
-  const done = useSetupDone()
-  // While setup runs, its nav item turns: the ring in place of the icon, the running step's line
-  // as its tip. The same record the Setup page reads, so the two never disagree.
-  const install = useQuery({
-    queryKey: ["install"],
-    queryFn: ({ signal }) => fetchInstall(signal),
-    enabled: isDesktop() && !done,
-    refetchInterval: 5_000,
-    retry: false,
-  })
-  const running = install.data?.status === "running" ? install.data.message : undefined
   const [collapsed, setCollapsed] = useState(
     () => readStored("local", COLLAPSED_KEY, (raw) => (typeof raw === "boolean" ? raw : null)) ?? false,
   )
@@ -133,11 +117,10 @@ export function Sidebar() {
         {PAGES.filter(
           (page) =>
             (page.key !== "sets" || features.sets) &&
-            (page.key !== "team" || (onTeam && features.team)) &&
-            (page.key !== "setup" || !done),
+            (page.key !== "team" || (onTeam && features.team)),
         ).map((page) => (
           <li key={page.key}>
-            <Item page={page} rail={rail} running={page.key === "setup" ? running : undefined} />
+            <Item page={page} rail={rail} />
           </li>
         ))}
       </ul>
@@ -147,26 +130,20 @@ export function Sidebar() {
   )
 }
 
-function Item({ page, rail, running }: { page: Page; rail: boolean; running?: string }) {
+function Item({ page, rail }: { page: Page; rail: boolean }) {
   const Icon = ICONS[page.key]
   return (
     <NavLink
       to={page.href}
       data-nav={page.key}
-      title={running ?? (rail ? page.label : undefined)}
+      title={rail ? page.label : undefined}
       className={cn(
         "flex h-9 items-center gap-2.5 rounded-[var(--radius-s)] px-2.5 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground",
         "aria-[current=page]:bg-surface-2 aria-[current=page]:font-semibold aria-[current=page]:text-foreground",
         rail && "justify-center px-0",
       )}
     >
-      {running ? (
-        <span className="grid size-[18px] shrink-0 place-items-center">
-          <Spinner className="size-3.5 text-primary" />
-        </span>
-      ) : (
-        <Icon className="size-[18px] shrink-0" />
-      )}
+      <Icon className="size-[18px] shrink-0" />
       {!rail && <span className="truncate">{page.label}</span>}
     </NavLink>
   )
