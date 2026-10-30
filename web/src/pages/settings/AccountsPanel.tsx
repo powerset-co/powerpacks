@@ -22,7 +22,7 @@ import type { InstallStatus } from "@/types/install"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
-const SERVICES: readonly ConnectRow[] = ["powerset", "codex"]
+const SERVICES: readonly ConnectRow[] = ["codex"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
   linkedin: "Your connections",
@@ -151,7 +151,7 @@ export function AccountsPanel({
             </div>
             <div>
               <h2 className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.1em] text-faint">
-                Powerpacks & chat
+                Chat
               </h2>
               {list(SERVICES)}
             </div>
