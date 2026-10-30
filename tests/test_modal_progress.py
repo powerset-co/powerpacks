@@ -27,16 +27,16 @@ class ProgressLineTests(unittest.TestCase):
 
     def test_fetch_start_and_counts_use_the_logged_rate(self):
         self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 700 rpm\n", 3),
-                         ("Company profiles: 0 of 700", 0, 700, 3, 180))
+                         ("Company profiles: 0 of 700", 0, 700, 3, 240))
         self.assertEqual(progress_line("[enrich-companies] fetched 350/700 company profiles\n", 3, 700),
-                         ("Company profiles: 350 of 700", 350, 700, 3, 150))
+                         ("Company profiles: 350 of 700", 350, 700, 3, 210))
         self.assertEqual(progress_line("[enrich-companies] fetched 700/700 company profiles\n", 3, 700),
-                         ("Company profiles: 700 of 700", 700, 700, 3, 120))
+                         ("Company profiles: 700 of 700", 700, 700, 3, 180))
         self.assertEqual(progress_line("[enrich-companies] fetched 40/111 company profiles\n", 3, 600)[-1],
-                         127.1)
+                         187.1)
 
     def test_disabled_rate_limit_has_only_the_remaining_build_estimate(self):
-        self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 0 rpm", 3)[-1], 120)
+        self.assertEqual(progress_line("[enrich-companies] fetching 700 company profiles at 0 rpm", 3)[-1], 180)
 
     def test_other_lines_say_nothing(self):
         self.assertIsNone(progress_line("[enrich-companies] fetched 4/111 company profiles by slug\n", 3))
@@ -72,9 +72,11 @@ class ModalProgressTests(unittest.TestCase):
                 duckdb.return_value.returncode = 0
                 self.assertEqual(run_indexing.main(), 0)
             messages = [item.args[1]["message"] for item in write.call_args_list if "message" in item.args[1]]
-            self.assertEqual(messages, [STEP_WORDS["build_roles"], "Company profiles: 0 of 700",
+            self.assertEqual(messages, ["Starting the sandbox", "Starting the build",
+                                        STEP_WORDS["build_roles"], "Company profiles: 0 of 700",
                                         "Company profiles: 350 of 700", "Company profiles: 700 of 700",
-                                        STEP_WORDS["build_company_corpus"]])
+                                        STEP_WORDS["build_company_corpus"],
+                                        "Preparing search", "Saving your search index"])
 
     def test_import_counts_reach_status_json_from_enrichment_stderr(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(sys, "stderr", io.StringIO()), \

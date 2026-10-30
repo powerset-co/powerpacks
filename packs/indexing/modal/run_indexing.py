@@ -37,7 +37,7 @@ _STEP_START = re.compile(r"^\[build-processing\] start (\S+)")
 _STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
 _COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles\s*$")
 _COMPANY_FETCH = re.compile(r"^\[enrich-companies\] fetching (\d+) company profiles at ([\d.]+) rpm")
-BUILD_SECONDS = 120
+BUILD_SECONDS = 180  # the 15 steps on a few hundred people, measured 2026-10-30
 
 
 def progress_line(line: str, steps_done: int,
@@ -228,7 +228,7 @@ def main() -> int:
     # volume even if the heavy duckdb build fails — we never want to re-pay the
     # LLM enrichment because of a downstream packaging failure.
     if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache", "message": "Saving reusable results"})
+        write_status(run_vol, status | {"phase": "refresh-cache", "message": "Saving reusable results", "left_seconds": 60})
         for rel_src, rel_cache in WORK_TO_CACHE.items():
             src = work / rel_src
             if not src.exists() or src.stat().st_size == 0:
@@ -240,7 +240,7 @@ def main() -> int:
             )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
-    write_status(run_vol, status | {"phase": "duckdb", "message": "Preparing search"})
+    write_status(run_vol, status | {"phase": "duckdb", "message": "Preparing search", "left_seconds": 30})
     # Feed the same people.csv that fed the processing pipeline as the
     # person-profiles source so the shim also builds local_person_profiles
     # (the denormalized contacts table the /contacts UI reads). It is loaded
@@ -259,7 +259,7 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "phase": "duckdb", "exit_code": duckdb_code, "finished_at": now_iso()})
         return duckdb_code
 
-    write_status(run_vol, status | {"phase": "persist", "message": "Saving your search index"})
+    write_status(run_vol, status | {"phase": "persist", "message": "Saving your search index", "left_seconds": 30})
     keep = ["ledger.json", "manifest.json", "stats", "local-search.duckdb"]
     for name in keep:
         src = work / name

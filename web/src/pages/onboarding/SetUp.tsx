@@ -146,11 +146,10 @@ export function SetUp() {
   const modalLeft = estimate
     ? Math.min(estimate.seconds, estimate.seconds - (now - estimate.at) / 1000)
     : null
+  // A Modal estimate that has run out reads "under a minute left" until the next write, not nothing.
   const left =
     modalLeft !== null
-      ? modalLeft > 0
-        ? modalLeft
-        : null
+      ? Math.max(modalLeft, 1)
       : count
         ? secondsLeft(install.data?.samples ?? [], count.total)
         : null
