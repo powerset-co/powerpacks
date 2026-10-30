@@ -53,8 +53,9 @@ class LinkedInSetupTests(unittest.TestCase):
             {"status": "running", "code": "enrich.count", "done": 1, "total": 2, "left_seconds": 3},
             {"status": "running", "code": "enrich.count", "done": 1, "total": 2, "left_seconds": 3},
             {"status": "completed", "code": "enrich.count", "done": 2, "total": 2, "left_seconds": 0},
-            {"status": "completed", "code": "step.embed_companies", "done": 15, "total": 15,
+            {"status": "running", "code": "step.embed_companies", "done": 15, "total": 15,
              "left_seconds": 0},
+            {"status": "completed", "phase": "done"},
         ]
         self.poll = mock(api_runs, "status", side_effect=lambda _label: self.payloads.pop(0))
         self.download = mock(api_runs, "download", return_value=100)
@@ -95,7 +96,7 @@ class LinkedInSetupTests(unittest.TestCase):
             call("index-people", "manifest.json", self.people.parent / "manifest.json")])
         self.realize.assert_called_once_with(self.root / ".powerpacks")
         self.validate.assert_called_once_with(self.people.parent / "local-search.duckdb", self.people)
-        self.assertEqual(self.sleep.call_args_list, [call(3), call(3), call(3)])
+        self.assertEqual(self.sleep.call_args_list, [call(3)] * 4)
 
     def test_second_invocation_repeats_every_stage(self):
         payloads = list(self.payloads)

@@ -49,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         previous = None
         while True:
             payload = api_runs.status(label) or {}
+            # The run's end carries no code: return before writing, so the row never falls back
+            # to the step's opening line.
+            if payload.get("status") == "failed":
+                raise RuntimeError(payload.get("error") or f"Modal run {label} failed")
+            if payload.get("status") == "completed":
+                return payload
             current = tuple(payload.get(key) for key in ("code", "done", "total", "left_seconds"))
             if current != previous:
                 # Modal writes a code and numbers; the words are status_prose.py's ("<event>.<code>").
@@ -56,10 +62,6 @@ def main(argv: list[str] | None = None) -> int:
                 write(f"{event}.{payload['code']}" if payload.get("code") else event,
                       **{key: payload[key] for key in payload.keys() & {"done", "total"}}, details=details)
                 previous = current
-            if payload.get("status") == "failed":
-                raise RuntimeError(payload.get("error") or f"Modal run {label} failed")
-            if payload.get("status") == "completed":
-                return payload
             time.sleep(3)
 
     def download(label: str, name: str, dest: Path) -> None:

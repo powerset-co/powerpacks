@@ -18,6 +18,7 @@ drop other operators' cached rows.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -140,8 +141,10 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_DUCKDB_THREADS", str(max(1, args.compute_threads)))
     os.environ.setdefault("POWERPACKS_CACHE_THREADS", "8")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
-    with open(args.people_csv, encoding="utf-8", errors="replace") as handle:
-        people = max(sum(1 for _ in handle) - 1, 0)
+    # CSV rows, not lines: profile fields carry newlines (378 people were 993 lines).
+    csv.field_size_limit(sys.maxsize)
+    with open(args.people_csv, encoding="utf-8", errors="replace", newline="") as handle:
+        people = sum(1 for _ in csv.DictReader(handle))
     write_status(run_vol, status | {"code": "seed", "left_seconds": seconds_left("estimate", people)})
 
     (work / "unified/roles").mkdir(parents=True, exist_ok=True)
