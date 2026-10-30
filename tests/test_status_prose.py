@@ -14,7 +14,7 @@ from pathlib import Path
 from packs.powerset.primitives.install.prose_cli import _RUN, _SAMPLE, _entry
 from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
 from packs.powerset.primitives.install.status_prose import (
-    DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, page_prose, render)
+    DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, STAGE_EVENTS, page_prose, render)
 from packs.powerset.primitives.install.steps import InstallStep
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,8 +66,30 @@ def _modal_codes() -> dict[str, set[str]]:
             "index.linkedin": importing | shared}
 
 
+def _phase_events() -> set[str]:
+    """The events built from the phase codes the nodes actually report."""
+    root = ROOT / "packs/ingestion/primitives"
+    sources = [(stage, running.split(".")[0], list((root / "deep_context_v2" / stage).glob("*.py")))
+               for stage, (_, running) in STAGE_EVENTS.items()]
+    sources.append(("signals", "discover", [root / "share/web/signals.py"]))
+    events = set()
+    for stage, prefix, paths in sources:
+        for path in paths:
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                function = node.func
+                name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", "")
+                phase = node.args[0]
+                if name in {"progress", "on_progress"} and isinstance(phase, ast.Constant) and isinstance(phase.value, str):
+                    events.add(f"{prefix}.{stage}.{phase.value}")
+    return events
+
+
 def _written() -> tuple[set[str], set[str]]:
     literals, prefixes = set(), set()
+    literals |= {event for pair in STAGE_EVENTS.values() for event in pair if event}
+    literals |= _phase_events()
     literals |= {f"{base}.{code}" for base, codes in _modal_codes().items() for code in codes}
     for path in WRITERS:
         found, heads = _python_events(path)
@@ -93,6 +115,26 @@ class StatusProseTests(unittest.TestCase):
                             if isinstance(value, ast.Dict):
                                 keys.extend(key.value for key in value.keys if isinstance(key, ast.Constant))
                         self.assertIn("code", keys)
+
+    def test_deep_context_skill_task_names_are_prose_stage_words(self) -> None:
+        skill = (ROOT / "packs/ingestion/skills/deep-context/SKILL.md").read_text()
+        tasks = dict(re.findall(r"^(\d+)\. (.+)$", skill, re.MULTILINE))
+        events = ("discover.people", "discover.reading", "discover.learning", "discover.combining",
+                  "discover.grouping", "enrich.running")
+        for number, event in enumerate(events, 2):
+            self.assertEqual(tasks[str(number)], PROSE[event].line)
+            print(f"{number}. {tasks[str(number)]}")
+
+    def test_each_counted_deep_context_phase_has_counted_prose(self) -> None:
+        for event in _phase_events() - {"discover.signals.people"}:
+            for desktop in (False, True):
+                _, line, _ = render(event, {"done": 3200, "total": 6346}, desktop=desktop)
+                self.assertIn("3,200 of 6,346", line)
+
+    def test_updating_people_has_no_count(self) -> None:
+        for desktop in (False, True):
+            self.assertEqual(render("discover.signals.people", {"done": 0, "total": 0}, desktop=desktop)[1],
+                             "Updating People")
 
     def test_every_event_the_installer_writes_is_in_the_script(self) -> None:
         literals, prefixes = _written()
@@ -133,7 +175,7 @@ class StatusProseTests(unittest.TestCase):
                 self.assertEqual(line, "Provider progress")
 
     def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
-        mapping = json.loads((INSTALL / "setup-steps-mapping.json").read_text())
+        mapping = json.loads((INSTALL / "status.json").read_text())
         codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
         self.assertCountEqual(codes, list(InstallStep))
         rows = [step for row in ROWS for step in row.steps]

@@ -21,7 +21,7 @@ import {
   type SignalsPlan,
   type SignalsStatus,
 } from "@/lib/api/signals"
-import { countOf, plural } from "@/lib/copy"
+import { plural } from "@/lib/copy"
 
 import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
 
@@ -175,16 +175,7 @@ export function RefreshSignals({ people, icon = false, onDone }: RefreshSignalsP
             <p className="m-0">Signals are up to date.</p>
           ) : running ? (
             <div className="grid gap-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <span>{status.message}</span>
-                {status.total ? (
-                  <span className="tabular-nums text-muted-foreground">
-                    {status.message === "Reading families"
-                      ? `${status.done.toLocaleString()} of ${status.total.toLocaleString()}`
-                      : countOf(status.done, status.total, "request")}
-                  </span>
-                ) : null}
-              </div>
+              <span>{status.message}</span>
               <ProgressBar label="Refresh progress" done={status.done} total={status.total} />
             </div>
           ) : status?.status === "completed" && !failure ? (

@@ -26,7 +26,7 @@ from packs.ingestion.primitives.deep_context_v2.run import archive_v1, index_com
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.install.status_prose import PROSE
+from packs.powerset.primitives.install.status_prose import PROSE, STAGE_EVENTS
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
 from packs.powerset.primitives.install.controller import LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
@@ -36,22 +36,6 @@ _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
 _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
-# Each stage's page events: while it estimates (empty: it prices nothing), while it runs.
-_EVENTS = {
-    "load": ("", "discover.people"),
-    "collect": ("", "discover.reading"),
-    "synthesize": ("discover.estimating", "discover.learning"),
-    "dedupe": ("discover.duplicates", "discover.combining"),
-    "worth": ("discover.grouping", "discover.grouping"),
-    "enrich": ("enrich.running", "enrich.running"),
-}
-# The live line of a stage's phase as its paid calls come back (Node.progress), at most every
-# _COUNT_SECONDS so the manifest is not rewritten per call.
-_COUNT_EVENTS = {
-    ("synthesize", "facts"): "discover.learning.count",
-    ("enrich", "research"): "enrich.researching.count",
-    ("enrich", "judge"): "enrich.judging.count",
-}
 _COUNT_SECONDS = 2.0
 
 
@@ -104,27 +88,33 @@ class ProcessingOnboarding:
     def _stage(self, name: str, node: Node) -> None:
         """One v2 stage under its page events: its estimate (when it prices its work), then its run
         with its counts on the page as they come in."""
-        estimating, running = _EVENTS[name]
+        estimating, running = STAGE_EVENTS[name]
+        node.on_progress = self._counter(name)
         if estimating:
             self._run(f"{name} estimate", node.estimate, estimating)
-        node.on_progress = self._counter(name)
         self._run(name, lambda: _manifest_payload(node.run()), running)
 
     def _counter(self, name: str) -> Callable[[str, int, int], None]:
         """The stage's progress callback: its phase's count event, written at most every _COUNT_SECONDS
         and when the phase is done."""
         written_at = 0.0
+        started_at: dict[str, float] = {}
+        prefix = STAGE_EVENTS[name][1].split(".")[0]
 
         def count(phase: str, done: int, total: int) -> None:
             nonlocal written_at
-            event = _COUNT_EVENTS.get((name, phase))
-            if event is None or not total:
+            event = f"{prefix}.{name}.{phase}"
+            if not total or event not in PROSE:
                 return
             now = time.monotonic()
+            started = started_at.setdefault(phase, now)
             if done < total and now - written_at < _COUNT_SECONDS:
                 return
             written_at = now
-            self._write(event, done=done, total=total, details={"done": done, "total": total})
+            details: dict[str, int | float] = {"done": done, "total": total}
+            if done:
+                details["left_seconds"] = (now - started) / done * (total - done)
+            self._write(event, done=done, total=total, details=details)
 
         return count
 

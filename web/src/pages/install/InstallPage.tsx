@@ -13,7 +13,7 @@ import { ReservedLines } from "@/components/shared/ReservedLines"
 import { EmptyPanel } from "@/pages/review/shared/EmptyPanel"
 import type { InstallAction, InstallState, InstallStatus } from "@/types/install"
 
-import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
+import MAPPING from "../../../../packs/powerset/primitives/install/status.json"
 
 import { DesktopSetup } from "./DesktopSetup"
 import { SetupKnot } from "./SetupKnot"

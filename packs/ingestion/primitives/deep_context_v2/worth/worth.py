@@ -37,7 +37,6 @@ from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
 DECISIONS_CACHE_DIR = Path("deep-context") / "decisions"  # answers by request digest
 # Measured overhead per question beyond the request text (2026-10-13).
 LABELS_TOKENS_PER_QUESTION = 107
-LABELS_PHASE = "Reading signals"
 PRE_MATCHED_REASON = "Already in the network: the name matches one LinkedIn connection."
 NOTABLE_REASON_PREFIX = "Notable position: "
 DEFAULT_LIMIT = 100_000  # more families than any store has; --limit N judges the first N
@@ -145,7 +144,7 @@ class Worth(Node):
         notable: int = 0
         cached: int = 0
         tokens: int = 0
-        self.progress("Reading families", 0, len(pending))
+        self.progress("families", 0, len(pending))
         for done, family in enumerate(pending, 1):
             request = self._request(family)
             digest = request_digest(luna.REQUEST_VERSION, request)
@@ -159,7 +158,7 @@ class Worth(Node):
             else:
                 tokens += input_tokens(request) + LABELS_TOKENS_PER_QUESTION * len(request["questions"])
             del request
-            self.progress("Reading families", done, len(pending))
+            self.progress("families", done, len(pending))
         return {
             "families": len(families), "members": members,
             "pending": len(pending), "pre_matched_yes": pre_matched, "notable_positions": notable,
@@ -192,7 +191,7 @@ class Worth(Node):
                 continue
             batch_missing = sum(saved_answers(self.cache_dir, digest, luna.refused) is None for digest in requests)
             answers = asyncio.run(decide_all(requests, self.cache_dir, cache_only=cache_only, stage="worth_labels",
-                                             on_progress=lambda done, total: self.progress(LABELS_PHASE, completed + done, missing),
+                                             on_progress=lambda done, total: self.progress("labels", completed + done, missing),
                                              refused=luna.refused))
             for digest, answer in answers.items():
                 labels_by_digest[digest] = None if luna.refused(answer) else {

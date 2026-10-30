@@ -22,8 +22,7 @@ export interface InstallAction {
   qr_url?: string
   details?: unknown
 }
-/** The page's fixed words, from packs/powerset/primitives/install/status_prose.py. The rows come
- *  from setup-steps-mapping.json beside it, imported by the pages. */
+/** The page's fixed words and rows, from packs/powerset/primitives/install/status.json. */
 export interface InstallProse {
   page: Record<string, string>
 }

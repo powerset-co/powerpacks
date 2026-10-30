@@ -56,6 +56,7 @@ from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 from packs.memory.runner import keep_updated
+from packs.powerset.primitives.install.status_prose import STAGE_EVENTS, render
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEW_PID_FILE = Path("deep-context") / "review-server.pid"
@@ -74,14 +75,16 @@ V1_STATE_GLOBS = ("deep-context.sqlite.*", "review-*.log", "*.message-linkedin.b
 
 def _print(stage: str, manifest: Manifest) -> None:
     counts: str = " ".join(f"{key}={value}" for key, value in manifest.counts.items())
-    print(f"{stage}: {manifest.status} {counts} {manifest.error or ''}".rstrip(), flush=True)
+    prefix = f"{render(STAGE_EVENTS[stage][1], {})[1]} — " if stage in STAGE_EVENTS else ""
+    print(f"{prefix}{stage}: {manifest.status} {counts} {manifest.error or ''}".rstrip(), flush=True)
 
 
 def _stage(stage: str, node: Node) -> Manifest:
     """Estimate (when the node prices its work), run, print; a failed stage ends the run."""
     estimate = getattr(node, "estimate", None)
     if estimate is not None:
-        print(f"{stage} estimate: {json.dumps(estimate())}", flush=True)
+        event = STAGE_EVENTS[stage][0]
+        print(f"{render(event, {})[1]} — {stage} estimate: {json.dumps(estimate())}", flush=True)
     manifest: Manifest = node.run()
     _print(stage, manifest)
     if manifest.status != "completed":

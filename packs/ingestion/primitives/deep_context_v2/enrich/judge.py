@@ -262,6 +262,8 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], owner_block: 
                 print(f"failed one family: {type(exc).__name__}")
                 return task, None
 
+        if on_progress is not None:
+            on_progress("judge", 0, len(tasks))
         calls = [asyncio.create_task(guarded(task)) for task in tasks]
         for done, call in enumerate(asyncio.as_completed(calls), 1):
             task, verdicts = await call

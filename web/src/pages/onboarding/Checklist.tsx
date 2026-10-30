@@ -1,4 +1,4 @@
-// The checklist Set up and Import share: the golden rows the run plans (setup-steps-mapping.json),
+// The checklist Set up and Import share: the golden rows the run plans (status.json),
 // the running row's line and time left, and a stop's way out.
 
 import { CheckIcon, Spinner } from "@/components/shared"
@@ -7,7 +7,7 @@ import { errorText } from "@/lib/api/http"
 import { cn } from "@/lib/utils"
 import type { InstallStatus } from "@/types/install"
 
-import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
+import MAPPING from "../../../../packs/powerset/primitives/install/status.json"
 
 import { Note } from "./Frame"
 import { stopDetail } from "@/pages/install/sources"
