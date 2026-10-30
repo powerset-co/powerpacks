@@ -48,6 +48,22 @@ class ResolveEducationTests(unittest.TestCase):
                          "University of California, Los Angeles")
         self.assertEqual(resolve_education.without_alias("KTH Royal Institute of Technology"), "KTH Royal Institute of Technology")
 
+    def test_exact_word_beats_a_larger_school_that_only_starts_with_it(self) -> None:
+        schools = [Row("huji", school_name="Hebrew University (Tumor Immunology)", person_count=89),
+                   Row("tum", school_name="Technical University of Munich (TUM School of Management)", person_count=73)]
+        with FakeNamespaces({"schools": schools, "education": []}):
+            result = asyncio.run(resolve_education.resolve_name("TUM", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["tum"])
+
+    def test_an_alias_does_not_join_another_schools_family(self) -> None:
+        schools = [Row("columbia", school_name="Columbia University (Columbia Business School)", person_count=900),
+                   Row("gwu", school_name="George Washington University (Columbian College)", person_count=300),
+                   Row("sc", school_name="University of South Carolina (Columbia Campus)", person_count=70),
+                   Row("barnard", school_name="Barnard College, Columbia University", person_count=20)]
+        with FakeNamespaces({"schools": schools, "education": []}):
+            result = asyncio.run(resolve_education.resolve_name("Columbia University", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["columbia", "barnard"])
+
     def test_resolve_name_adds_the_ids_people_are_filed_under(self) -> None:
         # The schools index knows KTH only by its Swedish name under the id most people are filed under;
         # the English name is a second id with a few people. The query must resolve both.
