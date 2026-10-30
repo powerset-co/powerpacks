@@ -180,6 +180,8 @@ describe("RunView", () => {
     renderRun(null, NOT_STOPPED, QUICK_RUN, "running")
     expect(screen.getByText("2 screened, ranking…")).toBeTruthy()
     expect(document.querySelector(".result-row")).toBeNull()
+    // Skeleton rows hold the table's place, not an empty pane.
+    expect(document.querySelectorAll("[data-results-waiting] .bg-card").length).toBeGreaterThan(0)
   })
 
   it("shows the header, the pond chain and both score tables in the documented order", () => {

@@ -1,6 +1,5 @@
 import { useMemo, type ReactNode } from "react"
 
-import { EmptyState } from "@/components/shared"
 import { isComplete } from "@/lib/searches/copy"
 import type { ResultSection, Results } from "@/lib/searches/ranking"
 import type { SearchResult } from "@/types/searches"
@@ -9,6 +8,7 @@ import { PondChain } from "./PondChain"
 import { ResultsTable, type ResultItem } from "./ResultsTable"
 import type { RowContext } from "./RowActions"
 import { RunHeader } from "./RunHeader"
+import { RowsSkeleton } from "./RunLoading"
 import { SearchFilters } from "./SearchFilters"
 
 export interface SearchRunProps {
@@ -59,8 +59,10 @@ export function SearchRun(props: SearchRunProps) {
   // One identity per filtered list: the table's row keys and measurements follow it.
   const items = useMemo(() => tableItems(sections), [sections])
   // A plain run's rows arrive screened and the ranking reorders them, so the table waits for it.
-  // A deep run shows its finished ponds while the next one runs.
-  const ranking = !search.jd_text && status !== undefined && status !== "failed" && !isComplete(status)
+  // A deep run shows its finished ponds while the next one runs; until one has people, it waits too.
+  const running = status !== undefined && status !== "failed" && !isComplete(status)
+  const ranking = running && !search.jd_text
+  const waiting = ranking || (running && items.length === 0 && !filtered)
   return (
     <div className="search-run" data-search-run>
       <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
@@ -76,10 +78,13 @@ export function SearchRun(props: SearchRunProps) {
       <div className="run-toolbar" data-run-toolbar>
         {props.toolbar}
       </div>
-      {ranking ? (
-        <EmptyState className="results-empty" data-results-ranking>
-          {`${props.people.toLocaleString()} screened, ranking…`}
-        </EmptyState>
+      {waiting ? (
+        <div className="grid content-start" aria-busy="true" data-results-waiting>
+          <p className="m-0 border-b border-line px-3 py-2 text-xs text-muted-foreground">
+            {ranking ? `${props.people.toLocaleString()} screened, ranking…` : "Searching…"}
+          </p>
+          <RowsSkeleton />
+        </div>
       ) : (
         <ResultsTable
           items={items}
