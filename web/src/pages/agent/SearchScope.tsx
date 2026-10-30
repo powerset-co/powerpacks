@@ -59,6 +59,7 @@ export function SearchScope() {
     } else setScope({ set_id: value })
   }
   // The pill is the app's Select with its own face: the pick's name and count, as wide as they are.
+  // Pinned, it is a plain label: no hover, no chevron.
   return (
     <span className="relative inline-flex">
       <Select value={selected} onValueChange={choose} disabled={pinned}>
@@ -69,7 +70,7 @@ export function SearchScope() {
               ? "This chat searches here; start a new chat to search elsewhere"
               : "Where this chat searches"
           }
-          className="h-[26px] w-auto max-w-[240px] gap-1.5 rounded-full border-line bg-transparent py-0 pl-2.5 pr-2 text-[11px] text-muted-foreground transition-colors duration-fast ease-out hover:text-foreground focus:border-line-strong focus:ring-0 focus:ring-offset-0 disabled:cursor-default disabled:opacity-100 [&>svg]:size-3 [&>svg]:shrink-0"
+          className="h-[26px] w-auto max-w-[240px] gap-1.5 rounded-full border-line bg-transparent py-0 pl-2.5 pr-2 text-[11px] text-muted-foreground transition-colors duration-fast ease-out hover:text-foreground focus:border-line-strong focus:ring-0 focus:ring-offset-0 disabled:cursor-default disabled:opacity-100 disabled:hover:text-muted-foreground [&:disabled>svg]:hidden [&>svg]:size-3 [&>svg]:shrink-0"
         >
           {/* A long name gives way before its count does. */}
           <span className="flex min-w-0">
