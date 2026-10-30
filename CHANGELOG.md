@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.49.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.1...powerpacks-v3.49.0) (2026-10-30)
+
+
+### Features
+
+* **desktop:** msgvault, wacli and the Google Cloud CLI ship in the app ([#1025](https://github.com/powerset-co/powerpacks/issues/1025)) ([08415ec](https://github.com/powerset-co/powerpacks/commit/08415ecf31e92de45a56a93046d93fc99b2b0024))
+* **people:** LinkedIn-only people show their profile and always upload ([#1015](https://github.com/powerset-co/powerpacks/issues/1015)) ([232aba8](https://github.com/powerset-co/powerpacks/commit/232aba84beecaec5cef082c05c945ceb4cdc6dab))
+* **setup:** the LinkedIn setup is one file and Set up is a checklist that says what it is doing ([#1027](https://github.com/powerset-co/powerpacks/issues/1027)) ([abcfde1](https://github.com/powerset-co/powerpacks/commit/abcfde1e77f82a23b11cb379838a6ebc7b9a1b40))
+
+
+### Bug Fixes
+
+* **onboarding:** allow the setup_skip command in the app's capability ([#1021](https://github.com/powerset-co/powerpacks/issues/1021)) ([4cef9f7](https://github.com/powerset-co/powerpacks/commit/4cef9f76e61f073a4a07840436cbda9db80f78da))
+
 ## [3.48.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.0...powerpacks-v3.48.1) (2026-10-29)
 
 
