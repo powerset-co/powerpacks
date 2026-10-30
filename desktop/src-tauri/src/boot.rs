@@ -26,7 +26,6 @@ use crate::crash::{self, Crash};
 use crate::onboard::{self, Setup};
 use crate::paths;
 use crate::source::{self, Plan};
-use crate::tools;
 
 pub const HOST: &str = "127.0.0.1";
 pub const PORT: u16 = 8765;
@@ -163,11 +162,6 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     // Codex's skills (~/.agents/skills) are links into the code just installed: this version's.
     if let Some(home) = dirs::home_dir() {
         source::link_skills(&root, &home, &version)?;
-        // The command-line tools the app ships, placed where Powerpacks looks for them.
-        if tools::stale(app, &home) {
-            boot.step(app, "Installing import tools", "");
-            tools::place(app, &home)?;
-        }
     }
 
     if first {
@@ -204,6 +198,17 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             }
             Err(error) => boot.line(app, format!("Browser download skipped: {error}")),
         }
+    }
+
+    // wacli and the Google Cloud CLI, downloaded once per pinned version like the browser, so Gmail
+    // and WhatsApp never wait for them. Silent when both are current; a failure does not stop the
+    // launch (the import retries its own install).
+    let mut tools = Command::new(paths::project_python(&root));
+    tools
+        .args(["-m", "packs.powerset.primitives.install.preflight", "tools"])
+        .current_dir(&root);
+    if let Err(error) = stream(app, boot, tools, "Import tools") {
+        boot.line(app, format!("Import tools download failed: {error}"));
     }
 
     if let Err(error) = serve(app, &root) {
