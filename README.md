@@ -105,10 +105,10 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface (`$powerset setup` runs the install skill): credential refresh, setup status, Auth0 identity, MCP install, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
+| [`powerset`](packs/powerset/skills/powerset/SKILL.md) | `$powerset login`, `$powerset status`, `$powerset sets ...` | Unified Powerset command surface (`$powerset setup` runs the install skill): credential refresh, setup status, Auth0 identity, and local default set selection. `$powerset-login` / `$powerset-set` remain aliases. |
 | [`powerpacks-doctor`](packs/powerset/skills/powerpacks-doctor/SKILL.md) | Health checks and setup failures | Diagnose unclear failures, repair within the requested scope, and retry the original command. |
 | [`install-powerpacks`](packs/powerset/skills/install-powerpacks/SKILL.md) | The pasted install URL, `$setup` | The one setup path: installs Powerpacks, signs in to Powerset, syncs LinkedIn, Gmail, iMessage and WhatsApp, processes contacts, and builds the search index. Rerun its saved command to resync. |
-| [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, account auth, and Codex MCP registration. |
+| [`msgvault`](packs/ingestion/skills/msgvault/SKILL.md) | `$msgvault`, `$powerset create oauth app` | Guided msgvault setup for local Gmail archive access: install/status, browser-assisted Google OAuth Desktop app creation, client secret config, and account auth. |
 | [`import-gmail`](packs/ingestion/skills/import-gmail/SKILL.md) | `$import-gmail` | Contact sync only: bounded msgvault sync, metadata-only extraction, and free local-directory attach. Unresolved contacts land in a research-candidates pool; identity lookups and indexing happen in `$deep-context`. See the [product guide](packs/ingestion/docs/gmail-import-pipeline.md). |
 | [`import-messages`](packs/ingestion/skills/import-messages/SKILL.md) | `$import-messages` | Contact sync only: adds iMessage/WhatsApp contact metadata, matches against imported LinkedIn/Gmail people for free, and stages matched people + a research-candidates pool for `$deep-context`. No LLM, no research, no index build in-skill. See the [product guide](packs/ingestion/docs/message-import-pipeline.md). |
 | [`deep-context`](packs/ingestion/skills/deep-context/SKILL.md) | `$deep-context`, "process my contacts" | The single post-import workflow and dossier surface: context over people + unresolved candidates, duplicate merge, a binary exception queue with editable Yes/No piles, one revision-bound lookup for effective-Yes people, LinkedIn verify/replace/Skip review, fan-in + Modal index + validate, plus ad-hoc person lookup/re-review. See the [product guide](packs/ingestion/docs/deep-context-pipeline.md). |
@@ -117,7 +117,7 @@ Product and architecture walkthroughs live in the
 
 | Skill | Trigger | What it does |
 | --- | --- | --- |
-| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator search through the `powerset-search` MCP. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Depends on `$powerset setup` having run first. |
+| [`sales-nav-search`](packs/sales-nav/skills/sales-nav-search/SKILL.md) | `$sales-nav-search` | Run a Sales Navigator lead search. Resolves company / title filters, runs a paginated lead search with server-side artifact persistence on by default, paginates via `get_artifact`. Requires the optional Powerset tools installation below. |
 | [`build-outbound`](packs/apollo/skills/build-outbound/SKILL.md) | `$build-outbound setup`, `$build-outbound <instructions>` | Resolve Sales Nav leads, preview copy, enrich through Apollo, create an inactive Apollo sequence/campaign, enroll contacts, and activate only with a separate exact campaign confirmation. |
 
 ## Goal
@@ -141,21 +141,19 @@ self-contained slice of the system.
 ```text
 powerpacks/
 ├── packs/
-│   ├── powerset/           identity + runtime env + MCP install
+│   ├── powerset/           identity + runtime env
 │   │   │                   (depended on by every other pack)
 │   │   ├── skills/         powerset (unified commands), powerset-login,
 │   │   │                   powerset-set (backcompat aliases)
 │   │   ├── primitives/     auth/ (Auth0 PKCE),
 │   │   │                   pull_runtime_keys/ (Powerset API key pull),
-│   │   │                   doctor/ (one-shot setup health check),
-│   │   │                   mcp_install/ (powerset-search MCP into
-│   │   │                                 Claude Code / Codex)
+│   │   │                   doctor/ (one-shot setup health check)
 │   │   └── templates/      env.example
-│   ├── sales-nav/          Sales Navigator search via the powerset-search MCP
+│   ├── sales-nav/          Sales Navigator lead search
 │   │   └── skills/         sales-nav-search
 │   ├── apollo/             Apollo.io setup + script-backed outbound builds
 │   │   ├── skills/         build-outbound
-│   │   └── primitives/     apollo_mcp, build_outbound
+│   │   └── primitives/     outbound setup + build_outbound
 │   ├── indexing/           local people.csv → search-index artifact pipeline
 │   │   ├── skills/         build-local-search-index
 │   │   ├── primitives/     build_processing_pipeline + transform CLIs
@@ -198,7 +196,7 @@ Use this path for a new Codex, Claude Code, or Pi setup. A fuller walkthrough is
 
 ```bash
 # 1. Let Codex clone/update the repo and run its install adapter.
-codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerset login/MCP setup steps from its instructions."
+codex exec "Clone or update https://github.com/powerset-co/powerpacks in the current directory, then run the Codex install and Powerpacks setup steps from its instructions."
 
 # Or install manually from a local checkout.
 git clone git@github.com:powerset-co/powerpacks.git
@@ -207,23 +205,12 @@ cd powerpacks
 # or: ./install.sh claude-code
 # or: ./install.sh pi
 
-# 2. Install/auth the Powerset MCP for MCP-backed skills.
-# This starts Auth0 login if needed and writes the bearer token into host config.
-./install-powerset-mcp.sh --host codex
-# or: ./install-powerset-mcp.sh --host claude
+# 2. Restart the agent host so it reloads skills.
 
-# 3. Verify MCP config.
-codex mcp get powerset-search
-# Expected for Codex:
-#   bearer_token_env_var: -
-#   http_headers: Authorization=*****
-
-# 4. Restart the agent host so it reloads skills and MCP config.
-
-# 5. Inside the agent, run what you need:
+# 3. Inside the agent, run what you need:
 $search senior infra eng at fintech
 $search-company stripe-like fintech infra companies
-$powerset setup                   # login + .env pull + powerset-search MCP
+$powerset setup                   # sign in, import, process, and index
 $import-gmail                     # Gmail contact sync (free after OAuth)
 $import-messages                  # iMessage + WhatsApp contact sync
 $deep-context                     # process contacts end-to-end, or run ad-hoc
@@ -240,13 +227,13 @@ $deep-context                     # process contacts end-to-end, or run ad-hoc
 | `import-gmail` | msgvault/Gmail OAuth only — the import itself is free and local (identity lookups moved to `deep-context`). |
 | `import-messages` | macOS Full Disk Access for iMessage and WhatsApp/wacli setup — no LLM or research secrets needed in-skill. |
 | `deep-context` | A merged network + linked message sources, Full Disk Access for iMessage, OpenAI for dossiers/triage, Parallel for the approved-person lookup, RapidAPI for retarget hydration, and Modal runtime keys for the index rebuild. |
-| `sales-nav-search` | `$powerset setup` already run (it ships the Auth0 token + registers the `powerset-search` MCP into your host) |
-| `build-outbound` | `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account/schedule, and a Sales Nav run or manifest. Node/npx is only needed for MCP setup/status. |
+| `sales-nav-search` | Powerset login and the optional Powerset tools installation below |
+| `build-outbound` | `APOLLO_API_KEY` in `.env` or shell, connected Apollo email account/schedule, and a Sales Nav run or manifest. Node/npx is needed for Apollo setup/status. |
 
 ### Secrets / env vars
 
 `$powerset setup` is the recommended one-command path: it logs in, runs
-`$powerset env pull`, and installs/refreshes the `powerset-search` MCP.
+`$powerset env pull`, and imports and indexes your network.
 `$powerset login` and `$powerset env pull` remain available as smaller
 backcompat/maintenance commands. Env pull populates `.env` from the
 authenticated Powerset API for provisioned users. Hosted processing for
@@ -332,9 +319,7 @@ bin/update-claude                         # alias for update-claude-code
 Pi discovers skills from `~/.pi/agent/skills/`, `.pi/skills/`, `.agents/skills/`,
 and configured package/settings paths. Installed skills are available as
 `/skill:<name>` commands (for example `/skill:powerset whoami`) and can also be
-loaded naturally when you type prompts like `$powerset whoami`. Pi does not ship
-first-party MCP support, so the Pi adapter installs skills only; MCP-backed
-Powerpacks flows still need a Pi MCP extension or a host with MCP support.
+loaded naturally when you type prompts like `$powerset whoami`.
 
 ### NanoClaw
 
@@ -367,33 +352,20 @@ bin/update-claude-code       # Claude Code: pull, sync agent files, reinstall sk
 # then restart the agent host, or run /reload in Pi, so it re-reads the skill list
 ```
 
-This is the only command needed for skill / primitive changes. The `mcp_install`
-registrations are written to host config files (`~/.codex/config.toml`,
-`~/.claude.json`) and only need re-running when the MCP URL or token format
-changes — `$powerset setup` covers that path.
+This is the only command needed for skill / primitive changes.
 
-### MCP install (powerset-search)
+### Powerset tools in Claude Code (optional)
 
-The `sales-nav-search` skill and any future MCP-driven skills need the remote
-`powerset-search` MCP registered with your agent host. The wrapper below
-handles Auth0 login when credentials are missing or expired, installs the MCP,
-and writes the bearer token into host config:
+The remote Powerset Search MCP is installed only by explicit request, separately
+from Powerpacks setup. To register it in Claude Code:
 
 ```bash
-./install-powerset-mcp.sh --host codex      # or claude/all
-# verify
-claude mcp list                  # for Claude Code
-codex mcp list 2>/dev/null \
-  || uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host codex
+./install-powerset-mcp.sh --host claude
 ```
 
-Claude Code bakes the bearer token into `~/.claude.json` at install time.
-Codex stores the bearer header in `~/.codex/config.toml`, matching Codex's
-HTTP MCP config shape. Re-run the installer to refresh the token:
-
-```bash
-./install-powerset-mcp.sh --host codex
-```
+The installer uses `POWERPACKS_MCP_URL` and your Powerset login.
+It also supports `--host codex` or `--host all`. Rerun the command to refresh
+its saved bearer token.
 
 ## Verify your install
 
@@ -407,8 +379,7 @@ ls ~/.agents/skills/               # or ~/.claude/skills/, ~/.pi/agent/skills/
 # 2. Powerpacks unit tests
 python3 -m unittest discover -s tests
 
-# 3. MCP reachability (after $powerset setup)
-claude mcp list                    # "powerset-search ... ✓ Connected"
+# 3. Account and runtime keys
 uv run --project . python packs/powerset/primitives/doctor/doctor.py run
 ```
 
@@ -416,7 +387,7 @@ Then, **inside the agent host**, sanity-check each skill family:
 
 | Skill | Test prompt |
 | --- | --- |
-| `powerset setup` | Type `$powerset setup` — the agent should run the doctor, handle missing login, pull runtime keys, and finish with `mcp_install`. |
+| `powerset setup` | Type `$powerset setup` — the agent should sign in, pull runtime keys, import contacts, process them, and build the index. |
 | `search` | `$search senior infra engineers in NYC` — should produce a plan + approval prompt, not retrieve anything yet. |
 | `sales-nav-search` | `$sales-nav-search VPs of engineering at Stripe` — should resolve company id, run the search, return a first page of leads + an `artifact_id`. |
 | `import-gmail` | `$import-gmail` — should create a nine-step plan, ask for accounts/window, use one bounded multi-account discovery command, and end by suggesting missing sources + offering `$deep-context`. |
@@ -523,4 +494,4 @@ Those pieces are not part of the portable primitive surface.
 
 ## Powerset-hosted config
 
-Hosted Powerset commands require explicit API/MCP/Auth0 config. Copy `packs/powerset/templates/env.powerset.example` to `.env` for Powerset-hosted use.
+Hosted Powerset commands require API/Auth0 config. Copy `packs/powerset/templates/env.powerset.example` to `.env` for Powerset-hosted use.

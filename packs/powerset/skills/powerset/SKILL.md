@@ -1,12 +1,12 @@
 ---
 name: powerset
-description: Unified Powerset command surface. Use for `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use [id-or-name]`, `$powerset mcp install`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
+description: Unified Powerset command surface. Use for `$powerset setup`, `$powerset login`, `$powerset status`, `$powerset whoami`, `$powerset sets list`, `$powerset sets use [id-or-name]`, `$powerset env pull`, `$powerset create oauth app`, and `$powerset help`.
 ---
 
 # Powerset
 
 Use this skill when the user asks for `$powerset ...` or wants Powerset setup,
-status, identity, MCP registration, runtime key pull, or default set selection.
+status, identity, runtime key pull, or default set selection.
 First-run setup has one path, the install skill
 (`packs/powerset/skills/install-powerpacks/SKILL.md`); `$powerset setup` runs it.
 
@@ -19,9 +19,8 @@ First-run setup has one path, the install skill
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
-| `$powerset sets`, `$powerset sets list` | List sets via the Powerset Search MCP. |
-| `$powerset sets use <id|name>` | Resolve a set via MCP and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
-| `$powerset mcp install` | Register/refresh the `powerset-search` MCP for local hosts. |
+| `$powerset sets`, `$powerset sets list` | Follow `packs/powerset/skills/powerset-set/SKILL.md` to list sets via HTTP `/v2/sets`. |
+| `$powerset sets use <id|name>` | Follow `packs/powerset/skills/powerset-set/SKILL.md` to resolve a set via HTTP `/v2/sets` and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
 | `$powerset env pull` | Pull your Modal token + OpenAI key + Parallel key + Powerset API key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 
@@ -36,12 +35,11 @@ When asked for help, respond with:
 
 ```text
 $powerset setup                 set up Powerpacks (runs the install skill)
-$powerset login                 refresh Auth0 credentials and MCP config
+$powerset login                 refresh Auth0 credentials and runtime keys
 $powerset status                check local setup
 $powerset whoami                show current Powerset/Auth0 identity
 $powerset sets list             list visible Powerset sets
 $powerset sets use <id|name>    set local default set in .env
-$powerset mcp install           install/refresh powerset-search MCP
 $powerset env pull              pull Modal/OpenAI/Parallel/Powerset API keys into .env
 $powerset create oauth app      guide Gmail OAuth app setup for msgvault
 $powerset help                  show this help
@@ -50,7 +48,7 @@ $powerset help                  show this help
 ## Canonical repo setup
 
 For mutating commands (`$powerset login`, `$powerset env
-pull`, `$powerset sets use`, `$powerset mcp install`, and `$powerset create
+pull`, `$powerset sets use`, and `$powerset create
 oauth app`), first resolve and enter the installed Powerpacks repo.
 This ensures `.env` and any local Powerpacks state are written under the
 installed checkout such as `~/powerpacks`, not under an agent skill bundle like
@@ -92,8 +90,8 @@ packs/...`. Prefer `python3` only when invoking a local helper outside `uv`.
 ## `$powerset setup`
 
 Load `packs/powerset/skills/install-powerpacks/SKILL.md` from the installed
-checkout and follow it. Its coordinator signs in, pulls runtime keys, registers
-the MCP, and then imports and indexes the user's network, so there is no
+checkout and follow it. Its coordinator signs in, pulls runtime keys,
+and then imports and indexes the user's network, so there is no
 separate Powerset-only setup.
 
 ## `$powerset login`
@@ -101,13 +99,12 @@ separate Powerset-only setup.
 User-facing output must be terse:
 
 - Start with exactly: `Updating your credentials...`
-- Do not narrate setup checks, missing check names, token formats, MCP config
-  details, or successful substeps.
+- Do not narrate setup checks, missing check names, token formats, or successful substeps.
 - If a browser/code login is needed, show only the auth URL/code prompt.
 - On success, say exactly:
-  `Credentials updated. Please restart Codex to reload the Powerset MCP token.`
+  `Credentials updated.`
 - If everything was already valid, say:
-  `Credentials are already up to date. Restart Codex if the Powerset MCP still fails.`
+  `Credentials are already up to date.`
 - For unresolved human-action blockers, give one short sentence with the action
   required. Do not paste raw reports.
 
@@ -133,7 +130,6 @@ Common direct fixes:
 ```bash
 uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py login
 uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull --env-file .env
-uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
 ```
 
 Do not run nested fix commands in the normal login flow; they can hide
@@ -166,18 +162,6 @@ uv run --env-file .env --project . python packs/powerset/primitives/auth/auth.py
 ```
 
 Report the email and authorization/role. Do not print raw tokens.
-
-## `$powerset mcp install`
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
-```
-
-If the user asks only to inspect MCP state, run:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
-```
 
 ## `$powerset env pull`
 
@@ -222,25 +206,5 @@ continuation command with `--client-secret`.
 
 ## `$powerset sets list` / `$powerset sets use <id|name>`
 
-Use the Powerset Search MCP for set retrieval and name resolution. Do not use
-local SQL for normal set listing.
-
-For `sets list`, call the MCP `list_sets` tool and show concise rows with name,
-set ID, role, and counts.
-
-For `sets use <id|name>`:
-
-1. Call MCP `list_sets`.
-2. Resolve the user's value against set IDs and names.
-3. Upsert exactly one local `.env` line:
-
-```dotenv
-POWERPACKS_DEFAULT_SET_ID=<set_id>
-```
-
-If `POWERPACKS_DEFAULT_SET_ID=` already exists, replace that line; otherwise
-append it. Do not append duplicates. If only legacy `POWERSET_DEFAULT_SET_ID`
-exists, leave it alone and add the preferred `POWERPACKS_DEFAULT_SET_ID` line.
-
-After setting, report the selected set name, `set_id`, `person_count`,
-`member_count`, and `sales_nav_account_count` when available.
+Follow `packs/powerset/skills/powerset-set/SKILL.md`. It reuses the existing
+HTTP `/v2/sets` request and stores only the default choice in local `.env`.

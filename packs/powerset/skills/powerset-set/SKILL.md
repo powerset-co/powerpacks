@@ -8,7 +8,7 @@ description: List accessible Powerset sets, show the active default set, or set 
 Use this skill when the user wants to choose, inspect, retrieve, list, switch,
 or set the active Powerset set for local Powerpacks search.
 
-The skill uses the Powerset Search MCP for set retrieval and name resolution.
+The skill uses HTTP `/v2/sets` for set retrieval and name resolution.
 It only manages local set scope:
 
 - lists sets accessible to the logged-in Powerset user
@@ -44,35 +44,32 @@ For read-only set listing, still prefer the canonical repo when available.
 
 ## Workflow
 
-1. Ensure Powerset setup exists. If credentials or MCP registration are missing,
-   route the user to `$powerset setup`.
-2. Confirm the Powerset Search MCP is installed when needed:
+1. From the installed checkout, refresh the accessible sets using the existing
+   bootstrap request to HTTP `/v2/sets`:
 
 ```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
+bin/agent-bootstrap --json
 ```
 
-3. List sets by calling the Powerset Search MCP `list_sets` tool directly.
-   Do not use local SQL or `set_scope.py` for normal set retrieval.
+2. Require `sets_refreshed: true`. If refresh fails, report the error; for
+   missing credentials, follow `$powerset login`, then retry. Read the fresh
+   `sets` array in `.powerpacks/memory/set_ids.json` and show concise rows with
+   name, ID, role, and counts.
+3. Show the current default by reading `POWERPACKS_DEFAULT_SET_ID` from local
+   `.env` and matching that ID against the returned sets. If unset, check
+   legacy `POWERSET_DEFAULT_SET_ID`.
+4. For `sets use <id|name>`, resolve the requested value against returned set
+   IDs or names. If multiple names match, ask which set; never guess. Upsert
+   only `POWERPACKS_DEFAULT_SET_ID` in local `.env` using the existing writer:
 
-4. Show the current default by reading `POWERPACKS_DEFAULT_SET_ID` from the
-   local `.env`, then matching that ID against the MCP `list_sets` result.
-   If `POWERPACKS_DEFAULT_SET_ID` is unset, check legacy
-   `POWERSET_DEFAULT_SET_ID`.
-
-5. Set the default by ID or name:
-
-- call MCP `list_sets`
-- resolve the user's `<name>` or `<set_id>` against the returned sets
-- upsert only this local `.env` line. If `POWERPACKS_DEFAULT_SET_ID=` already
-  exists, replace that line; otherwise append it. Do not append duplicates.
-
-```dotenv
-POWERPACKS_DEFAULT_SET_ID=<set_id>
+```python
+from pathlib import Path
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import write_env
+write_env(Path(".env"), {"POWERPACKS_DEFAULT_SET_ID": "<selected set id>"})
 ```
 
-6. After setting, report the selected set name, `set_id`, `person_count`,
-   `member_count`, and `sales_nav_account_count` from MCP. Only run
+5. Read `.env` back and report the selected set name, `set_id`, `person_count`,
+   `member_count`, and `sales_nav_account_count` when available. Only run
    `resolve_set_operators` if the user specifically asks to validate local
    TurboPuffer operator scoping.
 
@@ -83,5 +80,4 @@ POWERPACKS_DEFAULT_SET_ID=<set_id>
   TurboPuffer `allowed_operator_ids`.
 - `POWERPACKS_DEFAULT_SET_ID` is preferred. `POWERSET_DEFAULT_SET_ID` is still
   accepted as a legacy alias by search primitives.
-- The remote MCP owns set listing. The local repo owns only the default choice
-  stored in `.env`.
+- The API owns set listing. The local repo owns only the default choice in `.env`.

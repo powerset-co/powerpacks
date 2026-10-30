@@ -2,7 +2,7 @@
 
 Owns the per-account surface: email normalization, `msgvault add-account`
 authorization, reauthorization detection, the agent-facing authorize command
-strings, the overall `status` payload (install/config/accounts/MCP/gcloud),
+strings, the overall `status` payload (install/config/accounts/gcloud),
 and the `auth-check` payload that verifies token health per account without
 downloading mail.
 
@@ -52,9 +52,6 @@ from packs.ingestion.primitives.setup.automations.gcloud_project import (  # noq
     gcloud_context,
 )
 from packs.ingestion.primitives.setup.automations import oauth_browser  # noqa: E402
-from packs.ingestion.primitives.setup.automations.mcp import (  # noqa: E402
-    mcp_status,
-)
 from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa: E402
     config_path,
     db_path,
@@ -307,13 +304,12 @@ def stored_mailboxes(home: Path) -> tuple[str, ...]:
 
 
 def status_payload(home: Path) -> dict[str, Any]:
-    """Build the full `status` payload: binary, config, accounts, MCP, gcloud."""
+    """Build the full `status` payload: binary, config, accounts, gcloud."""
     msgvault_path = shutil.which("msgvault") or ""
     version = run_command(["msgvault", "version"], timeout=15) if msgvault_path else CommandResult(ok=False, returncode=0)
     cfg_path = config_path(home)
     secrets = parse_client_secret_paths(cfg_path)
     accounts, accounts_error = stored_accounts(home)
-    mcp = mcp_status()
     secret_records = {
         name: {"path": value, "exists": bool(value and Path(value).expanduser().exists())}
         for name, value in secrets.items()
@@ -347,7 +343,6 @@ def status_payload(home: Path) -> dict[str, Any]:
         },
         "accounts": accounts,
         "accounts_error": accounts_error,
-        "mcp": mcp,
         "gcloud": gcloud_context(),
     }
 

@@ -1,6 +1,6 @@
 ---
 name: msgvault
-description: Set up msgvault for local Gmail archive access, including install/status, browser-assisted Google OAuth Desktop app creation, client_secret config, account auth, and Codex MCP registration. Use for `$msgvault`, `msgvault setup`, `msgvault status`, `msgvault add-account`, `msgvault mcp install`, or `powerset create oauth app` when the target is Gmail/msgvault OAuth.
+description: Set up msgvault for local Gmail archive access, including install/status, browser-assisted Google OAuth Desktop app creation, client_secret config, and account auth. Use for `$msgvault`, `msgvault setup`, `msgvault status`, `msgvault add-account`, or `powerset create oauth app` when the target is Gmail/msgvault OAuth.
 ---
 
 # msgvault
@@ -20,7 +20,6 @@ uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py set
 uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py create-oauth-app --email <gmail>
 uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-test-users <gmail>
 uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py add-account --email <gmail>
-uv run --project . python packs/ingestion/primitives/setup/msgvault_setup.py mcp-install
 ```
 
 Run these commands from the checkout identified by the installed skill.
@@ -59,7 +58,6 @@ Keep it direct:
 - `Downloaded client secret configured.`
 - `OAuth app already configured.`
 - `msgvault account authorized.`
-- `msgvault MCP installed. Restart Codex to load it.`
 
 Do not print client secret values or token paths beyond the configured JSON
 file path. msgvault stores and searches Gmail message data locally; make that

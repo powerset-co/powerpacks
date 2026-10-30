@@ -227,41 +227,6 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(search.payload_quality_issues(payload), [])
 
-    def test_company_directory_fast_path_detects_company_only_payload(self):
-        payload = {
-            "role_search_filters": {
-                "company_names": ["OpenAI"],
-                "is_current_company": True,
-                "has_domain_intent": False,
-            }
-        }
-
-        self.assertEqual(
-            search.company_directory_tool_args(payload),
-            {"company_name": "OpenAI", "page": 0, "page_size": 50, "company_limit": 5},
-        )
-
-    def test_company_directory_fast_path_ignores_domain_intent_payload(self):
-        payload = {
-            "role_search_filters": {
-                "company_names": ["OpenAI"],
-                "is_current_company": True,
-                "has_domain_intent": True,
-            }
-        }
-
-        self.assertIsNone(search.company_directory_tool_args(payload))
-
-    def test_company_directory_fast_path_ignores_role_constrained_payload(self):
-        payload = {
-            "role_search_filters": {
-                "company_names": ["OpenAI"],
-                "bm25_queries": ["software engineer"],
-            }
-        }
-
-        self.assertIsNone(search.company_directory_tool_args(payload))
-
     def test_cmd_prepare_invokes_expand_and_emits_execute_command_without_openai(self):
         expand = {
             "primitive": "expand_search_request",
@@ -306,7 +271,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertIn("pipeline.ledger.json", out["execute_command"])
 
-    def test_cmd_prepare_emits_company_directory_fast_path_without_execute_command(self):
+    def test_cmd_prepare_company_only_emits_preview_and_execute_command(self):
         expand = {
             "primitive": "expand_search_request",
             "status": "completed",
@@ -339,10 +304,10 @@ class SearchNetworkPipelineTests(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         out = emitted[0]
-        self.assertEqual(out["status"], "company_directory_fast_path")
-        self.assertEqual(out["tool"], "list_company_people")
-        self.assertEqual(out["tool_args"]["company_name"], "OpenAI")
-        self.assertNotIn("execute_command", out)
+        self.assertEqual(out["status"], "preview_ready")
+        self.assertEqual(out["quality_issues"], [])
+        self.assertEqual(out["preview"]["filters"]["company_names"], ["OpenAI"])
+        self.assertIn("--execute-approved", out["execute_command"])
 
     def test_cli_parser_exposes_prepare_and_existing_commands(self):
         parser = search.build_parser()

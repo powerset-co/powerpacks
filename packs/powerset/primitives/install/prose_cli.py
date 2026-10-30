@@ -36,7 +36,7 @@ _PLAN = [*DEFAULT_PLAN, "sources", "linkedin_login", "gmail_tools", "gmail_login
 _RUN = [
     "install.preparing_mac", "install.dependencies_ready", "install.adding_skills", "install.skills_ready",
     "account.signing_in", "account.connected", "credentials.preparing", "credentials.ready",
-    "connection.connecting", "connection.done", "network.checking", "network.checking_one", "network.ready",
+    "network.checking", "network.checking_one", "network.ready",
     "sources.selected",
     ("tools.preparing", InstallStep.LINKEDIN_LOGIN), ("tools.ready", InstallStep.LINKEDIN_LOGIN),
     ("tools.preparing", InstallStep.GMAIL_TOOLS), ("tools.ready", InstallStep.GMAIL_TOOLS),

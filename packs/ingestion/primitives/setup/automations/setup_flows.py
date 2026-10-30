@@ -41,7 +41,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.setup.automations import (  # noqa: E402
     accounts,
     gcloud_project,
-    mcp,
     msgvault_home,
     oauth_browser,
 )
@@ -164,7 +163,6 @@ class MsgvaultSetup:
     install: bool
     copy_client_secret: bool
     init_db: bool
-    install_mcp: bool
     enable_gmail_api: bool
     open_console: bool
     headless: bool
@@ -181,7 +179,6 @@ class MsgvaultSetup:
             install=not args.no_install,
             copy_client_secret=not args.no_copy_client_secret,
             init_db=args.init_db,
-            install_mcp=args.install_mcp,
             enable_gmail_api=args.enable_gmail_api,
             open_console=args.open_console,
             headless=args.headless,
@@ -235,7 +232,6 @@ class MsgvaultSetup:
             )
 
         db = msgvault_home.init_db(self.home) if self.init_db else {"status": "skipped"}
-        mcp_result = mcp.install_mcp() if self.install_mcp else {"status": "skipped"}
 
         if self.needs_oauth_app():
             action = oauth_browser.build_user_action(
@@ -250,7 +246,6 @@ class MsgvaultSetup:
                 "gcloud": gcloud,
                 "gmail_api": api,
                 "database": db,
-                "mcp": mcp_result,
                 "opened": open_console_urls(action, self.open_console),
                 "action": action,
             }
@@ -269,7 +264,6 @@ class MsgvaultSetup:
                     "msgvault": msgvault,
                     "configured": configured,
                     "database": db,
-                    "mcp": mcp_result,
                     "account": account,
                 }
 
@@ -283,7 +277,6 @@ class MsgvaultSetup:
             "gmail_api": api,
             "configured": configured,
             "database": db,
-            "mcp": mcp_result,
             "account": account,
             "current": accounts.status_payload(self.home),
         }

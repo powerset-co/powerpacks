@@ -352,31 +352,6 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "runtime_blockers": quality_issues,
     }
 
-def company_directory_tool_args(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Return MCP args for company-only people lookup, else None.
-
-    This protects the company-directory fast path even if a harness calls
-    `prepare` for a simple "people at Company" query.
-    """
-    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
-    company_names=[x for x in (f.get("company_names") or f.get("current_company_names") or []) if isinstance(x,str) and x.strip()]
-    company_ids=[x for x in (f.get("company_ids") or []) if str(x).strip()]
-    if not company_names and not company_ids:
-        return None
-    if f.get("has_domain_intent") is True:
-        return None
-    allowed={"company_names","current_company_names","company_ids","is_current_company","set_id","has_domain_intent"}
-    if any(v not in (None, [], "") and k not in allowed for k,v in f.items()):
-        return None
-    args={"page":0,"page_size":50,"company_limit":5}
-    if company_ids:
-        args["company_id"]=str(company_ids[0])
-    else:
-        args["company_name"]=company_names[0]
-    if f.get("set_id"):
-        args["set_id"]=f["set_id"]
-    return args
-
 def prepare_output_dir(query: str, explicit: str|None) -> Path:
     if explicit:
         p=Path(explicit); return p if p.is_absolute() else ROOT/p
@@ -1252,18 +1227,6 @@ def cmd_prepare(args):
             payload=pin_payload_current_role(payload,True)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        company_args=company_directory_tool_args(payload)
-        if company_args:
-            emit({
-                "primitive":"search_network_pipeline",
-                "status":"company_directory_fast_path",
-                "message":"Company-only people lookup: call MCP list_company_people and skip search-network retrieval.",
-                "query":args.query,
-                "payload_json":str(payload_json),
-                "tool":"list_company_people",
-                "tool_args":company_args,
-            })
-            return 0
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         extra+=execution_contract_suffix(args)

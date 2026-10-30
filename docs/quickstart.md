@@ -62,8 +62,7 @@ a working `.env`. Run `$powerset setup` (below) to populate it, or copy
 
 For provisioned users, pulls local runtime keys, including TypeSafe when
 provisioned, from the authenticated Powerset API into `.env`, ensures Auth0
-login, and installs/refreshes the
-`powerset-search` MCP. Modal handles hosted processing for Powerset users.
+login. Modal handles hosted processing for Powerset users.
 
 The Google Cloud CLI is only needed for the separate msgvault/Gmail OAuth app
 setup flow.
@@ -158,7 +157,7 @@ scripts/lint-powerpacks    # runs ruff + flake8
 
 ## 4. First run, per skill
 
-### `$powerset setup` — login, `.env`, and MCP
+### `$powerset setup` — login and `.env`
 
 Inside Codex / Claude Code / Pi:
 
@@ -167,8 +166,7 @@ $powerset setup
 ```
 
 It runs the Powerset doctor, starts Auth0 login if needed, pulls provisioned
-runtime keys into `.env` (no values printed), and installs/refreshes the
-`powerset-search` MCP. `$powerset login` remains available as a smaller
+runtime keys into `.env` (no values printed), and imports and indexes your network. `$powerset login` remains available as a smaller
 credential-refresh/backcompat command.
 
 `$update-powerpacks` also fills a missing or empty provisioned

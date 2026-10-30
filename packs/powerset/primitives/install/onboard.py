@@ -26,7 +26,6 @@ from packs.powerset.primitives.install import report
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.workflow import SourceOnboarding, _parser
-from packs.powerset.primitives.mcp_install import mcp_install
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 from packs.shared.web.server import start_server
 
@@ -54,7 +53,7 @@ class Network:
 
 
 class Onboarding:
-    def __init__(self, root: Path, *, harnesses: list[str], pid: int, retry_command: str) -> None:
+    def __init__(self, root: Path, *, pid: int, retry_command: str) -> None:
         self.root = root.resolve()
         self.env_path = self.root / ".env"
         self.config = keys._read_env_file(self.root / "packs/powerset/templates/env.powerset.example")
@@ -62,7 +61,6 @@ class Onboarding:
         self.config.update(os.environ)
         self.credentials_path = Path(self.config.get("POWERPACKS_CREDENTIALS_PATH", str(auth.DEFAULT_CREDENTIALS_PATH)))
         self.base = self.config.get("POWERSET_API_URL", keys.DEFAULT_API_BASE).rstrip("/")
-        self.harnesses = harnesses
         self.pid = pid
         self.retry_command = retry_command
         self.status = InstallStatus(self.root)
@@ -192,21 +190,6 @@ class Onboarding:
             self.progress("credentials.ready")
         return missing
 
-    def connect_tools(self) -> None:
-        self.progress("connection.connecting")
-        url = self.config["POWERPACKS_MCP_URL"]
-        results = []
-        for harness in self.harnesses:
-            if harness == "codex":
-                results.append(mcp_install.codex_install("powerset-search", url, self.token))
-            elif harness == "claude-code":
-                results.append(mcp_install.claude_install("powerset-search", url, "user", self.token))
-        for result in results:
-            if not result.get("ok"):
-                self.log(f"Agent connection could not be registered: {result.get('error', 'host CLI unavailable')}")
-        complete = bool(results) and all(result.get("ok") for result in results)
-        self.progress("connection.done" if complete else "connection.skipped")
-
     def choose_network(self, networks: list[Network], account: dict) -> Network | None:
         selected_id = self.config.get("POWERPACKS_DEFAULT_SET_ID") or self.config.get("POWERSET_DEFAULT_SET_ID")
         if selected_id:
@@ -273,9 +256,7 @@ class Onboarding:
             if missing:
                 # Local setup does not use hosted search; say so and keep going.
                 self.progress("credentials.hosted_off", email=self.email)
-                self.connect_tools()
                 return NEEDS_YOU
-            self.connect_tools()
             return self.check_network(account)
         except urllib.error.HTTPError as exc:
             print(f"{self.step.value}: HTTP {exc.code} at {urllib.parse.urlsplit(exc.filename).path}", file=sys.stderr)
@@ -291,7 +272,6 @@ class Onboarding:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--harness", choices=("codex", "claude-code", "pi"), action="append")
     parser.add_argument("--port", type=int)
     parser.add_argument("--logins-only", action="store_true",
                         help="Only the chosen sources' tools and logins, for the desktop app's Connect screen")
@@ -319,14 +299,12 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
     """The account, then the sources, then processing, each resuming from the saved choices."""
     previous = status.read()
     saved, _ = parser.parse_known_args(shlex.split(previous["retry_command"])[1:])
-    harnesses = args.harness or saved.harness or ["codex"]
     port = args.port or saved.port or 8765
     # Resolve saved source choices before account progress replaces retry_command.
     flow = SourceOnboarding(root, sources=tuple(args.source),
                             gmail_emails=tuple(args.gmail_email), sync_after=args.sync_after,
                             wacli_store=args.wacli_store, refresh=args.refresh,
                             skip_sources=tuple(args.skip_source), linkedin_url=args.linkedin_url)
-    flow.retry_command += "".join(f" --harness {harness}" for harness in harnesses)
     flow.retry_command += f" --port {port}"
     try:
         page = start_server(root, port=port, stage="install")
@@ -337,7 +315,7 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
         print("FAILED: The progress page could not start. Check the installation log.", flush=True)
         raise SystemExit(1) from error
     print(f"STATUS PAGE: {page['url']}", flush=True)
-    onboarding = Onboarding(root, harnesses=harnesses, pid=os.getpid(),
+    onboarding = Onboarding(root, pid=os.getpid(),
                             retry_command=flow.retry_command)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):

@@ -24,7 +24,7 @@ RETIRED_SKILLS=(
   deep-setup enrich-email-markers import-contacts import-email import-imessage import-contacts-review
   import-whatsapp ingestion-onboarding onboard local-msg-vault discover-contacts
   import-gmail-network import-linkedin-network import-twitter-network
-  linkedin-sync-mcp linkedin-sync-csv setup search-contacts
+  linkedin-sync-csv setup search-contacts
 )
 
 "$REPO_ROOT/bin/setup-python"

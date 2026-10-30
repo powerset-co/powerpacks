@@ -41,7 +41,6 @@ rm -rf "$TARGET/container/skills/search-network" "$TARGET/container/skills/searc
 cp -R "$REPO_ROOT/packs/search/skills/search" "$TARGET/container/skills/search"
 
 rm -rf "$TARGET/powerpacks/primitives"
-rm -rf "$TARGET/powerpacks/mcp"
 rm -rf "$TARGET/powerpacks/templates"
 rm -rf "$TARGET/powerpacks/docs"
 rm -rf "$TARGET/powerpacks/packs"

@@ -1,7 +1,7 @@
 """Browser-driven command flows for msgvault setup.
 
 The `browser-setup` and `add-test-users` subcommands, one frozen request class
-each: gcloud login, project choose/create, Gmail API, database/MCP prep, then
+each: gcloud login, project choose/create, Gmail API, database prep, then
 the Chrome automation (oauth_browser) and client-secret configuration.
 `from_args` is the argparse boundary — it expands paths, validates the OAuth
 app name and project id, and resolves the automation defaults — so `run()`
@@ -49,7 +49,6 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.setup.automations import (  # noqa: E402
     accounts,
     gcloud_project,
-    mcp,
     msgvault_home,
     oauth_browser,
 )
@@ -84,7 +83,6 @@ class BrowserSetup:
     audience: str
     install: bool
     init_db: bool
-    install_mcp: bool
     enable_gmail_api: bool
     create_project: bool
     add_account: bool
@@ -111,7 +109,6 @@ class BrowserSetup:
             audience=args.audience,
             install=not args.no_install,
             init_db=args.init_db,
-            install_mcp=args.install_mcp,
             enable_gmail_api=args.enable_gmail_api,
             create_project=args.create_project,
             add_account=args.add_account,
@@ -139,7 +136,6 @@ class BrowserSetup:
         """Finish without touching Chrome: msgvault already has a valid client secret."""
         progress("msgvault OAuth client is already configured.")
         db = msgvault_home.init_db(self.home) if self.init_db else {"status": "skipped"}
-        mcp_result = mcp.install_mcp() if self.install_mcp else {"status": "skipped"}
         account = self.authorize()
         if account is not None and account["status"] != "ok":
             return {
@@ -150,7 +146,6 @@ class BrowserSetup:
                 "msgvault": msgvault,
                 "configured": existing,
                 "database": db,
-                "mcp": mcp_result,
                 "account": account,
             }
         msgvault_home.save_oauth_app_state(
@@ -172,7 +167,6 @@ class BrowserSetup:
             "oauth_client_name": self.oauth_client_name,
             "msgvault": msgvault,
             "database": db,
-            "mcp": mcp_result,
             "browser": {
                 "status": "skipped",
                 "reason": "valid client secret already configured",
@@ -234,7 +228,6 @@ class BrowserSetup:
             progress(f"Using Google Cloud project {project_id}.")
         api = gcloud_project.enable_gmail_api(project_id) if self.enable_gmail_api else {"status": "skipped"}
         db = msgvault_home.init_db(self.home) if self.init_db else {"status": "skipped"}
-        mcp_result = mcp.install_mcp() if self.install_mcp else {"status": "skipped"}
 
         browser = oauth_browser.run_browser_automation(
             project=project_id,
@@ -284,7 +277,6 @@ class BrowserSetup:
             "gcloud_auth": auth,
             "gmail_api": api,
             "database": db,
-            "mcp": mcp_result,
             "browser": browser,
             "download_dir": str(self.download_dir),
             "client_secret_path": secret_path,

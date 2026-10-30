@@ -19,7 +19,6 @@ if str(ROOT) not in sys.path:
 from packs.ingestion.primitives.setup.automations import (  # noqa: E402
     accounts,
     gcloud_project,
-    mcp,
     msgvault_home,
     oauth_browser,
     shell,
@@ -434,7 +433,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             with mock.patch.object(accounts.shutil, "which", return_value="/bin/msgvault"), \
                 mock.patch.object(accounts, "run_command", return_value=shell.CommandResult(ok=True)), \
                 mock.patch.object(accounts, "run_msgvault", return_value=shell.CommandResult(ok=True, stdout='[{"email":"me@example.com"}]')), \
-                mock.patch.object(accounts, "mcp_status", return_value={}), \
                 mock.patch.object(accounts, "gcloud_context", return_value={}):
                 for content in (None, "{}"):
                     with self.subTest(content=content):
@@ -496,7 +494,6 @@ class MsgvaultSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
             mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
             mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
-            mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
             mock.patch.object(gcloud_project, "gcloud_context", return_value={"project": "demo", "account": "", "installed": True}), \
             mock.patch.object(gcloud_project, "enable_gmail_api", return_value={"status": "ok"}):
             code, payload = self.invoke([
@@ -519,7 +516,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.write_secret(secret)
             with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
                 mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
-                mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
                 mock.patch.object(gcloud_project, "gcloud_context", return_value={"project": "demo", "account": "", "installed": True}), \
                 mock.patch.object(gcloud_project, "enable_gmail_api", return_value={"status": "ok"}), \
                 mock.patch.object(accounts, "add_account", return_value={"status": "ok", "email": "me@example.com"}), \
@@ -550,7 +546,6 @@ class MsgvaultSetupTests(unittest.TestCase):
                 mock.patch.object(gcloud_project, "create_gcloud_project", return_value={"status": "ok", "project": "local-msg-vault-test", "created": True}), \
                 mock.patch.object(gcloud_project, "enable_gmail_api", return_value={"status": "ok"}), \
                 mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
-                mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
                 mock.patch.object(oauth_browser, "run_browser_automation", return_value={"status": "ok", "client_secret_path": str(secret)}), \
                 mock.patch.object(accounts, "add_account", return_value={"status": "ok", "email": "me@example.com"}), \
                 mock.patch.object(accounts, "status_payload", return_value={"status": "ok"}):
@@ -580,7 +575,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
                 mock.patch.object(gcloud_project, "ensure_gcloud_auth") as auth, \
                 mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
-                mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
                 mock.patch.object(oauth_browser, "run_browser_automation") as browser, \
                 mock.patch.object(accounts, "status_payload", return_value={"status": "ok"}):
                 code, payload = self.invoke([
@@ -606,7 +600,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             msgvault_home.write_msgvault_config(home / "config.toml", secret)
             with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
                 mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
-                mock.patch.object(mcp, "install_mcp", return_value={"status": "ok"}), \
                 mock.patch.object(accounts, "add_account", return_value={"status": "ok", "email": "me@example.com"}), \
                 mock.patch.object(accounts, "status_payload", return_value={"status": "ok"}) as _:
                 code, payload = self.invoke([
