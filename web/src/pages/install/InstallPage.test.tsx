@@ -18,7 +18,7 @@ const INSTALL: InstallStatus = {
   message: "Installing what Powerpacks needs",
   log_path: "/synthetic/.powerpacks/install/install.log",
   retry_command: "bin/bootstrap --no-tools",
-  plan: ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
+  plan: ["runtime", "dependencies", "skills", "account", "credentials", "network"],
   prose: PROSE,
   steps: {
     runtime: { status: "completed", message: "Mac ready" },
@@ -233,7 +233,6 @@ describe("installation progress", () => {
       "skills",
       "account",
       "credentials",
-      "connection",
       "network",
       "sources",
       ...SOURCE_PLAN,
