@@ -36,6 +36,18 @@ costs. `--llm` spends that; `--limit N` tries the largest N first. Each batch is
 saved as it finishes, and reviewed rows are never asked again. To correct a row
 by hand, edit it and set `"source": "manual"`.
 
+To apply the mapping to published rows without rebuilding them:
+
+```bash
+ALEPH_ENV=dev uv run python packs/indexing/primitives/republish_school_parents/republish_school_parents.py
+```
+
+It moves each `aleph_people_education_v3` row to its top parent (only
+`canonical_education_id` changes), recounts parents in `aleph_education_v3`,
+keeps child names searchable as a trailing `(A / B)` alias on the parent, and
+deletes the child school docs. It prints counts until `--apply`, which backs both
+namespaces up first. `ALEPH_ENV` picks the family: unset is prod, `dev` is `_dev`.
+
 ## Shared output contract
 
 Both paths materialize the fixed local target:
