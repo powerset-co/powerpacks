@@ -23,12 +23,12 @@ export const flows: Record<GuideSource, Flow> = {
     steps: [
       "Powerpacks' browser starts empty.",
       "Pick the profile you already use.",
-      "Powerpacks syncs in the background.",
+      "No sign-in required.",
     ],
     captions: [
       "Without a profile, you would sign in to everything again with no saved passwords.",
       "A copy of its logins and saved passwords is saved on this Mac.",
-      "Powerpacks uses that copy to keep your network up to date, with no window and no sign-in.",
+      "Powerpacks uses the copy for headless automation to keep your network synced locally, saving you clicks and having to login again.",
     ],
     note: "The copy stays on this Mac. Your Chrome isn't changed and can stay open.",
     duration: 15,
