@@ -119,7 +119,7 @@ function Conversation({
     )
 
   return (
-    <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+    <section className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto]">
       <ChatHeader runTitle={runTitle} />
       <div
         ref={scroller}
