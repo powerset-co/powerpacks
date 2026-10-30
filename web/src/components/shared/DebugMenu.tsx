@@ -13,7 +13,7 @@ import { desktopPlatform, isDesktop } from "@/lib/desktop"
 const PAGES = [
   { label: "Onboarding", href: "/onboarding/signup" },
   { label: "Set up (progress)", href: "/onboarding/setup" },
-  { label: "Add sources", href: "/onboarding/sources" },
+  { label: "Add sources", href: "/accounts" },
   { label: "LinkedIn review", href: "/" },
   { label: "Chat", href: "/agent" },
   { label: "Searches", href: "/searches" },

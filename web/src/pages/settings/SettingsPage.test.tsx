@@ -10,7 +10,7 @@ import { SettingsPage } from "./SettingsPage"
 
 vi.mock("@/lib/desktop", () => ({ isDesktop: vi.fn(() => false) }))
 vi.mock("./AccountsSettings", () => ({
-  AccountsSettings: () => <h2>Accounts</h2>,
+  AccountsSettings: ({ panel }: { panel?: boolean }) => (panel ? <h1>Accounts</h1> : <h2>Accounts</h2>),
 }))
 
 function mount() {

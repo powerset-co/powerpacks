@@ -45,9 +45,9 @@ export const flows: Record<GuideSource, Flow> = {
     captions: [
       "Choose the mailbox you want to connect.",
       "Complete any verification Google asks for.",
-      "Tick Select all, then Continue. Powerpacks usually does this for you.",
+      "Tick Select all, then Continue.",
     ],
-    note: "Powerpacks ticks the two Gmail permissions and continues for you. If Google hands them to you instead, tick Select all, then Continue.",
+    note: "In the Google window, tick Select all, then Continue. Powerpacks waits for you to finish.",
     duration: 15,
   },
   whatsapp: {

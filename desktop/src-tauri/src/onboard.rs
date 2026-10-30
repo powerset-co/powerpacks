@@ -125,6 +125,9 @@ pub struct Answer {
     /// Left out (Try again), the run the record names runs again, and `bin/onboard` keeps the
     /// saved choice.
     pub sources: Option<Vec<String>>,
+    /// Sync source stores again, retaining their imported data and processing caches.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
@@ -204,6 +207,9 @@ pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
         for source in answer.sources.unwrap_or_default() {
             onboard.args(["--source", &source]);
         }
+        if answer.refresh {
+            onboard.arg("--refresh");
+        }
     }
 
     let log = root.join(LOG);
@@ -262,6 +268,7 @@ mod tests {
         let answer = |url: &str| Answer {
             linkedin_url: Some(url.into()),
             sources: None,
+            refresh: false,
         };
         assert!(start(&root, answer("https://example.com/jordan")).is_err());
         assert!(!root.join("setup-args").exists());
@@ -294,6 +301,7 @@ mod tests {
                 linkedin_url: None,
                 sources: sources
                     .map(|sources| sources.iter().map(|source| source.to_string()).collect()),
+                refresh: false,
             };
             start(&root, answer).unwrap();
             (0..50)
@@ -316,6 +324,39 @@ mod tests {
             run("bin/linkedin-setup", Some(&["linkedin", "gmail"])).trim(),
             format!("{onboard} --source linkedin --source gmail")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resync_refreshes_sources_only_when_requested() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("powerpacks-resync-{}", std::process::id()));
+        let python = paths::project_python(&root);
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, "#!/bin/sh\necho \"$@\" > setup-args\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+        for refresh in [None, Some(false), Some(true)] {
+            let mut answer = serde_json::json!({
+                "sources": ["linkedin", "gmail", "imessage", "whatsapp"]
+            });
+            if let Some(refresh) = refresh {
+                answer["refresh"] = serde_json::json!(refresh);
+            }
+            let _ = fs::remove_file(root.join("setup-args"));
+            start(&root, serde_json::from_value(answer).unwrap()).unwrap();
+            let args = (0..50)
+                .find_map(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    fs::read_to_string(root.join("setup-args")).ok()
+                })
+                .expect("setup started");
+            let expected = format!(
+                "-m {ONBOARD_MODULE} --root {} --source linkedin --source gmail --source imessage --source whatsapp{}",
+                root.display(),
+                if refresh == Some(true) { " --refresh" } else { "" }
+            );
+            assert_eq!(args.trim(), expected);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }
