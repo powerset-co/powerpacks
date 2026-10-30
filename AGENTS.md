@@ -51,7 +51,7 @@ Paths below are relative to the installed checkout.
 | User intent | Skill |
 | --- | --- |
 | Install or set up Powerpacks (the pasted URL, `$setup`, first run, LinkedIn import) | `packs/powerset/skills/install-powerpacks/SKILL.md` |
-| Login, account, network selection, credentials, agent connection | `packs/powerset/skills/powerset/SKILL.md` |
+| Login, account, network selection, credentials | `packs/powerset/skills/powerset/SKILL.md` |
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |

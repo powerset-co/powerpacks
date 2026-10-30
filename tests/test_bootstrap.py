@@ -405,7 +405,7 @@ set -euo pipefail
         proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("No account was connected", last_line(proc))
-        for step in ("account", "credentials", "connection", "network"):
+        for step in ("account", "credentials", "network"):
             self.assertEqual(self.sandbox.progress()["steps"][step]["status"], "skipped")
 
 

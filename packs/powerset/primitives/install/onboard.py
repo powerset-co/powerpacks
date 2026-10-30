@@ -273,6 +273,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--port", type=int)
+    # Saved retry commands from 3.49.1 and earlier end in --harness; it no longer does anything.
+    parser.add_argument("--harness", action="append", help=argparse.SUPPRESS)
     parser.add_argument("--logins-only", action="store_true",
                         help="Only the chosen sources' tools and logins, for the desktop app's Connect screen")
     args = parser.parse_args()
