@@ -11632,7 +11632,7 @@
 {"id": "70a7f373-b791-5ba4-8580-5076f332da03", "key": "provider:1514694", "parent_id": null, "school_name": "Marmion Abbey/Academy", "source": "llm"}
 {"id": "70a8070e-a8ea-5471-b3fd-69f68264ea52", "key": "provider:15092433", "parent_id": "76ad8bb7-a03d-503c-827f-6b654d833f23", "school_name": "HEC Lausanne - The Faculty of Business and Economics of the University of Lausanne", "source": "llm"}
 {"id": "70a9b0f6-2d19-5d99-9659-1bac4e31c062", "key": "provider:2562470", "parent_id": null, "school_name": "Burgmann College", "source": "llm"}
-{"id": "70aa9c84-a3bc-5837-b26f-5037e897be68", "key": "name:bard college (through the bard high school early college program)", "parent_id": "a1cde5ac-5601-571d-881d-85bb8253fe72", "school_name": "Bard College (Through the Bard High School Early College Program)", "source": "manual"}
+{"id": "70aa9c84-a3bc-5837-b26f-5037e897be68", "key": "name:bard college (through the bard high school early college program)", "parent_id": "9735a3f6-6610-5a0c-a719-ee085bc1ac85", "school_name": "Bard College (Through the Bard High School Early College Program)", "source": "manual"}
 {"id": "70ac9b3c-d2a5-5633-8d00-851eaa9683c3", "key": "provider:27075226", "parent_id": null, "school_name": "Akaki Tsereteli State University", "source": "llm"}
 {"id": "70ad2359-786b-5b57-903b-521b9370333f", "key": "provider:1245432", "parent_id": null, "school_name": "University of Iloilo", "source": "llm"}
 {"id": "70af1486-6595-50ee-ae7a-300715aacf83", "key": "provider:13348212", "parent_id": null, "school_name": "Indian Institute of Corporate Affairs", "source": "llm"}
@@ -12257,7 +12257,7 @@
 {"id": "76e20f4a-c351-52e3-b7cc-c5dc4b769323", "key": "provider:9988", "parent_id": null, "school_name": "Loughborough University", "source": "llm"}
 {"id": "76e2fe42-8333-5c38-8687-3cd14507b4f9", "key": "provider:45289", "parent_id": null, "school_name": "Tabor Academy", "source": "llm"}
 {"id": "76e3cbb7-50e7-5f8e-98b8-1ea5f8b09c0c", "key": "name:colegio san jorge", "parent_id": null, "school_name": "Colegio San Jorge", "source": "llm"}
-{"id": "76e3ce72-7942-5443-b102-539caa47e65a", "key": "name:bard high school early college manhattan", "parent_id": "a1cde5ac-5601-571d-881d-85bb8253fe72", "school_name": "Bard High School Early College Manhattan", "source": "manual"}
+{"id": "76e3ce72-7942-5443-b102-539caa47e65a", "key": "name:bard high school early college manhattan", "parent_id": "9735a3f6-6610-5a0c-a719-ee085bc1ac85", "school_name": "Bard High School Early College Manhattan", "source": "manual"}
 {"id": "76e58cee-fa1d-5c08-a492-d28cc989e1e3", "key": "provider:2857404", "parent_id": null, "school_name": "Ain Shams University", "source": "llm"}
 {"id": "76ebcb9a-bad0-50e0-8958-4ed625fc3e84", "key": "provider:15251075", "parent_id": null, "school_name": "Donghua University", "source": "llm"}
 {"id": "76ed8132-349c-5be3-95d5-9b110ff81e23", "key": "name:marr college", "parent_id": null, "school_name": "Marr College", "source": "llm"}
@@ -15610,7 +15610,7 @@
 {"id": "972f86ab-8eaf-5a3c-9245-a49fb94a59f0", "key": "name:james a. garfield high school(maplewood career center}", "parent_id": null, "school_name": "James A. Garfield High School(Maplewood Career Center}", "source": "llm"}
 {"id": "973035c6-4a46-52b3-ad55-ec4cfd91ba28", "key": "name:jacksonville state university", "parent_id": "966bce1c-2399-5a6d-b9ef-da75dfd21e54", "school_name": "Jacksonville State University", "source": "name"}
 {"id": "9734f263-6dcc-5f1a-9780-0470c8b96981", "key": "name:mk university", "parent_id": "bbd3a8ee-a396-5280-afbc-f408745c592e", "school_name": "MK University", "source": "llm"}
-{"id": "9735a3f6-6610-5a0c-a719-ee085bc1ac85", "key": "provider:1252194", "parent_id": null, "school_name": "Bard High School Early College", "source": "seed"}
+{"id": "9735a3f6-6610-5a0c-a719-ee085bc1ac85", "key": "provider:1252194", "parent_id": null, "school_name": "Bard High School Early College", "source": "manual"}
 {"id": "9737f8f9-d4e9-5967-bfc7-d976adb0d799", "key": "name:institute for integrative nutrition at columbia university's teacher's college", "parent_id": null, "school_name": "Institute for Integrative Nutrition at Columbia University's Teacher's College", "source": "llm"}
 {"id": "973b79be-e57a-559d-adb3-eb7c9045a563", "key": "name:hinsdale south high school", "parent_id": "bef27eff-cd7e-5c28-9106-2590aa44671f", "school_name": "Hinsdale South High School", "source": "name"}
 {"id": "973eaffa-52ca-58e8-b2fc-7077ed73c98a", "key": "name:staffordshire university", "parent_id": "f8f7ae44-b23e-5221-bec9-bd27aa63c32e", "school_name": "Staffordshire University", "source": "seed"}
@@ -16720,7 +16720,7 @@
 {"id": "a1c710ec-6d50-59a5-9a34-9b6034cf95d6", "key": "provider:18827", "parent_id": null, "school_name": "Oklahoma Christian University", "source": "llm"}
 {"id": "a1c97d4a-6eb4-5ea7-b348-3c65e67f0f4f", "key": "name:european venue management institute", "parent_id": null, "school_name": "European Venue Management Institute", "source": "llm"}
 {"id": "a1c98fa5-d607-5fd4-aab6-3203a238b20d", "key": "name:usc-tc", "parent_id": null, "school_name": "USC-TC", "source": "llm"}
-{"id": "a1cde5ac-5601-571d-881d-85bb8253fe72", "key": "name:bard high school early college", "parent_id": null, "school_name": "Bard High School Early College", "source": "manual"}
+{"id": "a1cde5ac-5601-571d-881d-85bb8253fe72", "key": "name:bard high school early college", "parent_id": "9735a3f6-6610-5a0c-a719-ee085bc1ac85", "school_name": "Bard High School Early College", "source": "manual"}
 {"id": "a1cf4de1-82d3-5b53-9f6b-104a6816e34b", "key": "name:gdynia international baccalaureate world school no 0704", "parent_id": null, "school_name": "Gdynia International Baccalaureate World School No 0704", "source": "llm"}
 {"id": "a1d0cefe-01dc-580c-8bd0-396b48ce178f", "key": "name:auburn high school, auburn, al", "parent_id": null, "school_name": "Auburn High School, Auburn, AL", "source": "llm"}
 {"id": "a1d77bce-e490-528b-83e9-516042e03d1e", "key": "name:the american school foundation, ac", "parent_id": null, "school_name": "The American School Foundation, AC", "source": "llm"}
@@ -25744,7 +25744,7 @@
 {"id": "f914349e-fbd9-5b7a-bb47-3926e16af62c", "key": "provider:71259910", "parent_id": null, "school_name": "MLH Fellowship", "source": "llm"}
 {"id": "f919661b-7364-5a11-b39a-50193f356956", "key": "name:the improved performance group", "parent_id": null, "school_name": "The Improved Performance Group", "source": "llm"}
 {"id": "f91b14c4-95a3-5577-938e-eaae5d7de43c", "key": "name:st. muredach's college", "parent_id": null, "school_name": "St. Muredach's College", "source": "llm"}
-{"id": "f91d2ebd-8430-52aa-aee6-fc7925c4366f", "key": "provider:2635927", "parent_id": null, "school_name": "EGADE Business School del Tecnológico de Monterrey", "source": "llm"}
+{"id": "f91d2ebd-8430-52aa-aee6-fc7925c4366f", "key": "provider:2635927", "parent_id": "9c182d93-abf4-5077-8c23-59148826b6f7", "school_name": "EGADE Business School del Tecnológico de Monterrey", "source": "manual"}
 {"id": "f91d950f-6237-5634-a854-c36d0587d253", "key": "name:de anza senior high school", "parent_id": null, "school_name": "De Anza Senior High School", "source": "llm"}
 {"id": "f91f894e-270c-539a-95f6-9e733898933e", "key": "name:south east european university", "parent_id": null, "school_name": "South East European University", "source": "llm"}
 {"id": "f92324da-0308-5ff4-9ea2-0bfff182c994", "key": "name:nassau community college", "parent_id": "750a9782-7603-5bd4-8ca1-278d543c6672", "school_name": "Nassau Community College", "source": "name"}
