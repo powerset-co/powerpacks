@@ -1466,5 +1466,34 @@ class AgeFilterPreviewTests(unittest.TestCase):
         self.assertFalse(any("inferred_birth_year" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
 
 
+
+class PickerBackendDefaultTests(unittest.TestCase):
+    """The chat's pinned scope, in the environment, is the pipeline's default backend."""
+
+    def parse(self, env: dict[str, str], *flags: str) -> tuple[str, str]:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            for key in ("POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_DEFAULT_SET_ID"):
+                if key not in env:
+                    os.environ.pop(key, None)
+            args = pipeline.build_parser().parse_args(["run", "--query", "q", *flags])
+        return args.backend, args.db
+
+    def test_local_index_pinned(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}),
+                         ("local", "/idx/local-search.duckdb"))
+
+    def test_set_pinned_or_nothing(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_DEFAULT_SET_ID": "abc", "POWERPACKS_LOCAL_SEARCH_DB": ""})[0], "powerset")
+        self.assertEqual(self.parse({})[0], "powerset")
+
+    def test_explicit_flags_win(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}, "--backend", "powerset")[0],
+                         "powerset")
+        self.assertEqual(self.parse({}, "--backend", "local", "--db", "/other.duckdb"), ("local", "/other.duckdb"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

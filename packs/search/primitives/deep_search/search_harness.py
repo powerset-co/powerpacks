@@ -753,7 +753,9 @@ def _decision_backend(run_dir: Path, backend: str | None) -> str:
 
 
 def _backend_args(backend: str, db: str) -> list[str]:
-    return ["--backend", "local", "--db", db] if backend == "local" else []
+    """Always explicit: the pipeline's default is the Search-in picker's choice, and a deep run's
+    backend is its decision's."""
+    return ["--backend", "local", "--db", db] if backend == "local" else ["--backend", "powerset"]
 
 
 def _approved_retrieval(run_dir: Path, backend: str,

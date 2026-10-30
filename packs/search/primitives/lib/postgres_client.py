@@ -80,18 +80,6 @@ def connect(dsn: str | None = None) -> Any:
     return conn
 
 
-def picked_set_id(env_file: Path | None) -> str | None:
-    """The set the Search-in picker wrote to .env. The file wins over the process environment,
-    which keeps whatever value the agent's shell started with."""
-    if not env_file or not env_file.exists():
-        return None
-    for raw in env_file.read_text().splitlines():
-        line = raw.strip()
-        if line.startswith("POWERPACKS_DEFAULT_SET_ID="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    return None
-
-
 def ensure_psycopg2() -> Any:
     try:
         import psycopg2  # type: ignore
@@ -138,10 +126,9 @@ def credentials_subject(credentials_path: Path | None = None) -> str | None:
 
 
 def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | None = None) -> dict[str, Any]:
+    # The chat's scope arrives in the environment of every command (the desktop app pins it per
+    # chat through Codex); the env file only fills what the environment left unset.
     load_env_file(env_file)
-    picked = picked_set_id(env_file)
-    if picked:
-        return {"set_id": picked, "source": "env_file"}
     explicit = os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
     if explicit:
         return {"set_id": explicit, "source": "env"}

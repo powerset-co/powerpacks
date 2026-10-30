@@ -79,10 +79,9 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      (even if they also say "my network": "search my Powerset network" is `powerset`).
    - `local` — the user says "local", "offline", or "my imported network/contacts",
      even if remote credentials exist.
-   - Unstated → environment default: if `POWERPACKS_LOCAL_SEARCH_DB` is set, or
-     `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
-     configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
-     which you picked in one line so the user can flip it.
+   - Unstated → the chat's scope, which the pipeline also defaults to: `local` when
+     `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment, otherwise `powerset`. Say which in
+     one line.
    - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
@@ -116,15 +115,14 @@ and nothing else (no Python: the system interpreter has none of the project's pa
 
 ```bash
 mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.json <<'EOF'
-{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
+{"surface": "people", "backend": "<local or powerset>", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
 EOF
 ```
 
-The environment default for `backend` comes from one line that prints key names only, never
-values: `grep -o '^\(POWERPACKS_LOCAL_SEARCH_DB\|TURBOPUFFER_API_KEY\)=' .env; ls .powerpacks/search-index/local-search.duckdb`.
-`local` when `POWERPACKS_LOCAL_SEARCH_DB` is listed, or the index file exists and
-`TURBOPUFFER_API_KEY` is not listed; otherwise `powerset`.
+The environment default for `backend` is one check that prints nothing secret (the desktop app
+pins a chat's scope into the environment; a command-line install may hold it in `.env`):
+`{ test -n "$POWERPACKS_LOCAL_SEARCH_DB" || grep -q '^POWERPACKS_LOCAL_SEARCH_DB=.' .env 2>/dev/null; } && echo local || echo powerset`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.
@@ -137,7 +135,7 @@ Then dispatch — this table is the whole routing contract:
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
 | `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
+| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare --backend powerset`) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns orchestration and delegates each reviewed pond to the
@@ -285,6 +283,7 @@ files on the happy path. Start a fresh run for every search request.
 
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+     --backend powerset \
      --query "<user query>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
