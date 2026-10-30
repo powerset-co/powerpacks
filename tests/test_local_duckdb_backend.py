@@ -1047,6 +1047,17 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 self.assertEqual(count["matched_people"], expected)
                 self.assertEqual(json.dumps(payload, sort_keys=True), before)
 
+    def test_pool_estimate_union_role_search_ignores_company(self) -> None:
+        pipeline = load_module(
+            "company_union_count_pipeline",
+            PRIMITIVES / "search_network_pipeline/search_network_pipeline.py",
+        )
+        role = {"bm25_queries": ["engineer"], "is_current_company": True}
+        union = {**role, "company_names": ["InfraDB"], "has_domain_intent": True}
+        without = pipeline.local_pool_estimate({"role_search_filters": role}, Path(self.db_path))
+        with_company = pipeline.local_pool_estimate({"role_search_filters": union}, Path(self.db_path))
+        self.assertEqual(with_company["matched_people"], without["matched_people"])
+
     def test_local_company_namespace_and_resolver_use_duckdb(self) -> None:
         response = local_backend.namespace("companies").query(
             rank_by=("name_aliases_text", "BM25", "InfraDB"),

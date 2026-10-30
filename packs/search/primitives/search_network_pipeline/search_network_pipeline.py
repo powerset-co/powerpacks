@@ -740,9 +740,11 @@ def configure_local_backend_mode(db_path: Path) -> None:
     search_backend_mode.configure_local_backend(db_path)
 
 def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
-    """Count eligible people, resolving company names before LLM spend.
+    """Count the people the run sends into filtering, before LLM spend.
 
-    Company semantic/sector queries are excluded, so this is an upper bound.
+    A company-only search sends the company's people. With a role search, the run filters the
+    role search on the company only when filters_from_role_payload does (not in union mode), so
+    the count does the same.
     """
     if not db_path.exists():
         return {"status": "skipped_no_db"}
@@ -751,17 +753,17 @@ def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any
         from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
         from local_resolve_companies import company_rows_for_names  # type: ignore
         import local_search_backend  # type: ignore
-        from search_common import filters_from_role_payload  # type: ignore
+        from search_common import filters_from_role_payload, has_role_constraint  # type: ignore
 
         role_filters = payload_filters(payload)
-        count_filter = filters_from_role_payload(role_filters)
         if role_filters.get("company_names") and not role_filters.get("company_ids"):
             local_search_backend.configure_local_backend(db_path)
             rows = asyncio.run(company_rows_for_names(
                 role_filters["company_names"], None, top_k=20,
             ))
             role_filters["company_ids"] = [str(row["id"]) for row in rows if row.get("id")]
-            count_filter = filters_from_role_payload(role_filters)
+        count_filter = filters_from_role_payload(role_filters)
+        if "company_ids" in role_filters and not has_role_constraint(role_filters):
             company_filter = ("company_id", "In", role_filters["company_ids"])
             count_filter = ("And", [count_filter, company_filter]) if count_filter else company_filter
         store = LocalDuckDBSearchStore(str(db_path), read_only=True)
