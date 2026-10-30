@@ -266,10 +266,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         resolved_ids.extend(str(value) for value in resolution.get("resolved_ids") or [] if value)
 
     education_ids = list(dict.fromkeys([*existing_ids, *resolved_ids]))
+    # The prefilter reuses these children instead of asking the schools index again.
+    families: dict[str, list[str]] = {}
+    for resolution in resolutions:
+        for school_id in resolution.get("resolved_ids") or []:
+            families.setdefault(str(school_id), [str(school_id)])
+        for child in resolution.get("children") or []:
+            if child["id"] not in families[child["parent_id"]]:
+                families[child["parent_id"]].append(child["id"])
     return {
         "namespace": turbopuffer_backend.namespace_name("schools"),
         "education_names": names,
         "education_ids": education_ids,
+        "education_families": families,
         "resolutions": resolutions,
         "unresolved_names": [
             resolution["query"]

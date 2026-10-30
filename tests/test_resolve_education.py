@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import sys
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,8 +14,10 @@ PRIMITIVES = ROOT / "packs/search/primitives"
 LIB = PRIMITIVES / "lib"
 SHARED = PRIMITIVES / "shared"
 TURBOPUFFER = PRIMITIVES / "turbopuffer"
-for _path in [LIB, SHARED, TURBOPUFFER]:
+for _path in [LIB, SHARED, TURBOPUFFER, PRIMITIVES / "apply_prefilters"]:
     sys.path.insert(0, str(_path))
+
+import apply_prefilters  # noqa: E402
 
 SCRIPT = TURBOPUFFER / "turbopuffer_resolve_education.py"
 
@@ -137,6 +141,27 @@ class SchoolFamilyTest(unittest.TestCase):
     def test_a_parent_brings_its_children_and_a_child_stands_for_itself(self) -> None:
         families = self.families([{"id": "hbs", "parent_id": "harvard"}], ["harvard", "kennedy"])
         self.assertEqual(families, {"harvard": ["harvard", "hbs"], "kennedy": ["kennedy"]})
+
+
+class EducationFamiliesTest(unittest.TestCase):
+    def test_the_prefilter_reuses_the_resolver_children_and_asks_only_for_the_rest(self) -> None:
+        asked: list[list[str]] = []
+
+        async def school_families(school_ids: list[str]) -> dict[str, list[str]]:
+            asked.append(school_ids)
+            return {school_id: [school_id] for school_id in school_ids}
+
+        async def rows(_: str, filters: tuple, *__: object, **___: object) -> list[dict[str, str]]:
+            self.assertEqual(filters[2], ["harvard", "hbs", "typed"])
+            return [{"person_id": "p1"}]
+
+        backend = types.SimpleNamespace(school_families=school_families, SCHOOL_FILTER_FIELD="education_id")
+        payload = {"education_ids": ["harvard", "typed"], "education_families": {"harvard": ["harvard", "hbs"]}}
+        with mock.patch.object(apply_prefilters, "search_backend", return_value=backend), \
+             mock.patch.object(apply_prefilters, "filter_only_rows_for_namespace", rows):
+            ids, _ = asyncio.run(apply_prefilters.education_base_ids(payload, page_size=100, max_ids=100))
+        self.assertEqual(asked, [["typed"]])
+        self.assertEqual(ids, ["p1"])
 
 
 class Row:

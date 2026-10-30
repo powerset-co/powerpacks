@@ -113,7 +113,10 @@ async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids
         return None
     education_ids = [str(value) for value in payload.get("education_ids") or [] if value]
     education_op = payload.get("education_op") or "or"
-    families = await search_backend().school_families(education_ids) if education_ids else {}
+    families = dict(payload.get("education_families") or {})
+    unknown = [school_id for school_id in education_ids if school_id not in families]
+    if unknown:
+        families |= await search_backend().school_families(unknown)
     if education_op == "and" and len(education_ids) > 1:
         sets: list[list[str]] = []
         for school_id in education_ids:
@@ -131,7 +134,7 @@ async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids
             ids = [pid for pid in sets[0] if pid in allowed]
         return ids[:max_ids], {"stage": "education", "mode": "and", "input_count": len(education_ids), "matched": len(ids)}
 
-    filters = education_filter(payload, [school_id for family in families.values() for school_id in family])
+    filters = education_filter(payload, [member for school_id in education_ids for member in families[school_id]])
     if filters is None:
         return None
     rows = await filter_only_rows_for_namespace("education", filters, ["person_id"], page_size=page_size, max_results=max_ids)
