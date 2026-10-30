@@ -78,7 +78,8 @@ function renderRun(
   status = "completed",
 ) {
   const saves = tagServer(tags)
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // The run as already read: the test server answers only the tag and feedback calls.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(searchRunKey(RUN_ID), payload)
   const submit = vi.fn((_record: FeedbackRecord) => Promise.resolve<FeedbackOutcome>("sent"))
   const retry = vi.fn(() => Promise.resolve())
