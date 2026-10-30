@@ -16,7 +16,7 @@ from packs.search.primitives.turbopuffer.turbopuffer_resolve_education import wi
 
 
 def mapping(*items):
-    return {school_id: {"id": school_id, "school_name": name, "parent_id": parent} for school_id, name, parent in items}
+    return {school_id: {"id": school_id, "key": f"name:{school_id}", "school_name": name, "parent_id": parent} for school_id, name, parent in items}
 
 
 def edge(edge_id, person, school):
@@ -62,8 +62,10 @@ class FakeNamespace:
         ids = sorted(doc_id for doc_id in self.docs if doc_id > after)[:PAGE_SIZE]
         return SimpleNamespace(rows=[SimpleNamespace(to_dict=lambda doc_id=doc_id: dict(self.docs[doc_id])) for doc_id in ids])
 
-    def write(self, patch_rows=(), deletes=()):
+    def write(self, upsert_rows=(), patch_rows=(), deletes=()):
         self.log.append(self.id)
+        for row in upsert_rows:
+            self.docs[row["id"]] = dict(row)
         for patch in patch_rows:
             self.docs[patch["id"]].update(patch)
         for doc_id in deletes:
@@ -92,10 +94,23 @@ class RunTest(unittest.TestCase):
             self.assertEqual({row["id"]: row for row in map(json.loads, lines)}, before)
             self.assertEqual(len(Path(report["backups"][1]).read_text().splitlines()), 4)
             rerun = run(edges, schools, PlanTest.rows, apply=False, backup_dir=Path(tmp))
-        self.assertEqual(report["remaining"], {"edge_patches": 0, "school_patches": 0, "deletes": 0})
+        self.assertEqual(report["remaining"], {"edge_patches": 0, "school_patches": 0, "restores": 0, "deletes": 0})
         self.assertEqual((rerun["edge_patches"], rerun["school_patches"], rerun["deletes"]), (0, 0, 0))
         self.assertEqual({doc["canonical_education_id"] for doc_id, doc in edges.docs.items() if doc_id in "34"}, {"kth"})
         self.assertEqual(sorted(schools.docs), ["kth", "mit"])
+
+    def test_a_corrected_mapping_undoes_the_merge(self):
+        edges, schools, _ = self.namespaces()
+        corrected = {**PlanTest.rows, "kungliga": {**PlanTest.rows["kungliga"], "parent_id": None}}
+        with tempfile.TemporaryDirectory() as tmp:
+            run(edges, schools, PlanTest.rows, apply=True, backup_dir=Path(tmp))
+            report = run(edges, schools, corrected, apply=True, backup_dir=Path(tmp))
+        self.assertEqual(report["restores"], 1)
+        self.assertEqual(report["remaining"], {"edge_patches": 0, "school_patches": 0, "restores": 0, "deletes": 0})
+        self.assertEqual(schools.docs["kungliga"], {"id": "kungliga", "school_name": "Kungliga tekniska högskolan", "person_count": 2, "canonical_key": "name:kungliga"})
+        self.assertEqual(schools.docs["kth"]["school_name"], "KTH (Empty Child)")
+        self.assertEqual(schools.docs["kth"]["person_count"], 2)
+        self.assertEqual({doc["canonical_education_id"] for doc_id, doc in edges.docs.items() if doc_id in "34"}, {"kungliga"})
 
 
 if __name__ == "__main__":

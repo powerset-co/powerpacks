@@ -6,6 +6,10 @@ a rebuild would write to canonical_education_id (only that attribute is patched)
 recomputed from those rows and its children's names as a trailing alias, so a
 child's name still finds the parent; the child docs are then deleted.
 
+School docs follow the mapping, so correcting it undoes a merge on the next run:
+a school that stands alone again gets its doc rebuilt and its rows back, and its
+name drops off the old parent's alias.
+
 Namespaces follow ALEPH_ENV like the rest of the search code: unset is prod,
 dev is the _dev family. Without --apply this only prints counts. --apply first
 backs both namespaces up as JSONL. A rerun finds nothing to do.
@@ -89,16 +93,21 @@ def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[
         if row["parent_id"]:
             children.setdefault(row["parent_id"], []).append(row)
 
+    docs = {school["id"]: school for school in schools}
     school_patches = []
-    for school in schools:
-        if school["id"] not in children:
+    restores = []
+    for row in rows.values():
+        if row["parent_id"]:
             continue
-        name = merged_name(school["school_name"], [child["school_name"] for child in children[school["id"]]])
-        count = len(people.get(school["id"], ()))
-        if name != school["school_name"] or count != school.get("person_count"):
-            school_patches.append({"id": school["id"], "school_name": name, "person_count": count})
+        name = merged_name(row["school_name"], [child["school_name"] for child in children.get(row["id"], [])])
+        count = len(people.get(row["id"], ()))
+        doc = docs.get(row["id"])
+        if doc is None:
+            restores.append({"id": row["id"], "school_name": name, "person_count": count} | ({"canonical_key": row["key"]} if row["key"] else {}))
+        elif name != doc["school_name"] or (row["id"] in children and count != doc.get("person_count")):
+            school_patches.append({"id": row["id"], "school_name": name, "person_count": count})
     deletes = [school["id"] for school in schools if rows[school["id"]]["parent_id"]]
-    return {"edge_patches": edge_patches, "school_patches": school_patches, "deletes": deletes}
+    return {"edge_patches": edge_patches, "school_patches": school_patches, "restores": restores, "deletes": deletes}
 
 
 def export(namespace: Any) -> list[dict[str, Any]]:
@@ -142,6 +151,7 @@ def run(edges_ns: Any, schools_ns: Any, rows: dict[str, dict[str, Any]], *, appl
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         report["backups"] = [str(backup(edges, edges_ns.id, backup_dir, stamp)), str(backup(schools, schools_ns.id, backup_dir, stamp))]
         write_batches(edges_ns, "patch_rows", writes["edge_patches"])
+        write_batches(schools_ns, "upsert_rows", writes["restores"])
         write_batches(schools_ns, "patch_rows", writes["school_patches"])
         write_batches(schools_ns, "deletes", writes["deletes"])
         report["remaining"] = counts(plan(export(edges_ns), export(schools_ns), rows))
