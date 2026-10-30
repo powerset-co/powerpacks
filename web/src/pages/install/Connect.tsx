@@ -56,16 +56,18 @@ const TODO: Record<ConnectSource, string> = {
 }
 
 /** WhatsApp's code, in a box of its own size from the start, so nothing moves when it arrives. */
-/** The WhatsApp code, with a larger copy on a light card: a phone reads a big, sharp code before
- *  it changes (every 20 seconds). Both follow the same polled url. */
+/** The WhatsApp code, opened large on a light card as soon as WhatsApp waits on a scan: a phone
+ *  reads a big, sharp code before it changes (every 20 seconds). Closed, the small one reopens it;
+ *  both follow the same polled url. */
 function CodeBox({ url }: { url?: string }) {
+  const [open, setOpen] = useState(true)
   const code = url ? (
     <img src={url} alt="WhatsApp code to scan" className="size-full [image-rendering:pixelated]" />
   ) : (
     <Spinner />
   )
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <span className="mt-1 flex flex-col items-start gap-1">
         <DialogTrigger
           aria-label="Show the WhatsApp code larger"
