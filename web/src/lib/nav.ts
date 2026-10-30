@@ -24,8 +24,9 @@ const BROWSER_PAGES: readonly Page[] = [
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.
   { key: "team", label: "Team", href: "/team" },
   // Setup runs for a while; it sits in the nav so the rest of the app is a click away. The app's
-  // is the onboarding's Set up screen; the browser's is the install page.
-  { key: "setup", label: "Setup", href: isDesktop() ? "/onboarding/setup" : "/install" },
+  // is the Import screen (Sources, Import; Back to the app), never the onboarding's Set up, whose
+  // Skip for now marks setup skipped; the browser's is the install page.
+  { key: "setup", label: "Setup", href: isDesktop() ? "/onboarding/import" : "/install" },
 ]
 
 /** The desktop app's one search page: chat with the Codex agent beside the saved searches and
