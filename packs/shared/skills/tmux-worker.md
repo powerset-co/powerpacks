@@ -38,7 +38,7 @@ tmux send-keys -t '<session>' Enter                 # only when idle
 
 Read progress about every 30 seconds with bounded waits, and relay user input
 immediately. Preserve requested review pauses. A login/permission wait does not
-end supervision: observe it and resume automatically. MCP/web calls can use the
+end supervision: observe it and resume automatically. Web calls can use the
 worker's tools; tmux holds CLI work. If the advisor ends its turn, tmux cannot
 wake it; promise follow-ups only with a supported, authorized wakeup mechanism.
 
