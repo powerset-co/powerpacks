@@ -262,7 +262,7 @@ PROSE: dict[str, Prose] = {
     # Building your search index
     "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
-    "index.building": Prose(InstallStep.INDEX, R, "Building your search index"),
+    "index.building": Prose(InstallStep.INDEX, R, "Starting the index build"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
     "validate.checking": Prose(InstallStep.VALIDATE, R, "Checking your search"),
     "validate.done": Prose(InstallStep.VALIDATE, C, "Search is ready: {people:,} people searchable."),

@@ -174,7 +174,7 @@ def main() -> int:
         # Estimate gate: dry-run the same command, persist the estimate, and
         # refuse to spend past --max-usd. The paid run itself still only pays
         # for cache misses; covered rows replay free.
-        write_status(run_vol, status | {"phase": "estimate", "message": "Estimating the cost"})
+        write_status(run_vol, status | {"phase": "estimate", "message": "Estimating the cost", "left_seconds": 60})
         dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
         estimated_usd = None
         try:
