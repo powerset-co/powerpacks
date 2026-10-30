@@ -126,11 +126,11 @@ async def query_people_school_ids(names: list[str], *, limit: int) -> list[dict[
                 filters=filters,
                 rank_by=("id", "asc"),
                 top_k=limit,
-                include_attributes=["canonical_education_id", "school_name"],
+                include_attributes=["education_id", "school_name"],
                 consistency=STRONG_CONSISTENCY,
             )
 
-        page = [row_attrs(row, ["canonical_education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
+        page = [row_attrs(row, ["education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
         rows.extend(page)
         if len(page) < limit:
             return rows
@@ -189,12 +189,17 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
 
     # Every id people wrote one of the resolved names under, whatever the schools index calls it.
     lookup_names = list(dict.fromkeys([name, *(without_alias(c["name"]) for c in candidates if c["id"] in resolved_ids)]))
+    people_rows = await query_people_school_ids(lookup_names, limit=limit)
+    people_ids = sorted({str(row["education_id"]) for row in people_rows if row.get("education_id")})
+    schools = await query_schools(("id", "In", people_ids), limit=limit) if people_ids else []
+    top_ids = {str(school["id"]): str(school.get("parent_id") or school["id"]) for school in schools}
     people_counts: Counter[str] = Counter()
     people_names: dict[str, str] = {}
-    for row in await query_people_school_ids(lookup_names, limit=limit):
-        school_id = str(row.get("canonical_education_id") or "")
+    for row in people_rows:
+        school_id = str(row.get("education_id") or "")
         if not school_id:
             continue
+        school_id = top_ids.get(school_id, school_id)
         people_counts[school_id] += 1
         people_names.setdefault(school_id, str(row.get("school_name") or school_id))
     for school_id, count in people_counts.most_common():
@@ -217,7 +222,7 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
         "resolved_ids": resolved_ids,
         "children": [{"id": child["id"], "name": child["school_name"], "parent_id": child["parent_id"], "matched_rows": int(child.get("person_count") or 0)}
                      for child in children],
-        # The sub-schools this query names: education_child_ids narrows a search to them instead of the parent.
+        # The sub-schools this query names: passed as education_ids, they narrow a search to just them.
         "named_child_ids": [child_id for school_id in resolved_ids for child_id in named_children.get(school_id, {})],
         "affiliated_queries": root_queries,
     }

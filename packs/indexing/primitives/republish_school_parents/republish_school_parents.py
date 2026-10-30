@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Apply the school parent mapping to the published education namespaces.
 
-Every people-education row moves to the top parent of its education_id, the id
-a rebuild would write to canonical_education_id (only that attribute is patched).
 Every school keeps its own doc under its own name, and a child's doc carries
 parent_id. A parent's person_count covers its children too, and a parenthetical
-in its name that a child row now covers comes off.
+in its name that a child row now covers comes off. People rows are read, never
+written: search expands a parent to its children when it filters on education_id.
 
 School docs follow the mapping, so correcting it undoes a merge on the next run.
 Namespaces follow ALEPH_ENV like the rest of the search code: unset is prod,
 dev is the _dev family. Without --apply this only prints counts. --apply first
-backs both namespaces up as JSONL. A rerun finds nothing to do.
+backs the school docs up as JSONL. A rerun finds nothing to do.
 """
 from __future__ import annotations
 
@@ -56,16 +55,11 @@ def own_name(name: str, child_names: Iterable[str]) -> str:
 
 
 def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[str, dict[str, Any]]) -> dict[str, list]:
-    """The writes that make the namespaces match the mapping; empty once they do."""
+    """The writes that make the school docs match the mapping; empty once they do."""
 
     def top(school_id: str) -> str:
         return rows[school_id]["parent_id"] or school_id
 
-    edge_patches = [
-        {"id": edge["id"], "canonical_education_id": top(edge["education_id"])}
-        for edge in edges
-        if top(edge["education_id"]) != edge["canonical_education_id"]
-    ]
     own_people: dict[str, set[str]] = {}
     family_people: dict[str, set[str]] = {}
     for edge in edges:
@@ -95,7 +89,7 @@ def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[
         changed = {field: value for field, value in wanted.items() if value != doc.get(field)}
         if changed:
             school_patches.append({"id": school_id, **changed})
-    return {"edge_patches": edge_patches, "school_patches": school_patches, "restores": restores}
+    return {"school_patches": school_patches, "restores": restores}
 
 
 def export(namespace: Any) -> list[dict[str, Any]]:
@@ -137,8 +131,7 @@ def run(edges_ns: Any, schools_ns: Any, rows: dict[str, dict[str, Any]], *, appl
     report: dict[str, Any] = {"edges": len(edges), "schools": len(schools), **counts(writes), "applied": apply}
     if apply:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        report["backups"] = [str(backup(edges, edges_ns.id, backup_dir, stamp)), str(backup(schools, schools_ns.id, backup_dir, stamp))]
-        write_batches(edges_ns, "patch_rows", writes["edge_patches"])
+        report["backup"] = str(backup(schools, schools_ns.id, backup_dir, stamp))
         write_batches(schools_ns, "upsert_rows", writes["restores"])
         write_batches(schools_ns, "patch_rows", writes["school_patches"])
         report["remaining"] = counts(plan(export(edges_ns), export(schools_ns), rows))

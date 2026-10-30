@@ -42,11 +42,11 @@ To apply the mapping to published rows without rebuilding them:
 ALEPH_ENV=dev uv run python packs/indexing/primitives/republish_school_parents/republish_school_parents.py
 ```
 
-It moves each `aleph_people_education_v3` row to its top parent (only
-`canonical_education_id` changes). Every school keeps its own doc in
-`aleph_education_v3` under its own name; a child's doc carries `parent_id` and a
-parent's `person_count` covers its children. It prints counts until `--apply`,
-which backs both namespaces up first. `ALEPH_ENV` picks the family: unset is
+Every school keeps its own doc in `aleph_education_v3` under its own name; a
+child's doc carries `parent_id` and a parent's `person_count` covers its
+children. People rows stay as they are: search finds a parent, then filters
+`education_id` on the parent and its children. It prints counts until `--apply`,
+which backs the school docs up first. `ALEPH_ENV` picks the family: unset is
 prod, `dev` is `_dev`. Correcting the mapping and rerunning undoes a merge.
 
 

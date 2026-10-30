@@ -42,9 +42,8 @@ class PlanTest(unittest.TestCase):
     ]
     edges = [edge("1", "a", "kth"), edge("2", "b", "kth"), edge("3", "b", "kungliga"), edge("4", "c", "kungliga"), edge("5", "d", "mit")]
 
-    def test_rows_move_counts_are_distinct_people_and_children_keep_their_docs(self):
+    def test_counts_are_distinct_people_and_children_keep_their_docs(self):
         writes = plan(self.edges, self.schools, self.rows)
-        self.assertEqual(writes["edge_patches"], [{"id": "3", "canonical_education_id": "kth"}, {"id": "4", "canonical_education_id": "kth"}])
         self.assertEqual(writes["school_patches"], [
             {"id": "kth", "school_name": "KTH", "person_count": 3},
             {"id": "kungliga", "parent_id": "kth"},
@@ -85,21 +84,18 @@ class RunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = run(edges, schools, PlanTest.rows, apply=False, backup_dir=Path(tmp))
             self.assertEqual(list(Path(tmp).iterdir()), [])
-        self.assertEqual((report["edge_patches"], report["school_patches"], report["restores"]), (2, 3, 0))
+        self.assertEqual((report["school_patches"], report["restores"]), (3, 0))
         self.assertEqual(log, [])
 
     def test_apply_backs_up_writes_and_a_rerun_finds_nothing(self):
-        edges, schools, _ = self.namespaces()
-        before = {doc_id: dict(doc) for doc_id, doc in edges.docs.items()}
+        edges, schools, log = self.namespaces()
         with tempfile.TemporaryDirectory() as tmp:
             report = run(edges, schools, PlanTest.rows, apply=True, backup_dir=Path(tmp))
-            lines = Path(report["backups"][0]).read_text().splitlines()
-            self.assertEqual({row["id"]: row for row in map(json.loads, lines)}, before)
-            self.assertEqual(len(Path(report["backups"][1]).read_text().splitlines()), 4)
+            self.assertEqual(len(Path(report["backup"]).read_text().splitlines()), 4)
             rerun = run(edges, schools, PlanTest.rows, apply=False, backup_dir=Path(tmp))
-        self.assertEqual(report["remaining"], {"edge_patches": 0, "school_patches": 0, "restores": 0})
-        self.assertEqual((rerun["edge_patches"], rerun["school_patches"], rerun["restores"]), (0, 0, 0))
-        self.assertEqual({doc["canonical_education_id"] for doc_id, doc in edges.docs.items() if doc_id in "34"}, {"kth"})
+        self.assertEqual(report["remaining"], {"school_patches": 0, "restores": 0})
+        self.assertEqual((rerun["school_patches"], rerun["restores"]), (0, 0))
+        self.assertEqual(set(log), {"schools"})
         self.assertEqual(sorted(schools.docs), ["empty", "kth", "kungliga", "mit"])
         self.assertEqual(schools.docs["kungliga"]["parent_id"], "kth")
         self.assertEqual(schools.docs["kungliga"]["person_count"], 2)
@@ -110,11 +106,10 @@ class RunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run(edges, schools, PlanTest.rows, apply=True, backup_dir=Path(tmp))
             report = run(edges, schools, corrected, apply=True, backup_dir=Path(tmp))
-        self.assertEqual(report["remaining"], {"edge_patches": 0, "school_patches": 0, "restores": 0})
+        self.assertEqual(report["remaining"], {"school_patches": 0, "restores": 0})
         self.assertIsNone(schools.docs["kungliga"]["parent_id"])
         self.assertEqual(schools.docs["kth"]["school_name"], "KTH (Kungliga)")
         self.assertEqual(schools.docs["kth"]["person_count"], 2)
-        self.assertEqual({doc["canonical_education_id"] for doc_id, doc in edges.docs.items() if doc_id in "34"}, {"kungliga"})
 
 
 if __name__ == "__main__":

@@ -81,9 +81,9 @@ class ResolveEducationTests(unittest.TestCase):
         # The schools index knows KTH only by its Swedish name under the id most people are filed under;
         # the English name is a second id with a few people. The query must resolve both.
         schools = [Row("368edcd5", school_name="KTH Royal Institute of Technology", person_count=32)]
-        people = [Row(f"e{i}", canonical_education_id="0819246e", school_name="KTH Royal Institute of Technology")
+        people = [Row(f"e{i}", education_id="0819246e", school_name="KTH Royal Institute of Technology")
                   for i in range(37)]
-        people += [Row(f"f{i}", canonical_education_id="368edcd5", school_name="KTH Royal Institute of Technology")
+        people += [Row(f"f{i}", education_id="368edcd5", school_name="KTH Royal Institute of Technology")
                    for i in range(3)]
         with FakeNamespaces({"schools": schools, "education": people}) as fake:
             result = asyncio.run(resolve_education.resolve_name("KTH Royal Institute of Technology", limit=5000))
@@ -94,7 +94,7 @@ class ResolveEducationTests(unittest.TestCase):
                          ("0819246e", 37, True, True))
 
     def test_resolve_name_finds_a_school_missing_from_the_schools_index(self) -> None:
-        people = [Row(f"e{i}", canonical_education_id="5a42ef6e", school_name="Reichman University") for i in range(6)]
+        people = [Row(f"e{i}", education_id="5a42ef6e", school_name="Reichman University") for i in range(6)]
         with FakeNamespaces({"schools": [], "education": people}):
             result = asyncio.run(resolve_education.resolve_name("Reichman University", limit=5000))
         self.assertEqual(result["resolved_ids"], ["5a42ef6e"])
@@ -103,8 +103,8 @@ class ResolveEducationTests(unittest.TestCase):
     def test_resolve_name_walks_every_page_so_a_minority_id_is_not_crowded_out(self) -> None:
         # Ids sort before the majority rows on purpose: "a…" rows fill the first pages, the lone "z" row
         # for the second id sits past them. One capped page would never see it.
-        people = [Row(f"a{i:03d}", canonical_education_id="majority", school_name="Harvard University") for i in range(10)]
-        people.append(Row("z", canonical_education_id="minority", school_name="Harvard University"))
+        people = [Row(f"a{i:03d}", education_id="majority", school_name="Harvard University") for i in range(10)]
+        people.append(Row("z", education_id="minority", school_name="Harvard University"))
         schools = [Row("majority", school_name="Harvard University", person_count=9000)]
         with FakeNamespaces({"schools": schools, "education": people}) as fake:
             result = asyncio.run(resolve_education.resolve_name("Harvard University", limit=4))
@@ -115,11 +115,28 @@ class ResolveEducationTests(unittest.TestCase):
 
     def test_resolve_name_keeps_one_id_when_people_agree_with_the_index(self) -> None:
         schools = [Row("acd99729", school_name="Stanford University (Stanford)", person_count=5000)]
-        people = [Row(f"e{i}", canonical_education_id="acd99729", school_name="Stanford University") for i in range(4)]
+        people = [Row(f"e{i}", education_id="acd99729", school_name="Stanford University") for i in range(4)]
         with FakeNamespaces({"schools": schools, "education": people}) as fake:
             result = asyncio.run(resolve_education.resolve_name("Stanford University", limit=5000))
         self.assertEqual(result["resolved_ids"], ["acd99729"])
         self.assertEqual(fake.queries["education"], [("school_name", "In", ["Stanford University"])])
+
+
+class SchoolFamilyTest(unittest.TestCase):
+    def families(self, rows: list[dict], ids: list[str]) -> dict[str, list[str]]:
+        async def rows_for(*_: object, **__: object) -> list[dict]:
+            return rows
+
+        real = resolve_education.turbopuffer_backend.filter_only_rows_for_namespace
+        resolve_education.turbopuffer_backend.filter_only_rows_for_namespace = rows_for
+        try:
+            return asyncio.run(resolve_education.turbopuffer_backend.school_families(ids))
+        finally:
+            resolve_education.turbopuffer_backend.filter_only_rows_for_namespace = real
+
+    def test_a_parent_brings_its_children_and_a_child_stands_for_itself(self) -> None:
+        families = self.families([{"id": "hbs", "parent_id": "harvard"}], ["harvard", "kennedy"])
+        self.assertEqual(families, {"harvard": ["harvard", "hbs"], "kennedy": ["kennedy"]})
 
 
 class Row:
