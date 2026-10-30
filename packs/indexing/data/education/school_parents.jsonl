@@ -7509,7 +7509,7 @@
 {"id": "485424e2-4bf9-5285-9305-5a4442f3c2c9", "key": "name:torquay boys grammar school", "parent_id": null, "school_name": "Torquay Boys Grammar School", "source": "name"}
 {"id": "48560c2c-f4c5-5d76-8003-1b7e88b67f54", "key": "name:kyiv national economic university", "parent_id": "97ea3fc3-83a1-503e-9262-3ae2a1d04d98", "school_name": "Kyiv National Economic University", "source": "name"}
 {"id": "485803e1-d054-57c2-b5e7-95e9f08e7509", "key": "provider:475428", "parent_id": null, "school_name": "Chabot College", "source": "llm"}
-{"id": "4858302a-2ff0-5fc9-bbff-45cf33fb7f1e", "key": "provider:15239554", "parent_id": null, "school_name": "HarvardX", "source": "llm"}
+{"id": "4858302a-2ff0-5fc9-bbff-45cf33fb7f1e", "key": "provider:15239554", "parent_id": "a0c7e153-d297-5be4-b9d2-384733dfbb24", "school_name": "HarvardX", "source": "manual"}
 {"id": "486255b7-a978-5244-a0ef-a679f128612d", "key": "name:carrollton school of the sacred heart", "parent_id": "a5c52222-6140-5ecc-8b10-f9d4fb2ca940", "school_name": "Carrollton School of the Sacred Heart", "source": "name"}
 {"id": "4862b46e-48ca-5dcb-a291-4bd569eb9dd5", "key": "name:cisco", "parent_id": null, "school_name": "Cisco", "source": "llm"}
 {"id": "48635b12-a918-57c5-b81a-767061a19e30", "key": "name:libf", "parent_id": null, "school_name": "LIBF", "source": "llm"}
