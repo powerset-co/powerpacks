@@ -262,7 +262,7 @@ PROSE: dict[str, Prose] = {
     # Building your search index
     "index.linkedin": Prose(InstallStep.INDEX, R, "Adding your LinkedIn connections"),
     # The Modal import of the connections (run_linkedin.py codes)
-    "index.linkedin.parse": Prose(InstallStep.INDEX, R, "Reading your connections"),
+    "index.linkedin.parse": Prose(InstallStep.INDEX, R, "Reading your connections file"),
     "index.linkedin.enrich": Prose(InstallStep.INDEX, R, "Importing your connections"),
     "index.linkedin.enrich.count": Prose(InstallStep.INDEX, R, "Importing your connections: {done:,} of {total:,}"),
     "index.linkedin.persist": Prose(InstallStep.INDEX, R, "Saving your connections"),
@@ -274,7 +274,7 @@ PROSE: dict[str, Prose] = {
     "index.building.estimate": Prose(InstallStep.INDEX, R, "Estimating the cost"),
     "index.building.pipeline": Prose(InstallStep.INDEX, R, "Starting the build"),
     "index.building.companies": Prose(InstallStep.INDEX, R, "Company profiles: {done:,} of {total:,}"),
-    "index.building.step.flatten_people": Prose(InstallStep.INDEX, R, "Reading your connections"),
+    "index.building.step.flatten_people": Prose(InstallStep.INDEX, R, "Loading your people"),
     "index.building.step.build_roles": Prose(InstallStep.INDEX, R, "Listing every role"),
     "index.building.step.embed_role_positions": Prose(InstallStep.INDEX, R, "Understanding job titles"),
     "index.building.step.build_company_corpus": Prose(InstallStep.INDEX, R, "Collecting companies"),
