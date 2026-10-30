@@ -9,7 +9,6 @@ import { errorText } from "@/lib/api/http"
 import { connectSource, continueSetup, fetchConnection } from "@/lib/api/install"
 import { live, POLL_MS, prepare, standing } from "@/pages/install/sources"
 
-import { ChromeProfiles } from "./ChromeProfiles"
 import { Frame, Heading, Info, Note } from "./Frame"
 import { after } from "./steps"
 
@@ -100,7 +99,6 @@ export function LinkedIn() {
             </>
           ) : (
             <>
-              {at.state === "needed" ? <ChromeProfiles onUsed={() => void signed.refetch()} /> : null}
               <Button
                 variant="primary"
                 size="lg"
