@@ -12975,7 +12975,7 @@
 {"id": "7dbafacd-6152-568a-93e9-7d6e0212bc45", "key": "name:vassar college", "parent_id": "14af1531-e470-5b42-a27e-9c7a88dbe0f5", "school_name": "Vassar College", "source": "name"}
 {"id": "7dbb4cd2-4c54-5f66-a933-51b95540acf0", "key": "provider:15090726", "parent_id": null, "school_name": "Centro Universitário Da Cidade", "source": "llm"}
 {"id": "7dc32647-a442-5a60-a905-2c6328fdc26c", "key": "provider:692941", "parent_id": null, "school_name": "Santa Fe College", "source": "llm"}
-{"id": "7dc492a1-34b8-5a64-b7f5-137ad1aa8faf", "key": "name:harvardx", "parent_id": "4858302a-2ff0-5fc9-bbff-45cf33fb7f1e", "school_name": "HarvardX", "source": "seed"}
+{"id": "7dc492a1-34b8-5a64-b7f5-137ad1aa8faf", "key": "name:harvardx", "parent_id": "a0c7e153-d297-5be4-b9d2-384733dfbb24", "school_name": "HarvardX", "source": "seed"}
 {"id": "7dc96824-7b5a-578a-8d6e-a734d0a2dae0", "key": "name:st. michaels", "parent_id": null, "school_name": "St. Michaels", "source": "llm"}
 {"id": "7dcd2c34-611e-5313-acbf-a694aaffc9f8", "key": "name:techshop", "parent_id": null, "school_name": "TechShop", "source": "llm"}
 {"id": "7dcd85e0-1871-5275-bde5-43a774436ad3", "key": "provider:13993158", "parent_id": null, "school_name": "College Louise Wegmann", "source": "llm"}
