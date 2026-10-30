@@ -176,7 +176,7 @@ export function AccountsPanel({
               <p className="m-0 text-center text-[11px] text-muted-foreground">
                 Sync connected sources, then update Deep Context and search.
               </p>
-              {run.data && run.data.event !== "setup.ready" ? (
+              {active || starting || previous !== undefined ? (
                 <button
                   type="button"
                   className="border-0 bg-transparent text-xs text-primary"

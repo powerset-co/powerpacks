@@ -117,6 +117,7 @@ it("keeps connected details and the disconnected helper in one Accounts screen",
   fireEvent.click(screen.getByRole("button", { name: /WhatsApp/ }))
   expect(await screen.findByRole("heading", { name: "Link your WhatsApp." })).toBeTruthy()
   expect(screen.getByTestId("path").textContent).toBe("/accounts")
+  expect(screen.queryByRole("button", { name: "View sync progress" })).toBeNull()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
 it("refreshes all sources then shows Deep Context progress without leaving Accounts", async () => {

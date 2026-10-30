@@ -18,7 +18,6 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
   const elapsed = useRef(0)
   const [scale, setScale] = useState(0.5)
   const [step, setStep] = useState(0)
-  const [beat, setBeat] = useState(0)
   useEffect(() => {
     const element = frame.current
     if (!element) return
@@ -43,16 +42,11 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
       const progress = elapsed.current / flow.duration
       demo.seek(progress)
       setStep(Math.min(2, Math.floor(progress * 3)))
-      setBeat(Math.min(5, Math.floor(progress * 6)))
       handle = requestAnimationFrame(tick)
     }
     handle = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(handle)
   }, [source, person.name, person.email, flow.duration])
-  const caption =
-    source === "gmail" && beat === 4
-      ? "Powerpacks ticks the two Gmail permissions and continues. If Google asks you instead, tick Select all, then Continue."
-      : flow.captions[step]
   return (
     <div className="guide flex flex-col gap-4" data-guide={source}>
       <div className="flex flex-col gap-1">
@@ -73,7 +67,7 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
         />
       </div>
       <p className="m-0 min-h-9 text-center text-xs text-muted-foreground" aria-live="off">
-        {caption}
+        {flow.captions[step]}
       </p>
       <ol className="m-0 flex list-none flex-col gap-1 p-0 text-[13px]">
         {flow.steps.map((line, at) => (
