@@ -2,6 +2,7 @@ import { useEffect, type ComponentType } from "react"
 import { useParams } from "react-router-dom"
 
 import { Codex } from "./Codex"
+import { Import } from "./Import"
 import { LinkedIn } from "./LinkedIn"
 import { SetUp } from "./SetUp"
 import { SignUp } from "./SignUp"
@@ -14,11 +15,11 @@ const SCREENS: Record<StepKey, ComponentType> = {
   linkedin: LinkedIn,
   setup: SetUp,
   sources: Sources,
-  import: SetUp,
+  import: Import,
 }
 
 /** The onboarding, one screen per step at /onboarding/<step>: sign up, ChatGPT, LinkedIn, set up (with the
- *  first look), sources, import (the Set up screen again, over every source). Outside the app shell: it is the whole window, as a first run is. */
+ *  first look), sources, import (the run over every source). Outside the app shell: it is the whole window, as a first run is. */
 export function OnboardingPage() {
   const { step } = useParams()
   const current = stepAt(step)
