@@ -243,9 +243,9 @@ export async function setFullAccess(on: boolean): Promise<void> {
   for (const approval of waiting) await answer(approval, "session")
 }
 
-/** Where the next chat searches; a chat that has started keeps its scope. */
+/** Where the next chat searches; a chat that has started (or is sending its first message) keeps its scope. */
 export function setScope(scope: ChatScope): void {
-  if (state.threadId !== null) return
+  if (state.threadId !== null || state.running) return
   set({ ...state, scope })
   remember(SCOPE_KEY, JSON.stringify(scope))
 }

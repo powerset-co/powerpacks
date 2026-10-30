@@ -1320,16 +1320,12 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_backend(p):
-    p.add_argument("--backend",choices=("powerset","local"),default=None,help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Unstated: local when POWERPACKS_LOCAL_SEARCH_DB is set")
-    p.add_argument("--db",default=None,help="Local DuckDB path (used only with --backend local); unstated: POWERPACKS_LOCAL_SEARCH_DB, else "+DEFAULT_LOCAL_DB)
-
-def resolve_backend(args) -> None:
-    """The chat's scope is the default: the desktop app pins a chat's set or local index into the
-    environment of every command Codex runs, so an agent that leaves the flag off still searches
-    where the chat's picker points. Explicit flags win."""
+    # The chat's scope is the default: the desktop app pins a chat's set or local index into the
+    # environment of every command Codex runs, so an agent that leaves the flag off still searches
+    # where the chat's picker points. Explicit flags win.
     local_db=os.environ.get("POWERPACKS_LOCAL_SEARCH_DB") or None
-    args.backend=getattr(args,"backend",None) or ("local" if local_db else "powerset")
-    args.db=getattr(args,"db",None) or local_db or DEFAULT_LOCAL_DB
+    p.add_argument("--backend",choices=("powerset","local"),default="local" if local_db else "powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Unstated: local when POWERPACKS_LOCAL_SEARCH_DB is set")
+    p.add_argument("--db",default=local_db or DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: POWERPACKS_LOCAL_SEARCH_DB, else "+DEFAULT_LOCAL_DB)
 
 def add_run(p):
     add_backend(p)
@@ -1403,7 +1399,5 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     ap=build_parser()
-    args=ap.parse_args()
-    if hasattr(args,"backend"): resolve_backend(args)
-    raise SystemExit(args.func(args))
+    args=ap.parse_args(); raise SystemExit(args.func(args))
 if __name__ == "__main__": main()

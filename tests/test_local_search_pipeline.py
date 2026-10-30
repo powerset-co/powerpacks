@@ -1478,7 +1478,6 @@ class PickerBackendDefaultTests(unittest.TestCase):
                 if key not in env:
                     os.environ.pop(key, None)
             args = pipeline.build_parser().parse_args(["run", "--query", "q", *flags])
-            pipeline.resolve_backend(args)
         return args.backend, args.db
 
     def test_local_index_pinned(self) -> None:

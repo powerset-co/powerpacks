@@ -36,7 +36,8 @@ export function SearchScope() {
   const scope = useSearchScope()
   const sets = scope.data?.sets ?? []
   const local_db = scope.data?.local_db ?? null
-  const pinned = agent.threadId !== null
+  // Pinned from the first message on: once sent, the pick is the chat's.
+  const pinned = agent.threadId !== null || agent.running
   // A pick still on offer, else the local index, else the largest set.
   const offered = (pick: ChatScope | null): pick is ChatScope =>
     pick !== null &&
