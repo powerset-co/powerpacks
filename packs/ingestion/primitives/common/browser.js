@@ -4,6 +4,8 @@
  * POWERPACKS_BROWSERS_DIR, default ~/.powerpacks/browsers), else Chrome, Brave, Edge, Arc.
  * A saved profile last written by a newer Chrome than that Chromium opens in the installed
  * browser instead: Chrome refuses a profile from a newer version.
+ * A profile copied from the user's Chrome (chrome_profiles.py) opens in the installed browser
+ * with the real Keychain, the only way its cookies and passwords decrypt.
  * The user agent matches the installed major
  * version so it agrees with the Sec-CH-UA hints the browser sends. After a login
  * window closes, returnFocus brings back the app that started the session:
@@ -11,6 +13,7 @@
  * (Terminal, Ghostty, the Claude or Codex desktop app).
  *
  * Changelog:
+ * 2026-10-30: Profiles copied from the user's Chrome.
  * 2026-10-27: Powerpacks' own Chromium first; the installed browsers are the fallback, and
  *   the browser for a profile made by a newer Chrome.
  * 2026-10-09: Share browser discovery with desktop preflight; include cached Chromium.
@@ -69,10 +72,14 @@ function chromiumMajor(executable) {
   return majorOf(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]);
 }
 
-// The browser for `profileDir`: our Chromium, unless a newer installed Chrome wrote the profile.
+const copiedFromChrome = profileDir => Boolean(profileDir) && fs.existsSync(path.join(profileDir, "chrome-profile.json"));
+
+// The browser for `profileDir`: our Chromium, unless the profile is a copy from Chrome or a newer
+// installed Chrome wrote it.
 function whichBrowser(profileDir) {
   const own = ownChromium();
   const installed = installedBrowser();
+  if (copiedFromChrome(profileDir)) return installed;
   if (own && installed && profileMajor(profileDir) > chromiumMajor(own.path)) return installed;
   return own || installed;
 }
@@ -82,6 +89,12 @@ function browserTarget(profileDir) {
   const browser = whichBrowser(profileDir);
   if (browser) return { executablePath: browser.path };
   throw new Error("Powerpacks could not download its browser. Install Chrome, Brave, Microsoft Edge, or Arc to continue.");
+}
+
+// Spread into launchPersistentContext options, after browserTarget.
+function ignoredArgs(profileDir) {
+  const keychain = copiedFromChrome(profileDir) ? ["--use-mock-keychain", "--password-store=basic"] : [];
+  return { ignoreDefaultArgs: ["--enable-automation", ...keychain] };
 }
 
 function desktopUserAgent(profileDir) {
@@ -106,7 +119,7 @@ function returnFocus() {
   }
 }
 
-module.exports = { browserTarget, desktopUserAgent, returnFocus, whichBrowser };
+module.exports = { browserTarget, desktopUserAgent, ignoredArgs, returnFocus, whichBrowser };
 
 if (require.main === module && process.argv[2] === "--which") {
   console.log(JSON.stringify(whichBrowser()));

@@ -7,6 +7,8 @@ GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in)
                               setup will take, as its Connect screen shows it
                               Jobs and health arrive together, so a finished job never
                               shows next to the account's pre-sync health.
+GET  /accounts/api/chrome-profiles  the user's Chrome profiles with a LinkedIn or Google session
+POST /accounts/api/chrome-profile   folder=<profile>: copy it into the sign-in browsers
 POST /accounts/api/sync       source=imessage|whatsapp, or source=gmail&email=<address>:
                               sync that one card
 POST /accounts/api/reconnect  email=<gmail>: open msgvault's Google sign-in, then sync
@@ -20,6 +22,7 @@ browser sign-in before that, so an abandoned sign-in never blocks other syncs. A
 Gmail sign-in checks until a job ends, the stored mailbox list changes, or signed-in refreshes them.
 
 Changelog:
+  2026-10-30: Chrome profiles to pick from.
   2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
   2026-09-28: created for the local Accounts page.
 """
@@ -43,9 +46,12 @@ from packs.ingestion.primitives.refresh.refresh_sources import (
 )
 from packs.ingestion.primitives.refresh.tasks import installed_runners
 from packs.ingestion.primitives.setup.automations.accounts import add_account
+from packs.ingestion.primitives.setup.automations.chrome_profiles import chrome_profiles, use_chrome_profile
 
 ACCOUNTS_PATH = "/accounts/api/accounts"
 SIGNED_IN_PATH = "/accounts/api/signed-in"
+CHROME_PROFILES_PATH = "/accounts/api/chrome-profiles"
+CHROME_PROFILE_PATH = "/accounts/api/chrome-profile"
 SYNC_PATH = "/accounts/api/sync"
 RECONNECT_PATH = "/accounts/api/reconnect"
 
@@ -72,6 +78,9 @@ class AccountsApi:
             self._signins = gmail_signins()
             _send_json(handler, asdict(signed_in(self._signins)))
             return True
+        if parsed.path == CHROME_PROFILES_PATH:
+            _send_json(handler, {"profiles": [asdict(profile) for profile in chrome_profiles()]})
+            return True
         if parsed.path != ACCOUNTS_PATH:
             return False
         self._signins = gmail_signins(self._signins)
@@ -83,11 +92,15 @@ class AccountsApi:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in (SYNC_PATH, RECONNECT_PATH):
+        if parsed.path not in (SYNC_PATH, RECONNECT_PATH, CHROME_PROFILE_PATH):
             return False
         length = int(handler.headers.get("Content-Length") or 0)
         form = {key: values[0] for key, values in urllib.parse.parse_qs(handler.rfile.read(length).decode()).items()}
         source, email = form.get("source"), form.get("email")
+        if parsed.path == CHROME_PROFILE_PATH:
+            use_chrome_profile(form["folder"])
+            _send_json(handler, {"status": "copied"})
+            return True
         if parsed.path == SYNC_PATH and source in MESSAGE_SYNCS:
             self._start(source, lambda: self._sync(source, lambda: [MESSAGE_SYNCS[source]()]))
         elif parsed.path == SYNC_PATH and source == "gmail" and email:

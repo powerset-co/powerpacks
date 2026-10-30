@@ -9,6 +9,7 @@ import { errorText } from "@/lib/api/http"
 import { connectSource, continueSetup, fetchConnection } from "@/lib/api/install"
 import { live, POLL_MS, prepare, standing } from "@/pages/install/sources"
 
+import { ChromeProfiles } from "./ChromeProfiles"
 import { Frame, Heading, Info, Note } from "./Frame"
 import { after } from "./steps"
 
@@ -99,6 +100,7 @@ export function LinkedIn() {
             </>
           ) : (
             <>
+              {at.state === "needed" ? <ChromeProfiles onUsed={() => void signed.refetch()} /> : null}
               <Button
                 variant="primary"
                 size="lg"
@@ -137,7 +139,7 @@ export function LinkedIn() {
             "Nothing is posted, liked or sent",
             "If LinkedIn slows down, we stop and ask for your data export instead",
           ]}
-          note="Your LinkedIn password never touches Powerpacks."
+          note="Powerpacks never reads your LinkedIn password."
         />
       }
     />

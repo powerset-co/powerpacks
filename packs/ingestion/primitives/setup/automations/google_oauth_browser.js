@@ -25,7 +25,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright-core");
-const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
+const { browserTarget, desktopUserAgent, ignoredArgs, returnFocus } = require("../../common/browser.js");
 
 const { GMAIL_SCOPES, authorize } = require("./gmail_consent.js");
 const { loginGcloud } = require("./gcloud_consent.js");
@@ -349,7 +349,7 @@ function launchChrome(profileDir, headless) {
     // --no-sandbox infobar) and the AutomationControlled blink feature.
     // Omit --no-sandbox (re-adds the flag banner) and --disable-web-security
     // (breaks the GCP console's CORS/OAuth flow).
-    ignoreDefaultArgs: ["--enable-automation"],
+    ...ignoredArgs(profileDir),
     args: [
       "--start-maximized",
       "--disable-blink-features=AutomationControlled",
