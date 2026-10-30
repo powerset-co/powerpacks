@@ -11,6 +11,7 @@ import { signIn as authenticate } from "@/lib/api/feedback"
 import { connectRelay } from "@/lib/api/relay"
 import { errorText } from "@/lib/api/http"
 import { useFeatures } from "@/lib/features"
+import type { InstallStatus } from "@/types/install"
 import {
   dismissedVersion,
   dismissVersion,
@@ -26,24 +27,115 @@ import { cn } from "@/lib/utils"
 import { Button } from "../ui/button"
 import { AppFeedback } from "./AppFeedback"
 import { Avatar } from "./Avatar"
-import { CLOSE_MARK } from "./icons/actions"
+import { CheckIcon, CLOSE_MARK } from "./icons/actions"
 import { CirclePlus } from "lucide-react"
-import { SettingsIcon } from "./icons/nav"
+import { SettingsIcon, SetupIcon } from "./icons/nav"
 import { ProgressBar } from "./ProgressBar"
 import { RelayDot } from "./RelayDot"
+import { Spinner } from "./Spinner"
 import { Tip } from "./Tip"
 
 // While signed out the footer watches for a sign-in that finishes on the server.
 const SIGNED_OUT_POLL_MS = 5_000
 
-/** The side nav's bottom: the update pane when a newer app is out, then who is signed in, whose
- *  row opens the account menu (Settings, Send feedback, Reconnect). */
+/** The side nav's bottom: the import pane while an import shows, otherwise the sources prompt
+ *  (never both), the update pane when a newer app is out, then who is signed in, whose row opens
+ *  the account menu (Settings, Send feedback, Reconnect). */
 export function SidebarFooter({ rail }: { rail: boolean }) {
+  const run = useImport()
   return (
     <div className="mt-auto flex flex-col">
-      <SourcesPane rail={rail} />
+      {run ? <ImportPane rail={rail} {...run} /> : <SourcesPane rail={rail} />}
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
+    </div>
+  )
+}
+
+// The finished run whose pane was dismissed (its record's updated_at); a later run shows again.
+const IMPORT_DISMISSED_KEY = "import-pane-dismissed"
+const IMPORT_POLL_MS = 5_000
+// The app's import screen; the browser's is the install page.
+const IMPORT_HREF = isDesktop() ? "/onboarding/import" : "/install"
+
+/** The setup run the import pane shows, with its dismiss; null once a finished run is dismissed
+ *  (or before any run). No dismissing while it runs or is stopped, so the way back is always there. */
+function useImport(): { data: InstallStatus; dismiss: () => void } | null {
+  const install = useQuery({
+    queryKey: ["install"],
+    queryFn: ({ signal }) => fetchInstall(signal),
+    refetchInterval: IMPORT_POLL_MS,
+    retry: false,
+  })
+  const [dismissed, setDismissed] = useState(() =>
+    readStored("local", IMPORT_DISMISSED_KEY, (raw) => (typeof raw === "string" ? raw : null)),
+  )
+  const data = install.data
+  if (data === undefined || (finished(data) && dismissed === data.updated_at)) return null
+  const dismiss = () => {
+    writeStored("local", IMPORT_DISMISSED_KEY, data.updated_at)
+    setDismissed(data.updated_at)
+  }
+  return { data, dismiss }
+}
+
+function finished(data: InstallStatus): boolean {
+  return data.status === "completed" && data.step === "ready"
+}
+
+/** Import: the setup run's line, opening the Import screen; once it reaches ready, a dismiss. */
+function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatus; dismiss: () => void }) {
+  const navigate = useNavigate()
+  const done = finished(data)
+  const stopped = data.status === "failed"
+  const title = done ? "Import done" : stopped ? "Import stopped" : "Importing"
+  const open = () => void navigate(IMPORT_HREF)
+  const icon = done ? (
+    <CheckIcon className="size-4 shrink-0 text-ok" />
+  ) : stopped ? (
+    <SetupIcon className="size-4 shrink-0 text-bad" />
+  ) : (
+    <span className="grid size-4 shrink-0 place-items-center">
+      <Spinner className="size-3.5 text-primary" />
+    </span>
+  )
+  if (rail) {
+    return (
+      <div className="flex justify-center pb-1">
+        <button
+          type="button"
+          aria-label={`${title}: ${data.message}`}
+          onClick={open}
+          className="group relative grid size-9 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 transition-colors duration-fast ease-out hover:bg-secondary"
+        >
+          {icon}
+          <Tip side="right">{data.message}</Tip>
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="mx-2 mb-2 rounded-[var(--radius-m)] border border-line bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] p-2.5">
+      <div className="flex items-start gap-2">
+        <span className="mt-px">{icon}</span>
+        <span className="min-w-0 flex-1 leading-[1.25]">
+          <span className="block truncate text-[12px] font-semibold text-foreground">{title}</span>
+          <span className="line-clamp-2 block text-[11px] text-muted-foreground">{data.message}</span>
+        </span>
+        {done ? (
+          <button
+            type="button"
+            aria-label="Dismiss this import"
+            onClick={dismiss}
+            className="-mt-1 -mr-1 grid size-6 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-[15px] leading-none text-faint transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+          >
+            {CLOSE_MARK}
+          </button>
+        ) : null}
+      </div>
+      <Button variant={done ? "ghost" : "primary"} size="sm" onClick={open} className="mt-2.5 w-full">
+        {done ? "View import" : "Open import"}
+      </Button>
     </div>
   )
 }

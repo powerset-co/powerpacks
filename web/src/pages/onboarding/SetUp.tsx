@@ -265,7 +265,7 @@ export function SetUp() {
                 Start using Powerpacks now
               </Button>
               <Note>
-                The import keeps running in the background; Setup in the side nav shows where it is.
+                The import keeps running in the background; Import in the side nav shows where it is.
                 {left !== null ? ` This stage: ${leftText(left)}.` : ""}
               </Note>
             </div>
