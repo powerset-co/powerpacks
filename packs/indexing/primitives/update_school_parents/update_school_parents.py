@@ -77,7 +77,7 @@ def estimate_usd(unreviewed: int, model: str) -> float:
     return unreviewed * (INPUT_TOKENS_PER_SCHOOL * prices["input"] + OUTPUT_TOKENS_PER_SCHOOL * prices["output"]) / 1000
 
 
-def canonical_names(client: OpenAI, names: list[str], model: str) -> dict[str, str]:
+def canonical_names(client: OpenAI, names: list[str], model: str) -> tuple[dict[str, str], float]:
     prompt = PROMPT.format(schools="\n".join(f"- {name}" for name in names))
     response = client.chat.completions.create(
         model=model,
@@ -85,30 +85,34 @@ def canonical_names(client: OpenAI, names: list[str], model: str) -> dict[str, s
         response_format={"type": "json_object"},
         **{**api_call_kwargs(model), "max_completion_tokens": 8000},
     )
-    return json.loads(response.choices[0].message.content)
+    prices = CHAT_MODEL_PRICES_PER_1K_USD[model]
+    usd = (response.usage.prompt_tokens * prices["input"] + response.usage.completion_tokens * prices["output"]) / 1000
+    return json.loads(response.choices[0].message.content), usd
 
 
-def review_with_llm(rows: dict[str, dict[str, Any]], counts: dict[str, int], model: str, output: Path, limit: int | None) -> dict[str, int]:
+def review_with_llm(rows: dict[str, dict[str, Any]], counts: dict[str, int], model: str, output: Path, limit: int | None) -> dict[str, Any]:
     unreviewed = [row for row in rows.values() if row["source"] is None and not row["parent_id"]]
     unreviewed.sort(key=lambda row: -counts.get(row["id"], 0))
     unreviewed = unreviewed[:limit] if limit else unreviewed
     batches = [unreviewed[i : i + BATCH_SIZE] for i in range(0, len(unreviewed), BATCH_SIZE)]
     client = OpenAI()
     failed = 0
+    spent = 0.0
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {pool.submit(canonical_names, client, [row["school_name"] for row in batch], model): batch for batch in batches}
         for future in as_completed(futures):
             batch = futures[future]
             try:
-                names = future.result()
+                names, usd = future.result()
             except Exception as e:
                 print(f"batch failed, stays unreviewed: {e}", file=sys.stderr)
                 failed += len(batch)
                 continue
+            spent += usd
             apply_canonical_names(rows, [row["id"] for row in batch], names, counts)
             flatten(rows)
             write_rows(rows, output)
-    return {"reviewed": len(unreviewed) - failed, "failed": failed}
+    return {"reviewed": len(unreviewed) - failed, "failed": failed, "spent_usd": round(spent, 4)}
 
 
 def run(schools: list[dict[str, Any]], mapping: Path, llm: bool, model: str, limit: int | None) -> dict[str, Any]:

@@ -109,7 +109,7 @@ def apply_canonical_names(
     by_name: dict[str, str] = {}
     for row in rows.values():
         name = normalize_name(row["school_name"])
-        if name not in by_name or counts.get(row["id"], 0) > counts.get(by_name[name], 0):
+        if name and (name not in by_name or counts.get(row["id"], 0) > counts.get(by_name[name], 0)):
             by_name[name] = row["id"]
     for school_id in reviewed:
         row = rows[school_id]

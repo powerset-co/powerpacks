@@ -68,6 +68,13 @@ class CanonicalNamesTest(unittest.TestCase):
         self.assertEqual((rows["a"]["parent_id"], rows["a"]["source"]), (None, "llm"))
 
 
+    def test_a_school_the_model_left_out_does_not_join_a_name_that_normalizes_to_nothing(self):
+        rows = rows_of(row("a", "武汉大学"), row("b", "Stanford University"))
+        apply_canonical_names(rows, ["b"], {}, {"a": 9})
+        self.assertIsNone(rows["b"]["parent_id"])
+        self.assertEqual(rows["b"]["source"], "llm")
+
+
 class FlattenTest(unittest.TestCase):
     def test_chain_points_at_the_top(self):
         rows = rows_of(row("a", "A", parent_id="b"), row("b", "B", parent_id="c"), row("c", "C"))
@@ -105,12 +112,12 @@ class UpdateTest(unittest.TestCase):
 
             def fake(client, names, model):
                 seen.append(names)
-                return {"HBS": "Harvard University"}
+                return {"HBS": "Harvard University"}, 0.01
 
             with mock.patch.object(update_school_parents, "canonical_names", fake), mock.patch.object(update_school_parents, "OpenAI"):
                 report = update_school_parents.run([], path, True, "gpt-6-luna", None)
             self.assertEqual(seen, [["HBS"]])
-            self.assertEqual(report["reviewed"], 1)
+            self.assertEqual((report["reviewed"], report["spent_usd"]), (1, 0.01))
             self.assertEqual(read_rows(path)["b"]["parent_id"], "a")
 
 
