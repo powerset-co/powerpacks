@@ -122,7 +122,8 @@ pub struct Answer {
     pub linkedin_url: Option<String>,
     /// The run's sources, when the screen decides them: LinkedIn alone (the onboarding's LinkedIn
     /// step) runs the LinkedIn setup; the Sources step runs every source through `bin/onboard`.
-    /// Left out, `bin/onboard` keeps the saved choice.
+    /// Left out (Try again), the run the record names runs again, and `bin/onboard` keeps the
+    /// saved choice.
     pub sources: Option<Vec<String>>,
 }
 
@@ -165,9 +166,27 @@ pub fn stop_running(root: &Path) {
     }
 }
 
+/// The command the record says reruns setup: `bin/linkedin-setup`, or `bin/onboard …`.
+fn recorded_retry_command(root: &Path) -> String {
+    let text = fs::read_to_string(root.join(MANIFEST)).unwrap_or_default();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    manifest
+        .get("retry_command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     let mut onboard = Command::new(paths::project_python(root));
-    if answer.sources.as_deref() == Some(&["linkedin".to_string()]) {
+    let linkedin_setup = match &answer.sources {
+        Some(sources) => *sources == ["linkedin"],
+        None => recorded_retry_command(root)
+            .split_whitespace()
+            .next()
+            .is_some_and(|program| program.ends_with("bin/linkedin-setup")),
+    };
+    if linkedin_setup {
         onboard
             .args(["-m", LINKEDIN_SETUP_MODULE, "--root"])
             .arg(root);
@@ -258,19 +277,23 @@ mod tests {
     }
 
     #[test]
-    fn linkedin_alone_runs_the_linkedin_setup_and_every_source_runs_onboard() {
+    fn try_again_runs_the_recorded_run_and_sources_pick_the_run() {
         use std::os::unix::fs::PermissionsExt;
         let root =
             std::env::temp_dir().join(format!("powerpacks-linkedin-setup-{}", std::process::id()));
         let python = paths::project_python(&root);
         fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::create_dir_all(root.join(MANIFEST).parent().unwrap()).unwrap();
         fs::write(&python, "#!/bin/sh\necho \"$@\" > setup-args\n").unwrap();
         fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
-        let run = |sources: &[&str]| {
+        let run = |retry_command: &str, sources: Option<&[&str]>| {
             let _ = fs::remove_file(root.join("setup-args"));
+            let record = serde_json::json!({ "status": "failed", "retry_command": retry_command });
+            fs::write(root.join(MANIFEST), record.to_string()).unwrap();
             let answer = Answer {
                 linkedin_url: None,
-                sources: Some(sources.iter().map(|source| source.to_string()).collect()),
+                sources: sources
+                    .map(|sources| sources.iter().map(|source| source.to_string()).collect()),
             };
             start(&root, answer).unwrap();
             (0..50)
@@ -280,14 +303,19 @@ mod tests {
                 })
                 .expect("setup started")
         };
+        let linkedin_setup = format!("-m {LINKEDIN_SETUP_MODULE} --root {}", root.display());
+        let onboard = format!("-m {ONBOARD_MODULE} --root {}", root.display());
+        // Try again (no sources) on a LinkedIn setup record runs the LinkedIn setup again.
+        assert_eq!(run("bin/linkedin-setup", None).trim(), linkedin_setup);
+        // Try again on an import record runs `bin/onboard` with its saved choice.
+        let import = "/app/bin/onboard --source linkedin --source gmail --port 4321";
+        assert_eq!(run(import, None).trim(), onboard);
+        // The LinkedIn step's Continue runs the LinkedIn setup whatever the record says.
+        assert_eq!(run(import, Some(&["linkedin"])).trim(), linkedin_setup);
         assert_eq!(
-            run(&["linkedin"]).trim(),
-            format!("-m {LINKEDIN_SETUP_MODULE} --root {}", root.display())
+            run("bin/linkedin-setup", Some(&["linkedin", "gmail"])).trim(),
+            format!("{onboard} --source linkedin --source gmail")
         );
-        assert!(run(&["linkedin", "gmail"]).contains(&format!(
-            "-m {ONBOARD_MODULE} --root {} --source linkedin --source gmail",
-            root.display()
-        )));
         fs::remove_dir_all(root).unwrap();
     }
 }

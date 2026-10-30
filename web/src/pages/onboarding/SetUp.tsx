@@ -169,8 +169,8 @@ export function SetUp() {
   const retry = () => {
     setRetrying(true)
     setError(null)
-    // Set up's run is LinkedIn alone (linkedin_setup.py); Import's is every source it saved.
-    continueSetup(step === "setup" ? { sources: ["linkedin"] } : {}).catch((caught: unknown) => {
+    // The app runs again the run the record names (bin/linkedin-setup or bin/onboard).
+    continueSetup({}).catch((caught: unknown) => {
       setError(errorText(caught))
       setRetrying(false)
     })

@@ -112,10 +112,8 @@ it("a stop before any stage shows the stop and Try again, and does not restart b
   expect(invoke).not.toHaveBeenCalled()
 
   fireEvent.click(screen.getByRole("button", { name: "Try again" }))
-  // Set up's run is LinkedIn alone, so Try again runs that again (linkedin_setup.py).
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: { sources: ["linkedin"] } }),
-  )
+  // Try again sends no choice: the app runs the run the record names again.
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
   expect(screen.getByRole<HTMLButtonElement>("button", { name: /Starting/ }).disabled).toBe(true)
 })
 
