@@ -49,16 +49,29 @@ class ResolveEducationTests(unittest.TestCase):
         self.assertEqual(resolve_education.without_alias("KTH Royal Institute of Technology"), "KTH Royal Institute of Technology")
 
     def test_exact_word_beats_a_larger_school_that_only_starts_with_it(self) -> None:
-        schools = [Row("huji", school_name="Hebrew University (Tumor Immunology)", person_count=89),
-                   Row("tum", school_name="Technical University of Munich (TUM School of Management)", person_count=73)]
+        schools = [Row("huji", school_name="Hebrew University", person_count=89),
+                   Row("tumor", school_name="Tumor Immunology Center", person_count=1, parent_id="huji"),
+                   Row("tum", school_name="Technical University of Munich", person_count=73),
+                   Row("tumsom", school_name="TUM School of Management", person_count=1, parent_id="tum")]
         with FakeNamespaces({"schools": schools, "education": []}):
             result = asyncio.run(resolve_education.resolve_name("TUM", limit=5000))
         self.assertEqual(result["resolved_ids"], ["tum"])
 
-    def test_an_alias_does_not_join_another_schools_family(self) -> None:
-        schools = [Row("columbia", school_name="Columbia University (Columbia Business School)", person_count=900),
-                   Row("gwu", school_name="George Washington University (Columbian College)", person_count=300),
-                   Row("sc", school_name="University of South Carolina (Columbia Campus)", person_count=70),
+    def test_a_match_on_a_child_resolves_to_its_parent_and_lists_the_children(self) -> None:
+        schools = [Row("harvard", school_name="Harvard University", person_count=2900),
+                   Row("hbs", school_name="Harvard Business School", person_count=1000, parent_id="harvard"),
+                   Row("hks", school_name="Harvard Kennedy School", person_count=300, parent_id="harvard")]
+        with FakeNamespaces({"schools": schools, "education": []}):
+            result = asyncio.run(resolve_education.resolve_name("Harvard Business School", limit=5000))
+        self.assertEqual(result["resolved_ids"], ["harvard"])
+        self.assertEqual(result["candidates"][0]["name"], "Harvard University")
+        self.assertEqual(result["named_child_ids"], ["hbs"])
+        self.assertEqual({child["id"] for child in result["children"]}, {"hbs", "hks"})
+
+    def test_a_childs_name_does_not_join_another_schools_family(self) -> None:
+        schools = [Row("columbia", school_name="Columbia University", person_count=900),
+                   Row("gwu", school_name="George Washington University", person_count=300),
+                   Row("ccas", school_name="Columbian College of Arts", person_count=30, parent_id="gwu"),
                    Row("barnard", school_name="Barnard College, Columbia University", person_count=20)]
         with FakeNamespaces({"schools": schools, "education": []}):
             result = asyncio.run(resolve_education.resolve_name("Columbia University", limit=5000))
@@ -128,7 +141,10 @@ class _Namespace:
               rank_by: tuple | None = None) -> _Response:
         self.queries.setdefault(self.logical, []).append(filters)
         if self.logical != "education":
-            return _Response(self.rows)
+            if filters[1] != "In":
+                return _Response(self.rows)
+            rows = [row for row in self.rows if (row.id if filters[0] == "id" else row.model_extra.get(filters[0])) in filters[2]]
+            return _Response(rows[:top_k])
         by_name, after = (filters[1][0], filters[1][1][2]) if filters[0] == "And" else (filters, None)
         names = set(by_name[2])
         rows = sorted((row for row in self.rows if row.model_extra["school_name"] in names), key=lambda row: row.id)

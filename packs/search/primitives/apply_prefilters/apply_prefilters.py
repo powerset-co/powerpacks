@@ -87,6 +87,8 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
     clauses: list[tuple] = []
     if ids:
         clauses.append(comparison("canonical_education_id", "In", ids))
+    if payload.get("education_child_ids"):
+        clauses.append(comparison("education_id", "In", payload["education_child_ids"]))
     if payload.get("degree_levels"):
         # Normalize to title-case to match TurboPuffer degree_normalized values
         degree_map = {"bachelors": "Bachelors", "masters": "Masters", "mba": "MBA", "phd": "PhD", "md": "MD", "jd": "JD"}
@@ -109,7 +111,7 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
 
 
 async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids: int) -> tuple[list[str], dict[str, Any]] | None:
-    if not any(payload.get(key) for key in ["education_ids", "degree_levels", "fields_of_study", "graduation_year_min", "graduation_year_max"]):
+    if not any(payload.get(key) for key in ["education_ids", "education_child_ids", "degree_levels", "fields_of_study", "graduation_year_min", "graduation_year_max"]):
         return None
     education_ids = [str(value) for value in payload.get("education_ids") or [] if value]
     education_op = payload.get("education_op") or "or"

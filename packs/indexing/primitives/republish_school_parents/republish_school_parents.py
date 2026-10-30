@@ -2,14 +2,12 @@
 """Apply the school parent mapping to the published education namespaces.
 
 Every people-education row moves to the top parent of its education_id, the id
-a rebuild would write to canonical_education_id (only that attribute is patched). Each parent school doc gets person_count
-recomputed from those rows and its children's names as a trailing alias, so a
-child's name still finds the parent; the child docs are then deleted.
+a rebuild would write to canonical_education_id (only that attribute is patched).
+Every school keeps its own doc under its own name, and a child's doc carries
+parent_id. A parent's person_count covers its children too, and a parenthetical
+in its name that a child row now covers comes off.
 
-School docs follow the mapping, so correcting it undoes a merge on the next run:
-a school that stands alone again gets its doc rebuilt and its rows back, and its
-name drops off the old parent's alias.
-
+School docs follow the mapping, so correcting it undoes a merge on the next run.
 Namespaces follow ALEPH_ENV like the rest of the search code: unset is prod,
 dev is the _dev family. Without --apply this only prints counts. --apply first
 backs both namespaces up as JSONL. A rerun finds nothing to do.
@@ -20,7 +18,6 @@ import argparse
 import json
 import re
 import sys
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -34,7 +31,7 @@ for _path in [REPO, SEARCH_PRIMITIVES / "lib", SEARCH_PRIMITIVES / "shared", SEA
 import turbopuffer_search_backend as tp_backend  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 
-from packs.indexing.lib.school_parents import MAPPING_PATH, read_rows  # noqa: E402
+from packs.indexing.lib.school_parents import MAPPING_PATH, normalize_name, read_rows  # noqa: E402
 
 BACKUP_DIR = REPO / ".powerpacks/tmp-education-mapping/backups"
 BATCH_SIZE = 500
@@ -48,29 +45,14 @@ def split_alias(name: str) -> tuple[str, list[str]]:
     return (match[1], [alias.strip() for alias in match[2].split("/") if alias.strip()]) if match else (name, [])
 
 
-def tokens(text: str) -> set[str]:
-    return set(re.findall(r"\w+", text.lower()))
-
-
-def merged_name(name: str, child_names: Iterable[str]) -> str:
-    """The name plus each child name that adds a word to it, in one parenthetical.
-
-    The schools index matches on all query words anywhere in the field, so a
-    child whose words are all there already needs no alias. The resolver strips
-    the trailing parenthetical, so an alias can't hold parentheses of its own.
-    """
+def own_name(name: str, child_names: Iterable[str]) -> str:
+    """The name without parenthetical names a child row covers; the rest stay, "(CEIBS)" lives nowhere else."""
     base, aliases = split_alias(name)
-    known = tokens(name)
-    added = False
-    for child in child_names:
-        child_base, child_aliases = split_alias(child)
-        for alias in [child_base, *child_aliases]:
-            alias = " ".join(re.sub(r"[()]", " ", alias).split())
-            if tokens(alias) - known:
-                aliases.append(alias)
-                known |= tokens(alias)
-                added = True
-    return f"{base} ({' / '.join(aliases)})" if added else name
+    covered = {normalize_name(child) for child in child_names}
+    kept = [alias for alias in aliases if normalize_name(alias) not in covered]
+    if len(kept) == len(aliases):
+        return name
+    return f"{base} ({' / '.join(kept)})" if kept else base
 
 
 def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[str, dict[str, Any]]) -> dict[str, list]:
@@ -84,30 +66,36 @@ def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[
         for edge in edges
         if top(edge["education_id"]) != edge["canonical_education_id"]
     ]
-    people: dict[str, set[str]] = {}
+    own_people: dict[str, set[str]] = {}
+    family_people: dict[str, set[str]] = {}
     for edge in edges:
-        people.setdefault(top(edge["education_id"]), set()).add(edge["person_id"])
-    rows_on_child = Counter(edge["education_id"] for edge in edges)
-    children: dict[str, list[dict[str, Any]]] = {}
-    for row in sorted(rows.values(), key=lambda row: (-rows_on_child[row["id"]], row["school_name"])):
+        own_people.setdefault(edge["education_id"], set()).add(edge["person_id"])
+        family_people.setdefault(top(edge["education_id"]), set()).add(edge["person_id"])
+    children: dict[str, list[str]] = {}
+    for row in rows.values():
         if row["parent_id"]:
-            children.setdefault(row["parent_id"], []).append(row)
+            children.setdefault(row["parent_id"], []).append(row["school_name"])
 
     docs = {school["id"]: school for school in schools}
+    former_parents = {school.get("parent_id") for school in schools}
     school_patches = []
     restores = []
     for row in rows.values():
-        if row["parent_id"]:
-            continue
-        name = merged_name(row["school_name"], [child["school_name"] for child in children.get(row["id"], [])])
-        count = len(people.get(row["id"], ()))
-        doc = docs.get(row["id"])
+        school_id, parent_id = row["id"], row["parent_id"]
+        name = own_name(row["school_name"], children.get(school_id, []))
+        family = not parent_id and (school_id in children or school_id in former_parents)
+        count = len((family_people if family else own_people).get(school_id, ()))
+        doc = docs.get(school_id)
         if doc is None:
-            restores.append({"id": row["id"], "school_name": name, "person_count": count} | ({"canonical_key": row["key"]} if row["key"] else {}))
-        elif name != doc["school_name"] or (row["id"] in children and count != doc.get("person_count")):
-            school_patches.append({"id": row["id"], "school_name": name, "person_count": count})
-    deletes = [school["id"] for school in schools if rows[school["id"]]["parent_id"]]
-    return {"edge_patches": edge_patches, "school_patches": school_patches, "restores": restores, "deletes": deletes}
+            restores.append({"id": school_id, "school_name": name, "person_count": count}
+                            | ({"parent_id": parent_id} if parent_id else {})
+                            | ({"canonical_key": row["key"]} if row["key"] else {}))
+            continue
+        wanted = {"school_name": name, "parent_id": parent_id} | ({"person_count": count} if family else {})
+        changed = {field: value for field, value in wanted.items() if value != doc.get(field)}
+        if changed:
+            school_patches.append({"id": school_id, **changed})
+    return {"edge_patches": edge_patches, "school_patches": school_patches, "restores": restores}
 
 
 def export(namespace: Any) -> list[dict[str, Any]]:
@@ -153,7 +141,6 @@ def run(edges_ns: Any, schools_ns: Any, rows: dict[str, dict[str, Any]], *, appl
         write_batches(edges_ns, "patch_rows", writes["edge_patches"])
         write_batches(schools_ns, "upsert_rows", writes["restores"])
         write_batches(schools_ns, "patch_rows", writes["school_patches"])
-        write_batches(schools_ns, "deletes", writes["deletes"])
         report["remaining"] = counts(plan(export(edges_ns), export(schools_ns), rows))
     return report
 

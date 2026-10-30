@@ -43,10 +43,12 @@ ALEPH_ENV=dev uv run python packs/indexing/primitives/republish_school_parents/r
 ```
 
 It moves each `aleph_people_education_v3` row to its top parent (only
-`canonical_education_id` changes), recounts parents in `aleph_education_v3`,
-keeps child names searchable as a trailing `(A / B)` alias on the parent, and
-deletes the child school docs. It prints counts until `--apply`, which backs both
-namespaces up first. `ALEPH_ENV` picks the family: unset is prod, `dev` is `_dev`.
+`canonical_education_id` changes). Every school keeps its own doc in
+`aleph_education_v3` under its own name; a child's doc carries `parent_id` and a
+parent's `person_count` covers its children. It prints counts until `--apply`,
+which backs both namespaces up first. `ALEPH_ENV` picks the family: unset is
+prod, `dev` is `_dev`. Correcting the mapping and rerunning undoes a merge.
+
 
 ## Shared output contract
 

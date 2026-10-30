@@ -12195,6 +12195,7 @@
 {"id": "7653dbf9-01e7-51a8-8c5a-e45be61a9203", "key": "provider:18704830", "parent_id": null, "school_name": "Growth Akademie", "source": "llm"}
 {"id": "7655d98e-4980-5de8-a7d9-ea399aef7cb1", "key": "name:lyceum 141", "parent_id": null, "school_name": "Lyceum 141", "source": "llm"}
 {"id": "7656251c-4944-5b1e-992b-0eb93d5d87be", "key": "provider:20148598", "parent_id": null, "school_name": "Lycée Ozenne", "source": "llm"}
+{"id": "765b04fc-b736-5800-b1fd-b6e5863d7d03", "key": "name:hbs", "parent_id": "a0c7e153-d297-5be4-b9d2-384733dfbb24", "school_name": "HBS", "source": "manual"}
 {"id": "765b57c6-1ecb-5e89-a2c2-188c87089ec3", "key": "provider:15091585", "parent_id": null, "school_name": "Pontifícia Universidade Católica do Paraná", "source": "llm"}
 {"id": "765c09c3-a74c-5217-bffd-f555a5fa3311", "key": "provider:74890988", "parent_id": null, "school_name": "Campion School Bhopal", "source": "seed"}
 {"id": "765e1279-3780-5a40-82ae-14b90a84c551", "key": "provider:320033", "parent_id": null, "school_name": "MiraCosta College", "source": "llm"}

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from packs.indexing.lib.artifacts import build_education_corpus, stable_school_uuid
@@ -19,6 +22,9 @@ from packs.indexing.lib.school_parents import (
     write_rows,
 )
 from packs.indexing.primitives.update_school_parents import update_school_parents
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packs/search/primitives/local"))
+import local_resolve_education  # noqa: E402
 
 
 def row(school_id, name, key=None, parent_id=None, source=None):
@@ -119,6 +125,23 @@ class UpdateTest(unittest.TestCase):
             self.assertEqual(seen, [["HBS"]])
             self.assertEqual((report["reviewed"], report["spent_usd"]), (1, 0.01))
             self.assertEqual(read_rows(path)["b"]["parent_id"], "a")
+
+
+class LocalSubSchoolTest(unittest.TestCase):
+    def test_a_sub_school_name_resolves_to_the_parent_through_people_rows(self):
+        class Query:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def query(self, **_):
+                return SimpleNamespace(rows=self.rows)
+
+        schools = Query([])
+        education = Query([SimpleNamespace(id="e1", model_extra={"canonical_education_id": "harvard"})])
+        namespaces = {"schools": schools, "education": education}
+        with mock.patch.object(local_resolve_education.local_backend, "namespace", namespaces.get):
+            result = asyncio.run(local_resolve_education.resolve_name("Harvard Business School", limit=100))
+        self.assertEqual(result["resolved_ids"], ["harvard"])
 
 
 class MappingFileTest(unittest.TestCase):
