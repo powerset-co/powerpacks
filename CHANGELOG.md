@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.49.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.0...powerpacks-v3.49.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **desktop:** wacli and the Google Cloud CLI download at launch, not inside the app ([#1029](https://github.com/powerset-co/powerpacks/issues/1029)) ([83e592d](https://github.com/powerset-co/powerpacks/commit/83e592d6bf94182b7334baeb501d65546b3a0d4f))
+
 ## [3.49.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.1...powerpacks-v3.49.0) (2026-10-30)
 
 
