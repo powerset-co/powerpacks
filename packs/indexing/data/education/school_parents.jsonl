@@ -1599,7 +1599,7 @@
 {"id": "0f8fac23-89f3-56cb-8736-24946e25aab8", "key": "name:gesu elementary school", "parent_id": null, "school_name": "Gesu Elementary School", "source": "llm"}
 {"id": "0f94b8d0-d913-5fd5-a026-1d5b1ad2da4c", "key": "name:saint louis university - madrid campus", "parent_id": "8e5bb9b2-d403-59dc-bcec-b8b1611645ef", "school_name": "Saint Louis University - Madrid Campus", "source": "name"}
 {"id": "0f982ec3-14a0-5d8e-b12d-50b134cb1145", "key": "provider:1356437", "parent_id": null, "school_name": "Don Bosco Preparatory High School", "source": "llm"}
-{"id": "0f9b392c-b13b-5b75-a411-d7a3b5d98424", "key": "name:de la salle college of st. benilde", "parent_id": "b0620a74-a7bb-5a7d-a73e-8ff715c3a3eb", "school_name": "De La Salle College of St. Benilde", "source": "llm"}
+{"id": "0f9b392c-b13b-5b75-a411-d7a3b5d98424", "key": "name:de la salle college of st. benilde", "parent_id": null, "school_name": "De La Salle College of St. Benilde", "source": "manual"}
 {"id": "0fa31cda-7fe8-5804-82d8-34feb2e58020", "key": "name:st. pauls", "parent_id": "94a66edf-2837-5c94-ba33-6df62c9e6938", "school_name": "St. Pauls", "source": "name"}
 {"id": "0fa5d200-9172-53cb-bfd3-71b7b5a4d4c0", "key": "name:saint lucie west centennial high school", "parent_id": null, "school_name": "Saint Lucie West Centennial High School", "source": "llm"}
 {"id": "0fa7450e-372d-5f8e-b76e-80b7b377ccae", "key": "name:new hampshire college", "parent_id": "c8be121d-f65a-5250-944e-f63597f925c6", "school_name": "New Hampshire College", "source": "llm"}
@@ -6428,7 +6428,7 @@
 {"id": "3ea62ff5-5eb4-5fa3-9db6-e4d90e59c0ab", "key": "name:enssat", "parent_id": null, "school_name": "ENSSAT", "source": "llm"}
 {"id": "3ea688bb-be5a-504f-bfcb-a1d401416037", "key": "provider:2362893", "parent_id": null, "school_name": "Art History Abroad", "source": "llm"}
 {"id": "3ea6b15c-cb36-5eba-84cc-0643ac6fdc4c", "key": "provider:15099994", "parent_id": null, "school_name": "Санкт-Петербургский Государственный Университет Экономики и Финансов", "source": "llm"}
-{"id": "3ea85155-2c1b-5d1c-9c4d-2c1563b5f012", "key": "provider:1870279", "parent_id": "97d56d84-2df7-53a3-bdf7-8499c80bd37a", "school_name": "Universidad Central (CO)", "source": "llm"}
+{"id": "3ea85155-2c1b-5d1c-9c4d-2c1563b5f012", "key": "provider:1870279", "parent_id": null, "school_name": "Universidad Central (CO)", "source": "manual"}
 {"id": "3ebd9ef2-8256-585f-8ccf-aef3ceaa4f89", "key": "name:the university of auckland", "parent_id": "05b56b6e-bbd1-59ef-b8ad-0edb5dc5d45f", "school_name": "The University of Auckland", "source": "seed"}
 {"id": "3ebe8fbd-3302-5880-a6da-8ce2206989a7", "key": "name:reforge growth series", "parent_id": "e4ea9678-103a-53d6-b9ab-d330a33fd90a", "school_name": "Reforge Growth Series", "source": "llm"}
 {"id": "3ebf756c-6dc7-51b3-9c7b-3cface1889c2", "key": "name:hill house international junior school london", "parent_id": null, "school_name": "Hill House International Junior School London", "source": "llm"}
@@ -18462,7 +18462,7 @@
 {"id": "b20d676e-dce8-5939-a22e-a564f39fea46", "key": "name:the university of manchester", "parent_id": "c361b7ba-174c-52c4-b987-f749eb4b25d4", "school_name": "The University of Manchester", "source": "seed"}
 {"id": "b20e3b9c-29a1-5a99-aceb-8abd2d6e0b1a", "key": "provider:29099", "parent_id": null, "school_name": "Bryan College", "source": "llm"}
 {"id": "b20f6918-48d7-5802-adbf-93d1c54dd198", "key": "name:international coaching federation (pcc )", "parent_id": "471c7693-e7ac-5e55-aad3-99375d803a98", "school_name": "International Coaching Federation (PCC )", "source": "name"}
-{"id": "b2191e61-e1ed-5ed7-8fdb-5b3e1af6ef8b", "key": "name:the university of chicago lab schools", "parent_id": "71bd7275-f8bd-5bfd-92b4-3af3477baa6b", "school_name": "The University of Chicago Lab Schools", "source": "llm"}
+{"id": "b2191e61-e1ed-5ed7-8fdb-5b3e1af6ef8b", "key": "name:the university of chicago lab schools", "parent_id": null, "school_name": "The University of Chicago Lab Schools", "source": "manual"}
 {"id": "b21c6112-b4e9-586c-946f-36b4d489def4", "key": "name:wilfrid laurier university", "parent_id": "79470c8e-95c3-5369-96e5-799ad6773bda", "school_name": "Wilfrid Laurier University", "source": "seed"}
 {"id": "b22013ef-6c5c-58c7-8a55-eabd45f4e64a", "key": "provider:210965", "parent_id": null, "school_name": "National University", "source": "llm"}
 {"id": "b22564f5-bfa3-5998-a9de-b4fbf027171b", "key": "name:avenues: the world school", "parent_id": "2e314d7f-9124-5967-b30d-636b3b7b0694", "school_name": "Avenues: The World School", "source": "name"}
@@ -23909,7 +23909,7 @@
 {"id": "e7614aff-63f5-56dd-a691-cb94b3787b5a", "key": "provider:15098712", "parent_id": "4167f291-7bc7-5986-bf13-4efe3e03031d", "school_name": "California NanoSystems Institute at UCLA", "source": "llm"}
 {"id": "e7629575-9faf-51c2-b301-38f500ea794d", "key": "name:bangalore institute of technology", "parent_id": "782fe03f-25e2-527e-90e9-234bd8563b1d", "school_name": "Bangalore Institute of Technology", "source": "seed"}
 {"id": "e763cbae-f7c0-5150-94ce-dc76f4c4f95a", "key": "name:mount olive high school", "parent_id": null, "school_name": "Mount Olive High School", "source": "llm"}
-{"id": "e7656cbc-4b44-533e-87d8-afc8733f3ddb", "key": "provider:15097386", "parent_id": "96051267-74e9-551d-971f-25141a74c0d7", "school_name": "ABA Stonier Graduate School of Banking", "source": "llm"}
+{"id": "e7656cbc-4b44-533e-87d8-afc8733f3ddb", "key": "provider:15097386", "parent_id": null, "school_name": "ABA Stonier Graduate School of Banking", "source": "manual"}
 {"id": "e767abcd-cc59-5f32-a740-c04c3e388637", "key": "name:university of virginia - curry school of education", "parent_id": "529a6935-fabb-5c53-9aa7-06d157fd6990", "school_name": "University of Virginia - Curry School of Education", "source": "llm"}
 {"id": "e76ac77f-a9b7-5500-8ec1-4c6d40ffddac", "key": "name:paul j hagerty high school", "parent_id": null, "school_name": "Paul J Hagerty High School", "source": "llm"}
 {"id": "e76efe3f-7f0e-5461-9a56-634c4ba9edb0", "key": "name:instituto sagrado corazon de jesus de hurlingham", "parent_id": null, "school_name": "Instituto Sagrado Corazon de Jesus de Hurlingham", "source": "llm"}
