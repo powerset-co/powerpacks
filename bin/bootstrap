@@ -290,7 +290,7 @@ if [[ "$powerset" == 1 ]]; then
   exit "$code"
 fi
 
-for step in account credentials connection network; do
+for step in account credentials network; do
   progress install.local_only "$step"
 done
 progress install.local_only_done
