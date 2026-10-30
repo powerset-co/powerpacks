@@ -34,11 +34,7 @@
     ],
     "resources": {
       "resources/powerpacks.tar.gz": "powerpacks.tar.gz",
-      "resources/powerpacks.version": "powerpacks.version",
-      "resources/wacli": "wacli",
-      "resources/wacli.version": "wacli.version",
-      "resources/google-cloud-sdk.tar.gz": "google-cloud-sdk.tar.gz",
-      "resources/google-cloud-sdk.version": "google-cloud-sdk.version"
+      "resources/powerpacks.version": "powerpacks.version"
     },
     "macOS": {
       "infoPlist": "Info.plist",

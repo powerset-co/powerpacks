@@ -1,14 +1,17 @@
 """Desktop prerequisite checks and the Chromium install run without Homebrew."""
 from __future__ import annotations
 
+import io
 import json
 import os
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from packs.ingestion.primitives.setup.automations import oauth_browser
+from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked
 from packs.powerset.primitives.install import preflight
 
 
@@ -126,6 +129,51 @@ class EnsureChromiumTests(unittest.TestCase):
     def test_default_folder(self, _popen, _deps):
         with patch.dict(os.environ, {"POWERPACKS_BROWSERS_DIR": ""}):
             self.assertEqual(oauth_browser.browsers_dir(), Path.home() / ".powerpacks/browsers")
+
+
+class LaunchToolsTests(unittest.TestCase):
+    """wacli and the Google Cloud CLI download at app launch, once per pinned version."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.sdk = Path(self.temp.name) / "google-cloud-sdk"
+        patcher = patch.object(preflight, "GCLOUD_SDK", self.sdk)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.temp.cleanup)
+
+    def test_current_gcloud_is_not_downloaded_again(self):
+        self.sdk.mkdir()
+        (self.sdk / "VERSION").write_text(preflight.GCLOUD_VERSION + "\n")
+        with patch.object(preflight.urllib.request, "urlretrieve") as download:
+            preflight.install_gcloud(lambda _line: None)
+        download.assert_not_called()
+
+    def test_missing_or_other_gcloud_is_replaced_by_the_pinned_one(self):
+        self.sdk.mkdir()
+        (self.sdk / "VERSION").write_text("500.0.0\n")
+        (self.sdk / "old").write_text("x")
+
+        def archive(url, dest):
+            self.assertIn(f"google-cloud-cli-{preflight.GCLOUD_VERSION}-darwin-", url)
+            with tarfile.open(dest, "w:gz") as bundle:
+                data = (preflight.GCLOUD_VERSION + "\n").encode()
+                info = tarfile.TarInfo("google-cloud-sdk/VERSION")
+                info.size = len(data)
+                bundle.addfile(info, io.BytesIO(data))
+
+        lines = []
+        with patch.object(preflight.urllib.request, "urlretrieve", side_effect=archive):
+            preflight.install_gcloud(lines.append)
+        self.assertEqual((self.sdk / "VERSION").read_text().strip(), preflight.GCLOUD_VERSION)
+        self.assertFalse((self.sdk / "old").exists())
+        self.assertTrue(lines)
+
+    def test_a_blocked_wacli_install_is_a_failed_result(self):
+        with patch.object(preflight, "ensure_wacli_installed",
+                          side_effect=PrimitiveBlocked({"message": "no network"})):
+            self.assertEqual(preflight.install_tools(lambda _line: None),
+                             {"status": "failed", "message": "no network"})
 
 
 if __name__ == "__main__":

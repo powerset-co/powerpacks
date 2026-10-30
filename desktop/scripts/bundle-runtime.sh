@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Fetch what the app ships: uv, Node, Codex and msgvault binaries (Tauri sidecars, named with
-# the target triple), the pinned wacli and Google Cloud CLI the app places under ~/.powerpacks at
-# launch (tools.rs), and Powerpacks source with its browser automation dependency.
+# the target triple) and Powerpacks source with its browser automation dependency. wacli and the
+# Google Cloud CLI are downloaded by the app at launch (preflight.py `tools`), not shipped: unsigned
+# in the bundle they fail Apple notarization.
 #
 #   scripts/bundle-runtime.sh [target-triple]     default: this machine's Rust host
 #
 # Writes src-tauri/binaries/{uv,node,codex,codex-code-mode-host,rg,msgvault}-<triple> and
-# src-tauri/resources/{powerpacks.tar.gz,wacli,wacli.version,google-cloud-sdk.tar.gz,google-cloud-sdk.version}.
+# src-tauri/resources/{powerpacks.tar.gz,powerpacks.version}.
 set -euo pipefail
 
 UV_VERSION="0.13.5"
@@ -14,7 +15,6 @@ CODEX_VERSION="0.161.0"
 NODE_VERSION="22.16.0"
 PLAYWRIGHT_VERSION="1.64.1"
 MSGVAULT_VERSION="0.22.0"
-GCLOUD_VERSION="591.0.0"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
@@ -26,13 +26,13 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$bin" "$resources"
 
 # Codex publishes one npm package per platform; its musl Linux builds stand in for gnu.
-# msgvault, wacli and the Google Cloud CLI publish macOS and Linux builds only.
+# msgvault publishes macOS and Linux builds only.
 exe=""
 case "$triple" in
-  aarch64-apple-darwin) codex_platform=darwin-arm64; node_platform=darwin-arm64; msgvault_platform=darwin_arm64; wacli_platform=darwin-arm64; gcloud_platform=darwin-arm ;;
-  x86_64-apple-darwin) codex_platform=darwin-x64; node_platform=darwin-x64; msgvault_platform=darwin_amd64; wacli_platform=darwin-amd64; gcloud_platform=darwin-x86_64 ;;
-  x86_64-unknown-linux-gnu) codex_platform=linux-x64; node_platform=linux-x64; msgvault_platform=linux_amd64; wacli_platform=linux-amd64; gcloud_platform=linux-x86_64 ;;
-  aarch64-unknown-linux-gnu) codex_platform=linux-arm64; node_platform=linux-arm64; msgvault_platform=linux_arm64; wacli_platform=linux-arm64; gcloud_platform=linux-arm ;;
+  aarch64-apple-darwin) codex_platform=darwin-arm64; node_platform=darwin-arm64; msgvault_platform=darwin_arm64 ;;
+  x86_64-apple-darwin) codex_platform=darwin-x64; node_platform=darwin-x64; msgvault_platform=darwin_amd64 ;;
+  x86_64-unknown-linux-gnu) codex_platform=linux-x64; node_platform=linux-x64; msgvault_platform=linux_amd64 ;;
+  aarch64-unknown-linux-gnu) codex_platform=linux-arm64; node_platform=linux-arm64; msgvault_platform=linux_arm64 ;;
   *) echo "bundle-runtime: unsupported target $triple" >&2; exit 2 ;;
 esac
 
@@ -65,8 +65,7 @@ install -m 755 "$vendor/bin/codex$exe" "$bin/codex-$triple$exe"
 install -m 755 "$vendor/bin/codex-code-mode-host$exe" "$bin/codex-code-mode-host-$triple$exe"
 install -m 755 "$vendor/codex-path/rg$exe" "$bin/rg-$triple$exe"
 
-# Each archive is checked against the sum its publisher signs: msgvault's SHA256SUMS, wacli's
-# table in packs/ingestion/primitives/discover/messages/wacli/binary.py (the version pin lives there too).
+# The archive is checked against the sum its publisher signs (msgvault's SHA256SUMS).
 verify() { # file expected-sha256
   local actual; actual="$(shasum -a 256 "$1" | cut -d' ' -f1)"
   [[ "$actual" == "$2" ]] || { echo "bundle-runtime: $1 sha256 $actual, expected $2" >&2; exit 1; }
@@ -79,23 +78,6 @@ curl -fsSL -o "$work/$msgvault_archive" "$msgvault_base/$msgvault_archive"
 verify "$work/$msgvault_archive" "$(curl -fsSL "$msgvault_base/SHA256SUMS" | grep " $msgvault_archive\$" | cut -d' ' -f1)"
 tar -xzf "$work/$msgvault_archive" -C "$work" msgvault
 install -m 755 "$work/msgvault" "$bin/msgvault-$triple"
-
-wacli_py="$repo/packs/ingestion/primitives/discover/messages/wacli/binary.py"
-wacli_version="$(sed -n 's/^WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "\(.*\)")$/\1/p' "$wacli_py")"
-wacli_sha="$(awk -v version="$wacli_version" -v asset="wacli-$wacli_platform" '
-  $1 == "\"" version "\":" { inside = 1; next }
-  inside && $1 == "\"" asset "\":" { gsub(/[",]/, "", $2); print $2; exit }
-  inside && $1 == "}," { exit }' "$wacli_py")"
-echo "bundle-runtime: wacli $wacli_version for $wacli_platform"
-curl -fsSL -o "$work/wacli" "https://github.com/powerset-co/wacli/releases/download/$wacli_version/wacli-$wacli_platform"
-verify "$work/wacli" "$wacli_sha"
-install -m 755 "$work/wacli" "$resources/wacli"
-printf '%s\n' "$wacli_version" > "$resources/wacli.version"
-
-echo "bundle-runtime: Google Cloud CLI $GCLOUD_VERSION for $gcloud_platform"
-curl -fsSL -o "$resources/google-cloud-sdk.tar.gz" \
-  "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-$GCLOUD_VERSION-$gcloud_platform.tar.gz"
-printf '%s\n' "$GCLOUD_VERSION" > "$resources/google-cloud-sdk.version"
 
 echo "bundle-runtime: Powerpacks source at $(git -C "$repo" rev-parse --short HEAD)"
 # The committed tree minus what only development uses; the app installs it as ~/powerpacks.
