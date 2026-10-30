@@ -324,7 +324,8 @@ def watch_run(read: Callable[[], dict | None], timeout_s: int = 7200) -> dict | 
         if payload:
             if payload != last:
                 last = payload
-                print(f"{payload.get('code')} {payload.get('done')}/{payload.get('total')}", flush=True)
+                error = f" {payload['error']}" if payload.get("error") else ""
+                print(f"{payload.get('code')} {payload.get('done')}/{payload.get('total')}{error}", flush=True)
             if payload.get("status") in ("completed", "failed"):
                 return payload
         time.sleep(3)
@@ -471,6 +472,7 @@ def cmd_index_people(args: argparse.Namespace) -> int:
     for name in ("local-search.duckdb", "manifest.json"):
         written = api_runs.download(label, name, dest / name)
         if written < 0:
+            print(f"missing from the run: {name}", flush=True)
             return 1
         print(f"downloaded {label}/{name} -> {dest / name} ({written / 1e6:.0f} MB, {written / 1e6 / max(time.time() - started, 0.001):.0f} MB/s)")
         started = time.time()

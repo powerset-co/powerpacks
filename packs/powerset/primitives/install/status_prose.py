@@ -268,7 +268,7 @@ PROSE: dict[str, Prose] = {
     "index.linkedin.enrich.count": Prose(InstallStep.INDEX, R, "Importing your connections: {done:,} of {total:,}"),
     "index.linkedin.persist": Prose(InstallStep.INDEX, R, "Saving your connections"),
     "index.linkedin.done": Prose(InstallStep.INDEX, R, "Your connections are imported"),
-    "index.linkedin.failed": Prose(InstallStep.INDEX, F, "The import stopped"),
+    "index.linkedin.failed": Prose(InstallStep.INDEX, R, "The import stopped"),
     "index.preparing": Prose(InstallStep.INDEX, R, "Preparing your search index"),
     "index.building": Prose(InstallStep.INDEX, R, "Starting the sandbox for building your search index"),
     # The Modal index build (run_indexing.py codes: its phases and the pipeline steps)
@@ -296,7 +296,7 @@ PROSE: dict[str, Prose] = {
     "index.building.duckdb": Prose(InstallStep.INDEX, R, "Preparing search"),
     "index.building.persist": Prose(InstallStep.INDEX, R, "Saving your search index"),
     "index.building.done": Prose(InstallStep.INDEX, R, "Your search index is built"),
-    "index.building.failed": Prose(InstallStep.INDEX, F, "The index build stopped"),
+    "index.building.failed": Prose(InstallStep.INDEX, R, "The index build stopped"),
     "index.done": Prose(InstallStep.INDEX, C, "Your search index is built"),
     "validate.checking": Prose(InstallStep.VALIDATE, R, "Checking your search"),
     "validate.done": Prose(InstallStep.VALIDATE, C, "Search is ready: {people:,} people searchable."),
