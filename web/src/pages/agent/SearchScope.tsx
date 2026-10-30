@@ -51,7 +51,7 @@ export function SearchScope() {
   const selected = valueOf(current)
   const picked = sets.find(({ set_id }) => set_id === selected)
   const shown =
-    selected === LOCAL ? "Local index" : picked ? name(picked) : pinned ? "Set from .env" : "Pick a set"
+    selected === LOCAL ? "Local index" : picked ? name(picked) : pinned ? "Earlier chat" : "Pick a set"
   const choose = (value: string) => {
     if (value === LOCAL) {
       if (local_db) setScope({ local_db })
