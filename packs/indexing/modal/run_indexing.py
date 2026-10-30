@@ -129,7 +129,7 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_DUCKDB_THREADS", str(max(1, args.compute_threads)))
     os.environ.setdefault("POWERPACKS_CACHE_THREADS", "8")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
-    write_status(run_vol, status)
+    write_status(run_vol, status | {"message": "Starting the sandbox"})
 
     (work / "unified/roles").mkdir(parents=True, exist_ok=True)
     seed_map = {
@@ -174,7 +174,7 @@ def main() -> int:
         # Estimate gate: dry-run the same command, persist the estimate, and
         # refuse to spend past --max-usd. The paid run itself still only pays
         # for cache misses; covered rows replay free.
-        write_status(run_vol, status | {"phase": "estimate"})
+        write_status(run_vol, status | {"phase": "estimate", "message": "Estimating the cost"})
         dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
         estimated_usd = None
         try:
@@ -197,7 +197,7 @@ def main() -> int:
             "--allow-paid-company-provider",
         ]
 
-    write_status(run_vol, status | {"phase": "pipeline"})
+    write_status(run_vol, status | {"phase": "pipeline", "message": "Starting the build"})
     pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
     steps_done = 0
     company_rpm = DEFAULT_COMPANY_MAX_RPM
@@ -228,7 +228,7 @@ def main() -> int:
     # volume even if the heavy duckdb build fails — we never want to re-pay the
     # LLM enrichment because of a downstream packaging failure.
     if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache"})
+        write_status(run_vol, status | {"phase": "refresh-cache", "message": "Saving reusable results"})
         for rel_src, rel_cache in WORK_TO_CACHE.items():
             src = work / rel_src
             if not src.exists() or src.stat().st_size == 0:
@@ -240,7 +240,7 @@ def main() -> int:
             )
             print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
-    write_status(run_vol, status | {"phase": "duckdb"})
+    write_status(run_vol, status | {"phase": "duckdb", "message": "Preparing search"})
     # Feed the same people.csv that fed the processing pipeline as the
     # person-profiles source so the shim also builds local_person_profiles
     # (the denormalized contacts table the /contacts UI reads). It is loaded
@@ -259,7 +259,7 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "phase": "duckdb", "exit_code": duckdb_code, "finished_at": now_iso()})
         return duckdb_code
 
-    write_status(run_vol, status | {"phase": "persist"})
+    write_status(run_vol, status | {"phase": "persist", "message": "Saving your search index"})
     keep = ["ledger.json", "manifest.json", "stats", "local-search.duckdb"]
     for name in keep:
         src = work / name
