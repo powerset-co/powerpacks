@@ -38,7 +38,9 @@ function show(plan = PLAN, people: readonly string[] = ["p:a", "p:b"], refused =
     if (url.endsWith("/check")) {
       status = { ...IDLE, plan }
       return Promise.resolve(
-        new Response(JSON.stringify({ ...IDLE, status: "running", message: "Reading families" })),
+        new Response(
+          JSON.stringify({ ...IDLE, status: "running", message: "Grouping each person's contacts: 0 of 0" }),
+        ),
       )
     }
     return Promise.resolve(new Response(JSON.stringify(status)))
@@ -108,7 +110,7 @@ describe("Refresh signals", () => {
     const running: SignalsStatus = {
       ...IDLE,
       status: "running",
-      message: "Reading signals",
+      message: "Grouping each person's contacts: 3 of 8",
       plan: PLAN,
       done: 3,
       total: 8,
@@ -125,7 +127,7 @@ describe("Refresh signals", () => {
     )
     fireEvent.click(await screen.findByRole("button", { name: /Refreshing signals/ }))
     expect((await screen.findByRole("progressbar")).getAttribute("aria-valuenow")).toBe("3")
-    expect(screen.getByText("3 of 8 requests")).toBeTruthy()
+    expect(screen.getByText("Grouping each person's contacts: 3 of 8")).toBeTruthy()
   })
 
   it("failed check shows the error and retries the estimate without starting paid work", async () => {
@@ -151,7 +153,13 @@ it("shows family progress while checking, then the paid plan without refreshing"
   let status = IDLE
   const fetch = vi.fn((url: string, init?: RequestInit) => {
     if (url.endsWith("/check") && init?.method === "POST")
-      status = { ...IDLE, status: "running", message: "Reading families", done: 3200, total: 6346 }
+      status = {
+        ...IDLE,
+        status: "running",
+        message: "Grouping each person's contacts: 3,200 of 6,346",
+        done: 3200,
+        total: 6346,
+      }
     return Promise.resolve(new Response(JSON.stringify(status)))
   })
   vi.stubGlobal("fetch", fetch)
@@ -162,8 +170,7 @@ it("shows family progress while checking, then the paid plan without refreshing"
     </QueryClientProvider>,
   )
   fireEvent.click(screen.getByRole("button", { name: /^Refresh signals/ }))
-  expect(await screen.findByText("Reading families")).toBeTruthy()
-  expect(screen.getByText("3,200 of 6,346")).toBeTruthy()
+  expect(await screen.findByText("Grouping each person's contacts: 3,200 of 6,346")).toBeTruthy()
   expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("3200")
   status = { ...IDLE, plan: PLAN }
   expect(await screen.findByRole("button", { name: "Refresh for <$0.01" }, { timeout: 2500 })).toBeTruthy()
@@ -196,7 +203,13 @@ it("reports a failed background check without announcing a completed refresh", a
       if (url.endsWith("/check")) {
         status = { ...IDLE, status: "failed", error: "Could not read saved messages" }
         return Promise.resolve(
-          new Response(JSON.stringify({ ...IDLE, status: "running", message: "Reading families" })),
+          new Response(
+            JSON.stringify({
+              ...IDLE,
+              status: "running",
+              message: "Grouping each person's contacts: 0 of 0",
+            }),
+          ),
         )
       }
       return Promise.resolve(new Response(JSON.stringify(status)))

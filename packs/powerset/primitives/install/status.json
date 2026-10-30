@@ -1,0 +1,1089 @@
+{
+  "rows": [
+    {
+      "label": "Signing you in",
+      "steps": [
+        "runtime",
+        "dependencies",
+        "skills",
+        "account",
+        "credentials",
+        "network",
+        "sources",
+        "linkedin_login",
+        "gmail_tools",
+        "gmail_login",
+        "imessage_access",
+        "whatsapp_tools",
+        "whatsapp_login"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Reading your connections",
+      "steps": [
+        "linkedin"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Syncing Gmail",
+      "steps": [
+        "gmail_sync",
+        "gmail_import"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Reading your Messages",
+      "steps": [
+        "imessage_import"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Syncing WhatsApp",
+      "steps": [
+        "whatsapp_sync",
+        "whatsapp_import"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Learning who they are",
+      "steps": [
+        "deep_context"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Enriching people",
+      "steps": [
+        "enrich"
+      ],
+      "needs": ""
+    },
+    {
+      "label": "Making your connections searchable",
+      "steps": [
+        "index",
+        "validate",
+        "ready"
+      ],
+      "needs": "index"
+    }
+  ],
+  "page": {
+    "title.running": "Setting up Powerpacks",
+    "title.waiting": "One thing to finish",
+    "title.failed": "Setup needs a fix",
+    "title.completed": "Powerpacks is installed",
+    "title.ready": "Powerpacks is ready",
+    "title.paused": "Setup paused",
+    "title.welcome": "Welcome to Powerpacks",
+    "title.signing_in": "Waiting for you to sign in",
+    "title.processing": "Your contacts are saved",
+    "state.running": "Working",
+    "state.waiting": "Waiting",
+    "state.failed": "Needs a fix",
+    "state.completed": "Done",
+    "state.skipped": "Skipped",
+    "state.paused": "Paused",
+    "state.next": "Next",
+    "failed.note": "Your progress is saved. I can check this step and retry.",
+    "tasks.done": "{done} of {total} tasks completed",
+    "history.folded": "{count} tasks completed",
+    "history.open": "Hide completed tasks",
+    "permission.button": "Open settings & show the app",
+    "qr.loading": "Getting your QR code…",
+    "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
+    "qr.alt": "Scan this QR code to link WhatsApp",
+    "running.elapsed": "{elapsed} so far",
+    "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",
+    "review.offer.many": "{count} LinkedIn matches need a quick look when you have time.",
+    "review.button": "Review contacts"
+  },
+  "desktop_page": {
+    "failed.note": "Your progress is saved. Try again picks up from this step."
+  },
+  "events": {
+    "install.starting": {
+      "step": "runtime",
+      "state": "waiting",
+      "line": "Starting Powerpacks"
+    },
+    "install.preparing_mac": {
+      "step": "runtime",
+      "state": "running",
+      "line": "Preparing your Mac"
+    },
+    "install.dependencies": {
+      "step": "dependencies",
+      "state": "running",
+      "line": "Installing what Powerpacks needs"
+    },
+    "install.dependencies_ready": {
+      "step": "dependencies",
+      "state": "completed",
+      "line": "Powerpacks dependencies are ready"
+    },
+    "install.adding_skills": {
+      "step": "skills",
+      "state": "running",
+      "line": "Adding Powerpacks skills"
+    },
+    "install.skills_ready": {
+      "step": "skills",
+      "state": "completed",
+      "line": "Powerpacks skills are installed"
+    },
+    "install.local_only": {
+      "step": null,
+      "state": "skipped",
+      "line": "Skipped for this local-only installation"
+    },
+    "install.local_only_done": {
+      "step": "ready",
+      "state": "completed",
+      "line": "Powerpacks skills are installed. No account was connected."
+    },
+    "install.stopped": {
+      "step": null,
+      "state": "failed",
+      "line": "Installation stopped. I'm checking what happened."
+    },
+    "install.page_failed": {
+      "step": "runtime",
+      "state": "failed",
+      "line": "The progress page could not start. I can check the log and retry."
+    },
+    "install.unreadable": {
+      "step": "runtime",
+      "state": "failed",
+      "line": "Installation status could not be read. I'm checking the installation log."
+    },
+    "account.signing_in": {
+      "step": "account",
+      "state": "waiting",
+      "line": "Waiting for you to sign in to Powerset. Setup continues as soon as you finish.",
+      "action": "signin"
+    },
+    "account.link_expired": {
+      "step": "account",
+      "state": "waiting",
+      "line": "The sign-in link expired. Opening a fresh one.",
+      "action": "signin"
+    },
+    "account.checking": {
+      "step": "account",
+      "state": "running",
+      "line": "Checking your account"
+    },
+    "account.connected": {
+      "step": "account",
+      "state": "completed",
+      "line": "Connected as {email}"
+    },
+    "account.reused": {
+      "step": "account",
+      "state": "skipped",
+      "line": "Already signed in as {email}. Tell me if that's the wrong account."
+    },
+    "account.login_failed": {
+      "step": "account",
+      "state": "failed",
+      "line": "Account login did not finish. Tell me in chat to try again; I will reopen the sign-in page."
+    },
+    "credentials.preparing": {
+      "step": "credentials",
+      "state": "running",
+      "line": "Preparing search access"
+    },
+    "credentials.ready": {
+      "step": "credentials",
+      "state": "completed",
+      "line": "Search access is ready"
+    },
+    "credentials.not_provisioned": {
+      "step": "credentials",
+      "state": "waiting",
+      "line": "Search access isn't set up for {email} yet.",
+      "note": "Ask Powerset to finish enabling search for this account, then tell me to retry."
+    },
+    "credentials.hosted_off": {
+      "step": "credentials",
+      "state": "skipped",
+      "line": "Hosted search isn't enabled for {email} yet, so local setup continues. Tell me if you want to sign in with a different account."
+    },
+    "network.checking": {
+      "step": "network",
+      "state": "running",
+      "line": "Checking your network"
+    },
+    "network.checking_one": {
+      "step": "network",
+      "state": "running",
+      "line": "Checking {network} for {email}"
+    },
+    "network.all_empty": {
+      "step": "network",
+      "state": "waiting",
+      "line": "Every network for {email} has 0 people.",
+      "note": "Tell me in chat whether to switch accounts or connect your contacts."
+    },
+    "network.unconfirmed": {
+      "step": "network",
+      "state": "waiting",
+      "line": "Your network for {email} could not be confirmed.",
+      "note": "Tell me in chat whether to switch accounts or choose a network."
+    },
+    "network.empty": {
+      "step": "network",
+      "state": "waiting",
+      "line": "{network} for {email} has 0 people.",
+      "note": "Tell me in chat whether to switch accounts or connect your contacts."
+    },
+    "network.not_searchable": {
+      "step": "network",
+      "state": "waiting",
+      "line": "{network} has {count:,} people, but its searchable profiles are not ready.",
+      "note": "Ask me in chat to check the network before searching."
+    },
+    "network.ready": {
+      "step": "network",
+      "state": "completed",
+      "line": "{network} for {email} is ready: {count:,} people in this network."
+    },
+    "network.ready_small": {
+      "step": "network",
+      "state": "completed",
+      "line": "{network} for {email} is ready: {count:,} people in this network. This is a small network; you may want another network or account."
+    },
+    "account.denied": {
+      "step": null,
+      "state": "waiting",
+      "line": "Powerset could not complete this check (HTTP {code}). Ask me in chat to check access and retry."
+    },
+    "account.service_failed": {
+      "step": null,
+      "state": "failed",
+      "line": "Powerset could not complete this check (HTTP {code}). Ask me in chat to check access and retry."
+    },
+    "account.error": {
+      "step": null,
+      "state": "failed",
+      "line": "Setup could not finish. Ask me in chat to check the installation log and retry."
+    },
+    "sources.selected": {
+      "step": "sources",
+      "state": "completed",
+      "line": "Sources selected"
+    },
+    "source.skipped": {
+      "step": null,
+      "state": "skipped",
+      "line": "Skipped for now"
+    },
+    "source.not_started": {
+      "step": null,
+      "state": "waiting",
+      "line": "Not started"
+    },
+    "sources.all_skipped": {
+      "step": "ready",
+      "state": "completed",
+      "line": "Powerpacks is installed"
+    },
+    "sources.connected": {
+      "step": "sources",
+      "state": "completed",
+      "line": "Connected"
+    },
+    "gmail.which_accounts": {
+      "step": "gmail_login",
+      "state": "waiting",
+      "line": "Which Gmail accounts should I add? The first one owns the Gmail setup.",
+      "action": "gmail"
+    },
+    "tools.preparing": {
+      "step": null,
+      "state": "running",
+      "line": "Preparing import tools"
+    },
+    "tools.browser": {
+      "step": null,
+      "state": "running",
+      "line": "Downloading the browser Powerpacks uses (about 180 MB)"
+    },
+    "tools.ready": {
+      "step": null,
+      "state": "completed",
+      "line": "Contact import tools are ready"
+    },
+    "tools.needs_password": {
+      "step": null,
+      "state": "waiting",
+      "line": "Your Mac password is needed to prepare import tools. I'll ask in chat."
+    },
+    "tools.failed": {
+      "step": null,
+      "state": "failed",
+      "line": "Import tools could not be prepared. I'm checking what happened."
+    },
+    "linkedin.login.checking": {
+      "step": "linkedin_login",
+      "state": "running",
+      "line": "Checking LinkedIn. Log in to LinkedIn in the window that opens if it asks."
+    },
+    "linkedin.login.waiting": {
+      "step": "linkedin_login",
+      "state": "waiting",
+      "line": "Log in to LinkedIn in the Chrome window Powerpacks opened."
+    },
+    "linkedin.login.done": {
+      "step": "linkedin_login",
+      "state": "completed",
+      "line": "Signed in to LinkedIn"
+    },
+    "linkedin.login.failed": {
+      "step": "linkedin_login",
+      "state": "failed",
+      "line": "LinkedIn sign-in stopped. I'm checking what happened."
+    },
+    "gmail.checking": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Checking Gmail access"
+    },
+    "gmail.app.starting": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Creating your Gmail app in Google Cloud. Sign in to Google in your browser if it asks."
+    },
+    "gmail.app.sign_in": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Sign in to Google in the Chrome window that opened. Setup continues on its own after."
+    },
+    "gmail.app.naming": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Creating your Gmail app in Google Cloud: naming the app"
+    },
+    "gmail.app.permissions": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Creating your Gmail app in Google Cloud: adding Gmail read access"
+    },
+    "gmail.app.client": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Creating your Gmail app in Google Cloud: creating its sign-in key"
+    },
+    "gmail.app.ready": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Your Gmail app is ready in Google Cloud"
+    },
+    "gmail.app.stopped": {
+      "step": "gmail_login",
+      "state": "waiting",
+      "line": "Gmail setup stopped in Google Cloud. I'm looking into it.",
+      "action": "gmail"
+    },
+    "gmail.app.failed": {
+      "step": "gmail_login",
+      "state": "failed",
+      "line": "Gmail setup could not finish. I'm checking what happened."
+    },
+    "gmail.allowing": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Allowing your Gmail accounts in your Gmail app"
+    },
+    "gmail.allowed": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Your Gmail accounts are allowed"
+    },
+    "gmail.allowing.failed": {
+      "step": "gmail_login",
+      "state": "failed",
+      "line": "Your Gmail accounts could not be allowed. I'm checking what happened."
+    },
+    "gmail.connect": {
+      "step": "gmail_login",
+      "state": "running",
+      "line": "Connecting {email}"
+    },
+    "gmail.connect.waiting": {
+      "step": "gmail_login",
+      "state": "waiting",
+      "line": "Connect Gmail in your browser",
+      "note": "Finish connecting Gmail in your browser. I’ll continue here.",
+      "action": "gmail"
+    },
+    "gmail.connect.failed": {
+      "step": "gmail_login",
+      "state": "failed",
+      "line": "Gmail could not be connected. I'm checking what happened."
+    },
+    "gmail.connected": {
+      "step": "gmail_login",
+      "state": "completed",
+      "line": "Gmail is connected"
+    },
+    "imessage.checking": {
+      "step": "imessage_access",
+      "state": "running",
+      "line": "Checking Messages access"
+    },
+    "imessage.permission": {
+      "step": "imessage_access",
+      "state": "waiting",
+      "line": "Allow access to Messages",
+      "note": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into Full Disk Access and turn it on; I’ll continue automatically.",
+      "action": "permission"
+    },
+    "imessage.allowed": {
+      "step": "imessage_access",
+      "state": "completed",
+      "line": "Messages access is allowed"
+    },
+    "imessage.unavailable": {
+      "step": "imessage_access",
+      "state": "failed",
+      "line": "Messages could not be read on this Mac. I'm checking why."
+    },
+    "whatsapp.checking": {
+      "step": "whatsapp_login",
+      "state": "running",
+      "line": "Checking WhatsApp"
+    },
+    "whatsapp.qr": {
+      "step": "whatsapp_login",
+      "state": "waiting",
+      "line": "Connect WhatsApp",
+      "note": "Scan the code with WhatsApp. I’ll continue automatically.",
+      "action": "qr"
+    },
+    "whatsapp.qr.refreshed": {
+      "step": "whatsapp_login",
+      "state": "waiting",
+      "line": "Refreshing your WhatsApp QR code",
+      "note": "Scan the code with WhatsApp. I’ll continue automatically.",
+      "action": "qr"
+    },
+    "whatsapp.already_linked": {
+      "step": "whatsapp_login",
+      "state": "completed",
+      "line": "WhatsApp is linked"
+    },
+    "whatsapp.linked": {
+      "step": "whatsapp_login",
+      "state": "completed",
+      "line": "WhatsApp is linked. Your message history is downloading in the background.",
+      "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
+    },
+    "whatsapp.blocked": {
+      "step": "whatsapp_login",
+      "state": "waiting",
+      "line": "WhatsApp can't link right now. I'll explain in chat."
+    },
+    "whatsapp.failed": {
+      "step": "whatsapp_login",
+      "state": "failed",
+      "line": "WhatsApp could not be linked. I'm checking what happened."
+    },
+    "linkedin.sync.current": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "LinkedIn connections ready"
+    },
+    "linkedin.reading": {
+      "step": "linkedin",
+      "state": "running",
+      "line": "Reading your LinkedIn connections"
+    },
+    "linkedin.reading.count": {
+      "step": "linkedin",
+      "state": "running",
+      "line": "Reading your LinkedIn connections: {read:,} of {total:,}"
+    },
+    "linkedin.reading.read": {
+      "step": "linkedin",
+      "state": "running",
+      "line": "Reading your LinkedIn connections: {read:,}"
+    },
+    "linkedin.done.read": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "{connections:,} LinkedIn connections ({added:,} new)"
+    },
+    "linkedin.done.partial": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "{connections:,} LinkedIn connections ({added:,} new); LinkedIn shows {total:,}"
+    },
+    "linkedin.done.limit": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "{connections:,} LinkedIn connections ({added:,} new). The rest keep syncing on your next run; your contacts are ready to process now."
+    },
+    "linkedin.done.stalled": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "LinkedIn stopped sending connections after {read:,} of {total:,}, so I stopped to keep your account safe.",
+      "note": "The rest sync on your next run. Your contacts are ready to process now."
+    },
+    "linkedin.done.export_requested": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "LinkedIn stopped sending connections after {read:,} of {total:,}, so I stopped to keep your account safe and asked LinkedIn for your data export.",
+      "note": "It can take a day; the next setup run imports it. Your contacts are ready to process now."
+    },
+    "linkedin.done.export_imported": {
+      "step": "linkedin",
+      "state": "completed",
+      "line": "{connections:,} LinkedIn connections ({added:,} new, from your LinkedIn data export)"
+    },
+    "linkedin.waiting": {
+      "step": "linkedin",
+      "state": "waiting",
+      "line": "Log in to LinkedIn in the Chrome window Powerpacks opened."
+    },
+    "linkedin.failed": {
+      "step": "linkedin",
+      "state": "failed",
+      "line": "Your LinkedIn connections could not be read. I'm checking what happened."
+    },
+    "gmail.sync.current": {
+      "step": "gmail_sync",
+      "state": "completed",
+      "line": "Gmail is already imported"
+    },
+    "gmail.import.current": {
+      "step": "gmail_import",
+      "state": "completed",
+      "line": "Gmail contacts ready"
+    },
+    "gmail.syncing": {
+      "step": "gmail_sync",
+      "state": "running",
+      "line": "Syncing Gmail"
+    },
+    "gmail.syncing.count": {
+      "step": "gmail_sync",
+      "state": "running",
+      "line": "Syncing Gmail: {read:,} of {total:,} messages"
+    },
+    "gmail.synced": {
+      "step": "gmail_sync",
+      "state": "completed",
+      "line": "Gmail is synced"
+    },
+    "gmail.sync.waiting": {
+      "step": "gmail_sync",
+      "state": "waiting",
+      "line": "Gmail needs you before it can sync. I'll explain in chat."
+    },
+    "gmail.sync.failed": {
+      "step": "gmail_sync",
+      "state": "failed",
+      "line": "Gmail could not sync. I'm checking what happened."
+    },
+    "gmail.importing": {
+      "step": "gmail_import",
+      "state": "running",
+      "line": "Adding Gmail contacts"
+    },
+    "gmail.imported": {
+      "step": "gmail_import",
+      "state": "completed",
+      "line": "Gmail contacts added"
+    },
+    "gmail.import.failed": {
+      "step": "gmail_import",
+      "state": "failed",
+      "line": "Gmail contacts could not be added. I'm checking what happened."
+    },
+    "imessage.current": {
+      "step": "imessage_import",
+      "state": "completed",
+      "line": "iMessage contacts ready"
+    },
+    "imessage.reading": {
+      "step": "imessage_import",
+      "state": "running",
+      "line": "Reading Messages"
+    },
+    "imessage.importing": {
+      "step": "imessage_import",
+      "state": "running",
+      "line": "Adding iMessage contacts"
+    },
+    "imessage.imported": {
+      "step": "imessage_import",
+      "state": "completed",
+      "line": "iMessage contacts added"
+    },
+    "imessage.read.failed": {
+      "step": "imessage_import",
+      "state": "failed",
+      "line": "Messages could not be read. I'm checking what happened."
+    },
+    "imessage.import.failed": {
+      "step": "imessage_import",
+      "state": "failed",
+      "line": "iMessage contacts could not be added. I'm checking what happened."
+    },
+    "whatsapp.sync.current": {
+      "step": "whatsapp_sync",
+      "state": "completed",
+      "line": "WhatsApp contacts already imported"
+    },
+    "whatsapp.import.current": {
+      "step": "whatsapp_import",
+      "state": "completed",
+      "line": "WhatsApp contacts ready"
+    },
+    "whatsapp.downloading": {
+      "step": "whatsapp_sync",
+      "state": "running",
+      "line": "Downloading your WhatsApp history. The first sync takes 30 minutes to a few hours.",
+      "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
+    },
+    "whatsapp.downloading.count": {
+      "step": "whatsapp_sync",
+      "state": "running",
+      "line": "Downloading your WhatsApp history: {messages:,} messages so far. The first sync takes 30 minutes to a few hours.",
+      "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
+    },
+    "whatsapp.syncing": {
+      "step": "whatsapp_sync",
+      "state": "running",
+      "line": "Syncing WhatsApp and fetching older messages in short chats",
+      "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
+    },
+    "whatsapp.synced": {
+      "step": "whatsapp_sync",
+      "state": "completed",
+      "line": "WhatsApp is synced"
+    },
+    "whatsapp.sync.waiting": {
+      "step": "whatsapp_sync",
+      "state": "waiting",
+      "line": "WhatsApp needs you before it can sync. I'll explain in chat."
+    },
+    "whatsapp.sync.failed": {
+      "step": "whatsapp_sync",
+      "state": "failed",
+      "line": "WhatsApp could not sync. I'm checking what happened."
+    },
+    "whatsapp.importing": {
+      "step": "whatsapp_import",
+      "state": "running",
+      "line": "Adding WhatsApp contacts"
+    },
+    "whatsapp.imported": {
+      "step": "whatsapp_import",
+      "state": "completed",
+      "line": "WhatsApp contacts added"
+    },
+    "whatsapp.import.failed": {
+      "step": "whatsapp_import",
+      "state": "failed",
+      "line": "WhatsApp contacts could not be added. I'm checking what happened."
+    },
+    "sources.ready": {
+      "step": null,
+      "state": "waiting",
+      "line": "{counts}",
+      "action": "processing"
+    },
+    "discover.linkedin": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Adding your LinkedIn connections"
+    },
+    "discover.people": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Discovering your contacts"
+    },
+    "discover.owner_needed": {
+      "step": "deep_context",
+      "state": "waiting",
+      "line": "Add your LinkedIn profile to continue. I'll ask in chat.",
+      "action": "owner"
+    },
+    "discover.owner": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Preparing your profile"
+    },
+    "discover.reading": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Reading your messages"
+    },
+    "discover.estimating": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Estimating context processing"
+    },
+    "discover.learning": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Learning about your contacts"
+    },
+    "discover.synthesize.facts": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Learning about your contacts: {done:,} of {total:,}"
+    },
+    "discover.duplicates": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Checking duplicate contacts"
+    },
+    "discover.combining": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Combining duplicate contacts"
+    },
+    "discover.grouping": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Grouping each person's contacts"
+    },
+    "discover.worth.families": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Grouping each person's contacts: {done:,} of {total:,}"
+    },
+    "discover.worth.labels": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Grouping each person's contacts: {done:,} of {total:,}"
+    },
+    "discover.signals.people": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Updating People"
+    },
+    "discover.done": {
+      "step": "deep_context",
+      "state": "completed",
+      "line": "Your contacts are ready"
+    },
+    "enrich.running": {
+      "step": "enrich",
+      "state": "running",
+      "line": "Enriching your contacts"
+    },
+    "enrich.enrich.research": {
+      "step": "enrich",
+      "state": "running",
+      "line": "Enriching your contacts: {done:,} of {total:,} researched"
+    },
+    "enrich.enrich.judge": {
+      "step": "enrich",
+      "state": "running",
+      "line": "Enriching your contacts: {done:,} of {total:,} LinkedIn matches checked"
+    },
+    "enrich.done": {
+      "step": "enrich",
+      "state": "completed",
+      "line": "Your contacts are enriched"
+    },
+    "enrich.deferred": {
+      "step": "enrich",
+      "state": "skipped",
+      "line": "Research and LinkedIn matching didn't finish. Search is built without it; the next setup run tries again."
+    },
+    "index.linkedin": {
+      "step": "index",
+      "state": "running",
+      "line": "Adding your LinkedIn connections"
+    },
+    "index.linkedin.queued": {
+      "step": "index",
+      "state": "running",
+      "line": "Starting the sandbox for importing your connections"
+    },
+    "index.linkedin.parse": {
+      "step": "index",
+      "state": "running",
+      "line": "Reading your connections file"
+    },
+    "index.linkedin.enrich": {
+      "step": "index",
+      "state": "running",
+      "line": "Importing your connections"
+    },
+    "index.linkedin.enrich.count": {
+      "step": "index",
+      "state": "running",
+      "line": "Importing your connections: {done:,} of {total:,}"
+    },
+    "index.linkedin.persist": {
+      "step": "index",
+      "state": "running",
+      "line": "Saving your connections"
+    },
+    "index.linkedin.done": {
+      "step": "index",
+      "state": "running",
+      "line": "Your connections are imported"
+    },
+    "index.linkedin.failed": {
+      "step": "index",
+      "state": "running",
+      "line": "The import stopped"
+    },
+    "index.preparing": {
+      "step": "index",
+      "state": "running",
+      "line": "Preparing your search index"
+    },
+    "index.building": {
+      "step": "index",
+      "state": "running",
+      "line": "Starting the sandbox for building your search index"
+    },
+    "index.building.queued": {
+      "step": "index",
+      "state": "running",
+      "line": "Starting the sandbox for building your search index"
+    },
+    "index.building.seed": {
+      "step": "index",
+      "state": "running",
+      "line": "Starting the sandbox for building your search index"
+    },
+    "index.building.estimate": {
+      "step": "index",
+      "state": "running",
+      "line": "Estimating the cost"
+    },
+    "index.building.pipeline": {
+      "step": "index",
+      "state": "running",
+      "line": "Starting the build"
+    },
+    "index.building.companies": {
+      "step": "index",
+      "state": "running",
+      "line": "Company profiles: {done:,} of {total:,}"
+    },
+    "index.building.step.flatten_people": {
+      "step": "index",
+      "state": "running",
+      "line": "Loading your people"
+    },
+    "index.building.step.build_roles": {
+      "step": "index",
+      "state": "running",
+      "line": "Listing every role"
+    },
+    "index.building.step.embed_role_positions": {
+      "step": "index",
+      "state": "running",
+      "line": "Understanding job titles"
+    },
+    "index.building.step.build_company_corpus": {
+      "step": "index",
+      "state": "running",
+      "line": "Collecting companies"
+    },
+    "index.building.step.embed_companies": {
+      "step": "index",
+      "state": "running",
+      "line": "Understanding companies"
+    },
+    "index.building.step.build_education_corpus": {
+      "step": "index",
+      "state": "running",
+      "line": "Collecting schools"
+    },
+    "index.building.step.build_location_corpus": {
+      "step": "index",
+      "state": "running",
+      "line": "Collecting locations"
+    },
+    "index.building.step.detect_ceo_founders": {
+      "step": "index",
+      "state": "running",
+      "line": "Finding founders and CEOs"
+    },
+    "index.building.step.infer_ages": {
+      "step": "index",
+      "state": "running",
+      "line": "Estimating career stage"
+    },
+    "index.building.step.build_people_records": {
+      "step": "index",
+      "state": "running",
+      "line": "Writing people records"
+    },
+    "index.building.step.build_unified_profiles": {
+      "step": "index",
+      "state": "running",
+      "line": "Combining profiles"
+    },
+    "index.building.step.build_summary_records": {
+      "step": "index",
+      "state": "running",
+      "line": "Writing summaries"
+    },
+    "index.building.step.embed_summaries": {
+      "step": "index",
+      "state": "running",
+      "line": "Understanding summaries"
+    },
+    "index.building.step.build_vectors": {
+      "step": "index",
+      "state": "running",
+      "line": "Building search vectors"
+    },
+    "index.building.step.validate_contracts": {
+      "step": "index",
+      "state": "running",
+      "line": "Checking the index"
+    },
+    "index.building.refresh-cache": {
+      "step": "index",
+      "state": "running",
+      "line": "Saving reusable results"
+    },
+    "index.building.duckdb": {
+      "step": "index",
+      "state": "running",
+      "line": "Preparing search"
+    },
+    "index.building.persist": {
+      "step": "index",
+      "state": "running",
+      "line": "Saving your search index"
+    },
+    "index.building.done": {
+      "step": "index",
+      "state": "running",
+      "line": "Your search index is built"
+    },
+    "index.building.failed": {
+      "step": "index",
+      "state": "running",
+      "line": "The index build stopped"
+    },
+    "index.done": {
+      "step": "index",
+      "state": "completed",
+      "line": "Your search index is built"
+    },
+    "validate.checking": {
+      "step": "validate",
+      "state": "running",
+      "line": "Checking your search"
+    },
+    "validate.done": {
+      "step": "validate",
+      "state": "completed",
+      "line": "Search is ready: {people:,} people searchable."
+    },
+    "search.ready": {
+      "step": "ready",
+      "state": "completed",
+      "line": "Search is ready: {people:,} people searchable.",
+      "note": "{follow_ups}"
+    },
+    "step.waiting": {
+      "step": null,
+      "state": "waiting",
+      "line": "This step needs you. I'll explain in chat.",
+      "action": "error"
+    },
+    "step.failed": {
+      "step": null,
+      "state": "failed",
+      "line": "This step stopped. I'm checking what happened.",
+      "action": "error"
+    },
+    "setup.paused": {
+      "step": null,
+      "state": "waiting",
+      "line": "Setup paused. I can resume it from here.",
+      "action": "resume"
+    },
+    "setup.ready": {
+      "step": null,
+      "state": "completed",
+      "line": "Ready to set up: sign in, import your contacts and build your network.",
+      "action": "resume"
+    }
+  },
+  "stages": {
+    "load": [
+      "",
+      "discover.people"
+    ],
+    "collect": [
+      "",
+      "discover.reading"
+    ],
+    "synthesize": [
+      "discover.estimating",
+      "discover.learning"
+    ],
+    "dedupe": [
+      "discover.duplicates",
+      "discover.combining"
+    ],
+    "worth": [
+      "discover.grouping",
+      "discover.grouping"
+    ],
+    "enrich": [
+      "enrich.running",
+      "enrich.running"
+    ]
+  },
+  "desktop_lines": {
+    "install.stopped": "Installation stopped. Try again to pick up from here.",
+    "install.page_failed": "The progress page could not start. Check the installation log, then try again.",
+    "install.unreadable": "Installation status could not be read. Check the installation log.",
+    "account.reused": "Already signed in as {email}.",
+    "account.login_failed": "Powerset sign-in did not finish. Try again to reopen the sign-in page.",
+    "credentials.hosted_off": "Hosted search isn't enabled for {email} yet, so local setup continues.",
+    "account.error": "Setup could not finish. Check the installation log, then try again.",
+    "tools.needs_password": "Your Mac password is needed to prepare import tools.",
+    "gmail.app.stopped": "Gmail setup stopped in Google Cloud. Try again to pick up from here.",
+    "imessage.unavailable": "Messages could not be read on this Mac.",
+    "whatsapp.blocked": "WhatsApp can't link right now. Try again, or set up without it.",
+    "whatsapp.failed": "WhatsApp could not be linked. Try again, or set up without it.",
+    "linkedin.done.stalled": "LinkedIn stopped sending connections after {read:,} of {total:,}, so setup stopped to keep your account safe.",
+    "linkedin.done.export_requested": "LinkedIn stopped sending connections after {read:,} of {total:,}, so setup stopped to keep your account safe and asked LinkedIn for your data export.",
+    "discover.owner_needed": "Add your LinkedIn profile to continue.",
+    "step.waiting": "This step needs you. Continue setup to try it again.",
+    "setup.paused": "Setup paused. Continue to pick up from here."
+  },
+  "desktop_notes": {
+    "credentials.not_provisioned": "Ask Powerset to finish enabling search for this account, then continue setup.",
+    "network.unconfirmed": "Setup continues with your contacts.",
+    "network.not_searchable": "Powerset is still preparing them; setup continues with your contacts.",
+    "gmail.connect.waiting": "Finish connecting Gmail in your browser; Powerpacks continues here.",
+    "imessage.permission": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into Full Disk Access and turn it on; Powerpacks continues on its own.",
+    "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own.",
+    "whatsapp.qr.refreshed": "Scan the code with WhatsApp; Powerpacks continues on its own."
+  },
+  "desktop_phrases": {
+    "I'm checking what happened.": "Try again to pick up from here.",
+    "I'll explain in chat.": "Try again to pick up from here.",
+    "Ask me in chat to check access and retry.": "Check your Powerset access, then try again.",
+    "Tell me in chat whether to switch accounts or connect your contacts.": "Setup continues with your contacts."
+  },
+  "source_count": "{source}: {count:,} contacts",
+  "no_source_counts": "Sources are ready",
+  "source_count_separator": " · "
+}

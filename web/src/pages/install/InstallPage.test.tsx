@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { InstallStatus } from "@/types/install"
 
-import MAPPING from "../../../../packs/powerset/primitives/install/setup-steps-mapping.json"
+import MAPPING from "../../../../packs/powerset/primitives/install/status.json"
 
 import { InstallPage } from "./InstallPage"
 import PROSE from "./prose.fixture.json"

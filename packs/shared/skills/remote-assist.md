@@ -16,7 +16,7 @@ Work only in this checkout and its `.powerpacks/` folder.
   until idle with a plan or failed. Checking reads saved families and cache coverage;
   it never calls a provider. Then POST /api/people/signals with the plan's checked
   value and poll until completed or failed. Both requests return running promptly;
-  polling reports Reading families progress. Include the plan's cost and outcome
+  polling reports the families count. Include the plan's cost and outcome
   in the report.
   Never overwrite paid artifacts (saved Luna answers, facts, dossiers).
   Never delete data.

@@ -26,6 +26,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.settle import settle
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT, Worth
 from packs.ingestion.primitives.share.person_labels import PersonLabels
+from packs.powerset.primitives.install.status_prose import render
 
 
 # Requests answered per second, for the time estimate: Luna's measured pace, 1,011 requests in 13 s
@@ -89,7 +90,7 @@ class RefreshSignals(Node):
             raise ValueError("The saved dossiers or cached answers changed. Check the cost again.")
         counts = self.worth.execute(cache_only=self.cache_only)
         counts["settle_worth_rows"] = settle(self.conn, now_iso())
-        self.progress("Updating People", 0, 0)
+        self.progress("people", 0, 0)
         PersonLabels(self.conn, self.data_root).execute()
         return counts
 
@@ -108,7 +109,7 @@ class PeopleSignals:
         with self._lock:
             if self._status.status == "running":
                 raise ValueError("Signals are already refreshing. Wait for them to finish.")
-            self._status = SignalsStatus("running", "Reading families")
+            self._status = SignalsStatus("running", render("discover.grouping", {})[1])
             self._thread = threading.Thread(target=self._run, args=(parent_ids, "check", None), daemon=True)
             self._thread.start()
             return asdict(self._status)
@@ -121,13 +122,17 @@ class PeopleSignals:
         with self._lock:
             if self._status.status == "running":
                 raise ValueError("Signals are already refreshing. Wait for them to finish.")
-            self._status = SignalsStatus("running", "Reading families")
+            self._status = SignalsStatus("running", render("discover.grouping", {})[1])
             self._thread = threading.Thread(target=self._run, args=(parent_ids, "refresh", checked), daemon=True)
             self._thread.start()
             return asdict(self._status)
 
     def _run(self, parent_ids: tuple[str, ...], method: Literal["check", "refresh"], checked: str | None) -> None:
-        def progress(message: str, done: int, total: int) -> None:
+        def progress(phase: str, done: int, total: int) -> None:
+            if phase != "people" and not total:
+                return
+            stage = "signals" if phase == "people" else "worth"
+            _, message, _ = render(f"discover.{stage}.{phase}", {"done": done, "total": total})
             with self._lock:
                 self._status = replace(self._status, message=message, done=done, total=total)
         try:

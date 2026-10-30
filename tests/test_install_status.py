@@ -100,7 +100,7 @@ class InstallStatusTests(unittest.TestCase):
         first = self.status.write("discover.learning", pid=os.getpid())
         self.assertTrue(first["step_started_at"])
         with patch("packs.powerset.primitives.install.status.now_iso", return_value="2099-01-01T00:00:00Z"):
-            later = self.status.write("discover.learning.count", pid=os.getpid(), done=3, total=9)
+            later = self.status.write("discover.synthesize.facts", pid=os.getpid(), done=3, total=9)
             self.assertEqual(later["step_started_at"], first["step_started_at"])
             self.assertEqual(later["message"], "Learning about your contacts: 3 of 9")
             moved = self.status.write("enrich.running", pid=os.getpid())
