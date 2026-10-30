@@ -9,6 +9,9 @@
 parent. ``source`` says who decided: ``seed`` (the pre-RapidAPI mapping),
 ``manual``, ``name`` (same normalized name) or ``llm``. A null ``source`` means
 nobody has reviewed the row yet; ``update_school_parents`` only touches those.
+
+``data/education/school_parent_reviews.jsonl`` records why a reviewed rollup
+was kept or split: the flag, each independent check's reason, and the decision.
 """
 
 from __future__ import annotations
