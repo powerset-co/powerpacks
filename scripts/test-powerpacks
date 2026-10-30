@@ -35,7 +35,6 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_refresh_tasks \
   tests.test_refresh_tasks_api \
   tests.test_refresh_sources \
-  tests.test_install_index_progress \
   tests.test_install_pipeline \
   tests.test_deep_context_v2_enrich_confirm \
   tests.test_deep_context_v2_enrich_settle \

@@ -177,7 +177,7 @@ class EnrichPeopleTests(unittest.TestCase):
             cache_dir = Path(tmp) / "cache"
             # Approved but no key: the spend gate is passed, so the run reaches the
             # hard missing-key failure rather than the needs_approval stop.
-            with patch.dict(os.environ, {}, clear=True):
+            with patch.dict(os.environ, {"POWERPACKS_CREDENTIALS_PATH": str(Path(tmp) / "no-login.json")}, clear=True):
                 code, payload = self.invoke(["run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"), "--profile-cache-dir", str(cache_dir), "--approve-spend"])
             self.assertEqual(code, 1)
             self.assertIn("POWERSET_API_KEY", payload["error"])
@@ -350,7 +350,7 @@ class EnrichPeopleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             people = Path(tmp) / "people.csv"
             self.write_people(people)
-            with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "direct-key"}, clear=True), \
+            with patch.dict(os.environ, {"RAPIDAPI_LINKEDIN_KEY": "direct-key", "POWERPACKS_CREDENTIALS_PATH": str(Path(tmp) / "no-login.json")}, clear=True), \
                     patch.object(rapidapi_client.RapidApiClient, "http_json", return_value=(200, self.profile(), "")) as http:
                 code, payload = self.invoke([
                     "run", "--input", str(people), "--output-dir", str(Path(tmp) / "out"),
