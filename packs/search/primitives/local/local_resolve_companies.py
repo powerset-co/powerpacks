@@ -326,6 +326,14 @@ async def name_bm25_lookup(names: list[str], filters: tuple | None, *, top_k: in
     return rows
 
 
+async def company_rows_for_names(
+    names: list[str], filters: tuple | None, *, top_k: int,
+) -> list[dict[str, Any]]:
+    names = expanded_company_names(names)
+    rows = await exact_name_lookup(names, filters, top_k=top_k)
+    return rows or await name_bm25_lookup(names, filters, top_k=top_k)
+
+
 def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
@@ -471,7 +479,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             f"({', '.join(foreign[:3])}{'…' if len(foreign) > 3 else ''}); "
             "pass company_names so they resolve against the local index"
         )
-    names = expanded_company_names([str(name) for name in payload.get("company_names") or [] if name])
+    names = [str(name) for name in payload.get("company_names") or [] if name]
     semantic_queries = [str(query).strip() for query in payload.get("company_semantic_queries") or [] if str(query).strip()]
     query_vector = vector_from_payload(payload)
     filters = company_attribute_filters(payload)
@@ -486,10 +494,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     sector_strategy_broadened = False
     ce_result = None
     if names:
-        exact_rows = await exact_name_lookup(names, filters, top_k=args.name_top_k)
-        rows.extend(exact_rows)
-        if not exact_rows:
-            rows.extend(await name_bm25_lookup(names, filters, top_k=args.name_top_k))
+        rows.extend(await company_rows_for_names(names, filters, top_k=args.name_top_k))
     if semantic_queries or query_vector is not None:
         # Collect semantic/vector rows separately for CE filtering
         semantic_rows_all: list[dict[str, Any]] = []
@@ -572,7 +577,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     company_ids = list(dict.fromkeys([*existing, *(str(row["id"]) for row in rows if row.get("id"))]))
     result = {
         "namespace": local_backend.namespace_name("companies"),
-        "company_names": names,
+        "company_names": expanded_company_names(names),
         "company_semantic_queries": semantic_queries,
         "company_ids": company_ids[:args.max_companies] if args.max_companies else company_ids,
         "resolved_count": min(len(company_ids), args.max_companies) if args.max_companies else len(company_ids),
