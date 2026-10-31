@@ -207,7 +207,7 @@ class WorthRunTests(StoreTests):
                                              "POWERPACKS_USAGE_LOG": str(root / "usage.jsonl")}):
             manifest = node.run()
         self.assertEqual((manifest.status, manifest.counts["requests"], len(sent)), ("completed", 1, 1))
-        self.assertEqual(set(phases), {"Reading signals"})
+        self.assertEqual(set(phases), {"labels"})
         labels = json.loads(self.conn.execute("SELECT labels_json FROM worth WHERE candidate_id = 'c1' "
                                               "ORDER BY seq DESC").fetchone()[0])
         self.assertEqual((labels["broadcast"], labels["version"]), (0.1, luna.REQUEST_VERSION))

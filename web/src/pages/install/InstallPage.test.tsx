@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { Profiler } from "react"
-import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { useSetupDone } from "@/hooks/useSetupDone"
 import type { InstallStatus } from "@/types/install"
+
+import MAPPING from "../../../../packs/powerset/primitives/install/status.json"
 
 import { InstallPage } from "./InstallPage"
 import PROSE from "./prose.fixture.json"
@@ -18,7 +18,7 @@ const INSTALL: InstallStatus = {
   message: "Installing what Powerpacks needs",
   log_path: "/synthetic/.powerpacks/install/install.log",
   retry_command: "bin/bootstrap --no-tools",
-  plan: ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
+  plan: ["runtime", "dependencies", "skills", "account", "credentials", "network"],
   prose: PROSE,
   steps: {
     runtime: { status: "completed", message: "Mac ready" },
@@ -46,31 +46,6 @@ afterEach(() => {
 })
 
 describe("installation progress", () => {
-  it("shows a stopped WhatsApp connection as paused rather than broken", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              ...INSTALL,
-              plan: ["whatsapp_tools", "whatsapp_login", "whatsapp_sync", "deep_context"],
-              step: "whatsapp_login",
-              status: "waiting",
-              message: "Setup paused. I can resume it from here.",
-              action: { kind: "resume", command: "bin/onboard" },
-              steps: { whatsapp_tools: { status: "completed" }, whatsapp_login: { status: "waiting" } },
-            }),
-          ),
-        ),
-      ),
-    )
-    mount()
-    await screen.findByRole("heading", { name: "Setup paused" })
-    expect(screen.getByText("Logging in to your accounts").closest("li")?.textContent).toContain("Paused")
-    expect(screen.queryByText("Needs a fix")).toBeNull()
-  })
-
   it("does not claim readiness when an intermediate stage completes", async () => {
     vi.stubGlobal(
       "fetch",
@@ -124,10 +99,10 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { client } = mount()
-    await screen.findByText("Logging in to your accounts")
+    await screen.findByText("Signing you in")
     const current = () => screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent
-    expect(current()).toContain("Logging in to your accountsWaiting")
-    expect(screen.getByRole("list").textContent).toContain("Syncing LinkedIn")
+    expect(current()).toContain("Signing you inWaiting")
+    expect(screen.getByRole("list").textContent).toContain("Reading your connections")
 
     status = {
       ...status,
@@ -140,15 +115,15 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await waitFor(() => expect(current()).toContain("Syncing LinkedInWorking"))
-    expect(screen.getByText("Logging in to your accounts").closest("li")?.textContent).toContain("Done")
+    await waitFor(() => expect(current()).toContain("Reading your connectionsWorking"))
+    expect(screen.getByText("Signing you in").closest("li")?.textContent).toContain("Done")
 
     for (const step of SOURCE_PLAN) {
       status = { ...status, step, status: "failed", steps: {} }
       await act(() => client.invalidateQueries({ queryKey: ["install"] }))
       await waitFor(() => {
         expect(current()).toContain("Needs a fix")
-        expect(current()).toContain(LOGINS.includes(step) ? "Logging in" : "Syncing")
+        expect(current()).toContain(MAPPING.rows.find((row) => row.steps.includes(step))?.label)
       })
     }
   })
@@ -223,11 +198,11 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     mount()
-    await screen.findByText("Installing Powerpacks")
-    expect(screen.queryByText("Building your search index")).toBeNull()
+    await screen.findByText("Signing you in")
+    expect(screen.queryByText("Making your connections searchable")).toBeNull()
   })
 
-  it("shows the processing message, then switches to index progress and stops on failure", async () => {
+  it("shows the processing message, then Modal's words for the index, and stops on failure", async () => {
     let status: InstallStatus = { ...INSTALL, step: "enrich", message: "Enriching contacts" }
     vi.stubGlobal(
       "fetch",
@@ -238,21 +213,15 @@ describe("installation progress", () => {
     status = {
       ...INSTALL,
       step: "index",
-      index_progress: {
-        status: "running",
-        progress: 0.4,
-        message: "Building search records",
-        payload: { contacts: 3 },
-      },
+      event: "index.building",
+      message: "Understanding companies",
+      action: { kind: "details", details: { done: 40, total: 111, left_seconds: 90 } },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("Building search records")
+    await screen.findByText("Understanding companies")
     // The task count stands in for any bar.
     expect(screen.queryByRole("progressbar")).toBeNull()
-    status = {
-      ...status,
-      index_progress: { status: "failed", message: "Index download failed", payload: {} },
-    }
+    status = { ...status, status: "failed", event: "step.failed", message: "Index download failed" }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await screen.findByRole("heading", { name: "Setup needs a fix" })
   })
@@ -264,7 +233,6 @@ describe("installation progress", () => {
       "skills",
       "account",
       "credentials",
-      "connection",
       "network",
       "sources",
       ...SOURCE_PLAN,
@@ -288,7 +256,8 @@ describe("installation progress", () => {
       vi.fn(() => Promise.resolve(new Response(JSON.stringify(status)))),
     )
     const { container } = mount()
-    const history = await screen.findByRole("button", { name: "2 tasks completed" })
+    // Eight rows, six done: the oldest folds, five done stay, then the current row and one next.
+    const history = await screen.findByRole("button", { name: "1 tasks completed" })
     expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(7)
     expect(
       screen
@@ -296,7 +265,7 @@ describe("installation progress", () => {
         .filter((node) => node.closest("li")?.getAttribute("aria-hidden") === "false").length,
     ).toBe(1)
     fireEvent.click(history)
-    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(9)
+    expect(container.querySelectorAll('li[data-folded="false"]').length).toBe(8)
     expect(history.getAttribute("aria-expanded")).toBe("true")
   })
 
@@ -317,7 +286,7 @@ describe("installation progress", () => {
       ),
     )
     const { client } = mount()
-    await screen.findByText("Enriching your contacts")
+    await screen.findByText("Enriching people")
     status = {
       ...status,
       step: "validate",
@@ -331,7 +300,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() =>
       expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Building your search indexWorking",
+        "Making your connections searchableWorking",
       ),
     )
     status = {
@@ -347,7 +316,7 @@ describe("installation progress", () => {
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
     await waitFor(() =>
       expect(screen.getByRole("list").querySelector('[aria-current="step"]')?.textContent).toContain(
-        "Building your search indexDone",
+        "Making your connections searchableDone",
       ),
     )
   })
@@ -469,7 +438,7 @@ describe("installation progress", () => {
       },
     }
     await act(() => client.invalidateQueries({ queryKey: ["install"] }))
-    await screen.findByText("Installing Powerpacks")
+    await screen.findByText("Signing you in")
     // The account and network show in the sidebar footer, not here.
     expect(screen.queryByText("casey@example.com")).toBeNull()
     expect(screen.queryByRole("heading", { name: "Powerpacks is ready" })).toBeNull()
@@ -581,44 +550,5 @@ describe("installation progress", () => {
     mount()
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboard_continue", { answer: {} }))
-  })
-})
-
-describe("the desktop app's welcome", () => {
-  // A finished setup, or an import, whose record still says "ready to set up" (one the app wrote
-  // into an imported install before it knew better).
-  const READY = { ...INSTALL, status: "completed" as const, step: "skills" as const, event: "setup.ready" }
-  // The welcome navigates, so it renders inside a router.
-  function desktop() {
-    vi.stubGlobal("__TAURI__", {
-      core: { invoke: vi.fn(() => Promise.resolve(null)) },
-      event: { listen: vi.fn(() => Promise.resolve(() => undefined)) },
-    })
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify(READY)))),
-    )
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-    render(
-      <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={["/install"]}>
-          <InstallPage />
-        </MemoryRouter>
-      </QueryClientProvider>,
-    )
-  }
-
-  it("offers the choice while setup is not done", async () => {
-    desktop()
-    await screen.findByRole("button", { name: /Start setup/ })
-  })
-
-  it("never offers the choice again once setup is done", async () => {
-    vi.mocked(useSetupDone).mockReturnValue(true)
-    desktop()
-    await screen.findByRole("heading", { name: PROSE.page["title.welcome"] })
-    expect(screen.queryByRole("button", { name: /Start setup/ })).toBeNull()
-    expect(screen.queryByText("Start fresh, or bring over what you already have on this Mac.")).toBeNull()
-    vi.mocked(useSetupDone).mockReturnValue(false)
   })
 })

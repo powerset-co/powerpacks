@@ -1211,6 +1211,17 @@ class LocalTitleExpansionTests(unittest.TestCase):
             self.assertEqual(len(list(CsvIO.dict_reader(handle))), 1)
 
 
+class SearchTitleTests(unittest.TestCase):
+    def test_title_keeps_five_words_and_fits(self):
+        module = load_pipeline_module()
+        self.assertEqual(module.clamp_title("  Open-source   LLM builders "), "Open-source LLM builders")
+        self.assertEqual(module.clamp_title("People who build with or operate open-source LLMs heavily"),
+                         "People who build with or")
+        long = module.clamp_title("Supercalifragilisticexpialidocious " * 3)
+        self.assertEqual(len(long), module.TITLE_CHARS)
+        self.assertTrue(long.endswith("…"))
+
+
 class NarrowPoolPreviewTests(unittest.TestCase):
     def test_suspiciously_narrow_pool_is_flagged(self):
         module = load_pipeline_module()
@@ -1466,5 +1477,34 @@ class AgeFilterPreviewTests(unittest.TestCase):
         self.assertFalse(any("inferred_birth_year" in note for note in preview["runtime_notes"]), preview["runtime_notes"])
 
 
+
+class PickerBackendDefaultTests(unittest.TestCase):
+    """The chat's pinned scope, in the environment, is the pipeline's default backend."""
+
+    def parse(self, env: dict[str, str], *flags: str) -> tuple[str, str]:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            for key in ("POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_DEFAULT_SET_ID"):
+                if key not in env:
+                    os.environ.pop(key, None)
+            args = pipeline.build_parser().parse_args(["run", "--query", "q", *flags])
+        return args.backend, args.db
+
+    def test_local_index_pinned(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}),
+                         ("local", "/idx/local-search.duckdb"))
+
+    def test_set_pinned_or_nothing(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_DEFAULT_SET_ID": "abc", "POWERPACKS_LOCAL_SEARCH_DB": ""})[0], "powerset")
+        self.assertEqual(self.parse({})[0], "powerset")
+
+    def test_explicit_flags_win(self) -> None:
+        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}, "--backend", "powerset")[0],
+                         "powerset")
+        self.assertEqual(self.parse({}, "--backend", "local", "--db", "/other.duckdb"), ("local", "/other.duckdb"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

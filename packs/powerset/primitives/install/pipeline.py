@@ -1,36 +1,7 @@
-"""Resume imported contacts through deep-context v2, the Modal index, and validation.
-
-The stages and their order are deep_context_v2/run.py's (`stages`); this walks them under the
-status page's events. Every paid stage estimates (into the install log) and runs: the install
-asks for nothing. A LinkedIn connections list newer than its import is imported on Modal first.
-Enrichment that fails is deferred and listed at the end; search is built without it. The index
-is built on Modal unless realize left people.csv as it was and an index is already there; only
-validation marks search ready.
+"""Process imported message sources: deep context, enrichment, Modal indexing and validation.
 
 Changelog:
-  2026-10-24: LinkedIn only (no Gmail or Messages import): the enriched LinkedIn import goes straight to
-      the Modal index; deep context and enrichment are marked as nothing to do, the follow-up names what
-      to connect for more. With messages, the index's people file (search-index/people.csv) is realize's
-      families plus every LinkedIn connection no family holds, so connections stay searchable.
-  2026-10-09: synthesize and enrich report their counts to the page as their paid calls come back
-      (Node.on_progress), so a long stage is never a static line.
-  2026-10-07: the stage order, realize (with the share list) and the index command come from
-      deep_context_v2/run.py. Gone: the $500 spend approval and --approve-spend (the install
-      budget always says yes), the Modal dispatch recovery and cap retry (a rerun builds again
-      against the Modal cache), and the review step.
-  2026-10-07: deep-context v2. The stages are load, collect, synthesize, dedupe, worth, enrich and
-      realize (packs/ingestion/primitives/deep_context_v2); a v1 store beside the v2 one is archived
-      first. Gone with v1: fan-in, seed, the readiness check, compose, validate-dossiers, parents,
-      profile prefetch and the workflow-state loop. The owner profile is built by v2's owner step
-      from the LinkedIn session and the Gmail address. The review is the page at `/`.
-  2026-10-05: every write names a status_prose event; what a run deferred is
-      listed with its reason in the ready step's details (`left_to_fix`).
-  2026-10-05: setup no longer waits on the LinkedIn review: matches the judges
-      could not settle are left for the user, the index builds, and the ready
-      step offers the review (count and link) for when they have time.
-  2026-10-05: enrichment that fails for any reason is deferred: search is built
-      without it, the ready message lists what is left to fix.
-  2026-10-03: import the scraped LinkedIn connections before fan-in.
+  2026-10-29: LinkedIn setup moves to linkedin_setup.py; this run processes message imports.
 """
 from __future__ import annotations
 
@@ -48,7 +19,6 @@ from typing import Callable
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.import_load.load import GMAIL_CSV, MESSAGES_CSV
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
@@ -56,34 +26,16 @@ from packs.ingestion.primitives.deep_context_v2.run import archive_v1, index_com
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
 from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.install.status_prose import PROSE
+from packs.powerset.primitives.install.status_prose import PROSE, STAGE_EVENTS
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
-from packs.powerset.primitives.install.controller import INDEXED_PEOPLE, LINKEDIN_PEOPLE
+from packs.powerset.primitives.install.controller import LINKEDIN_PEOPLE
 from packs.powerset.primitives.install.workflow import _parser as source_parser
 
 _LINKEDIN_PEOPLE = LINKEDIN_PEOPLE
-# The message imports deep context reads people from; without any, LinkedIn goes straight to search.
-_MESSAGE_IMPORTS = (GMAIL_CSV, MESSAGES_CSV)
 _DATA_ROOT = ".powerpacks"
 _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedin_modal_pipeline.py"]
 # Skipped steps the finished setup still lists for the user to fix.
 _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
-# Each stage's page events: while it estimates (empty: it prices nothing), while it runs.
-_EVENTS = {
-    "load": ("", "discover.people"),
-    "collect": ("", "discover.reading"),
-    "synthesize": ("discover.estimating", "discover.learning"),
-    "dedupe": ("discover.duplicates", "discover.combining"),
-    "worth": ("discover.grouping", "discover.grouping"),
-    "enrich": ("enrich.running", "enrich.running"),
-}
-# The live line of a stage's phase as its paid calls come back (Node.progress), at most every
-# _COUNT_SECONDS so the manifest is not rewritten per call.
-_COUNT_EVENTS = {
-    ("synthesize", "facts"): "discover.learning.count",
-    ("enrich", "research"): "enrich.researching.count",
-    ("enrich", "judge"): "enrich.judging.count",
-}
 _COUNT_SECONDS = 2.0
 
 
@@ -136,27 +88,33 @@ class ProcessingOnboarding:
     def _stage(self, name: str, node: Node) -> None:
         """One v2 stage under its page events: its estimate (when it prices its work), then its run
         with its counts on the page as they come in."""
-        estimating, running = _EVENTS[name]
+        estimating, running = STAGE_EVENTS[name]
+        node.on_progress = self._counter(name)
         if estimating:
             self._run(f"{name} estimate", node.estimate, estimating)
-        node.on_progress = self._counter(name)
         self._run(name, lambda: _manifest_payload(node.run()), running)
 
     def _counter(self, name: str) -> Callable[[str, int, int], None]:
         """The stage's progress callback: its phase's count event, written at most every _COUNT_SECONDS
         and when the phase is done."""
         written_at = 0.0
+        started_at: dict[str, float] = {}
+        prefix = STAGE_EVENTS[name][1].split(".")[0]
 
         def count(phase: str, done: int, total: int) -> None:
             nonlocal written_at
-            event = _COUNT_EVENTS.get((name, phase))
-            if event is None or not total:
+            event = f"{prefix}.{name}.{phase}"
+            if not total or event not in PROSE:
                 return
             now = time.monotonic()
+            started = started_at.setdefault(phase, now)
             if done < total and now - written_at < _COUNT_SECONDS:
                 return
             written_at = now
-            self._write(event, done=done, total=total, details={"done": done, "total": total})
+            details: dict[str, int | float] = {"done": done, "total": total}
+            if done:
+                details["left_seconds"] = (now - started) / done * (total - done)
+            self._write(event, done=done, total=total, details=details)
 
         return count
 
@@ -168,7 +126,7 @@ class ProcessingOnboarding:
         return {"status": "failed" if result.returncode else "completed", "returncode": result.returncode}
 
     def _linkedin(self) -> None:
-        """The scraped LinkedIn connections, imported on Modal when newer than their import."""
+        """Import scraped connections on Modal when newer than their import."""
         connections, imported = self.root / CONNECTIONS_CSV, self.root / _LINKEDIN_PEOPLE
         if connections.is_file() and (not imported.is_file()
                                       or imported.stat().st_mtime_ns < connections.stat().st_mtime_ns):
@@ -212,14 +170,9 @@ class ProcessingOnboarding:
 
     def _index(self) -> None:
         self.step = InstallStep.INDEX
-        self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
-                  "index.preparing")
-        self._build_index(self.root / INDEXED_PEOPLE)
-
-    def _index_linkedin(self) -> None:
-        """LinkedIn only: the enriched import is the people file, no deep context in between."""
-        self.step = InstallStep.INDEX
-        self._build_index(self.root / _LINKEDIN_PEOPLE)
+        result = self._run("realize", lambda: {"status": "completed", "people_csv": str(realize(self.data_root))},
+                           "index.preparing")
+        self._build_index(Path(result["people_csv"]))
 
     def _build_index(self, people: Path) -> None:
         """The Modal index of `people` unless the index on disk was built from this very file (the
@@ -243,26 +196,27 @@ class ProcessingOnboarding:
                     details={"validation": validation, "left_to_fix": self.left_to_fix})
 
     def run(self) -> dict:
+        """The import run over the connected sources: owner, deep context, enrichment, the index."""
+        return self._guarded(self._messages)
+
+    def _messages(self) -> None:
+        self._linkedin()
+        archive_v1(self.data_root)
+        with closing(open_store(store_path(self.data_root))) as conn:
+            self._owner()
+            *discover, (_, enrich) = stages(conn, self.data_root)
+            for name, build in discover:
+                self._stage(name, build())
+            self._write("discover.done")
+            self._enrich(enrich)
+        self._index()
+
+    def _guarded(self, work: Callable[[], None]) -> dict:
+        """`work` under the project root; a stop leaves its record, anything else fails the step."""
         with chdir(self.root):
             load_env()
             try:
-                self._linkedin()
-                if not any((self.data_root / relative).is_file() for relative in _MESSAGE_IMPORTS):
-                    # LinkedIn only: deep context has no messages to read, so the enriched import goes
-                    # straight to the index; the follow-up names what to connect for more.
-                    self._write("discover.linkedin_only")
-                    self._write("enrich.linkedin_only")
-                    self._index_linkedin()
-                else:
-                    archive_v1(self.data_root)
-                    with closing(open_store(store_path(self.data_root))) as conn:
-                        self._owner()
-                        *discover, (_, enrich) = stages(conn, self.data_root)
-                        for name, build in discover:
-                            self._stage(name, build())
-                        self._write("discover.done")
-                        self._enrich(enrich)
-                    self._index()
+                work()
                 keep_updated(self.root)
             except _Stopped:
                 pass

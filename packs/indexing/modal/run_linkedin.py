@@ -22,8 +22,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
+import time
+from contextlib import redirect_stderr
 from pathlib import Path
 
 REPO = Path("/repo")
@@ -40,6 +43,33 @@ from packs.ingestion.primitives.imports.linkedin import network_import as linked
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 WORK = Path("/tmp/linkedin-import")
+_PROFILES = re.compile(r"LinkedIn profile enrichment progress: (\d+)/(\d+) processed")
+
+
+class _ImportProgress:
+    """Forward enrichment's stderr and put its existing counts in the run record."""
+
+    def __init__(self, run_vol: Path, status: dict) -> None:
+        self.run_vol = run_vol
+        self.status = status
+        self.started = time.monotonic()
+        self.pending = ""
+        self.stderr = sys.stderr
+
+    def write(self, text: str) -> int:
+        self.stderr.write(text)
+        self.pending += text
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            if match := _PROFILES.search(line):
+                done, total = int(match.group(1)), int(match.group(2))
+                left = (total - done) * (time.monotonic() - self.started) / done
+                write_status(self.run_vol, self.status | {"phase": "enrich", "code": "enrich.count",
+                    "done": done, "total": total, "left_seconds": left})
+        return len(text)
+
+    def flush(self) -> None:
+        self.stderr.flush()
 
 
 def import_namespace(args: argparse.Namespace, cache_dir: Path) -> argparse.Namespace:
@@ -88,13 +118,13 @@ def main() -> int:
     cache_dir = Path(args.cache_root) / "profile_cache_v2"
     cache_dir.mkdir(parents=True, exist_ok=True)
     status = {"status": "running", "phase": "parse", "started_at": now_iso()}
-    write_status(run_vol, status)
+    write_status(run_vol, status | {"code": "parse"})
 
     if not os.environ.get("POWERSET_API_KEY"):
-        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "parse", "error": "POWERSET_API_KEY missing in sandbox (powerset-api secret not mounted?)", "finished_at": now_iso()})
         return 2
     if not Path(args.connections_csv).exists():
-        write_status(run_vol, status | {"status": "failed", "phase": "parse", "error": f"missing connections csv: {args.connections_csv}", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "parse", "error": f"missing connections csv: {args.connections_csv}", "finished_at": now_iso()})
         return 2
 
     WORK.mkdir(parents=True, exist_ok=True)
@@ -103,20 +133,21 @@ def main() -> int:
     # that manifest (not a ledger) is the source of truth for status + artifacts.
     manifest_path = resolve_discover_source_dir(Path(ns.output_dir), "linkedin") / "manifest.json"
 
-    write_status(run_vol, status | {"phase": "enrich"})
+    write_status(run_vol, status | {"phase": "enrich", "code": "enrich"})
     # RapidAPI is always approved on this path (approve_spend=True), so the single
     # `run` completes without a needs_approval stop — no approve/continue loop.
-    code = linkedin_import.LinkedInImport.command_run(ns)
+    with redirect_stderr(_ImportProgress(run_vol, status)):
+        code = linkedin_import.LinkedInImport.command_run(ns)
 
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     if code != 0 or manifest.get("status") != "completed":
-        write_status(run_vol, status | {"status": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "enrich", "exit_code": code, "run_status": manifest.get("status"), "error": manifest.get("error"), "finished_at": now_iso()})
         return code or 1
 
-    write_status(run_vol, status | {"phase": "persist"})
+    write_status(run_vol, status | {"phase": "persist", "code": "persist"})
     people_csv = str((manifest.get("artifacts") or {}).get("people_csv") or "")
     if not people_csv or not Path(people_csv).exists():
-        write_status(run_vol, status | {"status": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
+        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "persist", "error": f"import completed but people.csv missing: {people_csv}", "finished_at": now_iso()})
         return 1
     people_out = Path(args.people_out)
     people_out.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +158,7 @@ def main() -> int:
     stats = enrichment_stats(manifest) | {"people": people_count}
     (run_vol / "import-stats.json").write_text(json.dumps(stats, indent=2))
     print(f"[run-linkedin] people={people_count} stats={json.dumps(stats)}", flush=True)
-    write_status(run_vol, status | {"status": "completed", "phase": "done", "stats": stats, "finished_at": now_iso()})
+    write_status(run_vol, status | {"status": "completed", "phase": "done", "code": "done", "stats": stats, "finished_at": now_iso()})
     return 0
 
 

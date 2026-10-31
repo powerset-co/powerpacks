@@ -17,6 +17,9 @@
  *     headless relaunch; the form steps no longer wait for a login no one can see.
  *   2026-10-09: --mode gcloud-login approves `gcloud auth login` in this profile
  *     (gcloud_consent.js), so Google is signed in to once for the whole setup.
+ *   2026-10-28: waits are measured (page_wait.js): a page settles when two reads agree, the
+ *     network is dead when Chrome says so and nothing answers for a minute, the person is gone
+ *     after five idle minutes. No networkidle: Google's long-polls never let it fire.
  */
 
 const fs = require("fs");
@@ -26,6 +29,7 @@ const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/b
 
 const { GMAIL_SCOPES, authorize } = require("./gmail_consent.js");
 const { loginGcloud } = require("./gcloud_consent.js");
+const { settled, waitUntil } = require("./page_wait.js");
 
 class StepError extends Error {
   constructor(stuckAt, message) {
@@ -80,13 +84,13 @@ function log(message) {
   process.stderr.write(`[local-msg-vault/browser] [t=${total}s +${delta}s] ${message}\n`);
 }
 
-// Wait for the page to settle (network idle), capped at `ms`, and log how long
-// it actually took so timings are visible in the job log. Never throws — a slow
-// page just continues; the element waits that follow are the real backstop.
-async function settle(page, label = "settle", ms = 5000) {
+// Wait for the page to settle (page_wait.js: loaded, and two reads agree), and log how long it
+// actually took so timings are visible in the job log. Never throws; the element waits that
+// follow are the backstop for a page that would not settle by `until`.
+async function settle(page, label = "settle", until = Date.now() + 30000) {
   const start = Date.now();
-  await page.waitForLoadState("networkidle", { timeout: ms }).catch(() => {});
-  log(`${label}: waited ${Date.now() - start}ms (cap ${ms}ms)`);
+  const stable = await settled(page, until);
+  log(`${label}: waited ${Date.now() - start}ms${stable === null ? " (not settled)" : ""}`);
   await snapshot(page);
 }
 
@@ -356,23 +360,11 @@ function launchChrome(profileDir, headless) {
 }
 
 // The window is the person's: nothing is clicked for them (a click on the account chip mid
-// sign-in sent Google back to the identifier page); the wait is for the login to end.
-async function waitForHumanLogin(page, email, timeoutMs) {
-  const start = Date.now();
-  let lastUrl = "";
-  while (Date.now() - start < timeoutMs) {
-    const url = page.url();
-    if (url !== lastUrl) {
-      log(`page: ${url}`);
-      lastUrl = url;
-    }
-    if (!onGoogleLogin(url)) {
-      return true;
-    }
-    await page.waitForTimeout(1500);
-  }
-  log("still waiting for Google login");
-  return false;
+// sign-in sent Google back to the identifier page); the wait is for the login to end, measured
+// (page_wait.js), and its result says why it ended.
+function waitForHumanLogin(page, timeoutMs) {
+  return waitUntil(page, { done: url => !onGoogleLogin(url), human: true, deadlineMs: timeoutMs,
+    onProgress: url => log(`page: ${url}`) });
 }
 
 async function gotoPage(page, url, label, timeout = 30000) {
@@ -844,7 +836,7 @@ async function main() {
   let context = await launchChrome(profileDir, true);
   let page = context.pages()[0] || await context.newPage();
   await gotoPage(page, overview, "OAuth overview");
-  await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+  await settle(page, "OAuth overview");
   if (onGoogleLogin(page.url())) {
     log("Google needs a login; opening Chrome");
     progress("sign_in");
@@ -852,9 +844,10 @@ async function main() {
     context = await launchChrome(profileDir, false);
     page = context.pages()[0] || await context.newPage();
     await gotoPage(page, overview, "OAuth overview");
-    if (!await waitForHumanLogin(page, email, timeoutMs)) {
+    const login = await waitForHumanLogin(page, timeoutMs);
+    if (login.status !== "ok") {
       await context.close().catch(() => {});
-      result({ status: "needs_user_action", message: "Log in to Google in the Chrome window Powerpacks opened, then run this again." });
+      result(login);
       return;
     }
     log("logged in; closing the window and continuing headless");
@@ -864,7 +857,7 @@ async function main() {
     page = context.pages()[0] || await context.newPage();
     await gotoPage(page, overview, "OAuth overview");
     // The same settle the first check had: the Console redirects a few times before it lands.
-    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await settle(page, "OAuth overview");
     if (onGoogleLogin(page.url())) {
       await context.close().catch(() => {});
       result({ status: "error", message: "Google did not keep the login for the headless browser." });

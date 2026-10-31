@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react"
 
+import { DataTable } from "@/components/shared/DataTable"
 import { blocks, type Block } from "@/lib/agent/markdown"
 
 // Codex's replies are Markdown. This renders lib/agent/markdown's blocks, with inline code, bold
@@ -84,33 +85,7 @@ function render(block: Block, key: number): ReactNode {
     }
     case "table":
       return (
-        <div key={key} className="overflow-x-auto rounded-[var(--radius-s)] border border-line">
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr>
-                {block.head.map((cell, index) => (
-                  <th
-                    key={`${index}:${cell}`}
-                    className="whitespace-nowrap border-b border-line bg-card px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[.06em] text-faint"
-                  >
-                    <Inline text={cell} />
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row, rowIndex) => (
-                <tr key={`${rowIndex}:${row.join("|")}`} className="border-b border-line last:border-b-0">
-                  {row.map((cell, index) => (
-                    <td key={`${index}:${cell}`} className="px-3 py-2 align-top tabular-nums">
-                      <Inline text={cell} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable key={key} head={block.head} rows={block.rows} cell={(text) => <Inline text={text} />} />
       )
     case "paragraph":
       return (

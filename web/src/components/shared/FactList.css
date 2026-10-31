@@ -1,0 +1,23 @@
+/* A Work / Education bullet list, with its "+ show N more" under it; the review cards and the
+   person drawer draw it. */
+.fact-list {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+.fact-list li + li {
+  margin-top: 4px;
+}
+.show-more {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.show-more:hover {
+  text-decoration: underline;
+}

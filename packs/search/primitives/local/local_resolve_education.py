@@ -97,6 +97,22 @@ async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
     return [row_attrs(row, ["school_name", "person_count"]) for row in (response.rows or [])]
 
 
+async def query_people_school_ids(name: str, *, limit: int) -> list[str]:
+    """The ids people who wrote exactly this school name are filed under: a sub-school has no row of its own here."""
+    ns = local_backend.namespace("education")
+
+    def run_query() -> Any:
+        return ns.query(
+            filters=("school_name", "In", [name]),
+            top_k=limit,
+            include_attributes=["canonical_education_id"],
+            consistency=STRONG_CONSISTENCY,
+        )
+
+    rows = [row_attrs(row, ["canonical_education_id"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
+    return list(dict.fromkeys(str(row["canonical_education_id"]) for row in rows if row.get("canonical_education_id")))
+
+
 async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
     root_queries = affiliated_school_queries(name)
     query_rows: list[tuple[str, dict[str, Any]]] = []
@@ -131,6 +147,7 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
     resolved_ids = [candidate["id"] for candidate in candidates if candidate.get("included")]
     if not resolved_ids and candidates:
         resolved_ids = [candidates[0]["id"]]
+    resolved_ids += await query_people_school_ids(name, limit=limit)
     return {
         "query": name,
         "candidates": candidates,

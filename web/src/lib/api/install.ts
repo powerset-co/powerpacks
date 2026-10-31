@@ -92,6 +92,8 @@ export interface SetupAnswer {
   linkedinUrl?: string
   /** The run's sources: LinkedIn alone from the LinkedIn step, every source from Sources. */
   sources?: string[]
+  /** Sync sources again while preserving imported data and processing caches. */
+  refresh?: boolean
 }
 
 /** Resumes setup in the desktop app, which runs it instead of an agent. */
@@ -109,20 +111,14 @@ export function openExternal(url: string): Promise<void> {
   return invoke("open_external", { url }).then(() => undefined)
 }
 
+/** Skip for now: setup counts as done on later launches (desktop/src-tauri onboard.rs set_skipped). */
+export function setupSkip(): Promise<void> {
+  return invoke("setup_skip").then(() => undefined)
+}
+
 /** Whether the app's setup is done: run here, skipped, or imported (desktop/src-tauri onboard.rs). */
 export async function setupDone(): Promise<boolean> {
   return (await invoke("setup_done")) === true
-}
-
-/** The command-line install on this machine whose data the app can import, as a path to show. */
-export async function importSource(): Promise<string | null> {
-  const path = await invoke("setup_import_source")
-  return typeof path === "string" ? path : null
-}
-
-/** Import that install's data: the app then uses its network, imports and account. */
-export async function importData(): Promise<void> {
-  await invoke("setup_import")
 }
 
 /** One preflight item: whether it is ready, and its background install once one was asked for. */
@@ -135,7 +131,6 @@ export interface PreflightInstall {
 /** What the desktop app's first screen checks (packs/powerset/primitives/install/preflight.py). */
 export interface Preflight {
   browser: { ok: boolean; name: string | null; install: PreflightInstall | null }
-  gcloud: { ok: boolean; install: PreflightInstall | null }
 }
 
 export async function fetchPreflight(signal?: AbortSignal): Promise<Preflight> {
@@ -145,6 +140,6 @@ export async function fetchPreflight(signal?: AbortSignal): Promise<Preflight> {
 }
 
 /** Install a preflight item in the background; fetchPreflight follows it. */
-export function installPreflight(item: "chromium" | "gcloud"): Promise<void> {
+export function installPreflight(item: "chromium"): Promise<void> {
   return installAction("preflight", { item })
 }

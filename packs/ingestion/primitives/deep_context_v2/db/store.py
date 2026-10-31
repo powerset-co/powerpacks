@@ -69,6 +69,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 8:
         _migrate_8_to_9(conn)
         version = 9
+    if version == 9:
+        _migrate_9_to_10(conn)
+        version = 10
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -166,3 +169,21 @@ def _migrate_8_to_9(conn: sqlite3.Connection) -> None:
             if column.split()[0] not in present:
                 conn.execute(f"ALTER TABLE person_tags ADD COLUMN {column}")
         conn.execute("UPDATE meta SET value = '9' WHERE key = 'schema_version'")
+
+
+def _migrate_9_to_10(conn: sqlite3.Connection) -> None:
+    """Allow LinkedIn sources without changing any candidate or decision history."""
+    source = DDL[DDL.index("CREATE TABLE candidate_sources ("):DDL.index("CREATE TABLE connections (")]
+    profile = DDL[DDL.index("CREATE VIEW current_profile AS"):]
+    with conn:
+        conn.execute("BEGIN")
+        conn.execute("ALTER TABLE candidate_sources RENAME TO old_candidate_sources")
+        conn.execute("DROP INDEX candidate_sources_by_source")
+        for statement in source.split(";"):
+            if statement.strip():
+                conn.execute(statement)
+        conn.execute("INSERT INTO candidate_sources SELECT * FROM old_candidate_sources")
+        conn.execute("DROP TABLE old_candidate_sources")
+        conn.execute("DROP VIEW current_profile")
+        conn.execute(profile.strip().removesuffix(";"))
+        conn.execute("UPDATE meta SET value = '10' WHERE key = 'schema_version'")

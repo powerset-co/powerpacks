@@ -12,16 +12,7 @@ const SLOT = "w-28 shrink-0 self-center"
 
 /** One thing to connect: what it is for, then its slot: Connect while it is not connected,
  *  "Working" while its sign-in runs, a check once connected. */
-export function ConnectionRow({
-  icon,
-  title,
-  why,
-  state,
-  action,
-  children,
-  details,
-  onIcon,
-}: {
+export interface ConnectionRowProps {
   icon: ReactNode
   title: ReactNode
   why: ReactNode
@@ -32,7 +23,18 @@ export function ConnectionRow({
   details?: ReactNode
   /** With this, the icon is a button: the onboarding shows how this one connects. */
   onIcon?: () => void
-}) {
+}
+
+export function ConnectionRow({
+  icon,
+  title,
+  why,
+  state,
+  action,
+  children,
+  details,
+  onIcon,
+}: ConnectionRowProps) {
   const badge =
     "grid size-9 shrink-0 place-items-center rounded-[var(--radius-s)] bg-surface-2 text-foreground"
   const row = (

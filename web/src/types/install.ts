@@ -22,9 +22,8 @@ export interface InstallAction {
   qr_url?: string
   details?: unknown
 }
-/** The page's rows and fixed words, from packs/powerset/primitives/install/status_prose.py. */
+/** The page's fixed words and rows, from packs/powerset/primitives/install/status.json. */
 export interface InstallProse {
-  rows: { label: string; steps: InstallStep[]; needs: InstallStep }[]
   page: Record<string, string>
 }
 export interface InstallStatus {
@@ -45,7 +44,6 @@ export interface InstallStatus {
   step_started_at?: string
   prose: InstallProse
   action?: InstallAction | null
-  index_progress?: { status: string; message: string; progress?: number; payload: unknown } | null
   account_email?: string | null
   network_name?: string | null
   person_count?: number | null

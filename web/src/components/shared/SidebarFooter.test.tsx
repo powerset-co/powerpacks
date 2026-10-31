@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import { must } from "@/lib/must"
+import { writeStored } from "@/lib/storage"
 
 import { SidebarFooter } from "./SidebarFooter"
 
@@ -14,6 +15,10 @@ const desktop = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }))
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true, invoke: desktop.invoke, listen: desktop.listen }))
 vi.mock("@/lib/api/relay", () => ({ connectRelay: vi.fn() }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
+const setup = vi.hoisted(() => ({ done: false }))
+vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: () => setup.done }))
+const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
+vi.mock("@/lib/api/install", () => install)
 
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: "Casey", picture: null }
 
@@ -31,8 +36,22 @@ function mount(rail = false) {
     </QueryClientProvider>,
   )
 }
+// A finished run whose import pane was dismissed, so the sources prompt has the spot.
+const FINISHED = {
+  status: "completed",
+  step: "ready",
+  message: "Search is ready",
+  updated_at: "2026-10-30T07:37:30Z",
+  steps: {},
+}
+function dismissImport() {
+  writeStored("local", "import-pane-dismissed", FINISHED.updated_at)
+}
+
 beforeEach(() => {
   desktop.invoke.mockResolvedValue({ current: "3.27.0", latest: "3.27.0", available: false })
+  setup.done = false
+  install.fetchInstall.mockResolvedValue(FINISHED)
 })
 afterEach(() => {
   cleanup()
@@ -257,4 +276,53 @@ it("ignores an old saved check and checks the installed version on launch", asyn
   cleanup()
   mount()
   await waitFor(() => expect(invoked("update_check")).toBe(2))
+})
+
+it("prompts for more sources once setup is done with LinkedIn alone, and opens the Sources screen", async () => {
+  setup.done = true
+  dismissImport()
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/agent"]}>
+        <Routes>
+          <Route path="/accounts" element={<p>Sources screen</p>} />
+          <Route path="*" element={null} />
+        </Routes>
+        <SidebarFooter rail={false} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+  fireEvent.click(await screen.findByRole("button", { name: "Add sources" }))
+  await screen.findByText("Sources screen")
+})
+
+it("the prompt dismisses for good on this machine, and never shows once a message import ran", async () => {
+  setup.done = true
+  dismissImport()
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "Dismiss this prompt" }))
+  expect(screen.queryByText("Add more sources")).toBeNull()
+  cleanup()
+  mount()
+  await waitFor(() => expect(auth.fetchAccount).toHaveBeenCalled())
+  expect(screen.queryByText("Add more sources")).toBeNull()
+  localStorage.clear()
+  dismissImport()
+  cleanup()
+  install.fetchInstall.mockResolvedValue({ ...FINISHED, steps: { gmail_import: { status: "completed" } } })
+  mount()
+  await waitFor(() => expect(install.fetchInstall).toHaveBeenCalled())
+  expect(screen.queryByText("Add more sources")).toBeNull()
+})
+
+it("shows the running import instead of the sources prompt, never both", async () => {
+  setup.done = true
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  install.fetchInstall.mockResolvedValue({ ...FINISHED, status: "running", step: "gmail_sync" })
+  mount()
+  expect(await screen.findByText("Importing")).toBeTruthy()
+  expect(screen.queryByText("Add more sources")).toBeNull()
 })

@@ -24,12 +24,12 @@ export function WarmthCell({ value }: { value: number | null }) {
   )
 }
 
-// The worth dot and word, and "You" when the owner decided it.
+// The worth dot and word ("—" before any decision), and "You" when the owner decided it.
 export function WorthCell({ row }: { row: Person }) {
   return (
     <div role="cell" className="worth c-worth" data-worth={row.worth}>
       <i className="dot" />
-      {label("worth", row.worth || "unjudged")}{" "}
+      {row.worth ? label("worth", row.worth) : "—"}{" "}
       <span className={`src ${row.worth_source}`}>{row.worth_source === "human" ? "You" : ""}</span>
     </div>
   )

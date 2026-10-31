@@ -6,7 +6,7 @@ import { PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { useFeatures } from "@/lib/features"
-import type { FacetSet } from "@/lib/people/facets"
+import type { FacetSet, HideKey } from "@/lib/people/facets"
 import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
 import { withLogbooks } from "@/lib/people/logbook"
@@ -102,13 +102,11 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { cancelDelete } = decisions
   useEffect(() => cancelDelete(), [targetKey, cancelDelete])
   // The selection's one logbook action: View when everyone has a saved logbook, else Build.
-  // The open person's is in the drawer.
-  const saved = targets.map((id) => byId.get(id)?.logbook ?? "")
-  const barLogbook: LogbookAction | null = !selection.selected.size
-    ? null
-    : saved.every(Boolean)
-      ? "view"
-      : "build"
+  // The open person's is in the drawer. LinkedIn-only people have no messages to save.
+  const messaged = targets.filter((id) => !byId.get(id)?.linkedin_only)
+  const saved = messaged.map((id) => byId.get(id)?.logbook ?? "")
+  const barLogbook: LogbookAction | null =
+    !selection.selected.size || !messaged.length ? null : saved.every(Boolean) ? "view" : "build"
   const barLabel = selection.selected.size
     ? `${selection.selected.size.toLocaleString()} selected`
     : openId
@@ -117,7 +115,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
   // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
-  const { setTab: pickTab, setFilters: pickFilters, setText: pickText } = filters
+  const { setTab: pickTab, setFilters: pickFilters, toggleHide: pickHide, setText: pickText } = filters
   const startOver = useCallback(() => {
     clearSelection()
     setFocus(-1)
@@ -145,6 +143,13 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
       startOver()
     },
     [pickText, startOver],
+  )
+  const toggleHide = useCallback(
+    (key: HideKey) => {
+      pickHide(key)
+      startOver()
+    },
+    [pickHide, startOver],
   )
   const clearFilters = useCallback(() => setFilters({}), [setFilters])
   const setRelationship = useCallback(
@@ -184,15 +189,19 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { showToast } = decisions
   // The upload is a local feature (the Share network switch); without it the page is worth and tags.
   const features = useFeatures()
-  const actions = useMemo(
-    () => (
+  const actions = useMemo(() => {
+    // Signals read messages: a selection refreshes its people with messages, and a selection of
+    // only LinkedIn-only people has none to refresh. Nothing selected is All.
+    const signaled = [...selection.selected].filter((id) => !byId.get(id)?.linkedin_only)
+    return (
       <>
-        <RefreshSignals people={[...selection.selected]} onDone={refresh} />
+        {selection.selected.size && !signaled.length ? null : (
+          <RefreshSignals people={signaled} onDone={refresh} />
+        )}
         {features.share ? <ShareUpload onToast={(message) => showToast({ message })} /> : null}
       </>
-    ),
-    [selection.selected, refresh, showToast, features.share],
-  )
+    )
+  }, [selection.selected, byId, refresh, showToast, features.share])
   return (
     <PeopleShell
       main={
@@ -209,6 +218,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             onText={setText}
             onTab={setTab}
             onRelationship={setRelationship}
+            hide={view.hide}
+            onHide={toggleHide}
             actions={actions}
             notice={
               catalog.error ? (
@@ -269,7 +280,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             disabled={decisions.saving || targets.some((id) => byId.get(id)?.in_progress)}
             building={logbook.building}
             logbook={barLogbook}
-            onLogbook={() => (barLogbook === "view" ? onView(saved) : void logbook.build(targets))}
+            onLogbook={() => (barLogbook === "view" ? onView(saved) : void logbook.build(messaged))}
             onAction={(action) => void label(action, targets)}
             question={decisions.question}
             onDelete={() => decisions.askDelete(targets)}

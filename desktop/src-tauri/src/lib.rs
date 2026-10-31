@@ -15,14 +15,16 @@ mod onboard;
 mod paths;
 mod permission;
 mod restart;
+mod scopes;
 mod source;
+mod tools;
 mod update;
 
 use std::sync::Arc;
 
 use serde_json::Value;
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 use boot::{Boot, BootState};
@@ -123,8 +125,11 @@ async fn codex_start_thread(
     app: AppHandle,
     boot: State<'_, Arc<Boot>>,
     codex: State<'_, Codex>,
+    scope: Value,
 ) -> Result<Value, String> {
-    codex.start_thread(&app, &boot::require_root(&boot)?).await
+    codex
+        .start_thread(&app, &boot::require_root(&boot)?, scope)
+        .await
 }
 
 #[tauri::command]
@@ -190,6 +195,14 @@ fn debug_state(boot: State<'_, Arc<Boot>>) -> DebugState {
     }
 }
 
+/// Skip for now on an onboarding screen: setup counts as done on later launches; Accounts and
+/// Add sources in the nav take it from there.
+#[tauri::command]
+fn setup_skip(boot: State<'_, Arc<Boot>>) -> Result<(), String> {
+    let root = boot::require_root(&boot)?;
+    onboard::set_skipped(&root, true)
+}
+
 /// Debug menu: skip setup (launch opens Chat), or stop skipping and resume it now.
 #[tauri::command]
 fn debug_skip_setup(boot: State<'_, Arc<Boot>>, skip: bool) -> Result<(), String> {
@@ -225,43 +238,6 @@ fn debug_reset_data(
 fn setup_done(boot: State<'_, Arc<Boot>>) -> bool {
     boot.root()
         .is_some_and(|root| onboard::setup(&root) == onboard::Setup::Done)
-}
-
-/// The command-line install the setup page can import, as a path to show.
-#[tauri::command]
-fn setup_import_source(boot: State<'_, Arc<Boot>>) -> Option<String> {
-    let root = boot.root()?;
-    source::cli_install(&root).map(|path| path.display().to_string())
-}
-
-/// How many of the import's steps are done, as each finishes: find the install, pause the local
-/// page, bring its data over, start the page again (the page lists them, DesktopWelcome.tsx).
-const IMPORT_STEP_EVENT: &str = "import://step";
-
-/// Import the command-line install's data.
-#[tauri::command]
-async fn setup_import(app: AppHandle, boot: State<'_, Arc<Boot>>) -> Result<(), String> {
-    let root = boot::require_root(&boot)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let done = |count: usize| {
-            let _ = app.emit(IMPORT_STEP_EVENT, count);
-        };
-        let cli = source::cli_install(&root).ok_or("No Powerpacks install to import.")?;
-        done(1);
-        boot::stop_server()?;
-        done(2);
-        // The page comes back whether or not the import worked; its error is reported after.
-        let imported = source::import_cli_data(&root, &cli);
-        if imported.is_ok() {
-            done(3);
-        }
-        boot::serve(&app, &root)?;
-        imported?;
-        done(4);
-        Ok(())
-    })
-    .await
-    .map_err(|error| error.to_string())?
 }
 
 /// Resumes setup from the install page with what the user answered there.
@@ -442,8 +418,7 @@ pub fn run() {
             debug_skip_setup,
             debug_reset_data,
             setup_done,
-            setup_import_source,
-            setup_import,
+            setup_skip,
             report_crash,
         ])
         // On a Mac, closing the window keeps Powerpacks running in the Dock (setup, the page server

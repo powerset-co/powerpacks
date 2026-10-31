@@ -47,6 +47,7 @@ class Sandbox:
         for relative in (
             "packs/powerset/primitives/install/status.py",
             "packs/powerset/primitives/install/status_prose.py",
+            "packs/powerset/primitives/install/status.json",
             "packs/powerset/primitives/install/steps.py",
             "packs/ingestion/primitives/common/manifests.py",
             "packs/ingestion/primitives/common/jsonio.py",
@@ -405,7 +406,7 @@ set -euo pipefail
         proc = self.sandbox.run("--harness", "codex")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("No account was connected", last_line(proc))
-        for step in ("account", "credentials", "connection", "network"):
+        for step in ("account", "credentials", "network"):
             self.assertEqual(self.sandbox.progress()["steps"][step]["status"], "skipped")
 
 

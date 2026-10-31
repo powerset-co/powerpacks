@@ -148,13 +148,8 @@ it("shows a prepared search as a card in its command's place, its query, traits 
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
-it("asks only on the newest card while the agent waits; the company fast path is no card", () => {
+it("asks only on the newest card while the agent waits", () => {
   const entries: Entry[] = [
-    prepared("c0", {
-      query: "people at Stripe",
-      status: "company_directory_fast_path",
-      tool: "list_company_people",
-    }),
     prepared("c1", PREVIEW),
     { kind: "user", id: "u1", text: "only New York City" },
     prepared("c2", { ...PREVIEW, query: "VP of finance in New York City" }),
@@ -167,9 +162,7 @@ it("asks only on the newest card while the agent waits; the company fast path is
   expect(within(older).queryByRole("textbox")).toBeNull()
   expect(within(newest).getByRole("button", { name: "Execute" })).toBeTruthy()
   expect(within(newest).getByRole("button", { name: "More filters…" })).toBeTruthy()
-  expect(screen.getByRole("list", { name: "Work" }).textContent).toContain(
-    "search_network_pipeline.py prepare",
-  )
+  expect(screen.queryByRole("list", { name: "Work" })).toBeNull()
 
   rerender(<Transcript entries={entries} running={true} />)
   expect(screen.queryByRole("button", { name: "Execute" })).toBeNull()

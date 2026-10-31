@@ -3,13 +3,13 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "rea
 
 import { DebugMenu, EmptyState, ErrorBoundary, Sidebar } from "@/components/shared"
 import { BrokenPage } from "@/components/shared/DebugMenu"
+import { routeExternalLinks } from "@/lib/externalLinks"
 import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { TeamPage } from "./pages/team/TeamPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
-import { HomePage } from "@/pages/home/HomePage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { MemoryPage } from "@/pages/memory/MemoryPage"
@@ -29,6 +29,8 @@ function Shell() {
   useEffect(() => {
     document.title = `${page.label} · Powerpacks`
   }, [page])
+  // Links to other sites open in the system browser (a no-op outside the desktop app).
+  useEffect(routeExternalLinks, [])
   return (
     <div className="page-enter grid h-dvh grid-cols-[auto_minmax(0,1fr)] overflow-hidden">
       <Sidebar />
@@ -74,7 +76,6 @@ export function App() {
                 }
               />
             ) : null}
-            <Route path="/home" element={<HomePage />} />
             <Route path="/install" element={<InstallPage />} />
             <Route path="/agent" element={<AgentPage />} />
             <Route path="/people" element={<PeoplePage />}>

@@ -1,12 +1,11 @@
 ---
 name: search
-description: "Find and rank people in your network or search from a job description. Use for discovery, recruiting and shortlists. Saved personal knowledge and named-person dossiers use memory. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
+description: "Find and rank people in your network or search from a job description. Use for discovery, recruiting and shortlists. A named person's dossier, or a list of people by relationship, label or tag (\"show me my family\"), is Deep Context's. Supports local and Powerset networks; company, SQL, and contact browsing use their own surfaces. Formerly $search-network."
 ---
 
 # Search
 
 Find and rank people through local or Powerset network retrieval.
-Saved personal knowledge and dossier lookups route to memory below.
 
 Use this for discovery and recruiting requests:
 
@@ -20,8 +19,10 @@ Use this for discovery and recruiting requests:
 > `$search` supersedes `$search-network` (the old name still works as an alias). The retrieval
 > primitive is still `search_network_pipeline.py` — only the skill/route was renamed.
 
-For saved personal knowledge, labels, relationships, preferences or a named
-person's dossier, follow `packs/memory/skills/memory/SKILL.md` and stop here.
+For a named person's dossier, labels or relationships, or a list of people the user
+already knows by relationship, label, tag or worth ("show me my family", "who is tagged
+investor", "my close friends"), follow `packs/ingestion/skills/deep-context/SKILL.md`
+(its lookup and people reads) and stop here. Those are reads of the People list, not searches.
 Explicit shared-network requests and recruiting stay on this skill. Requests
 for people like someone continue through search below.
 
@@ -78,10 +79,9 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      (even if they also say "my network": "search my Powerset network" is `powerset`).
    - `local` — the user says "local", "offline", or "my imported network/contacts",
      even if remote credentials exist.
-   - Unstated → environment default: if `POWERPACKS_LOCAL_SEARCH_DB` is set, or
-     `.powerpacks/search-index/local-search.duckdb` exists with no TurboPuffer credentials
-     configured, pick `local`; otherwise `powerset`. Both configured → `powerset`, and say
-     which you picked in one line so the user can flip it.
+   - Unstated → the chat's scope, which the pipeline also defaults to: `local` when
+     `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment, otherwise `powerset`. Say which in
+     one line.
    - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
@@ -115,15 +115,14 @@ and nothing else (no Python: the system interpreter has none of the project's pa
 
 ```bash
 mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.json <<'EOF'
-{"surface": "people", "backend": "powerset", "depth": "fast", "mode": "interactive",
+{"surface": "people", "backend": "<local or powerset>", "depth": "fast", "mode": "interactive",
  "reason": "<one sentence on why>"}
 EOF
 ```
 
-The environment default for `backend` comes from one line that prints key names only, never
-values: `grep -o '^\(POWERPACKS_LOCAL_SEARCH_DB\|TURBOPUFFER_API_KEY\)=' .env; ls .powerpacks/search-index/local-search.duckdb`.
-`local` when `POWERPACKS_LOCAL_SEARCH_DB` is listed, or the index file exists and
-`TURBOPUFFER_API_KEY` is not listed; otherwise `powerset`.
+The environment default for `backend` is one check that prints nothing secret (the desktop app
+pins a chat's scope into the environment; a command-line install may hold it in `.env`):
+`{ test -n "$POWERPACKS_LOCAL_SEARCH_DB" || grep -q '^POWERPACKS_LOCAL_SEARCH_DB=.' .env 2>/dev/null; } && echo local || echo powerset`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.
@@ -136,7 +135,7 @@ Then dispatch — this table is the whole routing contract:
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
 | `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare`) |
+| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare --backend powerset`) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns orchestration and delegates each reviewed pond to the
@@ -235,11 +234,15 @@ Use `--search-only` to skip those model stages entirely.
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
      --backend local \
      --query "<user query>" \
+     --title "<3-5 word name>" \
      --db "<db-path>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
 
    Use the same `<slug>` run dir where `decision.json` was recorded.
+
+   `--title` names the search in the side nav and headers: 3-5 words, a noun phrase
+   ("Open-source LLM builders"), not the query. Longer is cut to fit.
 
 4. Show the query without an agent-written targeting or filter summary.
    Review the compiled filters for correctness: a role noun like "product
@@ -284,28 +287,28 @@ files on the happy path. Start a fresh run for every search request.
 
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
+     --backend powerset \
      --query "<user query>" \
+     --title "<3-5 word name>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
 
    Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
    profile searches pass their own output dir; follow the engine's instructions there.)
 
-2. If `prepare` returns `status: company_directory_fast_path`, follow the
-   returned tool request and skip semantic retrieval.
-3. If `prepare` returns a preview, say exactly this and nothing else: no restated query, no
-   targeting or filter summary, no quoted rules (the chat shows the prepared search as a card):
+2. If `prepare` returns a preview, say exactly this and nothing else (the chat shows the
+   prepared search as a card):
 
    `Search prepared. Execute or modify?`
 
-4. Apply the reply using **Execute or modify the preview** below.
+3. Apply the reply using **Execute or modify the preview** below.
    `execute_command` already includes `--execute-approved`; do not ask for another approval.
    - If a **limit** was provided (e.g. by the deep-search engine for a
      capped profile search), append `--limit <N>` to the execute_command (or
      pass `--limit` to `prepare`, which threads it through). This caps
      retrieval and the whole downstream pipeline. For standalone user
      searches, do not add a limit unless the user asks for one.
-5. Follow **Execution progress** below until the command finishes or emits a
+4. Follow **Execution progress** below until the command finishes or emits a
    concrete `blocked_approval` / `blocked_user_action`.
 
 ## Execute or modify the preview
@@ -353,28 +356,18 @@ For both local and Powerset previews:
 
 Keep execution quiet except for these milestones from `run`:
 
-- When it prints the screened count, say at once: `<N> screened, not ranked yet`.
-  Say the results page shows them once ranking finishes. These are screened people, never
-  the ranked list; do not present a ranked shortlist before ranking finishes.
+- When it prints the screened count, say at once: `<N> screened, not ranked yet`; do not
+  present a ranked shortlist before ranking finishes.
 - When it prints the ranked count, say ranking has finished.
-
-Read these counts from the command's live output; no other run files need to
-be opened for progress.
 
 ## Final Summary
 
 - Say `<N> found`.
 - For local results, say `found (local)`.
 - In the Powerpacks desktop app (the developer instructions say you are its assistant), stop
-  there: the results pane beside the chat already shows the ranked list. Never print a table of
-  results in the chat.
-- Outside the app: say `Run artifacts: <artifact-dir>`, then read only the `csv` path from the
-  final `artifacts` object and show the top 10 candidates, or fewer if fewer than 10 rows were
-  returned. Keep each row compact: rank, name, current title/company, location, and LinkedIn URL
-  when present.
-- Live progress above is the exception to waiting for final output. Other run
-  files are internal handoff/debug artifacts. Inspect them only for a
-  failed or inconsistent run, or when the user asks to debug.
+  there: the results pane beside the chat shows the ranked list.
+- Outside the app: say `Run artifacts: <artifact-dir>` and show the top 10 ranked rows from the
+  run's `csv` artifact as a Markdown table (rank, name, title/company, location, LinkedIn URL).
 
 ## User edit & feedback capture
 
@@ -402,8 +395,7 @@ person-data errors still use `$feedback`.
 ## Execution Rules
 
 - Do not run the search before the user answers "Search prepared. Execute or modify?"; never
-  quote this rule or the checklist to the user. In interactive deep mode, also wait for
-  the required pond query/payload review; in auto deep mode, the approved query authorizes the loop.
+  quote this rule or the checklist to the user.
 - Do not run doctor or setup checks before a normal search unless the primitive
   fails with an unclear auth/env/setup error.
 - Do not use sub-agents for ordinary single-query searches except the local

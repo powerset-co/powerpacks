@@ -6,7 +6,8 @@
 //!   -> `python -m packs.shared.web.server serve`, as this app's child (an earlier page on the
 //!      port is stopped first); when it does not start, Codex looks into it (crash.rs) and it
 //!      gets one more try
-//!   -> setup not finished: start `bin/onboard` and show the onboarding step the run is on; otherwise show the Agent.
+//!   -> setup not finished: record it waiting for the user's click and show the onboarding from Sign up;
+//!      otherwise show the Agent.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -37,6 +38,8 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
 const SERVER_TIMEOUT: Duration = Duration::from_secs(20);
 const KEPT_LINES: usize = 40;
 const HOME_PAGE: &str = "/agent";
+/// Setup not done: the onboarding from its first screen, every launch.
+const ONBOARDING_PAGE: &str = "/onboarding";
 
 #[derive(Clone, Copy, Serialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -156,6 +159,10 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         source::install(&archive, &root, &version)?;
     }
     source::ensure_env(&root)?;
+    // Codex's skills (~/.agents/skills) are links into the code just installed: this version's.
+    if let Some(home) = dirs::home_dir() {
+        source::link_skills(&root, &home, &version)?;
+    }
 
     if first {
         boot.step(
@@ -193,6 +200,17 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         }
     }
 
+    // wacli and the Google Cloud CLI, downloaded once per pinned version like the browser, so Gmail
+    // and WhatsApp never wait for them. Silent when both are current; a failure does not stop the
+    // launch (the import retries its own install).
+    let mut tools = Command::new(paths::project_python(&root));
+    tools
+        .args(["-m", "packs.powerset.primitives.install.preflight", "tools"])
+        .current_dir(&root);
+    if let Err(error) = stream(app, boot, tools, "Import tools") {
+        boot.line(app, format!("Import tools download failed: {error}"));
+    }
+
     if let Err(error) = serve(app, &root) {
         boot.step(app, "Powerpacks is fixing itself", "This takes a minute.");
         if !crash::repair(&root, &version, &Crash::server(&root)).unwrap_or(false) {
@@ -206,7 +224,6 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     let setup = onboard::setup(&root);
     match setup {
         Setup::New => onboard::record_install(&root, &paths::project_python(&root))?,
-        Setup::Interrupted => onboard::record_paused(&root, &paths::project_python(&root))?,
         Setup::Paused | Setup::Done => {}
     }
     show_page(
@@ -215,7 +232,7 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
         if setup == Setup::Done {
             HOME_PAGE
         } else {
-            onboard::resume_page(&root)
+            ONBOARDING_PAGE
         },
     )
 }

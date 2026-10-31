@@ -13,6 +13,7 @@ export { ErrorBoundary } from "./ErrorBoundary"
 export { FeedbackFooter } from "./FeedbackFooter"
 export { FeedbackForm } from "./FeedbackForm"
 export { CHIP, ReadRow, Row, TraitChips } from "./FilterRows"
+export { FactList } from "./FactList"
 export { Fold } from "./Fold"
 export {
   CLOSE_MARK,
@@ -44,4 +45,5 @@ export { SourcePills } from "./SourcePills"
 export { Spinner } from "./Spinner"
 export { Tip } from "./Tip"
 export { Toast, type ToastAction, type ToastMessage } from "./Toast"
+export { DataTable } from "./DataTable"
 export { VirtualRows, type VirtualRowsHandle, type VirtualRowsProps } from "./VirtualRows"

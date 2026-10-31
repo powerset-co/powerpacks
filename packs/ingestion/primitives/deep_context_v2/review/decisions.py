@@ -18,14 +18,17 @@ Created: 2026-10-07
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
-from packs.ingestion.primitives.deep_context_v2.db import queries_review
+from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe, queries_review
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, SYNTHETIC_PROFILE_PREFIX, MergeReason, Origin, Verdict, Worth
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
-from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles
+from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile, Profiles, load_profiles, profile_from_record
 from packs.ingestion.primitives.deep_context_v2.review.queue import Card, Pending
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 from packs.ingestion.schemas.people_schema import extract_public_identifier, normalize_linkedin_url
 
 SKIP_REASON = "review: skip"
@@ -37,12 +40,19 @@ class DecisionError(Exception):
 
 def _confirm(conn: sqlite3.Connection, card: Card, url: str, member_id: str, origin: str, fingerprint: str,
              now: str) -> None:
-    """Every member onto li:<member id>, each parent row naming its own member's verdict row."""
-    for member in card.members:
-        seq: int = queries_review.insert_linkedin(conn, member.candidate_id, url, member_id, origin,
+    """Confirm the card's selected message members; an imported identity never moves."""
+    ids = [member.candidate_id for member in card.members if not member.candidate_id.startswith("candidate:linkedin:")]
+    parents = queries_dedupe.current_parents(conn)
+    held = {(v.candidate_id, v.member_id) for v in queries_review.current_verdicts(conn, ids)
+            if v.verdict == Verdict.CONFIRMED}
+    for candidate_id in ids:
+        if parents[candidate_id] == LINKEDIN_PARENT_PREFIX + member_id and (candidate_id, member_id) in held:
+            continue
+        seq: int = queries_review.insert_linkedin(conn, candidate_id, url, member_id, origin,
                                                   Verdict.CONFIRMED.value, fingerprint, now)
-        queries_review.insert_parent(conn, member.candidate_id, LINKEDIN_PARENT_PREFIX + member_id,
-                                     MergeReason.HUMAN.value, f"candidate_linkedins:{seq}", now)
+        if parents[candidate_id] != LINKEDIN_PARENT_PREFIX + member_id:
+            queries_review.insert_parent(conn, candidate_id, LINKEDIN_PARENT_PREFIX + member_id,
+                                         MergeReason.HUMAN.value, f"candidate_linkedins:{seq}", now)
 
 
 def chosen(card: Card, key: str) -> Pending:
@@ -77,10 +87,16 @@ def pasted_url(pasted: str) -> str:
     return url
 
 
-def fetch_profile(data_root: Path, pasted: str) -> tuple[str, Profile]:
+def fetch_profile(conn: sqlite3.Connection, data_root: Path, pasted: str) -> tuple[str, Profile]:
     """The pasted URL and its profile: cache first, one RapidAPI call on a miss. The profile's member id is
     what the parent ledger keys the family by, so finish needs it."""
     url: str = pasted_url(pasted)
+    imported = queries_review.imported_profile(conn, url)
+    if imported is not None:
+        payload = json.loads(imported["import_json"])
+        record = {"normalized_profile": normalize_linkedin_profile(json.loads(payload["rapidapi_response"])),
+                  "fetched_at": hashlib.sha256(imported["import_json"].encode()).hexdigest()}
+        return url, profile_from_record(url, record)
     profiles: Profiles = load_profiles(data_root, [url], fetch=True)
     profile: Profile | None = profiles.found.get(url)
     if profile is None:
@@ -90,7 +106,7 @@ def fetch_profile(data_root: Path, pasted: str) -> tuple[str, Profile]:
 
 def retarget(conn: sqlite3.Connection, data_root: Path, card: Card, pasted: str) -> str:
     """The pasted profile is assumed right. Returns the confirmed URL."""
-    url, profile = fetch_profile(data_root, pasted)
+    url, profile = fetch_profile(conn, data_root, pasted)
     with conn:
         _confirm(conn, card, url, profile.member_id, Origin.HUMAN_OVERRIDE.value, profile.fetched_at, now_iso())
     return url

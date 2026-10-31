@@ -6,20 +6,23 @@ Changelog:
 - 2026-10-07: v2 stages (load, collect, synthesize, dedupe, worth, enrich, realize); the v1 seed,
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
-import csv
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect
 from packs.ingestion.primitives.deep_context_v2.db import queries, store
+from packs.ingestion.primitives.deep_context_v2.node import Manifest
+from packs.ingestion.primitives.deep_context_v2.run import _stage
 from packs.ingestion.primitives.deep_context_v2.dedupe.dedupe import Dedupe
 from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
@@ -79,8 +82,7 @@ class InstallPipelineTests(unittest.TestCase):
         self.status = InstallStatus(self.root)
         self.retry = "bin/onboard --source gmail --gmail-email casey@example.com --sync-after 2025-01-01"
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command=self.retry)
-        # A Gmail import is on disk: deep context has messages to read (without any, LinkedIn goes
-        # straight to the index; see test_linkedin_only_goes_straight_to_the_modal_index).
+        # This import run reads messages from the Gmail import on disk.
         gmail = self.root / ".powerpacks/network-import/import/gmail/people.csv"
         gmail.parent.mkdir(parents=True, exist_ok=True)
         gmail.write_text("id,primary_email\ncandidate:email:casey@example.com,casey@example.com\n", encoding="utf-8")
@@ -262,6 +264,67 @@ class InstallPipelineTests(unittest.TestCase):
             "Enriching your contacts: 4 of 4 LinkedIn matches checked"])
         self.assertEqual(self.status.read()["status"], "completed")
 
+    def test_zero_total_progress_keeps_the_stage_line(self):
+        flow = ProcessingOnboarding(self.root)
+        with patch.object(flow, "_write") as writes:
+            for stage, phases in (("synthesize", ("facts",)), ("worth", ("families", "labels")),
+                                  ("enrich", ("research", "judge"))):
+                counter = flow._counter(stage)
+                for phase in phases:
+                    counter(phase, 0, 0)
+            writes.assert_not_called()
+
+    def test_phase_counter_uses_its_own_rate_and_keeps_throttling_and_final_write(self):
+        flow = ProcessingOnboarding(self.root)
+        counter = flow._counter("enrich")
+        with patch.object(pipeline.time, "monotonic", side_effect=[100, 104, 105, 105, 200, 204]):
+            counter("research", 0, 10)
+            first = self.status.read()
+            self.assertNotIn("left_seconds", first["action"]["details"])
+            counter("research", 2, 10)
+            record = self.status.read()
+            self.assertEqual(record["message"], "Enriching your contacts: 2 of 10 researched")
+            self.assertEqual(record["action"]["details"],
+                             {"done": 2, "total": 10, "left_seconds": 16})
+            counter("research", 3, 10)
+            self.assertEqual(self.status.read()["message"], record["message"])
+            counter("research", 10, 10)
+            self.assertEqual(self.status.read()["action"]["details"]["left_seconds"], 0)
+            counter("judge", 0, 10)
+            self.assertNotIn("left_seconds", self.status.read()["action"]["details"])
+            counter("judge", 2, 10)
+            record = self.status.read()
+            self.assertEqual(record["event"], "enrich.enrich.judge")
+            self.assertEqual(record["action"]["details"]["left_seconds"], 16)
+        print(record["message"], record["action"]["details"])
+
+    def test_worth_estimate_and_labels_both_publish_counts(self):
+        flow = ProcessingOnboarding(self.root)
+        node = Worth(self.open_store(self.root / "test.sqlite"), self.root, limit=10)
+        self.addCleanup(node.conn.close)
+        with patch.object(node, "estimate", side_effect=lambda: node.progress("families", 2, 2) or {}), \
+                patch.object(node, "run", side_effect=lambda: (
+                    node.progress("labels", 3, 3) or
+                    Manifest("worth", "completed", "", "", {}, None))):
+            with patch.object(flow, "_write", wraps=flow._write) as writes:
+                flow._stage("worth", node)
+        events = [call.args[0] for call in writes.call_args_list]
+        self.assertIn("discover.worth.families", events)
+        self.assertIn("discover.worth.labels", events)
+        self.assertEqual(self.status.read()["message"], "Grouping each person's contacts: 3 of 3")
+
+    def test_cli_stage_line_starts_with_prose_and_preserves_counts_and_failure(self):
+        output = io.StringIO()
+        manifest = Manifest("worth", "completed", "", "", {"families": 2}, None)
+        node = SimpleNamespace(run=lambda: manifest)
+        with redirect_stdout(output):
+            _stage("worth", node)
+        self.assertEqual(output.getvalue(), "Grouping each person's contacts — worth: completed families=2\n")
+        print(output.getvalue().strip())
+        node.run = lambda: Manifest("worth", "failed", "", "", {}, "synthetic failure")
+        with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+            _stage("worth", node)
+
     def test_completed_index_resumes_without_rebuild_and_revalidates(self):
         self.run_pipeline()
         self.calls.clear()
@@ -394,30 +457,11 @@ class InstallPipelineTests(unittest.TestCase):
         self.assertEqual(self.run_pipeline()["status"], "completed")
         self.assertCountEqual(self.paid_commands, ["index"])
 
-    def test_linkedin_only_goes_straight_to_the_modal_index(self):
-        # No Gmail or Messages import: nothing for deep context to read, so the enriched LinkedIn
-        # import is the people file the Modal index builds from; the stages are never run.
-        (self.root / ".powerpacks/network-import/import/gmail/people.csv").unlink()
-        linkedin = self.root / ".powerpacks/network-import/import/linkedin/people.csv"
-        self.write(linkedin, self.csv)
-        result = self.run_pipeline()
-        self.assertEqual((result["step"], result["status"], result["event"]), ("ready", "completed", "search.ready"))
-        self.assertTrue(self.indexed())
-        for stage in ("load", "collect", "synthesize", "dedupe", "worth", "enrich", "realize", "owner"):
-            self.assertFalse(self.did(stage), stage)
-        self.assertEqual(result["steps"]["deep_context"]["status"], "completed")
-        self.assertEqual(result["steps"]["enrich"]["status"], "skipped")
-        self.assertIn("Connect Messages or Gmail", result["note"])
-        commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
-        self.assertTrue(any("index-people" in command and str(linkedin) in command for command in commands), commands)
-
     def test_the_index_builds_from_the_file_realize_hands_back(self):
-        # With messages, realize hands back the index's people file (families plus the LinkedIn
-        # connections no family holds; realize.with_connections, tested on its own) and the index
-        # builds from it.
+        # The index builds from exactly the file returned by realize.
         result = self.run_pipeline()
         self.assertEqual((result["step"], result["status"]), ("ready", "completed"))
-        indexed = self.index / "people.csv"
+        indexed = self.people
         commands = [" ".join(map(str, call.args[0])) for call in self.subprocess.call_args_list]
         self.assertTrue(any("index-people" in command and str(indexed) in command for command in commands), commands)
 

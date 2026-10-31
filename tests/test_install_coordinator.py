@@ -28,7 +28,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.status = InstallStatus(self.root)
         self.retry = (f"{self.root}/bin/onboard --source gmail --gmail-email casey@example.com"
-                      " --sync-after 2025-10-03 --harness codex --port 8899")
+                      " --sync-after 2025-10-03 --port 8899")
         self.status.write('step.waiting', step=InstallStep.DEEP_CONTEXT, pid=0, retry_command=self.retry)
         self.events = []
         self.account_code = 0
@@ -48,7 +48,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.processing_class.return_value.run.side_effect = self.run_processing
         self.addCleanup(patch.stopall)
 
-    def build_account(self, root, *, harnesses, pid, retry_command):
+    def build_account(self, root, *, pid, retry_command):
         def run():
             self.events.append("account")
             event = {0: "network.ready", 1: "account.error", 10: "network.empty"}[self.account_code]
@@ -123,12 +123,11 @@ class InstallCoordinatorTests(unittest.TestCase):
                 self.assertEqual(self.events, ["account", "imports", "processing"])
                 self.assertTrue(output.rstrip().endswith("DONE: Verified"))
                 self.assertEqual(self.source_choices[-1][:3], (("gmail",), ("casey@example.com",), "2025-10-03"))
-                self.assertEqual(self.account_class.call_args.kwargs["harnesses"], ["codex"])
 
     def test_each_source_wait_and_failure_resumes_through_same_coordinator(self):
         self.retry = (f"{self.root}/bin/onboard --source linkedin --source gmail --source imessage"
                       " --source whatsapp --gmail-email casey@example.com --sync-after 2025-10-03"
-                      f" --wacli-store {self.root}/synthetic-whatsapp --harness pi --port 8899")
+                      f" --wacli-store {self.root}/synthetic-whatsapp --port 8899")
         self.status.write('step.waiting', step=InstallStep.SOURCES, pid=0, retry_command=self.retry)
         steps = ("gmail_tools", "gmail_login", "gmail_sync", "gmail_import", "imessage_access",
                  "imessage_import", "whatsapp_tools", "whatsapp_login", "whatsapp_sync", "whatsapp_import",
@@ -152,7 +151,6 @@ class InstallCoordinatorTests(unittest.TestCase):
                     self.assertEqual(choices[:3], (("linkedin", "gmail", "imessage", "whatsapp"),
                                                   ("casey@example.com",), "2025-10-03"))
                     self.assertEqual(choices[3], self.root / "synthetic-whatsapp")
-                    self.assertEqual(self.account_class.call_args.kwargs["harnesses"], ["pi"])
                     self.assertTrue(output.rstrip().endswith("DONE: Verified"))
 
     def test_logins_only_connects_without_the_account_imports_or_processing(self):
@@ -181,7 +179,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         # accounts.signed_in names, never a saved or asked-for one.
         self.enterContext(patch('packs.powerset.primitives.install.workflow.DESKTOP', True))
         self.sources.stop()  # Exercise SourceOnboarding.run after the account step writes its email.
-        self.retry = f"{self.root}/bin/onboard --source gmail --gmail-email saved@gmail.com --harness pi --port 8899"
+        self.retry = f"{self.root}/bin/onboard --source gmail --gmail-email saved@gmail.com --port 8899"
         self.status.write('step.waiting', step=InstallStep.ACCOUNT, pid=0,
                           retry_command=self.retry, account_email='')
         self.account_email = 'new-powerset@example.com'
@@ -205,7 +203,7 @@ class InstallCoordinatorTests(unittest.TestCase):
             code, output = self.run_command()
             self.assertEqual(code, 0, output)
             self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])
-            self.assertIn('--harness pi --port 8899', self.status.read()['retry_command'])
+            self.assertIn('--port 8899', self.status.read()['retry_command'])
             self.account_email = 'different-powerset@example.com'
             code, output = self.run_command()
             self.assertEqual(code, 0, output)

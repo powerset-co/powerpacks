@@ -259,8 +259,17 @@ def reviewed_dir(value: str|None, label: str) -> str|None:
         raise Failed(f"{label} is not a readable directory: {path}")
     return str(path)
 
+TITLE_WORDS, TITLE_CHARS = 5, 48
+
+def clamp_title(text: str) -> str:
+    """The search's name in the side nav and headers: the agent's 3-5 words, cut to fit if it wrote more."""
+    title=" ".join(text.split()[:TITLE_WORDS])
+    return title if len(title)<=TITLE_CHARS else title[:TITLE_CHARS-1].rstrip()+"…"
+
 def execution_contract_suffix(args) -> str:
     parts: list[str]=cross_encoder_child_args(args)
+    if getattr(args,"title",""):
+        parts += ["--title",clamp_title(args.title)]
     if getattr(args,"evaluation_query",None):
         parts += ["--evaluation-query",args.evaluation_query]
     traits=normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
@@ -351,31 +360,6 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         "traits": payload.get("traits") or [],
         "runtime_blockers": quality_issues,
     }
-
-def company_directory_tool_args(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Return MCP args for company-only people lookup, else None.
-
-    This protects the company-directory fast path even if a harness calls
-    `prepare` for a simple "people at Company" query.
-    """
-    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
-    company_names=[x for x in (f.get("company_names") or f.get("current_company_names") or []) if isinstance(x,str) and x.strip()]
-    company_ids=[x for x in (f.get("company_ids") or []) if str(x).strip()]
-    if not company_names and not company_ids:
-        return None
-    if f.get("has_domain_intent") is True:
-        return None
-    allowed={"company_names","current_company_names","company_ids","is_current_company","set_id","has_domain_intent"}
-    if any(v not in (None, [], "") and k not in allowed for k,v in f.items()):
-        return None
-    args={"page":0,"page_size":50,"company_limit":5}
-    if company_ids:
-        args["company_id"]=str(company_ids[0])
-    else:
-        args["company_name"]=company_names[0]
-    if f.get("set_id"):
-        args["set_id"]=f["set_id"]
-    return args
 
 def prepare_output_dir(query: str, explicit: str|None) -> Path:
     if explicit:
@@ -943,7 +927,9 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
-    l=load_ledger(lp); l["current_block"]=None; save(lp,l)
+    l=load_ledger(lp); l["current_block"]=None
+    if getattr(args,"title",""): l["title"]=clamp_title(args.title)
+    save(lp,l)
     normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
     args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
     args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
@@ -1028,6 +1014,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp)
     l["mode"]="local_duckdb"; l["duckdb"]=str(db_path); l["current_block"]=None
+    if getattr(args,"title",""): l["title"]=clamp_title(args.title)
     save(lp,l)
     normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
     args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
@@ -1164,7 +1151,7 @@ def record_quick_run(result: dict[str, Any]) -> None:
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
     attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file"))
-    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
+    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], title=l.get("title"), filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
                         person_attribution=attribution, person_attribution_error=attribution_error)
@@ -1252,18 +1239,6 @@ def cmd_prepare(args):
             payload=pin_payload_current_role(payload,True)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        company_args=company_directory_tool_args(payload)
-        if company_args:
-            emit({
-                "primitive":"search_network_pipeline",
-                "status":"company_directory_fast_path",
-                "message":"Company-only people lookup: call MCP list_company_people and skip search-network retrieval.",
-                "query":args.query,
-                "payload_json":str(payload_json),
-                "tool":"list_company_people",
-                "tool_args":company_args,
-            })
-            return 0
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         extra+=execution_contract_suffix(args)
@@ -1357,8 +1332,12 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_backend(p):
-    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = TurboPuffer + Postgres remote retrieval (default); local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
-    p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local)")
+    # The chat's scope is the default: the desktop app pins a chat's set or local index into the
+    # environment of every command Codex runs, so an agent that leaves the flag off still searches
+    # where the chat's picker points. Explicit flags win.
+    local_db=os.environ.get("POWERPACKS_LOCAL_SEARCH_DB") or None
+    p.add_argument("--backend",choices=("powerset","local"),default="local" if local_db else "powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Unstated: local when POWERPACKS_LOCAL_SEARCH_DB is set")
+    p.add_argument("--db",default=local_db or DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: POWERPACKS_LOCAL_SEARCH_DB, else "+DEFAULT_LOCAL_DB)
 
 def add_run(p):
     add_backend(p)
@@ -1370,6 +1349,7 @@ def add_run(p):
     p.add_argument("--ledger")
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
+    p.add_argument("--title", default="", help="The search's 3-5 word name; longer is cut to fit")
     p.add_argument("--payload-json", help="Exact reviewed expansion payload; the only payload execution input")
     p.add_argument("--edits-json", help="The card's edits as one JSON file ({\"filters\": {key: value|null}, \"traits\": [...]}): applied to --payload-json before the run and logged in its folder's user-edits.jsonl")
     p.add_argument("--evaluation-query", help="Canonical plan/JD brief used only by filter/rerank")
@@ -1408,6 +1388,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--query",required=True)
+    p.add_argument("--title", default="", help="The search's 3-5 word name, e.g. \"Open-source LLM builders\"; longer is cut to fit. Unstated: the query")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")
     p.add_argument("--edits-json",help="The card's edits as one JSON file: its filters are applied to the prepared payload and logged in the output dir's user-edits.jsonl (the traits come from the query)")

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-setup-skip"
+description = "Enables the setup_skip command without any pre-configured scope."
+commands.allow = ["setup_skip"]
+
+[[permission]]
+identifier = "deny-setup-skip"
+description = "Denies the setup_skip command without any pre-configured scope."
+commands.deny = ["setup_skip"]

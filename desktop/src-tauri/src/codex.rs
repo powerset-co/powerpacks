@@ -22,6 +22,7 @@ use tokio::sync::oneshot;
 
 use crate::children;
 use crate::paths;
+use crate::scopes;
 
 mod questions;
 use questions::QuestionEvents;
@@ -48,14 +49,12 @@ pub const PAGE_METHODS: &[&str] = &[
     "turn/interrupt",
     "thread/archive",
 ];
-const DEVELOPER_INSTRUCTIONS: &str = "You are the assistant inside the Powerpacks desktop app. \
-You search the user's network, answer questions about people, companies and dossiers, and run \
-the Powerpacks workflows the user asks for (contact imports, Deep Context processing, logbooks, \
-the search index) with the Powerpacks skills. Powerpacks setup and the Powerset sign-in run from \
-the app's own pages; if one is needed, say which page to open. Never ask the user to open a URL \
-in a browser: the app already shows every Powerpacks page. After a search, say how many were \
-found and stop: the results pane beside the chat shows the ranked list, so never print a table \
-of results in the chat.";
+const DEVELOPER_INSTRUCTIONS: &str =
+    "You are the assistant inside the Powerpacks desktop app; work \
+with the Powerpacks skills. Setup and sign-in happen on the app's own pages, so never ask the \
+user to open a URL. A search's results appear in the pane beside the chat: after a search, say \
+the count and stop. Anything else the user asks to see, show as a Markdown table in your reply, \
+every row.";
 const THREAD_LIST_LIMIT: u32 = 50;
 
 type Reply = Result<Value, String>;
@@ -320,28 +319,56 @@ impl Codex {
     }
 
     /// Writes stay in the Powerpacks folder plus uv's cache (every `bin/*` command runs through
-    /// `uv run`, which dies without it); network is on, since every search calls Powerset.
-    fn thread_settings(cwd: &Path) -> Value {
+    /// `uv run`, which dies without it); network is on, since every search calls Powerset. The
+    /// chat's scope (`{"set_id": …}` or `{"local_db": …}`, from the page's Search-in picker) goes
+    /// into the environment of every command the agent runs, both keys always, so a stale value in
+    /// `.env` fills neither; a chat with no scope (from before scopes) leaves `.env` to decide.
+    fn thread_settings(cwd: &Path, scope: &Value) -> Value {
         let uv_cache = dirs::home_dir().unwrap_or_default().join(".cache/uv");
+        let mut config = json!({
+            "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] },
+        });
+        if scope.is_object() {
+            let text = |key: &str| scope.get(key).and_then(Value::as_str).unwrap_or("");
+            config["shell_environment_policy"] = json!({ "set": {
+                "POWERPACKS_DEFAULT_SET_ID": text("set_id"),
+                "POWERPACKS_LOCAL_SEARCH_DB": text("local_db"),
+            } });
+        }
         json!({
             "cwd": cwd,
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
-            "config": { "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] } },
+            "config": config,
             "developerInstructions": DEVELOPER_INSTRUCTIONS,
         })
     }
 
-    pub async fn start_thread(&self, app: &AppHandle, cwd: &Path) -> Reply {
-        self.call(app, Some(cwd), "thread/start", Self::thread_settings(cwd))
-            .await
+    /// A new chat pinned to `scope`; the scope is kept by thread id so reopening the chat keeps it.
+    pub async fn start_thread(&self, app: &AppHandle, cwd: &Path, scope: Value) -> Reply {
+        let reply = self
+            .call(
+                app,
+                Some(cwd),
+                "thread/start",
+                Self::thread_settings(cwd, &scope),
+            )
+            .await?;
+        if let Some(id) = reply.pointer("/thread/id").and_then(Value::as_str) {
+            scopes::write(cwd, id, &scope)?;
+        }
+        Ok(reply)
     }
 
-    /// Resume a past chat with its turns, so the page can show its history and continue it.
+    /// Resume a past chat with its turns and its scope, so the page can show its history and
+    /// continue it where it searched.
     pub async fn open_thread(&self, app: &AppHandle, cwd: &Path, thread_id: &str) -> Reply {
-        let mut params = Self::thread_settings(cwd);
+        let scope = scopes::read(cwd, thread_id);
+        let mut params = Self::thread_settings(cwd, &scope);
         params["threadId"] = json!(thread_id);
-        self.call(app, Some(cwd), "thread/resume", params).await
+        let mut reply = self.call(app, Some(cwd), "thread/resume", params).await?;
+        reply["scope"] = scope;
+        Ok(reply)
     }
 
     /// This app's chats, newest first. Codex's `updatedAt` moves whenever a chat is opened (a resume

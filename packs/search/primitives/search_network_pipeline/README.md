@@ -17,8 +17,7 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 
 `prepare` runs `expand_search_request`, writes `expand_search_request.json`,
 emits a compact preview, and returns an `execute_command` to run after the user
-chooses `execute`. For company-directory-only requests, `prepare` emits
-`status: company_directory_fast_path` with the tool request to follow.
+chooses `execute`. Company-only requests follow this same prepare/run path.
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \

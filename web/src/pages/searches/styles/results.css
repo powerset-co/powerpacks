@@ -119,12 +119,13 @@
   font-size: 11px;
   overflow-wrap: anywhere;
 }
-/* rendering.py .network-context: the source pills, and the operator stack at the right. */
+/* rendering.py .network-context: the source pills, then the operator stack beside them (the
+   person column is wide here; at its right edge the stack sat far from what it attributes). */
 .result-network {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
+  gap: 4px 8px;
   min-width: 0;
   margin-top: 6px;
 }

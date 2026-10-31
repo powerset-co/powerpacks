@@ -4,6 +4,7 @@
  * Credentials and challenges stay human-owned: anything but the account chooser and the
  * Cloud SDK's own Continue/Allow opens the window for the user. */
 const { snapshot } = require("./gmail_consent.js");
+const { waitUntil } = require("./page_wait.js");
 
 // The Cloud SDK's public OAuth client, which `gcloud auth login` always uses.
 const GCLOUD_CLIENT = "32555940559.apps.googleusercontent.com";
@@ -39,29 +40,26 @@ function consentAction(page, request) {
 async function loginGcloud(request, { launchChrome, progress, returnFocus }) {
   const callback = validateRequest(request);
   const deadline = Date.now() + request.timeoutSeconds * 1000;
+  // gcloud's localhost callback took the code; it then redirects to its success page.
+  const done = url => url.startsWith(callback) || url.startsWith("https://cloud.google.com/sdk/auth_success");
   let context = await launchChrome(request.profileDir, true);
   let page = context.pages()[0] || await context.newPage();
   let human = false;
   const open = () => page.goto(request.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
   try {
     await open();
-    while (Date.now() < deadline && !page.isClosed()) {
-      // gcloud's localhost callback took the code; it then redirects to its success page.
-      if (page.url().startsWith(callback) || page.url().startsWith("https://cloud.google.com/sdk/auth_success")) {
-        return { status: "ok" };
-      }
+    for (;;) {
       // Once the window is the person's, nothing is read or clicked for them: the wait is for
-      // gcloud's callback. (A snapshot mid-sign-in threw out of the loop and closed the window.)
-      if (human) {
-        await page.waitForTimeout(1000);
-        continue;
-      }
-      // A page mid-navigation (Google moved on) throws out of the snapshot: a moment, not the end.
+      // gcloud's callback, measured (page_wait.js): the page settled, the network alive, the
+      // person still there.
+      const wait = await waitUntil(page, { done, human, deadlineMs: deadline - Date.now() });
+      if (wait.status !== "act") return wait;
+      // The page settled and is the script's: read it once, click once, measure again. A read
+      // that throws means Google moved on between the settle and the read (a redirect after load).
       let action;
       try {
         action = consentAction(await snapshot(page), request);
       } catch (_) {
-        await page.waitForTimeout(1000);
         continue;
       }
       if (action.kind === "human") {
@@ -79,9 +77,7 @@ async function loginGcloud(request, { launchChrome, progress, returnFocus }) {
       } else {
         await page.getByRole("button", { name: action.name, exact: true }).first().click({ timeout: 2500 });
       }
-      await page.waitForTimeout(500);
     }
-    return { status: "needs_user_action", message: "Google sign-in did not finish. Retry to reopen Chrome." };
   } catch (_) {
     return { status: "needs_user_action", message: "Google sign-in could not finish. Retry and complete it in Chrome." };
   } finally {

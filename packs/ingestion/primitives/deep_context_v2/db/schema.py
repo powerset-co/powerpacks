@@ -5,9 +5,8 @@ enums, so the two cannot drift. Every nullable column names what its NULL means
 in a comment; none exists for a fallback.
 
 Id space:
-  candidate_id  'candidate:email:<address>' | 'candidate:phone:+<digits>'
-                Email and phone normalization are pinned. There is no LinkedIn candidate: the
-                LinkedIn export is the `connections` lookup, keyed by URL, never a candidate.
+  candidate_id  'candidate:email:<address>' | 'candidate:phone:+<digits>' | 'candidate:linkedin:<member_id>'
+                Email and phone normalization are pinned. LinkedIn source members stay on li:<member_id>.
   parent_id     'p:<16 hex>' minted by free merge, dedupe or a split | 'li:<member_id>' once confirmed
   seq           AUTOINCREMENT, one counter per ledger table; comparable within a table only
   verdict_ref   'pair_verdicts:<candidate_a>|<candidate_b>|<signature>' | 'candidate_linkedins:<seq>'
@@ -20,6 +19,7 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-10-28 (schema 10): LinkedIn sources; confirmed profiles prefer their current imported URL.
 - 2026-10-20 (schema 7): separate match probability from legacy verdict confidence; allow judged synthetic profiles.
 - 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh; deleted_parents,
   the families deleted on the People page, which the page hides and no stage moves.
@@ -50,7 +50,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -63,6 +63,7 @@ class IdentifierKind(StrEnum):
 
 
 class SourceChannel(StrEnum):
+    LINKEDIN = "linkedin"
     GMAIL = "gmail_msgvault"
     IMESSAGE = "imessage"
     WHATSAPP = "whatsapp"
@@ -379,6 +380,8 @@ CREATE VIEW current_linkedins AS
 CREATE VIEW current_profile AS
   SELECT p.parent_id,
          COALESCE(
+           (SELECT json_extract(c.import_json, '$.linkedin_url') FROM candidates c
+            WHERE p.parent_id LIKE 'li:%' AND c.candidate_id = 'candidate:linkedin:' || substr(p.parent_id, 4)),
            (SELECT MIN(l.linkedin_url) FROM current_linkedins l JOIN current_parent cp USING (candidate_id)
             WHERE cp.parent_id = p.parent_id AND 'li:' || l.member_id = p.parent_id AND l.verdict = 'confirmed'),
            (SELECT MIN(l.linkedin_url) FROM current_linkedins l JOIN current_parent cp USING (candidate_id)

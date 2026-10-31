@@ -2,19 +2,18 @@ import { useQuery } from "@tanstack/react-query"
 
 import { fetchSearchRun } from "@/lib/api/searches"
 
-// A saved run changes only when the harness rewrites it; a pane swap re-reads the cache.
-const RUN_STALE_MS = 60_000
-
 export function searchRunKey(runId: string | null) {
   return ["searches", "run", runId] as const
 }
 
-/** One saved run; idle while no run is picked. */
+/** One saved run; idle while no run is picked. Read again whenever its pane opens (the cached
+ *  one shows meanwhile): a search can finish while its pane is closed. The 2 s keeps the pane's
+ *  mount after the fade from reading it a second time. */
 export function useSearchRun(runId: string | null) {
   return useQuery({
     queryKey: searchRunKey(runId),
     queryFn: ({ signal }) => fetchSearchRun(runId ?? "", signal),
     enabled: runId !== null,
-    staleTime: RUN_STALE_MS,
+    staleTime: 2_000,
   })
 }

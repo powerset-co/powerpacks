@@ -15,6 +15,41 @@ Read the canonical [LinkedIn and Modal indexing pipeline](docs/linkedin-modal-pi
 for the product flow, diagrams, data boundaries, shared-cache behavior, and
 known limitations.
 
+## School parents
+
+`data/education/school_parents.jsonl` says which school rolls up to which:
+"Stanford Graduate School of Business" to Stanford University, a translated or
+misspelled name to the main one. `build_education_corpus` applies it, so every
+build writes the parent into `canonical_education_id`. Rows already in
+TurboPuffer change only when they are published again.
+
+To bring the mapping up to date, run this from a checkout and commit the file:
+
+```bash
+uv run python packs/indexing/primitives/update_school_parents/update_school_parents.py
+```
+
+It reads `aleph_education_v3` (or `--schools file.jsonl`), adds schools it has
+not seen, and rolls name-keyed schools into a school with the same name for free.
+It then prints how many schools nobody has reviewed and what reviewing them
+costs. `--llm` spends that; `--limit N` tries the largest N first. Each batch is
+saved as it finishes, and reviewed rows are never asked again. To correct a row
+by hand, edit it and set `"source": "manual"`.
+
+To apply the mapping to published rows without rebuilding them:
+
+```bash
+ALEPH_ENV=dev uv run python packs/indexing/primitives/republish_school_parents/republish_school_parents.py
+```
+
+Every school keeps its own doc in `aleph_education_v3` under its own name; a
+child's doc carries `parent_id` and a parent's `person_count` covers its
+children. People rows stay as they are: search finds a parent, then filters
+`education_id` on the parent and its children. It prints counts until `--apply`,
+which backs the school docs up first. `ALEPH_ENV` picks the family: unset is
+prod, `dev` is `_dev`. Correcting the mapping and rerunning undoes a merge.
+
+
 ## Shared output contract
 
 Both paths materialize the fixed local target:

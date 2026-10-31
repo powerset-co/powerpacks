@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent/decode"
 import { invoke, listen } from "@/lib/desktop"
 import { isRecord } from "@/lib/utils"
+import type { ChatScope } from "@/types/searches"
 import type {
   AgentEvent,
   Approval,
@@ -55,9 +56,9 @@ export async function logoutCodex(): Promise<void> {
   await call("account/logout", {})
 }
 
-/** A new thread in the Powerpacks checkout; returns its id. */
-export async function startThread(): Promise<string> {
-  const started = await invoke("codex_start_thread")
+/** A new thread in the Powerpacks checkout, pinned to where it searches; returns its id. */
+export async function startThread(scope: ChatScope | null): Promise<string> {
+  const started = await invoke("codex_start_thread", { scope })
   const thread = isRecord(started) && isRecord(started.thread) ? started.thread : {}
   if (typeof thread.id !== "string") throw new Error("Codex did not start a conversation.")
   return thread.id
@@ -73,10 +74,20 @@ export async function fetchThreads(): Promise<ThreadSummary[]> {
   })
 }
 
-/** Resumes a past chat; returns its transcript so far. */
-export async function openThread(threadId: string): Promise<Entry[]> {
+/** Resumes a past chat; returns its transcript so far and where it searches (null before scopes). */
+export async function openThread(threadId: string): Promise<{ entries: Entry[]; scope: ChatScope | null }> {
   const opened = await invoke("codex_open_thread", { threadId })
-  return decodeHistory(isRecord(opened) ? opened.thread : null)
+  return {
+    entries: decodeHistory(isRecord(opened) ? opened.thread : null),
+    scope: isRecord(opened) ? decodeScope(opened.scope) : null,
+  }
+}
+
+function decodeScope(raw: unknown): ChatScope | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.set_id === "string" && raw.set_id) return { set_id: raw.set_id }
+  if (typeof raw.local_db === "string" && raw.local_db) return { local_db: raw.local_db }
+  return null
 }
 
 export async function archiveThread(threadId: string): Promise<void> {

@@ -12,8 +12,9 @@ import unittest
 from pathlib import Path
 
 from packs.powerset.primitives.install.prose_cli import _RUN, _SAMPLE, _entry
+from packs.indexing.primitives.build_processing_pipeline.build_processing_pipeline import STEPS
 from packs.powerset.primitives.install.status_prose import (
-    DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, page_prose, render)
+    DESKTOP_LINES, DESKTOP_NOTES, DESKTOP_PAGE, PAGE, PROSE, ROWS, STAGE_EVENTS, page_prose, render)
 from packs.powerset.primitives.install.steps import InstallStep
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,8 +53,44 @@ def _python_events(path: Path) -> tuple[set[str], set[str]]:
     return literals, prefixes
 
 
+def _modal_codes() -> dict[str, set[str]]:
+    """The codes each Modal runner writes to status.json (`"code": "..."` literals, the code a
+    progress line returns, and `step.<name>` for every pipeline step), under the event base
+    linkedin_setup.py watches it with."""
+    modal = ROOT / "packs/indexing/modal"
+    pattern = r'"code": "([a-z_.-]+)"|return "([a-z_.-]+)", '
+    indexing = {a or b for a, b in re.findall(pattern, (modal / "run_indexing.py").read_text())}
+    importing = {a or b for a, b in re.findall(pattern, (modal / "run_linkedin.py").read_text())}
+    shared = {a or b for a, b in re.findall(pattern, (modal / "app.py").read_text())}
+    return {"index.building": indexing | shared | {f"step.{step}" for step in STEPS},
+            "index.linkedin": importing | shared}
+
+
+def _phase_events() -> set[str]:
+    """The events built from the phase codes the nodes actually report."""
+    root = ROOT / "packs/ingestion/primitives"
+    sources = [(stage, running.split(".")[0], list((root / "deep_context_v2" / stage).glob("*.py")))
+               for stage, (_, running) in STAGE_EVENTS.items()]
+    sources.append(("signals", "discover", [root / "share/web/signals.py"]))
+    events = set()
+    for stage, prefix, paths in sources:
+        for path in paths:
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                function = node.func
+                name = function.attr if isinstance(function, ast.Attribute) else getattr(function, "id", "")
+                phase = node.args[0]
+                if name in {"progress", "on_progress"} and isinstance(phase, ast.Constant) and isinstance(phase.value, str):
+                    events.add(f"{prefix}.{stage}.{phase.value}")
+    return events
+
+
 def _written() -> tuple[set[str], set[str]]:
     literals, prefixes = set(), set()
+    literals |= {event for pair in STAGE_EVENTS.values() for event in pair if event}
+    literals |= _phase_events()
+    literals |= {f"{base}.{code}" for base, codes in _modal_codes().items() for code in codes}
     for path in WRITERS:
         found, heads = _python_events(path)
         literals |= found
@@ -67,6 +104,38 @@ def _written() -> tuple[set[str], set[str]]:
 
 
 class StatusProseTests(unittest.TestCase):
+    def test_every_modal_status_write_has_a_code(self) -> None:
+        for name in ("app.py", "run_indexing.py", "run_linkedin.py"):
+            tree = ast.parse((ROOT / "packs/indexing/modal" / name).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "write_status":
+                    with self.subTest(file=name, line=node.lineno):
+                        keys = []
+                        for value in ast.walk(node.args[1]):
+                            if isinstance(value, ast.Dict):
+                                keys.extend(key.value for key in value.keys if isinstance(key, ast.Constant))
+                        self.assertIn("code", keys)
+
+    def test_deep_context_skill_task_names_are_prose_stage_words(self) -> None:
+        skill = (ROOT / "packs/ingestion/skills/deep-context/SKILL.md").read_text()
+        tasks = dict(re.findall(r"^(\d+)\. (.+)$", skill, re.MULTILINE))
+        events = ("discover.people", "discover.reading", "discover.learning", "discover.combining",
+                  "discover.grouping", "enrich.running")
+        for number, event in enumerate(events, 2):
+            self.assertEqual(tasks[str(number)], PROSE[event].line)
+            print(f"{number}. {tasks[str(number)]}")
+
+    def test_each_counted_deep_context_phase_has_counted_prose(self) -> None:
+        for event in _phase_events() - {"discover.signals.people"}:
+            for desktop in (False, True):
+                _, line, _ = render(event, {"done": 3200, "total": 6346}, desktop=desktop)
+                self.assertIn("3,200 of 6,346", line)
+
+    def test_updating_people_has_no_count(self) -> None:
+        for desktop in (False, True):
+            self.assertEqual(render("discover.signals.people", {"done": 0, "total": 0}, desktop=desktop)[1],
+                             "Updating People")
+
     def test_every_event_the_installer_writes_is_in_the_script(self) -> None:
         literals, prefixes = _written()
         self.assertEqual(sorted(literals - set(PROSE)), [])
@@ -99,9 +168,21 @@ class StatusProseTests(unittest.TestCase):
         for item in _RUN:
             self.assertIn(_entry(item)[0], PROSE)
 
-    def test_every_step_but_choosing_sources_has_one_row(self) -> None:
+    def test_a_message_replaces_any_events_line(self) -> None:
+        for desktop in (False, True):
+            with self.subTest(desktop=desktop):
+                _, line, _ = render("tools.preparing", {"message": "Provider progress"}, desktop=desktop)
+                self.assertEqual(line, "Provider progress")
+
+    def test_every_step_has_exactly_one_row_in_the_golden_file(self) -> None:
+        mapping = json.loads((INSTALL / "status.json").read_text())
+        codes = [InstallStep(code) for row in mapping["rows"] for code in row["steps"]]
+        self.assertCountEqual(codes, list(InstallStep))
         rows = [step for row in ROWS for step in row.steps]
-        self.assertEqual(sorted(rows), sorted(step for step in InstallStep if step is not InstallStep.SOURCES))
+        self.assertEqual(rows, codes)
+        for row in mapping["rows"]:
+            if row["needs"]:
+                self.assertIn(InstallStep(row["needs"]), codes)
 
     def test_the_desktop_app_never_speaks_as_an_agent(self) -> None:
         self.assertEqual(sorted((set(DESKTOP_LINES) | set(DESKTOP_NOTES)) - set(PROSE)), [])
@@ -116,7 +197,6 @@ class StatusProseTests(unittest.TestCase):
         for word in page_prose(desktop=True)["page"].values():
             self.assertIsNone(AGENT_VOICE.search(word), word)
         # The agent's own words are unchanged outside the app.
-        self.assertEqual(render("setup.paused", {}, desktop=False)[1], "Setup paused. I can resume it from here.")
 
     def test_the_page_test_fixture_is_this_script(self) -> None:
         fixture = ROOT / "web/src/pages/install/prose.fixture.json"

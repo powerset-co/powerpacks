@@ -13,6 +13,7 @@ import { ago, stamp } from "@/lib/copy"
 import { isDesktop } from "@/lib/desktop"
 import type { Account, AccountSource, AccountHealth, Job, JobsPayload } from "@/types/accounts"
 
+import { AccountsPanel } from "./AccountsPanel"
 import { Connect } from "@/pages/install/Connect"
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
 
@@ -37,7 +38,7 @@ function jobFor(account: Account, jobs: JobsPayload): Job | undefined {
 }
 
 /** The connected message accounts, read live from each source's store on every load. */
-export function AccountsSettings() {
+export function AccountsSettings({ panel = false }: { panel?: boolean }) {
   const client = useQueryClient()
   const accounts = useQuery({
     queryKey: ["accounts"],
@@ -83,6 +84,14 @@ export function AccountsSettings() {
     whatsapp: detail("whatsapp"),
     linkedin: detail("linkedin"),
   }
+  if (panel)
+    return (
+      <AccountsPanel
+        details={details}
+        accounts={accounts.data}
+        error={actionError ?? (accounts.error ? errorText(accounts.error) : null)}
+      />
+    )
   return (
     <section className="flex flex-col gap-3" aria-label="Accounts">
       {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
@@ -172,7 +181,7 @@ function AccountDetails({ account, job, onReconnect, onSync }: AccountDetailsPro
         </span>
         {!running && <CardAction account={account} onReconnect={onReconnect} onSync={onSync} />}
       </div>
-      <dl className="m-0 mt-3 grid grid-cols-4 gap-3 max-[680px]:grid-cols-2">
+      <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
         {account.source === "linkedin" ? (
           <>
             <Stat label="Connections" value={account.contacts.toLocaleString()} />

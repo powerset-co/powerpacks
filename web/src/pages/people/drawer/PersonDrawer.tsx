@@ -54,18 +54,21 @@ export function PersonDrawer(props: PersonDrawerProps) {
             onRefresh={onRetry}
           />
           {row.in_progress ? <p className="dim">{row.name} is being updated; finish the run first.</p> : null}
-          <div className="drawer-actions">
-            <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
-            <LogbookButton
-              row={row}
-              disabled={saving || swap.leaving || row.in_progress}
-              building={building}
-              onBuild={onLogbook}
-              onView={() => {
-                if (row.logbook) onView([row.logbook])
-              }}
-            />
-          </div>
+          {/* Signals and the logbook read messages; a LinkedIn-only person has none. */}
+          {row.linkedin_only ? null : (
+            <div className="drawer-actions">
+              <RefreshSignals people={[row.parent_id]} icon onDone={onRetry} />
+              <LogbookButton
+                row={row}
+                disabled={saving || swap.leaving || row.in_progress}
+                building={building}
+                onBuild={onLogbook}
+                onView={() => {
+                  if (row.logbook) onView([row.logbook])
+                }}
+              />
+            </div>
+          )}
           {detail.status === "loading" ? <DetailLoading /> : null}
           {detail.status === "failed" ? <DetailFailed onRetry={onRetry} /> : null}
           {ready ? <DetailSections row={row} detail={ready} section={section} onRefresh={onRetry} /> : null}

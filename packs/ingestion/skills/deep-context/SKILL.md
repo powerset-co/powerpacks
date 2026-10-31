@@ -1,6 +1,6 @@
 ---
 name: deep-context
-description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. To retrieve saved knowledge or a named person's dossier, use memory.
+description: Process imported contacts and build dossiers. Use for $deep-context, "process/resolve/enrich my contacts", "build deep context", duplicate-person review, or the Check LinkedIn page. Merges duplicates, enriches identities, verifies uncertain LinkedIns, and builds the network and index. A named person's dossier is `bin/deep-context-v2 lookup --name`. Also lists people the user knows by relationship, label, tag or worth ("show me my family", "who is tagged investor").
 ---
 
 # deep-context
@@ -63,12 +63,12 @@ visible task/plan tool and keep them current yourself. The worker in tmux runs c
 prints stage lines; it never creates, updates or reports tasks, and never speaks to the user.
 
 1. Confirm owner profile
-2. Load imported contacts
-3. Collect messages and emails
-4. Build dossiers
-5. Merge duplicate people
-6. Assess network worth: yes unless a Luna detector says the contact is a newsletter or automated sender, a shared mailbox, a vendor the owner only buys from, or an assistant acting for someone else
-7. Enrich identities
+2. Discovering your contacts
+3. Reading your messages
+4. Learning about your contacts
+5. Combining duplicate contacts
+6. Grouping each person's contacts
+7. Enriching your contacts
 8. Export people, decide the share list and build the search index
 9. Review LinkedIn matches
 10. Update the index with reviewed matches
@@ -142,11 +142,9 @@ The reports are for the developers; the user is not told about them.
 
 ## Share and the People page
 
-"Show me my network", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
+"Show me my network", "who do I know", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
 marks people worth it or not worth it there, alone or in bulk; the page writes the call on the spot.
 Uploading to Powerset is the page's own button, shown only with the Share network local feature.
-
-"Show me my network", "who do I know", "my people": the same page.
 
 ## Acting on a person from chat
 
@@ -166,6 +164,21 @@ relationship is one person per request. Never walk the store's tables for names:
 the user sees. Before a bulk delete,
 tell the user the count and the names and wait for yes; the other writes just happen.
 
+Every word that narrows the request is a filter, and a set write keeps all of them: "biz contacts marked
+no" is the people who are business contacts AND worth no, never everyone marked no. A relationship word
+matches the label or the `relationship_kind` column, as below; "biz", "business" or "work contacts" is
+`relationship_kind` `business_contact` or `colleague`, or `is_professional` in `labels` or `tags`. A word
+that maps to no column, label or tag is a question for the user, not a filter to drop; a filter that
+matches nobody changes nothing and says so. After the write, reply with the filter you used, the count,
+and the changed rows as a table.
+
+A list the user asks to see ("show me my business contacts marked no", "who is tagged investor") is the
+same `GET /api/people/rows` read filtered in Python, answered as one Markdown table in the reply: every
+matching row, the columns the question is about (name, company, title, worth, tags). A count alone is
+never the answer to "show me". A relationship ("my family", "close friends") matches either side: the label in `labels` or
+`tags` (`is_family`, `is_close_friend`) or the `relationship_kind` column (`family`, `close_friend`);
+show `relationship_kind` so a mismatch is visible.
+
 | Ask | Write |
 |---|---|
 | Keep or skip | `POST /api/people/worth` `{"ids": ["<parent_id>"], "worth": "yes"\|"no"}`. One human `worth` row per member (`decided_by = 'human'`); undo = delete that row and the machine call shows again. The machine's call is yes unless one of four detectors fired (`labels_json`: `broadcast`, `mailbox`, `vendor_only`, `intermediary`, each a probability; no at 0.75 or above); its `reason` names the one that fired. There is no maybe. |
@@ -173,21 +186,36 @@ tell the user the count and the names and wait for yes; the other writes just ha
 | Relationship | `POST /api/people/relationship` `{"parent_id": "<parent_id>", "relationship_kind": "<kind>"}`; kinds: family, romantic_partner, close_friend, friend, acquaintance, colleague, business_contact, service_provider, community, stranger, unknown. A human kind outlives every label refresh. |
 | Tags | `POST /api/people/tags` `{"people": [{"parent_id": "<parent_id>", "tags": ["is_recruiter"]}]}`. The list replaces the person's tags. Only the label names are tags: is_family, is_close_friend, is_personal, is_professional, is_classmate, is_coworker_current, is_coworker_past, is_client, is_vendor_or_partner, is_investor, is_founder, is_recruiter, is_mentor_or_advisor, is_mentee_or_report, is_service_provider, is_healthcare_legal_or_financial_provider, is_hr_benefits_or_payroll, is_support_billing_or_landlord, is_neighbor_or_local, is_automated_sender, is_transactional, is_stranger, is_minor, met_in_person, notable, owner_would_intro, they_would_take_owner_call, confidential_dealings. Any other word is refused; pick the closest and tell the user. |
 | Delete | `POST /api/people/delete` `{"ids": ["<parent_id>"]}`. Hides the family for good: a `deleted_parents` row, and its `families` row goes. Members and decisions stay. Undo on request: delete the `deleted_parents` row and run `bin/deep-context-v2 realize` (free). |
-| Merge two people | The family table is `candidate_parent`, append-only, newest row per member wins (`current_parent`). Move every member of the second family onto the first: `INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, '<kept parent_id>', 'human', NULL, <now iso>)` once per member. That insert is the whole merge: never edit `facts`, `person_labels` or `candidate_names` to make the row read a certain way. |
-| Split a person out | The same insert, with the member's own earlier `parent_id` when it had one, else a new `p:<new id>`. |
-| Wrong LinkedIn | On the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
+| Merge two people | Keep the `li:` destination when joining a message family to a verified LinkedIn. Use the profile attachment below, regardless of selection order. Refuse a merge of two distinct `li:` identities. Only for two `p:` message families: the family table is `candidate_parent`, append-only, newest row per member wins (`current_parent`). Move the message members of the second family onto the first: `INSERT INTO candidate_parent (candidate_id, parent_id, reason, verdict_ref, created_at) VALUES (?, '<kept parent_id>', 'human', NULL, <now iso>)` once per member. That insert is the whole merge: never edit `facts`, `person_labels` or `candidate_names` to make the row read a certain way. |
+| Split a person out | A known correct LinkedIn uses the profile attachment below for the selected message candidates. Never move a `candidate:linkedin:*` source member. Detaching to an unknown identity needs a separate split investigation; do not improvise parent assignments. |
+| Wrong LinkedIn | For a pending `p:` family, on the review page's queue: `POST /retarget` with `parent_slug` and `guidance` (who the person is, in words), or `POST /api/review/decide` with `decision=fix` and `new_url`; `bin/deep-context-v2 finish` applies the queue (a description costs about $0.05 of research). |
+
+Imported LinkedIn people are existing `li:<member_id>` families with a permanent
+`candidate:linkedin:<member_id>` source member. They appear in People and the initial index without
+message facts, machine worth or labels; those fields are unknown until evidence exists. LinkedIn email
+metadata is not a message source. Missing verified member IDs are counted and skipped, never minted
+from a URL slug. Reimports refresh source evidence and preserve human decisions and deletions.
+
+To attach a profile or correct an already-confirmed family, use the same `review.decisions.retarget`
+operation that applies the review UI's pasted URL. Read the family with `review.queue.load_card`, select
+only the requested email/phone candidates with `dataclasses.replace(card, members=...)`, then call
+`retarget(conn, data_root, selected_card, pasted_url)`. Selection is by candidate ID, never by name.
+Imported LinkedIn members are excluded by the operation and stay at their own identities. The imported
+profile answers before cache or a paid fetch; a cache miss still needs the normal spend estimate and
+approval. Repeating the same attachment writes no membership or verdict history. Run realize afterward
+so People and the index input show the same directory. Never replace this with generic parent inserts
+onto a different LinkedIn, and never change worth as a side effect of a correction.
 
 What a merged family shows: its keep/skip is the newest human call among its members (else the newest machine
 one); tags are the union; the name is the newest human name among its members, else the members' majority
 `canonical_name` (two members tie and the row may read as either), so "merge these and call him Fahad
 AlSharekh" is the merge insert plus one rename; the row says in progress until the next run relabels
-the family. A rename writes every member, so after a split both sides keep it until renamed again. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families and
-never splits one, and it never re-judges a pair on evidence it has a verdict for, so a human merge or split
-stands. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
+the family. A rename writes every member, so after a split both sides keep it until renamed again. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families, never splits one, and refuses a component with two distinct `li:` identities.
+A correction to a known LinkedIn therefore preserves both imported identities. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
 its next update.
 
-For a named person's saved dossier or questions about existing personal knowledge,
-follow `packs/memory/skills/memory/SKILL.md`. Do not run processing for a lookup.
+A named person's saved dossier, or a question about what Powerpacks knows of them, is
+`bin/deep-context-v2 lookup --name "<name>" --json`, answered in the chat. Do not run processing for a lookup.
 
 ## What is where
 

@@ -11,7 +11,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 
 Changelog:
 - 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
-- 2026-10-14: GET/POST /api/search/scope: where chat searches, a Powerset set or the local index (search_scope.py).
+- 2026-10-14: GET /api/search/scope: the sets and local index chat can search (search_scope.py); the chat pins its pick through Codex since 2026-10-29.
 - 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
 - 2026-10-13: GET /api/install/connect reads the Connect screen's run; its QR is /api/install/qr?connect=1.
 - 2026-10-12: open an empty store on the first store-backed request, so Sets and the relay work before import.
@@ -54,7 +54,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.powerset.primitives.install.controller import InstallController, permission_app
-from packs.powerset.primitives.install.index_progress import read_index_progress
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.shared.web import account, features, feedback, providers, search_scope
 from packs.shared.web.app import AppRoutes
@@ -64,7 +63,6 @@ DEFAULT_PORT = 8765
 START_TIMEOUT_SECONDS = 10
 MAX_FEATURE_REQUEST_BYTES = 1024
 MAX_PROVIDER_REQUEST_BYTES = 4096
-MAX_SCOPE_REQUEST_BYTES = 1024
 MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback reads
 MAX_TEAM_REQUEST_BYTES = 160 * 1024  # support text, including UTF-8 and JSON escaping
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
@@ -282,8 +280,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             if parsed.path == "/api/install":
                 record = InstallStatus(root).read()
-                if record["step"] == "index":
-                    record["index_progress"] = read_index_progress(root, record["updated_at"])
                 qr = install.qr(record)
                 if qr:
                     record["action"]["qr_url"] = f"/api/install/qr?t={qr.stat().st_mtime_ns}"
@@ -382,23 +378,6 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     self._json(providers.save(root, json.loads(self.rfile.read(length))))
                 except ValueError as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-                return
-            if parsed.path == "/api/search/scope":
-                _load_project_packages(root)
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 < length <= MAX_SCOPE_REQUEST_BYTES:
-                        raise ValueError("invalid request size")
-                    payload = json.loads(self.rfile.read(length))
-                    selected = payload.get("selected") if isinstance(payload, dict) else None
-                    if not isinstance(selected, str) or not selected:
-                        raise ValueError("selected is a set id or local")
-                    self._json(search_scope.save(root, selected))
-                except ValueError as error:
-                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-                except Exception as error:
-                    logging.getLogger(__name__).exception("Saving search scope failed")
-                    self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
                 return
             if app.post(self, parsed):
                 return

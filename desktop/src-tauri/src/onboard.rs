@@ -7,7 +7,6 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use crate::children;
 use crate::paths;
 use crate::source;
 
@@ -20,19 +19,19 @@ pub const DESKTOP_FLAG: &str = "POWERPACKS_DESKTOP";
 /// The setup workflow and the owner-profile step, run with the project's Python (what
 /// `bin/onboard` and `bin/deep-context-v2 owner` wrap) so no shell is needed.
 const ONBOARD_MODULE: &str = "packs.powerset.primitives.install.onboard";
+/// The onboarding's LinkedIn step: read the connections, import and index them, check search
+/// (what `bin/linkedin-setup` wraps). It takes no sources or profile link.
+const LINKEDIN_SETUP_MODULE: &str = "packs.powerset.primitives.install.linkedin_setup";
 /// What bootstrap records after installing; the app did the same work before setup starts.
 const INSTALLED_EVENTS: [&str; 2] = ["install.dependencies_ready", "install.skills_ready"];
 /// The page shows a Start/Continue button for these (status_prose.py: action `resume`).
 const READY_EVENT: &str = "setup.ready";
-const PAUSED_EVENT: &str = "setup.paused";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Setup {
     /// Nothing has run yet.
     New,
-    /// A step is running or just finished; the process may have died with the last app run.
-    Interrupted,
-    /// Waiting on the user, or failed: the install page offers the next click.
+    /// Started and not done: running, waiting on the user, or failed.
     Paused,
     Done,
 }
@@ -55,46 +54,9 @@ pub fn setup(root: &Path) -> Setup {
     if field("event") == READY_EVENT {
         return Setup::Paused;
     }
-    // A wait the installer sat in (it records its pid; 0 once it stops for a click) died with
-    // the last app run when that pid is gone.
-    let installer = manifest
-        .get("installer_pid")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32;
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
-        ("running" | "completed", _) => Setup::Interrupted,
-        ("waiting", _) if installer != 0 && !children::is_alive(installer) => Setup::Interrupted,
         _ => Setup::Paused,
-    }
-}
-
-/// The onboarding screen a launch with setup not done opens: a run that took a message source
-/// (Gmail, Messages or WhatsApp signed in) is the Import step; a run that started is Set up;
-/// nothing run yet is the first screen.
-pub fn resume_page(root: &Path) -> &'static str {
-    let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
-        return "/onboarding";
-    };
-    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    let status = |step: &str| {
-        manifest
-            .get("steps")
-            .and_then(|steps| steps.get(step))
-            .and_then(|entry| entry.get("status"))
-            .and_then(serde_json::Value::as_str)
-    };
-    // A fresh install's manifest holds only the install's own steps (record_install); setup has
-    // run once its account step is in it. Before that the window starts at Sign up.
-    if status("account").is_none() {
-        "/onboarding"
-    } else if ["gmail_login", "imessage_access", "whatsapp_login"]
-        .iter()
-        .any(|step| status(step) == Some("completed"))
-    {
-        "/onboarding/import"
-    } else {
-        "/onboarding/setup"
     }
 }
 
@@ -124,17 +86,6 @@ pub fn record_install(root: &Path, python: &Path) -> Result<(), String> {
         write_event(root, python, event, &retry_command)?;
     }
     write_event(root, python, READY_EVENT, &retry_command)
-}
-
-/// A run that died with the last app run waits for the user's click too.
-pub fn record_paused(root: &Path, python: &Path) -> Result<(), String> {
-    let text = fs::read_to_string(root.join(MANIFEST)).map_err(|error| error.to_string())?;
-    let manifest: serde_json::Value =
-        serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    let retry_command = manifest["retry_command"]
-        .as_str()
-        .ok_or("Setup has no retry command.")?;
-    write_event(root, python, PAUSED_EVENT, retry_command)
 }
 
 fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> Result<(), String> {
@@ -169,10 +120,14 @@ fn write_event(root: &Path, python: &Path, event: &str, retry_command: &str) -> 
 pub struct Answer {
     /// The user's own LinkedIn profile, when setup cannot tell whose network it is.
     pub linkedin_url: Option<String>,
-    /// The run's sources, when the screen decides them: the onboarding's LinkedIn step runs
-    /// LinkedIn alone whatever else is signed in; its Sources step runs every source. Left out,
-    /// setup keeps the saved choice.
+    /// The run's sources, when the screen decides them: LinkedIn alone (the onboarding's LinkedIn
+    /// step) runs the LinkedIn setup; the Sources step runs every source through `bin/onboard`.
+    /// Left out (Try again), the run the record names runs again, and `bin/onboard` keeps the
+    /// saved choice.
     pub sources: Option<Vec<String>>,
+    /// Sync source stores again, retaining their imported data and processing caches.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Resume `bin/onboard` in the background with the user's answer; it outlives the app like the
@@ -193,7 +148,7 @@ pub fn is_running(root: &Path) -> bool {
 
 /// Stop the setup process recorded in the manifest, if any: before a new run (its lock would
 /// refuse one, and a macOS permission granted meanwhile only reaches a new process), and when
-/// the app exits. Setup resumes from its saved step on the next launch.
+/// the app exits. The next run starts from the person's click.
 pub fn stop_running(root: &Path) {
     let Ok(text) = fs::read_to_string(root.join(MANIFEST)) else {
         return;
@@ -214,18 +169,47 @@ pub fn stop_running(root: &Path) {
     }
 }
 
+/// The command the record says reruns setup: `bin/linkedin-setup`, or `bin/onboard …`.
+fn recorded_retry_command(root: &Path) -> String {
+    let text = fs::read_to_string(root.join(MANIFEST)).unwrap_or_default();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    manifest
+        .get("retry_command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 pub fn start(root: &Path, answer: Answer) -> Result<(), String> {
     let mut onboard = Command::new(paths::project_python(root));
-    onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
-    if let Some(url) = answer.linkedin_url {
-        if !url.contains("linkedin.com/in/") {
-            return Err("Paste your LinkedIn profile URL, like linkedin.com/in/your-name.".into());
+    let linkedin_setup = match &answer.sources {
+        Some(sources) => *sources == ["linkedin"],
+        None => recorded_retry_command(root)
+            .split_whitespace()
+            .next()
+            .is_some_and(|program| program.ends_with("bin/linkedin-setup")),
+    };
+    if linkedin_setup {
+        onboard
+            .args(["-m", LINKEDIN_SETUP_MODULE, "--root"])
+            .arg(root);
+    } else {
+        onboard.args(["-m", ONBOARD_MODULE, "--root"]).arg(root);
+        if let Some(url) = answer.linkedin_url {
+            if !url.contains("linkedin.com/in/") {
+                return Err(
+                    "Paste your LinkedIn profile URL, like linkedin.com/in/your-name.".into(),
+                );
+            }
+            // Setup's owner step looks the profile up once its credentials are in (pipeline.py).
+            onboard.args(["--linkedin-url", url.trim()]);
         }
-        // Setup's owner step looks the profile up once its credentials are in (pipeline.py).
-        onboard.args(["--linkedin-url", url.trim()]);
-    }
-    for source in answer.sources.unwrap_or_default() {
-        onboard.args(["--source", &source]);
+        for source in answer.sources.unwrap_or_default() {
+            onboard.args(["--source", &source]);
+        }
+        if answer.refresh {
+            onboard.arg("--refresh");
+        }
     }
 
     let log = root.join(LOG);
@@ -259,31 +243,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_launch_resumes_on_the_step_the_run_is_on() {
-        let root =
-            std::env::temp_dir().join(format!("powerpacks-resume-page-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let root = root.as_path();
-        assert_eq!(resume_page(root), "/onboarding");
-        fs::create_dir_all(root.join(".powerpacks/install")).unwrap();
-        let write = |manifest: &str| fs::write(root.join(MANIFEST), manifest).unwrap();
-        // A fresh install: only the install's own steps are recorded, so the window starts at Sign up.
-        write(
-            r#"{"status":"waiting","step":"skills","event":"setup.ready","steps":{"dependencies":{"status":"completed"},"skills":{"status":"completed"}}}"#,
-        );
-        assert_eq!(resume_page(root), "/onboarding");
-        write(
-            r#"{"status":"running","step":"linkedin","steps":{"account":{"status":"completed"},"gmail_login":{"status":"skipped"}}}"#,
-        );
-        assert_eq!(resume_page(root), "/onboarding/setup");
-        write(
-            r#"{"status":"running","step":"whatsapp_sync","steps":{"account":{"status":"completed"},"whatsapp_login":{"status":"completed"}}}"#,
-        );
-        assert_eq!(resume_page(root), "/onboarding/import");
-    }
-
-    #[test]
     fn imported_data_is_a_finished_setup_without_any_record() {
         let temporary =
             std::env::temp_dir().join(format!("powerpacks-setup-state-{}", std::process::id()));
@@ -309,6 +268,7 @@ mod tests {
         let answer = |url: &str| Answer {
             linkedin_url: Some(url.into()),
             sources: None,
+            refresh: false,
         };
         assert!(start(&root, answer("https://example.com/jordan")).is_err());
         assert!(!root.join("setup-args").exists());
@@ -324,42 +284,79 @@ mod tests {
     }
 
     #[test]
-    fn pause_preserves_saved_source_gmail_and_window_choices() {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let python = paths::project_python(&repo).canonicalize().unwrap();
-        let root = std::env::temp_dir().join(format!(
-            "powerpacks-onboard-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir(&root).unwrap();
-        std::os::unix::fs::symlink(
-            repo.join("packs").canonicalize().unwrap(),
-            root.join("packs"),
-        )
-        .unwrap();
+    fn try_again_runs_the_recorded_run_and_sources_pick_the_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("powerpacks-linkedin-setup-{}", std::process::id()));
+        let python = paths::project_python(&root);
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::create_dir_all(root.join(MANIFEST).parent().unwrap()).unwrap();
+        fs::write(&python, "#!/bin/sh\necho \"$@\" > setup-args\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+        let run = |retry_command: &str, sources: Option<&[&str]>| {
+            let _ = fs::remove_file(root.join("setup-args"));
+            let record = serde_json::json!({ "status": "failed", "retry_command": retry_command });
+            fs::write(root.join(MANIFEST), record.to_string()).unwrap();
+            let answer = Answer {
+                linkedin_url: None,
+                sources: sources
+                    .map(|sources| sources.iter().map(|source| source.to_string()).collect()),
+                refresh: false,
+            };
+            start(&root, answer).unwrap();
+            (0..50)
+                .find_map(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    fs::read_to_string(root.join("setup-args")).ok()
+                })
+                .expect("setup started")
+        };
+        let linkedin_setup = format!("-m {LINKEDIN_SETUP_MODULE} --root {}", root.display());
+        let onboard = format!("-m {ONBOARD_MODULE} --root {}", root.display());
+        // Try again (no sources) on a LinkedIn setup record runs the LinkedIn setup again.
+        assert_eq!(run("bin/linkedin-setup", None).trim(), linkedin_setup);
+        // Try again on an import record runs `bin/onboard` with its saved choice.
+        let import = "/app/bin/onboard --source linkedin --source gmail --port 4321";
+        assert_eq!(run(import, None).trim(), onboard);
+        // The LinkedIn step's Continue runs the LinkedIn setup whatever the record says.
+        assert_eq!(run(import, Some(&["linkedin"])).trim(), linkedin_setup);
+        assert_eq!(
+            run("bin/linkedin-setup", Some(&["linkedin", "gmail"])).trim(),
+            format!("{onboard} --source linkedin --source gmail")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
-        record_install(&root, &python).unwrap();
-        let manifest_path = root.join(MANIFEST);
-        let mut manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        let retry = "bin/onboard --source gmail --source whatsapp --skip-source whatsapp \
-            --gmail-email casey@example.com --sync-after 2025-01-01 \
-            --wacli-store '/tmp/synthetic whatsapp' --harness codex --port 8899";
-        manifest["retry_command"] = retry.into();
-        manifest["step"] = "gmail_sync".into();
-        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-
-        record_paused(&root, &python).unwrap();
-        let paused: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        fs::remove_dir_all(&root).unwrap();
-        assert_eq!(paused["event"], PAUSED_EVENT);
-        assert_eq!(paused["installer_pid"], 0);
-        assert_eq!(paused["retry_command"], retry);
-        assert_eq!(paused["step"], "gmail_sync");
+    #[test]
+    fn resync_refreshes_sources_only_when_requested() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("powerpacks-resync-{}", std::process::id()));
+        let python = paths::project_python(&root);
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, "#!/bin/sh\necho \"$@\" > setup-args\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+        for refresh in [None, Some(false), Some(true)] {
+            let mut answer = serde_json::json!({
+                "sources": ["linkedin", "gmail", "imessage", "whatsapp"]
+            });
+            if let Some(refresh) = refresh {
+                answer["refresh"] = serde_json::json!(refresh);
+            }
+            let _ = fs::remove_file(root.join("setup-args"));
+            start(&root, serde_json::from_value(answer).unwrap()).unwrap();
+            let args = (0..50)
+                .find_map(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    fs::read_to_string(root.join("setup-args")).ok()
+                })
+                .expect("setup started");
+            let expected = format!(
+                "-m {ONBOARD_MODULE} --root {} --source linkedin --source gmail --source imessage --source whatsapp{}",
+                root.display(),
+                if refresh == Some(true) { " --refresh" } else { "" }
+            );
+            assert_eq!(args.trim(), expected);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }

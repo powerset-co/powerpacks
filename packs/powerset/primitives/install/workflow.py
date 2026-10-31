@@ -150,7 +150,8 @@ class SourceOnboarding:
         # Processing's owner step reads it from the saved command when LinkedIn's sign-in is unused.
         self.linkedin_url = linkedin_url or saved.linkedin_url
         self.step = InstallStep.SOURCES
-        if all(source in self.skip_sources for source in self.sources):
+        active = [source for source in self.sources if source not in self.skip_sources]
+        if not active:
             next_steps = (InstallStep.READY,)
         else:
             next_steps = PROCESSING_STEPS
@@ -229,7 +230,7 @@ class SourceOnboarding:
         if not local["config"]["oauth_configured"]:
             self._write("gmail.app.starting")
             created = BrowserSetup.from_args(msgvault_parser().parse_args(
-                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0], "--no-install-mcp"]),
+                ["browser-setup", "--home", str(home), "--email", self.gmail_emails[0]]),
                 on_stage=self._gmail_stage).run()
             # A stop in Google Cloud is the agent's to fix; the user is not handed its steps.
             if not self._result(created, "gmail.app.ready", waiting="gmail.app.stopped", failed="gmail.app.failed"):
@@ -380,8 +381,9 @@ class SourceOnboarding:
             return True
         self._write("linkedin.reading")
         result = LinkedInConnections(csv_path=self.root / CONNECTIONS_CSV).run(
-            on_count=lambda read, total: self._write("linkedin.reading.count", read=read, total=total,
-                                                    details={"read": read, "total": total}))
+            on_count=lambda read, total: self._write(
+                "linkedin.reading.count" if total is not None else "linkedin.reading.read", read=read, total=total,
+                details={"read": read, "total": total}))
         return self._result(result, f"linkedin.done.{result.get('outcome')}", failed="linkedin.failed",
                             waiting="linkedin.waiting",
                             **{key: result[key] for key in ("connections", "added", "read", "total") if key in result})
@@ -458,8 +460,8 @@ class SourceOnboarding:
         imports = [import_common.ImportManifest.read(source) for source in ("gmail", "messages")]
         counts = {item.source: item.stats["people"] for item in imports
                   if item.status == "completed" and "people" in item.stats}
-        return self._write("sources.ready", counts=source_counts(counts), action={"command": "bin/deep-context-v2 run"},
-                           details={"counts": counts}, handed_back=True)
+        return self._write("sources.ready", step=InstallStep.DEEP_CONTEXT, counts=source_counts(counts),
+                           action={"command": "bin/deep-context-v2 run"}, details={"counts": counts}, handed_back=True)
 
 
 def _parser(*, add_help: bool = True) -> argparse.ArgumentParser:

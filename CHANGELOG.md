@@ -1,5 +1,95 @@
 # Changelog
 
+## [3.50.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.1...powerpacks-v3.50.0) (2026-10-30)
+
+
+### Features
+
+* **accounts:** connection guides and inline resync progress ([#1028](https://github.com/powerset-co/powerpacks/issues/1028)) ([6cacaf5](https://github.com/powerset-co/powerpacks/commit/6cacaf5f852c1ce21f9f05d2eb5916f4978c93cb))
+* **chat:** a chat's search scope is pinned through Codex, not .env ([#1024](https://github.com/powerset-co/powerpacks/issues/1024)) ([19fbb7b](https://github.com/powerset-co/powerpacks/commit/19fbb7b6bde963a05d608c343293e2548eb2fbe0))
+* **setup:** every status word in one status.json; deep-context progress reads it ([#1026](https://github.com/powerset-co/powerpacks/issues/1026)) ([ae5497f](https://github.com/powerset-co/powerpacks/commit/ae5497fe20fadc21913eb7ffd3650271bb9ccc61))
+
+
+### Bug Fixes
+
+* **accounts:** remove duplicate Powerset account row ([#1038](https://github.com/powerset-co/powerpacks/issues/1038)) ([0b01fd4](https://github.com/powerset-co/powerpacks/commit/0b01fd438dc90b6bd6a06056921c29d85044787f))
+* **bootstrap:** a local-only install no longer records the retired connection step ([#1035](https://github.com/powerset-co/powerpacks/issues/1035)) ([4e87a53](https://github.com/powerset-co/powerpacks/commit/4e87a53d73fefce43bc47effb4913b07e9c4aa16))
+* **searches:** skeleton rows while a search runs; results re-read when their pane opens ([#1031](https://github.com/powerset-co/powerpacks/issues/1031)) ([69d3947](https://github.com/powerset-co/powerpacks/commit/69d394750111967ee192b6bb554025154c62c16e))
+
+## [3.49.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.0...powerpacks-v3.49.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **desktop:** wacli and the Google Cloud CLI download at launch, not inside the app ([#1029](https://github.com/powerset-co/powerpacks/issues/1029)) ([83e592d](https://github.com/powerset-co/powerpacks/commit/83e592d6bf94182b7334baeb501d65546b3a0d4f))
+
+## [3.49.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.1...powerpacks-v3.49.0) (2026-10-30)
+
+
+### Features
+
+* **desktop:** msgvault, wacli and the Google Cloud CLI ship in the app ([#1025](https://github.com/powerset-co/powerpacks/issues/1025)) ([08415ec](https://github.com/powerset-co/powerpacks/commit/08415ecf31e92de45a56a93046d93fc99b2b0024))
+* **people:** LinkedIn-only people show their profile and always upload ([#1015](https://github.com/powerset-co/powerpacks/issues/1015)) ([232aba8](https://github.com/powerset-co/powerpacks/commit/232aba84beecaec5cef082c05c945ceb4cdc6dab))
+* **setup:** the LinkedIn setup is one file and Set up is a checklist that says what it is doing ([#1027](https://github.com/powerset-co/powerpacks/issues/1027)) ([abcfde1](https://github.com/powerset-co/powerpacks/commit/abcfde1e77f82a23b11cb379838a6ebc7b9a1b40))
+
+
+### Bug Fixes
+
+* **onboarding:** allow the setup_skip command in the app's capability ([#1021](https://github.com/powerset-co/powerpacks/issues/1021)) ([4cef9f7](https://github.com/powerset-co/powerpacks/commit/4cef9f76e61f073a4a07840436cbda9db80f78da))
+
+## [3.48.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.48.0...powerpacks-v3.48.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **onboarding:** Skip for now works in a release build ([#1019](https://github.com/powerset-co/powerpacks/issues/1019)) ([ba0494f](https://github.com/powerset-co/powerpacks/commit/ba0494fa782bc325c8c57676b4a3307842bcd90d))
+
+## [3.48.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.47.0...powerpacks-v3.48.0) (2026-10-29)
+
+
+### Features
+
+* **onboarding:** Skip for now, and Add sources in the nav ([#1016](https://github.com/powerset-co/powerpacks/issues/1016)) ([ec74118](https://github.com/powerset-co/powerpacks/commit/ec74118cef1f6dd225bdadefd5c65d4aa4b9d466))
+
+
+### Bug Fixes
+
+* **setup:** the LinkedIn run's Modal import shows on the index row ([#1018](https://github.com/powerset-co/powerpacks/issues/1018)) ([6cf1771](https://github.com/powerset-co/powerpacks/commit/6cf1771a9ba9576a11aa1a1e7f752f774252a5a7))
+
+## [3.47.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.46.0...powerpacks-v3.47.0) (2026-10-29)
+
+
+### Features
+
+* include LinkedIn-only people in families ([#1007](https://github.com/powerset-co/powerpacks/issues/1007)) ([098f08e](https://github.com/powerset-co/powerpacks/commit/098f08ea393cbe5ffe9d3c9a9b581c17766f0139))
+* **onboarding:** a create-account helper on the ChatGPT step ([#1005](https://github.com/powerset-co/powerpacks/issues/1005)) ([90ed8cb](https://github.com/powerset-co/powerpacks/commit/90ed8cb60cbad3b99df718b9429bd7eba5e22809))
+
+
+### Bug Fixes
+
+* **agent:** "show me my family" reads the People list, not a search ([#1008](https://github.com/powerset-co/powerpacks/issues/1008)) ([f73db53](https://github.com/powerset-co/powerpacks/commit/f73db53977b781d8186d9d9fd35e0f0a8e481fff))
+* **onboarding:** nothing happens by itself; a stop always has Try again ([#1012](https://github.com/powerset-co/powerpacks/issues/1012)) ([64e60b4](https://github.com/powerset-co/powerpacks/commit/64e60b467dbb9cd8847357325efd144c1d46d201))
+* **search:** resolve a school to every id its people are filed under ([#1009](https://github.com/powerset-co/powerpacks/issues/1009)) ([6ac8599](https://github.com/powerset-co/powerpacks/commit/6ac8599ac35db05fc2e74f4cd70e150d106b9258))
+* **setup:** a run that selected LinkedIn alone never runs deep context ([#1013](https://github.com/powerset-co/powerpacks/issues/1013)) ([f062206](https://github.com/powerset-co/powerpacks/commit/f062206cea02f8d8cb5ddae6693e7e437120dc80))
+* **setup:** no resume machinery; the pipeline names its two runs ([#1014](https://github.com/powerset-co/powerpacks/issues/1014)) ([bb92891](https://github.com/powerset-co/powerpacks/commit/bb92891cda1f779392eb96fba68f07f8d81b92e0))
+
+## [3.46.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.4...powerpacks-v3.46.0) (2026-10-28)
+
+
+### Features
+
+* **agent:** lists are tables in the chat; the memory skill leaves routing ([#996](https://github.com/powerset-co/powerpacks/issues/996)) ([62aa680](https://github.com/powerset-co/powerpacks/commit/62aa6806f2d8af16831ac65bb7229734e8171dff))
+* **agent:** model and effort pickers in the chat composer ([#981](https://github.com/powerset-co/powerpacks/issues/981)) ([23f496a](https://github.com/powerset-co/powerpacks/commit/23f496ac7298837a04d22afc3c7d4325dca42f4f))
+* **desktop:** the app links its skills into ~/.agents/skills at every launch ([#1000](https://github.com/powerset-co/powerpacks/issues/1000)) ([4a22f05](https://github.com/powerset-co/powerpacks/commit/4a22f05d06e3a9d4a6b442ef742912c506b7c090))
+* **gmail:** measured waits for the Google sign-in windows, not timers ([#997](https://github.com/powerset-co/powerpacks/issues/997)) ([6c9404a](https://github.com/powerset-co/powerpacks/commit/6c9404a0a733cdf063c035418ab367584d47b517))
+
+
+### Bug Fixes
+
+* **desktop:** outbound links open through the app's own opener ([#1002](https://github.com/powerset-co/powerpacks/issues/1002)) ([a9ae6a2](https://github.com/powerset-co/powerpacks/commit/a9ae6a29b579c93508e5517b6a217fd5d6470f06))
+* **linkedin:** read the connections count in any language ([#1004](https://github.com/powerset-co/powerpacks/issues/1004)) ([d22d3fe](https://github.com/powerset-co/powerpacks/commit/d22d3fec51bfc3ec8d633b59c44c539a3a978dfb))
+* **setup:** the error report goes out before the run exits; a stop shows its own words ([#1003](https://github.com/powerset-co/powerpacks/issues/1003)) ([e3b370f](https://github.com/powerset-co/powerpacks/commit/e3b370f1c15810f7daa30c094537f0abdbe9364c))
+
 ## [3.45.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.45.3...powerpacks-v3.45.4) (2026-10-28)
 
 

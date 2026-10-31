@@ -60,7 +60,8 @@ def _text(value: object) -> str:
 
 
 def _year(value: object) -> str:
-    if isinstance(value, dict):
+    """RapidAPI dates a current job's end as year 0: no year."""
+    if isinstance(value, dict) and value.get("year"):
         return _text(value.get("year"))
     return ""
 

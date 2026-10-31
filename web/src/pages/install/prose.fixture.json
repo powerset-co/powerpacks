@@ -1,58 +1,4 @@
 {
-  "rows": [
-    {
-      "label": "Installing Powerpacks",
-      "steps": ["runtime", "dependencies", "skills", "account", "credentials", "connection", "network"],
-      "needs": ""
-    },
-    {
-      "label": "Logging in to your accounts",
-      "steps": [
-        "linkedin_login",
-        "gmail_tools",
-        "gmail_login",
-        "imessage_access",
-        "whatsapp_tools",
-        "whatsapp_login"
-      ],
-      "needs": ""
-    },
-    {
-      "label": "Syncing LinkedIn",
-      "steps": ["linkedin"],
-      "needs": ""
-    },
-    {
-      "label": "Syncing Gmail",
-      "steps": ["gmail_sync", "gmail_import"],
-      "needs": ""
-    },
-    {
-      "label": "Syncing iMessage",
-      "steps": ["imessage_import"],
-      "needs": ""
-    },
-    {
-      "label": "Syncing WhatsApp",
-      "steps": ["whatsapp_sync", "whatsapp_import"],
-      "needs": ""
-    },
-    {
-      "label": "Discovering your contacts",
-      "steps": ["deep_context"],
-      "needs": ""
-    },
-    {
-      "label": "Enriching your contacts",
-      "steps": ["enrich"],
-      "needs": ""
-    },
-    {
-      "label": "Building your search index",
-      "steps": ["index", "validate", "ready"],
-      "needs": "index"
-    }
-  ],
   "page": {
     "title.running": "Setting up Powerpacks",
     "title.waiting": "One thing to finish",
@@ -75,8 +21,8 @@
     "history.folded": "{count} tasks completed",
     "history.open": "Hide completed tasks",
     "permission.button": "Open settings & show the app",
-    "qr.loading": "Getting your QR code…",
-    "qr.where": "WhatsApp → Settings → Linked devices → Link a device",
+    "qr.loading": "Getting your QR code\u2026",
+    "qr.where": "WhatsApp \u2192 Settings \u2192 Linked devices \u2192 Link a device",
     "qr.alt": "Scan this QR code to link WhatsApp",
     "running.elapsed": "{elapsed} so far",
     "review.offer.one": "1 LinkedIn match needs a quick look when you have time.",

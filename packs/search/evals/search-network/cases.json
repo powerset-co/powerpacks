@@ -1,13 +1,8 @@
 [
  {
-  "id": "company-directory-openai",
-  "query": "people who work at OpenAI",
-  "expected_behavior": "A company-only query with no role/title/seniority/domain constraints must route to the deterministic company-directory fast path: one list_company_people MCP call by company name with pagination. The plan must NOT run query extraction, company resolution, candidate counting, semantic/role retrieval, hydration, LLM filtering, or reranking, and must not create task state. If multiple companies plausibly match the name, the plan asks the user to choose rather than guessing."
- },
- {
   "id": "software-engineers-sf",
   "query": "who are software engineers in sf",
-  "expected_behavior": "A normal role+location search. The plan runs the standard pipeline: query extraction (expand_search_request via the prepare fast-path), a compact preview shown to the user with exactly one execute/modify decision, then retrieval, hydration of the candidate frontier, conservative LLM filtering, and LLM reranking, ending with persisted results. Location should be treated as a metro-area-style filter and the search scoped to current roles. The plan must not invent extra enrichment stages, must not use the company-directory fast path, and must not skip the user approval gate."
+  "expected_behavior": "A normal role+location search. The plan runs the standard pipeline: query extraction (expand_search_request via the prepare fast-path), a compact preview shown to the user with exactly one execute/modify decision, then retrieval, hydration of the candidate frontier, conservative LLM filtering, and LLM reranking, ending with persisted results. Location should be treated as a metro-area-style filter and the search scoped to current roles. The plan must not invent extra enrichment stages, and must not skip the user approval gate."
  },
  {
   "id": "stanford-swe-3-5-yoe-nyc",
@@ -32,7 +27,7 @@
  {
   "id": "sql-fanout-career-ordering",
   "query": "local: find engineers who became product managers in my network",
-  "expected_behavior": "A career-ordering query (first engineering role strictly before first product role) cannot be expressed as one-position-row-at-a-time filters, so the plan must BOTH run the normal local hybrid pipeline AND fan out a search-sql sub-agent in parallel, then fan the SQL people back in through the pipeline's extra-candidates mechanism so they flow through the same hydration and LLM filter/rerank as hybrid candidates. The plan must not replace hybrid search with SQL, must not merge SQL results after reranking as a separate list, and must not use the company-directory fast path. If the sub-agent fails or returns nothing, the search proceeds on hybrid results alone."
+  "expected_behavior": "A career-ordering query (first engineering role strictly before first product role) cannot be expressed as one-position-row-at-a-time filters, so the plan must BOTH run the normal local hybrid pipeline AND fan out a search-sql sub-agent in parallel, then fan the SQL people back in through the pipeline's extra-candidates mechanism so they flow through the same hydration and LLM filter/rerank as hybrid candidates. The plan must not replace hybrid search with SQL, must not merge SQL results after reranking as a separate list. If the sub-agent fails or returns nothing, the search proceeds on hybrid results alone."
  },
  {
   "id": "sql-fanout-cross-trait-designers",

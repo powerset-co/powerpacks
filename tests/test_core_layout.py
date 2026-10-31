@@ -135,7 +135,7 @@ class CoreLayoutTests(unittest.TestCase):
         # user-facing contract should stay quiet.
         self.assertIn("packs/powerset/primitives/doctor/doctor.py run", text)
         self.assertIn("Updating your credentials...", text)
-        self.assertIn("Credentials updated. Please restart Codex", text)
+        self.assertIn("Credentials updated.", text)
         self.assertIn("do not\nrun nested fix commands", text)
         self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
         self.assertIn("authenticated Powerset API", text)
@@ -178,7 +178,6 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertIn("| `$powerset setup` | Load and follow `packs/powerset/skills/install-powerpacks/SKILL.md`. |", text)
         self.assertIn("packs/powerset/primitives/auth/auth.py login", text)
         self.assertIn("packs/powerset/primitives/pull_runtime_keys/pull_runtime_keys.py pull", text)
-        self.assertIn("packs/powerset/primitives/mcp_install/mcp_install.py install --host all", text)
         self.assertIn("uv run --env-file .env --project . python", text)
         self.assertNotIn("provision_runtime_env", text)
         self.assertNotIn("operator_bootstrap", text)
@@ -223,7 +222,6 @@ class CoreLayoutTests(unittest.TestCase):
         text = (ROOT / "packs/search/skills/search/SKILL.md").read_text()
         self.assertIn("Happy Path", text)
         self.assertIn("search_network_pipeline.py prepare", text)
-        self.assertIn("company_directory_fast_path", text)
         self.assertIn("deep-mode.md", text)
         self.assertIn("Do not inspect repo docs, source, memory", text)
 

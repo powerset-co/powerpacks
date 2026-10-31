@@ -80,7 +80,7 @@ function ChatList({ rail }: { rail: boolean }) {
   return (
     <section aria-label="Searches" className="flex min-h-0 flex-1 flex-col border-t border-line">
       <div className="p-2">
-        <h2 className="m-0 flex h-9 items-center gap-2.5 px-2.5 text-[13px] font-semibold text-foreground">
+        <h2 className="m-0 flex h-9 items-center gap-2.5 px-2.5 text-[13px] font-semibold text-muted-foreground">
           <SearchesIcon className="size-[18px] shrink-0" />
           Searches
         </h2>

@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import signal
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -45,7 +46,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
 from packs.ingestion.primitives.deep_context_v2.node import Manifest, Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
-from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize, with_connections
+from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review.commit import commit_review
 from packs.ingestion.primitives.share.person_labels import PersonLabels
 from packs.shared.web.server import DEFAULT_PORT, start_server as start_page, stop_page
@@ -55,6 +56,7 @@ from packs.ingestion.primitives.deep_context_v2.worth.worth import DEFAULT_LIMIT
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 from packs.memory.runner import keep_updated
+from packs.powerset.primitives.install.status_prose import STAGE_EVENTS, render
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEW_PID_FILE = Path("deep-context") / "review-server.pid"
@@ -73,14 +75,16 @@ V1_STATE_GLOBS = ("deep-context.sqlite.*", "review-*.log", "*.message-linkedin.b
 
 def _print(stage: str, manifest: Manifest) -> None:
     counts: str = " ".join(f"{key}={value}" for key, value in manifest.counts.items())
-    print(f"{stage}: {manifest.status} {counts} {manifest.error or ''}".rstrip(), flush=True)
+    prefix = f"{render(STAGE_EVENTS[stage][1], {})[1]} — " if stage in STAGE_EVENTS else ""
+    print(f"{prefix}{stage}: {manifest.status} {counts} {manifest.error or ''}".rstrip(), flush=True)
 
 
 def _stage(stage: str, node: Node) -> Manifest:
     """Estimate (when the node prices its work), run, print; a failed stage ends the run."""
     estimate = getattr(node, "estimate", None)
     if estimate is not None:
-        print(f"{stage} estimate: {json.dumps(estimate())}", flush=True)
+        event = STAGE_EVENTS[stage][0]
+        print(f"{render(event, {})[1]} — {stage} estimate: {json.dumps(estimate())}", flush=True)
     manifest: Manifest = node.run()
     _print(stage, manifest)
     if manifest.status != "completed":
@@ -168,16 +172,16 @@ def pending_reviews(port: int) -> int:
 
 
 def realize(data_root: Path) -> Path:
-    """people.csv from everything decided so far, then the index's people file (families plus the LinkedIn
-    connections no family holds); returns the index file's path."""
+    """The realized directory used by both People and indexing, respecting family deletion."""
     conn: sqlite3.Connection = open_store(store_path(data_root))
     node = Realize(conn, data_root)
     _stage("realize", node)
     _stage("labels", PersonLabels(conn, data_root))
     conn.close()
     print(f"people.csv: {node.people_csv()}", flush=True)
-    indexed, families, added = with_connections(data_root)
-    print(f"index people: {families} families + {added} LinkedIn connections no family holds -> {indexed}", flush=True)
+    indexed = data_root / "search-index" / "people.csv"
+    indexed.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(node.people_csv(), indexed)
     return indexed
 
 

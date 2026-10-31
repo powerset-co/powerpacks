@@ -103,6 +103,14 @@ class LinkedInConnectionsTests(unittest.TestCase):
         self.assertEqual(self.flags, {"--stop-after-known": "25", "--max-loads": "300"})
         self.assertTrue(self.manifest()["complete"])
 
+    def test_a_page_without_a_count_is_read_as_far_as_it_goes(self):
+        # LinkedIn in another language: the count line was not recognized, the cards were.
+        cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(10)]
+        result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": None, "loads": 16, "stopped": "end",
+                              "connections": cards})
+        self.assertEqual((result["status"], result["outcome"], result["complete"], result["total"]),
+                         ("completed", "read", True, None))
+
     def test_a_read_that_stalls_early_is_not_complete_and_says_why(self):
         # LinkedIn stopped sending cards after 10 of the 298 it says there are.
         cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(10)]

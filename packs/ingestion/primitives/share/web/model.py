@@ -15,21 +15,25 @@ Changelog:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from dataclasses import asdict, astuple, dataclass, fields
 from pathlib import Path
 from typing import Any
 
 from packs.ingestion.primitives.common.jsonio import parse_json_object
-from packs.ingestion.primitives.deep_context_v2.db import queries_share
+from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
+from packs.ingestion.primitives.deep_context_v2.enrich.profiles import profile_from_record
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
 from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
+from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
 
 # A people.csv channel name -> the channel the page shows (one icon per family).
@@ -130,6 +134,10 @@ class PersonDetail:
     emails: tuple[str, ...]
     phones: tuple[str, ...]
     interactions: dict[str, int]  # source family -> emails or messages, as the importer counted them
+    # The imported LinkedIn profile, in the review card's lines; empty for a family without one.
+    summary: str
+    experiences: tuple[str, ...]
+    education: tuple[str, ...]
 
 
 def _events(facts: dict[str, Any]) -> tuple[FactEvent, ...]:
@@ -173,10 +181,11 @@ class SharePeople:
 
     def load(self, parents: tuple[str, ...] = ()) -> tuple[SharePerson, ...]:
         """Every family's row, or with `parents` only those families' rows: what a write answers with. A family
-        realize wrote that the labels pass has not reached yet is not shown."""
+        realize wrote is shown even when it has no message context or machine labels."""
         rows: dict[str, sqlite3.Row] = queries_share.families(self.conn, parents)
         labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn, parents)
         tags: dict[str, Tags] = queries_share.current_tags(self.conn, parents)
+        relationships = queries_share.relationships_by_parent(self.conn, parents)
         worth: dict[str, sqlite3.Row] = {}
         for row in self.conn.execute(
                 "SELECT parent_id, worth, decided_by, reason FROM current_worth "
@@ -186,15 +195,17 @@ class SharePeople:
         people: list[SharePerson] = []
         for parent_id, row in rows.items():
             label = labels.get(parent_id)
-            if label is None or parent_id in deleted:
+            if parent_id in deleted:
                 continue
-            cells = parse_json_object(label.labels_json)
+            cells = parse_json_object(label.labels_json) if label else {}
+            kind = relationships.get(parent_id, str(cells.get("relationship_kind") or ""))
+            flag = label.flag if label else kind if kind in ("family", "romantic_partner") else ""
             held = tags.get(parent_id)
             decision = worth.get(parent_id)
             people.append(SharePerson(
                 parent_id=parent_id,
                 public_identifier=row["public_identifier"],
-                in_progress=row["public_identifier"] != label.public_identifier,
+                in_progress=label is not None and row["public_identifier"] != label.public_identifier,
                 name=row["name"],
                 avatar_url=row["profile_picture_url"],
                 title=row["title"],
@@ -209,7 +220,7 @@ class SharePeople:
                 # A machine "maybe" from before the detectors (2026-10-28) is not a call: not assessed.
                 worth=decision["worth"] if decision is not None and decision["worth"] != "maybe" else "",
                 worth_source=decision["decided_by"] if decision is not None else "",
-                relationship_kind=str(cells.get("relationship_kind") or ""),
+                relationship_kind=kind,
                 mode=str(cells.get("mode") or ""),
                 hierarchy=str(cells.get("hierarchy") or ""),
                 intro_source=str(cells.get("intro_source") or ""),
@@ -217,11 +228,11 @@ class SharePeople:
                 function=str(cells.get("function") or ""),
                 warmth=cells.get("warmth"),
                 labels=tuple(name for name in NOUL_LABELS if float(cells.get(name, 0.0)) >= ACTIVE_P),
-                flag=label.flag,
-                reason=_reason(bool(cells.get("is_owner")), decision, label.flag),
+                flag=flag,
+                reason=_reason(bool(cells.get("is_owner")), decision, flag),
                 tags=tuple(sorted(split_tags(held.tags))) if held else (),
                 is_owner=bool(cells.get("is_owner")),
-                linkedin_only=bool(cells.get("linkedin_only")),
+                linkedin_only=_families(tuple(row["source_channels"].split(","))) == ("linkedin",),
                 group_chat_only=bool(cells.get("group_chat_only")),
                 shared_employer=bool(cells.get("shared_employer")),
                 shared_school=bool(cells.get("shared_school")),
@@ -233,18 +244,23 @@ class SharePeople:
         row = queries_share.families(self.conn, (parent_id,)).get(parent_id)
         if row is None or parent_id in queries_share.deleted_parents(self.conn):
             return None
-        card = load_card(self.conn, self.data_root, parent_id)
-        facts = card.facts.to_payload()
-        label = queries_share.labels_by_parent(self.conn)[parent_id]
-        cells = parse_json_object(label.labels_json)
-        held = queries_share.current_tags(self.conn).get(parent_id)
+        members = queries_review.family_members(self.conn, parent_id)
+        ids = [member.candidate_id for member in members]
+        has_facts = bool(queries_review.member_facts(self.conn, parent_id, ids))
+        card = load_card(self.conn, self.data_root, parent_id) if has_facts else None
+        facts = card.facts.to_payload() if card else {}
+        label = queries_share.labels_by_parent(self.conn, (parent_id,)).get(parent_id)
+        cells = parse_json_object(label.labels_json) if label else {}
+        relationships = queries_share.relationships_by_parent(self.conn, (parent_id,))
+        held = queries_share.current_tags(self.conn, (parent_id,)).get(parent_id)
         worth = self.conn.execute("SELECT reason FROM current_worth WHERE parent_id = ?", (parent_id,)).fetchone()
+        imported = self._imported_profile(parent_id, row["linkedin_url"])
         name = row["name"]
-        known_as = (str(facts.get("canonical_name") or ""), *(member.display_name for member in card.members),
+        known_as = (str(facts.get("canonical_name") or ""), *(member.display_name for member in members),
                     *(str(alias) for alias in facts.get("aliases") or []))
         emails: list[str] = []
         phones: list[str] = []
-        for identifier in card.identifiers:
+        for identifier in card.identifiers if card else queries_review.identifiers(self.conn, ids):
             (emails if identifier.kind == "email" else phones).append(identifier.display_value)
         return PersonDetail(
             parent_id=parent_id,
@@ -253,12 +269,12 @@ class SharePeople:
             avatar_url=row["profile_picture_url"],
             worth_reason=str(worth["reason"] if worth else ""),
             note=held.note if held else "",
-            dossier_html=payloads.dossier(card),
+            dossier_html=payloads.dossier(card) if card else "",
             probabilities={name: float(cells[name]) for name in NOUL_LABELS if name in cells},
             choice_p={name: float(cells[f"{name}_p"]) for name in CHOICE_LABELS if f"{name}_p" in cells},
             worth_note="",
             relationship_to_owner=str(facts.get("relationship_to_owner") or ""),
-            relationship_kind_source=label.relationship_kind_source,
+            relationship_kind_source="human" if parent_id in relationships else label.relationship_kind_source if label else "",
             events=_events(facts),
             shared_context=_shared_context(facts),
             topics=tuple(str(topic) for topic in facts.get("topics") or []),
@@ -271,7 +287,25 @@ class SharePeople:
             emails=tuple(dict.fromkeys(emails)),
             phones=tuple(dict.fromkeys(phones)),
             interactions=_family_counts(parse_interaction_counts(row["interaction_counts"])),
+            summary=imported.get("summary", ""),
+            experiences=imported.get("experiences", ()),
+            education=imported.get("education", ()),
         )
+
+    def _imported_profile(self, parent_id: str, url: str) -> dict[str, Any]:
+        """The family's imported LinkedIn profile as the review card draws it (review/decisions.py
+        `fetch_profile` builds the same lines): the About text, the work lines, the education lines."""
+        if not parent_id.startswith("li:"):
+            return {}
+        row = self.conn.execute("SELECT import_json FROM candidates WHERE candidate_id = ?",
+                                ("candidate:linkedin:" + parent_id[3:],)).fetchone()
+        if row is None:
+            return {}
+        normalized = normalize_linkedin_profile(json.loads(json.loads(row["import_json"])["rapidapi_response"]))
+        record = {"normalized_profile": normalized, "fetched_at": hashlib.sha256(row["import_json"].encode()).hexdigest()}
+        profile = profile_from_record(url, record)
+        return {"summary": str(normalized.get("summary") or "").strip(), "experiences": profile.experiences,
+                "education": profile.education}
 
 
 def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:

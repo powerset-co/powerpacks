@@ -1,12 +1,12 @@
-"""Where chat searches by default: one of the user's Powerset sets, or this Mac's local index.
+"""Where chat can search: the user's Powerset sets, and this Mac's local index when it has one.
 
-`.env` holds the choice the way `$search` already reads it: POWERPACKS_DEFAULT_SET_ID names the
-set, and POWERPACKS_LOCAL_SEARCH_DB, when set, makes the local index the default. The sets are the
+The chat page shows them in its Search-in picker; the pick is pinned to the chat and reaches every
+command the agent runs through Codex (desktop codex.rs), never through `.env`. The sets are the
 signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no sign-in there are
-none. With no choice in `.env` (a fresh install, or a set an import brought from another account),
-searches default to this Mac's local index, written to `.env` so search and picker agree.
+none.
 
 Changelog:
+  2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
   2026-10-27: no choice in .env defaults to the local index, not the largest set: a new install
       searches its own network first.
   2026-10-14: no set of yours in .env defaults to your largest set; counts come with the sets.
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_env_file, write_env
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_env_file
 
 SEARCH_LIB = Path(__file__).resolve().parents[2] / "search" / "primitives" / "lib"
 if str(SEARCH_LIB) not in sys.path:
@@ -27,30 +27,13 @@ if str(SEARCH_LIB) not in sys.path:
 
 import postgres_client  # noqa: E402
 
-LOCAL = "local"
 LOCAL_INDEX = Path(".powerpacks/search-index/local-search.duckdb")
-SET_KEY = "POWERPACKS_DEFAULT_SET_ID"
-LOCAL_KEY = "POWERPACKS_LOCAL_SEARCH_DB"
 
 
 def read(root: Path) -> dict[str, Any]:
-    """The user's sets, whether a local index exists, and which one searches use now."""
+    """The user's sets, and the local index's path when this Mac has one (else null)."""
     env = _read_env_file(root / ".env")
     subject = postgres_client.credentials_subject()
     sets = postgres_client.fetch_member_sets(subject, env["DATABASE_URL"]) if subject and env.get("DATABASE_URL") else []
-    if env.get(LOCAL_KEY):
-        selected = LOCAL
-    elif env.get(SET_KEY) in {row["set_id"] for row in sets}:
-        selected = env[SET_KEY]
-    else:
-        return save(root, LOCAL)
-    return {"sets": sets, "local": (root / LOCAL_INDEX).is_file(), "selected": selected}
-
-
-def save(root: Path, selected: str) -> dict[str, Any]:
-    """Search the local index, or a set (which also stops the local index being the default)."""
-    if selected == LOCAL:
-        write_env(root / ".env", {LOCAL_KEY: str(root / LOCAL_INDEX)})
-    else:
-        write_env(root / ".env", {SET_KEY: selected, LOCAL_KEY: None})
-    return read(root)
+    index = root / LOCAL_INDEX
+    return {"sets": sets, "local_db": str(index) if index.is_file() else None}

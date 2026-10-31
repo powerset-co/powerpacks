@@ -6,7 +6,6 @@ import type { CatalogPayload, SearchRunPayload, SearchScope, Tagged, TagsPayload
 
 const API = "/searches"
 const SCOPE = "/api/search/scope"
-export const LOCAL_SCOPE = "local"
 
 export async function fetchCatalog(signal?: AbortSignal): Promise<CatalogPayload> {
   const response = await fetch(`${API}/api/catalog`, { signal })
@@ -103,20 +102,9 @@ export async function sendAsk(runId: string, question: string): Promise<{ status
   return body(response)
 }
 
-/** Where chat searches: the signed-in user's Powerset sets, and this Mac's local index if any. */
+/** Where chat can search: the signed-in user's Powerset sets, and this Mac's local index if any. */
 export async function fetchSearchScope(signal?: AbortSignal): Promise<SearchScope> {
   const response = await fetch(SCOPE, { signal })
   if (!response.ok) throw await failure(response, "Couldn't load your sets.")
-  return body<SearchScope>(response)
-}
-
-/** Search a set (its set_id) or the local index (LOCAL_SCOPE) from now on. */
-export async function saveSearchScope(selected: string): Promise<SearchScope> {
-  const response = await fetch(SCOPE, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selected }),
-  })
-  if (!response.ok) throw await failure(response, "Couldn't change where searches look.")
   return body<SearchScope>(response)
 }

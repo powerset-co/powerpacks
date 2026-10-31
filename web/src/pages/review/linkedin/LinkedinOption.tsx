@@ -5,7 +5,7 @@ import { displayName, summaryOf } from "@/lib/review/person"
 import { cn } from "@/lib/utils"
 import type { ReviewCandidate, ReviewPerson } from "@/types/review"
 
-import { FactList } from "../shared/FactList"
+import { FactList } from "@/components/shared"
 import { LabelBadges } from "../shared/LabelBadges"
 import { LinkedinLink } from "../shared/LinkedinLink"
 import { SyntheticBadge } from "../shared/SyntheticBadge"

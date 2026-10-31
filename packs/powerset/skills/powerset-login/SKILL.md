@@ -1,6 +1,6 @@
 ---
 name: powerset-login
-description: One-command Powerset login flow. Quietly refreshes Auth0 credentials, pulls provisioned runtime keys from the Powerset API, refreshes MCP registration, and only stops for OS installs, visible auth codes, or human actions.
+description: One-command Powerset login flow. Quietly refreshes Auth0 credentials, pulls provisioned runtime keys from the Powerset API, and only stops for OS installs, visible auth codes, or human actions.
 ---
 
 # Powerset Login
@@ -9,7 +9,7 @@ Use this skill when the user asks for `$powerset login`, `$powerset-login`,
 or "log me in to Powerset". For first-run Powerset setup, runtime setup, or
 API key setup, prefer the unified `$powerset setup` command in
 `packs/powerset/skills/powerset/SKILL.md`; it intentionally runs login plus
-runtime key pull plus MCP registration. This alias remains the right skill when
+runtime key pull. This alias remains the right skill when
 an unrelated Powerpacks command failed because of a missing key or expired
 session.
 
@@ -21,13 +21,12 @@ invocation/shell so prompts, URLs, and failures are visible.
 User-facing output must be terse:
 
 - Start with exactly: `Updating your credentials...`
-- Do not narrate setup checks, missing check names, token formats, MCP config
-  details, or successful substeps.
+- Do not narrate setup checks, missing check names, token formats, or successful substeps.
 - If a browser/code login is needed, show only the auth URL/code prompt.
 - On success, say exactly:
-  `Credentials updated. Please restart Codex to reload the Powerset MCP token.`
+  `Credentials updated.`
 - If everything was already valid, say:
-  `Credentials are already up to date. Restart Codex if the Powerset MCP still fails.`
+  `Credentials are already up to date.`
 - For unresolved human-action blockers, give one short sentence with the action
   required. Do not paste raw reports.
 
@@ -39,7 +38,7 @@ swallow browser/code prompts. Let the skill self-heal by running the relevant
 primitive or CLI command directly.
 
 Only use install commands when something is actually missing. Do not reinstall
-Powerpacks adapters, MCP config, or credentials when the setup check says the
+Powerpacks adapters or credentials when the setup check says the
 check is already `ok`.
 
 ## Canonical Repo Setup
@@ -123,7 +122,7 @@ Keep the in-app progress pane on its status page; do not open another login
 window or navigate it to a callback. Use `--no-browser` only for an explicitly
 requested manual or headless login.
 
-### Step 3 - Pull runtime keys and register MCP directly
+### Step 3 - Pull runtime keys directly
 
 If `runtime_keys` is missing, run:
 
@@ -138,16 +137,6 @@ authenticated Powerset API when the user has been provisioned. Modal handles
 hosted processing for Powerset users.
 The Google Cloud CLI remains relevant
 only to the separate msgvault/Gmail OAuth app setup flow.
-
-If `mcp_powerset_search` is missing but a host CLI exists, run:
-
-```bash
-uv run --env-file .env --project . python packs/powerset/primitives/mcp_install/mcp_install.py install --host all
-```
-
-If `mcp_powerset_search` says no MCP host CLI is on PATH, that is an install
-gap: use `./install.sh codex` or `./install.sh claude-code` only for the host
-the user is using, or tell the user which host CLI is missing.
 
 ### Step 4 - Human-action blockers
 
@@ -166,8 +155,7 @@ missing runtime key.
 
 Re-run the setup check and report a terse final message:
 
-- `overall: ok` -> "Credentials updated. Please restart Codex to reload the
-  Powerset MCP token."
+- `overall: ok` -> "Credentials updated."
 - `overall: warn` -> same, but mention the remaining warning in one short phrase.
 - `overall: needs_setup` -> list the still-blocked items and what the user
   needs to do.

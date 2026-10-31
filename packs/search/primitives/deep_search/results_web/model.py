@@ -803,7 +803,7 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
     write_json(root / CATALOG_FILE, catalog)
 
 
-def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[str, Any],
+def record_quick_search(root: Path, run_id: str, *, query: str, title: str | None = None, filters: dict[str, Any],
                         traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
                         status: str, person_attribution: dict[str, Any] | None = None,
                         person_attribution_error: str | None = None) -> None:
@@ -813,7 +813,7 @@ def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[st
     rows = len(tuple(_jsonl_rows(_artifact_path(root, jsonl))))
     artifacts = {"jsonl": jsonl, "profiles_path": profiles_path}
     payload: dict[str, Any] = {
-        "title": query,
+        "title": title or query,
         "created_at": created_at,
         "iterations": [{"pond_n": 1, "query": query, "arm": {"artifacts": artifacts}}],
         "summary": {"pond_chain": [{"run": run_id, "pond_n": 1, "query": query, "result_count": rows,
@@ -825,7 +825,7 @@ def record_quick_search(root: Path, run_id: str, *, query: str, filters: dict[st
     if person_attribution_error:
         payload["person_attribution_error"] = person_attribution_error
     write_json(root / run_id / "results.json", payload)
-    card = SearchCard(run_id=run_id, title=query, company="", status=status,
+    card = SearchCard(run_id=run_id, title=title or query, company="", status=status,
                       created_at=created_at, updated_at=created_at, search_version="quick",
                       candidates=rows, ponds_run=1, cost_usd=0.0)
     catalog = _payload(root / CATALOG_FILE) or {}

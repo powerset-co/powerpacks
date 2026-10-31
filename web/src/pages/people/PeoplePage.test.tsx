@@ -18,11 +18,20 @@ import {
   logbookStatus,
   savedEntry,
 } from "@/testing/logbook-fixture"
-import { DETAIL, PAYLOAD } from "@/testing/people-fixture"
+import { BASE, DETAIL, PAYLOAD } from "@/testing/people-fixture"
+import {
+  PERSON_COLUMNS,
+  type PeoplePayload,
+  type PersonCell,
+  type PersonColumn,
+  type PersonDetail,
+} from "@/types/people"
 import { PLAN, uploadResponse, uploadStatus } from "@/testing/upload-fixture"
 
 import { LogbookReader } from "./logbook/LogbookReader"
 import { PeoplePage } from "./PeoplePage"
+
+type Cells = Record<PersonColumn, PersonCell>
 
 // jsdom has no layout, Web Animations, matchMedia or ResizeObserver; the virtualizer reads
 // offset sizes. Reduced motion, as in the browser tests: overlays mount and unmount at once.
@@ -902,4 +911,162 @@ it("saves a human relationship from the profile and refreshes its source", async
   pick("Edit relationship", "Friend")
   await screen.findByText("Your choice · kept on refresh")
   expect(changed).toBe(true)
+})
+
+it("hides LinkedIn-only people until the Filters menu shows them, and keeps that in the URL", async () => {
+  const people: Partial<Cells>[] = [
+    {
+      parent_id: "li:7001",
+      name: "Morgan Example",
+      channels: ["linkedin"],
+      linkedin_only: true,
+      reason: "unjudged",
+    },
+    {
+      parent_id: "p1",
+      name: "Jordan Bravo",
+      channels: ["gmail"],
+      interactions: 40,
+      worth: "no",
+      reason: "worth_no",
+    },
+  ]
+  const payload: PeoplePayload = {
+    counts: { total: 2, upload: 0, private: 2 },
+    columns: [...PERSON_COLUMNS],
+    rows: people.map((person) => PERSON_COLUMNS.map((column) => ({ ...BASE, ...person })[column])),
+  }
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) =>
+      url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
+    ),
+  )
+  const { container } = renderPage()
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(1))
+  expect(container.querySelector(".row")?.textContent).toContain("Jordan Bravo")
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toContain("Filters · 1")
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }))
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Hide LinkedIn-only people" }))
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toBe("Filters")
+  expect(new URLSearchParams(must(at()).split("?")[1]).getAll("show")).toEqual(["linkedin_only"])
+})
+
+it("keeps human edits and leaves out message actions for a LinkedIn-only person", async () => {
+  // A LinkedIn import with no messages, no labels and no facts, beside a family with messages.
+  const people: Partial<Cells>[] = [
+    {
+      parent_id: "li:7001",
+      public_identifier: "synthetic-7001",
+      name: "Morgan Example",
+      title: "Engineer",
+      company: "Example Labs",
+      location: "San Francisco",
+      channels: ["linkedin"],
+      linkedin_only: true,
+      reason: "unjudged",
+    },
+    {
+      parent_id: "p1",
+      name: "Jordan Bravo",
+      channels: ["gmail", "linkedin"],
+      interactions: 40,
+      recency_days: 30,
+      worth: "no",
+      warmth: 2.5,
+      relationship_kind: "family",
+      reason: "worth_no",
+    },
+  ]
+  const payload: PeoplePayload = {
+    counts: { total: 2, upload: 0, private: 2 },
+    columns: [...PERSON_COLUMNS],
+    rows: people.map((person) => {
+      const cells: Cells = { ...BASE, ...person }
+      return PERSON_COLUMNS.map((column) => cells[column])
+    }),
+  }
+  const sourceOnly: PersonDetail = {
+    ...DETAIL,
+    parent_id: "li:7001",
+    linkedin_url: "https://www.linkedin.com/in/synthetic-7001",
+    headline: "",
+    relationship_kind_source: "",
+    probabilities: {},
+    relationship_to_owner: "",
+    summary: "Builds things.",
+    experiences: ["Engineer @ Example Labs, 2020-present"],
+    education: ["BS, CS — State"],
+    events: [],
+    topics: [],
+    employers: [],
+    location: "San Francisco",
+  }
+  const sent: unknown[] = []
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/rows")) return Promise.resolve(respond(payload))
+      if (url.includes("/person?"))
+        return Promise.resolve(respond(url.includes("li%3A7001") ? sourceOnly : DETAIL))
+      if (url.endsWith("/worth") || url.endsWith("/relationship")) {
+        if (typeof init?.body !== "string") throw new Error("Expected JSON body")
+        sent.push(JSON.parse(init.body))
+      }
+      if (url.endsWith("/worth")) return Promise.resolve(worthResponse(init))
+      if (url.endsWith("/relationship")) {
+        return Promise.resolve(
+          respond({
+            rows: [{ parent_id: "li:7001", relationship_kind: "colleague", flag: "", reason: "worth_yes" }],
+          }),
+        )
+      }
+      return serve(url, init)
+    }),
+  )
+  const { container } = renderPage("/people?sections=relationship&show=linkedin_only")
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+  const row = (name: string) =>
+    must([...container.querySelectorAll<HTMLElement>(".row")].find((each) => each.textContent.includes(name)))
+  const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
+  const bar = () => must(container.querySelector<HTMLElement>("[data-action-bar]"))
+  const messageActions = (scope: HTMLElement) =>
+    within(scope)
+      .queryAllByRole("button")
+      .map((button) => button.textContent)
+      .filter((text) => /logbook|Refresh signals/.test(text))
+
+  // The LinkedIn-only person: the profile alone; no decision, signals, logbook or relationship.
+  fireEvent.click(row("Morgan Example"))
+  await within(drawer).findByRole("button", { name: "Rename" })
+  expect(within(drawer).queryByRole("combobox", { name: "Edit decision" })).toBeNull()
+  expect(messageActions(drawer)).toEqual([])
+  expect(drawer.querySelector('[data-section="confidence"]')).toBeNull()
+  expect(drawer.querySelector('[data-section="timeline"]')).toBeNull()
+  expect(drawer.querySelector('[data-section="relationship"]')).toBeNull()
+  expect(within(drawer).queryByRole("combobox", { name: "Edit relationship" })).toBeNull()
+  expect(drawer.querySelector(".profile")?.textContent).toContain("Builds things.")
+  expect([...drawer.querySelectorAll(".profile .fact-list li")].map((li) => li.textContent)).toEqual([
+    "Engineer @ Example Labs, 2020-present",
+    "BS, CS — State",
+  ])
+  expect(sent).toEqual([])
+
+  // The family with messages keeps both.
+  fireEvent.click(row("Jordan Bravo"))
+  await waitFor(() => expect(messageActions(drawer)).toEqual(["Refresh signals", "Build logbook"]))
+  fireEvent.click(row("Jordan Bravo"))
+
+  // A selection of LinkedIn-only people has no signals or logbook; one with messages refreshes
+  // only its people with messages. Nothing selected refreshes All.
+  const head = must(container.querySelector<HTMLElement>("[data-bar] > .bar-actions"))
+  expect(messageActions(head)).toEqual(["Refresh signals All"])
+  fireEvent.click(must(row("Morgan Example").querySelector<HTMLElement>("input[type=checkbox]")))
+  expect(messageActions(bar())).toEqual([])
+  expect(messageActions(head)).toEqual([])
+  expect(within(bar()).getByRole("button", { name: /^Keep/ })).toBeTruthy()
+  fireEvent.click(must(row("Jordan Bravo").querySelector<HTMLElement>("input[type=checkbox]")))
+  expect(messageActions(bar())).toEqual(["Build logbook"])
+  expect(messageActions(head)).toEqual(["Refresh signals 1 selected"])
 })

@@ -37,10 +37,10 @@ jobs:
             echo "python=true" >> "$GITHUB_OUTPUT"; echo "web=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           files=$(git diff --name-only "$base" "${{ github.sha }}")
-          web_only='^(web/|tests/test_msgvault_consent\.js|tests/test_browser_picker\.js)'
+          web_only='^(web/|tests/test_msgvault_consent\.js|tests/test_browser_picker\.js|tests/test_linkedin_count\.js)'
           python_only='^(packs/|bin/|scripts/|tests/|pyproject\.toml|uv\.lock|\.python-version)'
           if echo "$files" | grep -vE "$web_only" | grep -q .; then echo "python=true" >> "$GITHUB_OUTPUT"; else echo "python=false" >> "$GITHUB_OUTPUT"; fi
-          if echo "$files" | grep -vE "$python_only" | grep -q . || echo "$files" | grep -qE '^tests/test_(msgvault_consent|browser_picker)\.js'; then echo "web=true" >> "$GITHUB_OUTPUT"; else echo "web=false" >> "$GITHUB_OUTPUT"; fi
+          if echo "$files" | grep -vE "$python_only" | grep -q . || echo "$files" | grep -qE '^tests/test_(msgvault_consent|browser_picker|linkedin_count)\.js'; then echo "web=true" >> "$GITHUB_OUTPUT"; else echo "web=false" >> "$GITHUB_OUTPUT"; fi
           echo "files: $(echo "$files" | wc -l | tr -d ' ')"; cat "$GITHUB_OUTPUT"
 
   python:
@@ -85,6 +85,8 @@ jobs:
         run: node --test ../tests/test_msgvault_consent.js
       - name: Browser picker
         run: node --test ../tests/test_browser_picker.js
+      - name: LinkedIn count in any language
+        run: node --test ../tests/test_linkedin_count.js
       - name: Typecheck, lint, format and unit tests
         run: pnpm check
       - name: Committed dist is the build of the source

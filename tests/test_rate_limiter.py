@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from packs.shared.rate_limiter import StartRateLimiter  # noqa: E402
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rc  # noqa: E402
-from packs.ingestion.primitives.enrich import enrich_people as ep  # noqa: E402
+from packs.ingestion.primitives.enrich import enrich_people as ep, rapidapi_client  # noqa: E402
 
 
 class StartRateLimiterTests(unittest.TestCase):
@@ -51,15 +51,18 @@ class StartRateLimiterTests(unittest.TestCase):
 
 
 class SharedAcrossCallSitesTests(unittest.TestCase):
-    def test_company_fetch_uses_shared_limiter_at_300_rpm(self) -> None:
+    def test_company_fetch_uses_shared_limiter_at_700_rpm(self) -> None:
         self.assertIs(rc.StartRateLimiter, StartRateLimiter)
         self.assertIsInstance(rc._RATE_LIMITER, StartRateLimiter)
         if "POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM" not in os.environ:
-            self.assertEqual(rc.DEFAULT_COMPANY_MAX_RPM, 300.0)
-            self.assertAlmostEqual(rc._RATE_LIMITER.interval, 0.2, places=6)
+            self.assertEqual(rc.DEFAULT_COMPANY_MAX_RPM, 700.0)
+            self.assertAlmostEqual(rc._RATE_LIMITER.interval, 60 / 700, places=6)
 
     def test_profile_enrichment_uses_shared_limiter(self) -> None:
         self.assertIs(ep.StartRateLimiter, StartRateLimiter)
+        if "POWERPACKS_RAPIDAPI_LINKEDIN_MAX_RPM" not in os.environ:
+            self.assertEqual(rapidapi_client.DEFAULT_RAPIDAPI_MAX_RPM, 700)
+            self.assertAlmostEqual(StartRateLimiter(rapidapi_client.DEFAULT_RAPIDAPI_MAX_RPM).interval, 60 / 700)
 
 
 if __name__ == "__main__":

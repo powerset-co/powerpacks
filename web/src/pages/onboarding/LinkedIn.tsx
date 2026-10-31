@@ -115,7 +115,12 @@ export function LinkedIn() {
                   "Connect LinkedIn ↗"
                 )}
               </Button>
-              {"stopped" in at ? <Note bad>{at.line}</Note> : null}
+              {"stopped" in at ? (
+                <Note bad>
+                  {at.line}
+                  {at.detail ? <span className="mt-1 block text-muted-foreground">{at.detail}</span> : null}
+                </Note>
+              ) : null}
               <Note>
                 Opens LinkedIn in a browser window. Come back here once you are in; it closes on its own.
               </Note>
