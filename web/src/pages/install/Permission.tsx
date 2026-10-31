@@ -31,9 +31,7 @@ export function Permission() {
         <div className="flex min-h-8 items-center gap-2 pl-10">
           <ArrowUp size={24} className="shrink-0 text-primary" aria-hidden="true" />
           <p className="m-0 flex-1 text-xs text-muted-foreground">
-            {signed.data?.imessage === false
-              ? "Drag Powerpacks into the list, then turn it on."
-              : "Checking Full Disk Access…"}
+            Drag Powerpacks into the list, then turn it on.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -45,22 +43,20 @@ export function Permission() {
           >
             <X size={16} aria-hidden="true" />
           </button>
-          {signed.data?.imessage === false ? (
-            <button
-              type="button"
-              className="flex min-h-10 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-xl border border-line-strong bg-card px-2 py-1 text-left text-xs active:cursor-grabbing"
-              aria-label="Drag Powerpacks into Full Disk Access"
-              onMouseDown={(event) => {
-                if (event.button !== 0) return
-                event.preventDefault()
-                setError(null)
-                void invoke("permission_drag").catch(fail)
-              }}
-            >
-              <img src={icon} alt="Powerpacks" width={24} height={24} draggable={false} />
-              Powerpacks
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="flex min-h-10 min-w-0 flex-1 cursor-grab items-center gap-2 rounded-xl border border-line-strong bg-card px-2 py-1 text-left text-xs active:cursor-grabbing"
+            aria-label="Drag Powerpacks into Full Disk Access"
+            onMouseDown={(event) => {
+              if (event.button !== 0) return
+              event.preventDefault()
+              setError(null)
+              void invoke("permission_drag").catch(fail)
+            }}
+          >
+            <img src={icon} alt="Powerpacks" width={24} height={24} draggable={false} />
+            Powerpacks
+          </button>
           <Button
             size="sm"
             variant="ghost"

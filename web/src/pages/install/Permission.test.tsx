@@ -42,11 +42,10 @@ it("starts a native app drag from the icon, not an HTML image drag", async () =>
   expect(screen.getByAltText("Powerpacks").getAttribute("draggable")).toBe("false")
 })
 
-it("never shows the drag icon when the record already grants permission", async () => {
-  vi.mocked(fetchSignedIn).mockResolvedValue({ ...NONE, imessage: true })
+it("shows the drag icon at once, without waiting on the sign-in check", () => {
+  vi.mocked(fetchSignedIn).mockReturnValue(new Promise(() => undefined))
   mount()
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end"))
-  expect(screen.queryByRole("button", { name: "Drag Powerpacks into Full Disk Access" })).toBeNull()
+  expect(screen.getByRole("button", { name: "Drag Powerpacks into Full Disk Access" })).toBeTruthy()
 })
 
 it("closes automatically when polling sees permission granted", async () => {
