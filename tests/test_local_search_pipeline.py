@@ -1211,6 +1211,17 @@ class LocalTitleExpansionTests(unittest.TestCase):
             self.assertEqual(len(list(CsvIO.dict_reader(handle))), 1)
 
 
+class SearchTitleTests(unittest.TestCase):
+    def test_title_keeps_five_words_and_fits(self):
+        module = load_pipeline_module()
+        self.assertEqual(module.clamp_title("  Open-source   LLM builders "), "Open-source LLM builders")
+        self.assertEqual(module.clamp_title("People who build with or operate open-source LLMs heavily"),
+                         "People who build with or")
+        long = module.clamp_title("Supercalifragilisticexpialidocious " * 3)
+        self.assertEqual(len(long), module.TITLE_CHARS)
+        self.assertTrue(long.endswith("…"))
+
+
 class NarrowPoolPreviewTests(unittest.TestCase):
     def test_suspiciously_narrow_pool_is_flagged(self):
         module = load_pipeline_module()

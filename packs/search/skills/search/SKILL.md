@@ -234,11 +234,15 @@ Use `--search-only` to skip those model stages entirely.
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
      --backend local \
      --query "<user query>" \
+     --title "<3-5 word name>" \
      --db "<db-path>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
 
    Use the same `<slug>` run dir where `decision.json` was recorded.
+
+   `--title` names the search in the side nav and headers: 3-5 words, a noun phrase
+   ("Open-source LLM builders"), not the query. Longer is cut to fit.
 
 4. Show the query without an agent-written targeting or filter summary.
    Review the compiled filters for correctness: a role noun like "product
@@ -285,6 +289,7 @@ files on the happy path. Start a fresh run for every search request.
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
      --backend powerset \
      --query "<user query>" \
+     --title "<3-5 word name>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
 
