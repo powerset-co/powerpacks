@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.51.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.50.0...powerpacks-v3.51.0) (2026-10-31)
+
+
+### Features
+
+* **accounts:** How Deep Context works, and Enrich imported data once a sync finishes ([#1044](https://github.com/powerset-co/powerpacks/issues/1044)) ([580fa3d](https://github.com/powerset-co/powerpacks/commit/580fa3dec0a026931b94f409b2e17ac52591b135))
+* **connect:** show the WhatsApp code larger on a light card ([#1043](https://github.com/powerset-co/powerpacks/issues/1043)) ([9cec884](https://github.com/powerset-co/powerpacks/commit/9cec884b837ce36ff12b3025b5b21fd5e9bb9732))
+* **indexing:** school parent mapping, query-time family expansion ([#1037](https://github.com/powerset-co/powerpacks/issues/1037)) ([5531f4c](https://github.com/powerset-co/powerpacks/commit/5531f4cc4bbb4554726b3f4da3b62a745d1d02b0))
+
+
+### Bug Fixes
+
+* **chat:** short search titles, and a long one no longer pushes the chat under the results ([#1041](https://github.com/powerset-co/powerpacks/issues/1041)) ([bdaa785](https://github.com/powerset-co/powerpacks/commit/bdaa7850f1bd3d6e937df683492f386bc88b5a4b))
+* **desktop:** check for an update every 30 minutes, not every 12 hours ([#1039](https://github.com/powerset-co/powerpacks/issues/1039)) ([2fecd0e](https://github.com/powerset-co/powerpacks/commit/2fecd0ea015ca337747ab01acd6ef3491e7160a9))
+* **indexing:** republish keeps every school name exactly as the mapping has it ([#1046](https://github.com/powerset-co/powerpacks/issues/1046)) ([b9a040e](https://github.com/powerset-co/powerpacks/commit/b9a040ed5e393b20f7f7c1e0b57f9ddf1fd261ab))
+* **people:** AI, ML, VP and other acronyms keep their capitals in titles ([#1048](https://github.com/powerset-co/powerpacks/issues/1048)) ([0c3c914](https://github.com/powerset-co/powerpacks/commit/0c3c914bef7063d15a7cddfb1c4f946e91e32dd0))
+* **permission:** the drag tile shows at once, without waiting on the sign-in check ([#1045](https://github.com/powerset-co/powerpacks/issues/1045)) ([f2b5cf6](https://github.com/powerset-co/powerpacks/commit/f2b5cf6d6f005b276c1632b9742909e19608d2ad))
+* **search:** the local preview count applies the company the way the run does ([#1036](https://github.com/powerset-co/powerpacks/issues/1036)) ([56e8a66](https://github.com/powerset-co/powerpacks/commit/56e8a6656c381c191d965c2fd516826535dd4f61))
+
+
+### Documentation
+
+* **indexing:** hold the school mapping to its reviews and record how to change it ([#1047](https://github.com/powerset-co/powerpacks/issues/1047)) ([155ab0a](https://github.com/powerset-co/powerpacks/commit/155ab0a3dcae70a8da631407e8201d8bf2d4adea))
+
 ## [3.50.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.49.1...powerpacks-v3.50.0) (2026-10-30)
 
 
