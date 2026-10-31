@@ -1,14 +1,16 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
-import { ChevronRight, RefreshCw } from "lucide-react"
+import { ChevronRight, Sparkles } from "lucide-react"
 import { CheckIcon, Spinner } from "@/components/shared"
 import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { fetchAccount } from "@/lib/api/account"
 import { continueSetup, fetchConnection, type SetupAnswer } from "@/lib/api/install"
 import { errorText } from "@/lib/api/http"
 import { isDesktop } from "@/lib/desktop"
+import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { Connect, type ConnectRow } from "@/pages/install/Connect"
 import { DesktopSetup } from "@/pages/install/DesktopSetup"
@@ -21,6 +23,10 @@ import { useRun } from "@/pages/onboarding/run"
 import type { InstallStatus } from "@/types/install"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
+import { HowItWorks } from "./how-it-works/HowItWorks"
+
+// Remembered on this Mac once How Deep Context works is closed; the "here" link opens it again.
+const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
 const SERVICES: readonly ConnectRow[] = ["codex"]
 const SUBTITLE: Record<ConnectRow, string> = {
@@ -47,6 +53,24 @@ export function AccountsPanel({
   const [guide, setGuide] = useState<GuideSource | null>(null)
   const [previous, setPrevious] = useState<InstallStatus>()
   const [startError, setStartError] = useState<string | null>(null)
+  // How Deep Context works opens the first time Accounts does.
+  const [howItWorks, setHowItWorks] = useState(
+    () => readStored("local", HOW_IT_WORKS_KEY, (raw) => (raw === true ? true : null)) === null,
+  )
+  const openHowItWorks = (open: boolean) => {
+    setHowItWorks(open)
+    if (!open) writeStored("local", HOW_IT_WORKS_KEY, true)
+  }
+  // When a source's sync finishes, the enrich button asks to be pressed.
+  const jobs = Object.values(accounts?.jobs ?? {})
+  const syncing = jobs.some((job) => job.state === "running")
+  const synced = !syncing && jobs.some((job) => job.state === "done")
+  const wasSyncing = useRef(false)
+  const [nudge, setNudge] = useState(false)
+  useEffect(() => {
+    if (wasSyncing.current && synced) setNudge(true)
+    wasSyncing.current = syncing
+  }, [syncing, synced])
   const progress = params.get("view") === "sync"
   const client = useQueryClient()
   const run = useRun(() => true, previous)
@@ -141,7 +165,18 @@ export function AccountsPanel({
           <div className="mx-auto flex w-full max-w-[410px] flex-col gap-6">
             <div>
               <h1 className="m-0 text-[24px] font-semibold tracking-tight">Accounts</h1>
-              <p className="mb-0 mt-2 text-sm text-muted-foreground">Your people, in one place.</p>
+              <p className="mb-0 mt-2 text-sm text-muted-foreground">
+                Your people, in one place. See how your data is processed{" "}
+                <button
+                  type="button"
+                  aria-label="See how your data is processed here"
+                  className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
+                  onClick={() => setHowItWorks(true)}
+                >
+                  here
+                </button>
+                .
+              </p>
             </div>
             <div>
               <h2 className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.1em] text-faint">
@@ -161,20 +196,35 @@ export function AccountsPanel({
                   ? "Updating in the background."
                   : accounts?.scheduled
                     ? "Refreshes daily at 6:00 AM."
-                    : "Sync when you're ready."}
+                    : "Enrich when you're ready."}
               </p>
-              <Button
-                variant="primary"
-                disabled={!isDesktop() || !run.data || !canSync || connecting || active || starting}
-                onClick={() =>
-                  void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
-                }
-              >
-                {active || starting ? <Spinner /> : <RefreshCw className="size-3.5" />}
-                {active || starting ? "Syncing…" : "Resync all"}
-              </Button>
+              <Popover open={nudge && canSync && !connecting && !active && !starting} onOpenChange={setNudge}>
+                <PopoverAnchor asChild>
+                  <Button
+                    variant="primary"
+                    disabled={!isDesktop() || !run.data || !canSync || connecting || active || starting}
+                    onClick={() => {
+                      setNudge(false)
+                      void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
+                    }}
+                  >
+                    {active || starting ? <Spinner /> : <Sparkles className="size-3.5" />}
+                    {active || starting ? "Enriching…" : "Enrich imported data"}
+                  </Button>
+                </PopoverAnchor>
+                <PopoverContent
+                  side="top"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  className="w-64 p-3"
+                >
+                  <p className="m-0 text-sm font-semibold">Your sources are synced</p>
+                  <p className="mb-0 mt-1 text-xs text-muted-foreground">
+                    Enrich imported data to build dossiers and update search.
+                  </p>
+                </PopoverContent>
+              </Popover>
               <p className="m-0 text-center text-[11px] text-muted-foreground">
-                Sync connected sources, then update Deep Context and search.
+                Syncs your sources, then builds dossiers and updates search.
               </p>
               {active || starting || previous !== undefined ? (
                 <button
@@ -278,5 +328,10 @@ export function AccountsPanel({
       </div>
     )
   }
-  return <Connect disabled={active || starting} details={details} onGuide={setGuide} layout={layout} />
+  return (
+    <>
+      <Connect disabled={active || starting} details={details} onGuide={setGuide} layout={layout} />
+      <HowItWorks open={howItWorks} onOpenChange={openHowItWorks} />
+    </>
+  )
 }

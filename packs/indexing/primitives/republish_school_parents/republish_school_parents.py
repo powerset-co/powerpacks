@@ -2,9 +2,11 @@
 """Apply the school parent mapping to the published education namespaces.
 
 Every school keeps its own doc under its own name, and a child's doc carries
-parent_id. A parent's person_count covers its children too, and a parenthetical
-in its name that a child row now covers comes off. People rows are read, never
-written: search expands a parent to its children when it filters on education_id.
+parent_id. A parent's person_count covers its children too. A school's name is
+written exactly as the mapping has it: released apps match a query on the
+parent's own name, so trimming "(MIT)" off a parent breaks "MIT" for every app
+that has not updated (2026-10-31). People rows are read, never written: search
+expands a parent to its children when it filters on education_id.
 
 School docs follow the mapping, so correcting it undoes a merge on the next run.
 Namespaces follow ALEPH_ENV like the rest of the search code: unset is prod,
@@ -15,11 +17,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[4]
 SEARCH_PRIMITIVES = REPO / "packs/search/primitives"
@@ -30,28 +31,12 @@ for _path in [REPO, SEARCH_PRIMITIVES / "lib", SEARCH_PRIMITIVES / "shared", SEA
 import turbopuffer_search_backend as tp_backend  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 
-from packs.indexing.lib.school_parents import MAPPING_PATH, normalize_name, read_rows  # noqa: E402
+from packs.indexing.lib.school_parents import MAPPING_PATH, read_rows  # noqa: E402
 
 BACKUP_DIR = REPO / ".powerpacks/tmp-education-mapping/backups"
 BATCH_SIZE = 500
 PAGE_SIZE = 1000
 STRONG_CONSISTENCY = {"level": "strong"}
-
-
-def split_alias(name: str) -> tuple[str, list[str]]:
-    """"Harvard University (HBS / HKS)" -> ("Harvard University", ["HBS", "HKS"])."""
-    match = re.fullmatch(r"(.*?)\s*\(([^()]*)\)\s*", name)
-    return (match[1], [alias.strip() for alias in match[2].split("/") if alias.strip()]) if match else (name, [])
-
-
-def own_name(name: str, child_names: Iterable[str]) -> str:
-    """The name without parenthetical names a child row covers; the rest stay, "(CEIBS)" lives nowhere else."""
-    base, aliases = split_alias(name)
-    covered = {normalize_name(child) for child in child_names}
-    kept = [alias for alias in aliases if normalize_name(alias) not in covered]
-    if len(kept) == len(aliases):
-        return name
-    return f"{base} ({' / '.join(kept)})" if kept else base
 
 
 def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[str, dict[str, Any]]) -> dict[str, list]:
@@ -65,10 +50,7 @@ def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[
     for edge in edges:
         own_people.setdefault(edge["education_id"], set()).add(edge["person_id"])
         family_people.setdefault(top(edge["education_id"]), set()).add(edge["person_id"])
-    children: dict[str, list[str]] = {}
-    for row in rows.values():
-        if row["parent_id"]:
-            children.setdefault(row["parent_id"], []).append(row["school_name"])
+    children = {row["parent_id"] for row in rows.values() if row["parent_id"]}
 
     docs = {school["id"]: school for school in schools}
     former_parents = {school.get("parent_id") for school in schools}
@@ -76,7 +58,7 @@ def plan(edges: list[dict[str, Any]], schools: list[dict[str, Any]], rows: dict[
     restores = []
     for row in rows.values():
         school_id, parent_id = row["id"], row["parent_id"]
-        name = own_name(row["school_name"], children.get(school_id, []))
+        name = row["school_name"]
         family = not parent_id and (school_id in children or school_id in former_parents)
         count = len((family_people if family else own_people).get(school_id, ()))
         doc = docs.get(school_id)

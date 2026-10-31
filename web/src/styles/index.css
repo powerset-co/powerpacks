@@ -107,15 +107,6 @@
   ::selection {
     background: var(--primary-soft);
   }
-
-  /* Text boxes show focus with their own border, never a second ring. */
-  button:focus-visible,
-  a:focus-visible,
-  summary:focus-visible,
-  [tabindex]:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: 2px;
-  }
 }
 
 /* Dropdowns and popovers (Radix): data-state drives the open and close motion. */
