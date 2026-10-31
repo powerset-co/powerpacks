@@ -25,7 +25,7 @@ class SettleTests(StoreTests):
             "test", None, "test", NOW))
 
     def test_without_a_profile_or_messages_every_worth_is_preserved(self) -> None:
-        for worth in ("yes", "maybe", "no"):
+        for worth in ("yes", "no", "maybe"):  # maybe: a row from before 2026-10-28
             with self.subTest(worth=worth):
                 self._worth(worth)
                 before = [tuple(row) for row in self.conn.execute("SELECT * FROM worth")]
@@ -33,7 +33,7 @@ class SettleTests(StoreTests):
                 self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM worth")], before)
 
     def test_an_own_connection_keeps_labels_and_sets_every_member_to_yes_once(self) -> None:
-        self._worth("maybe")
+        self._worth("no")
         self._connection()
         self.assertEqual(settle(self.conn, LATER), 2)
         self.assertEqual([tuple(row) for row in self.conn.execute(
@@ -43,7 +43,7 @@ class SettleTests(StoreTests):
         self.assertEqual(settle(self.conn, LATER), 0)
 
     def test_a_human_no_on_another_member_wins_over_an_own_connection(self) -> None:
-        self._worth("maybe")
+        self._worth("no")
         self._worth("no", "human", "c2")
         self._connection()
         self.assertEqual(settle(self.conn, LATER), 0)
@@ -51,7 +51,7 @@ class SettleTests(StoreTests):
                          ("no", "human"))
 
     def test_a_wrong_person_own_connection_preserves_worth(self) -> None:
-        self._worth("maybe")
+        self._worth("no")
         self._connection("wrong_person")
         self.assertEqual(settle(self.conn, LATER), 0)
-        self.assertEqual(self.conn.execute("SELECT worth FROM current_worth").fetchone()[0], "maybe")
+        self.assertEqual(self.conn.execute("SELECT worth FROM current_worth").fetchone()[0], "no")

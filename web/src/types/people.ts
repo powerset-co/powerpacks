@@ -7,11 +7,11 @@ export const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "
 export type WarmthBucket = (typeof WARMTH)[number]
 
 /** The worth call; "" when no one judged it. */
-export type Worth = "yes" | "maybe" | "no" | ""
+export type Worth = "yes" | "no" | ""
 
 /** The Worth select's values: everyone, each worth call, or no call yet. */
-export type WorthTab = "all" | "yes" | "maybe" | "no" | "unjudged"
-export const WORTH_TABS: readonly WorthTab[] = ["all", "yes", "maybe", "no", "unjudged"]
+export type WorthTab = "all" | "yes" | "no" | "unjudged"
+export const WORTH_TABS: readonly WorthTab[] = ["all", "yes", "no", "unjudged"]
 
 /** The tab a person's worth puts them under. */
 export const worthTab = (worth: Worth): Exclude<WorthTab, "all"> => worth || "unjudged"

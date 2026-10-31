@@ -52,7 +52,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
   const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
   const totals = useMemo(() => {
-    const counts: Record<Tab, number> = { all: rows.length, yes: 0, maybe: 0, no: 0, unjudged: 0 }
+    const counts: Record<Tab, number> = { all: rows.length, yes: 0, no: 0, unjudged: 0 }
     for (const row of rows) counts[worthTab(row.worth)] += 1
     return counts
   }, [rows])

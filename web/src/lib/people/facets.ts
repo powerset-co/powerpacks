@@ -162,7 +162,7 @@ export interface Sort {
   dir: 1 | -1
 }
 
-const WORTH_ORDER = ["yes", "maybe", "no", ""]
+const WORTH_ORDER = ["yes", "no", ""]
 
 const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
   name: (a, b) => a.name.localeCompare(b.name),

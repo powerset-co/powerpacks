@@ -159,13 +159,14 @@ class _Providers:
             answer = {"name": name, "type": kind}
             if kind == "choice":
                 choices = {"relationship_kind": relationship,
-                           "intro_source": "work", "function": "engineering", "worth": "no"}
+                           "intro_source": "work", "function": "engineering"}
                 choice = choices[name]
                 answer.update(choice=choice, probabilities=[
                     {"value": item["value"], "probability": float(item["value"] == choice)}
                     for item in question["choices"]])
             elif kind == "predicate":
-                answer["probability"] = 0.1
+                # Every family reads as a broadcast sender: worth no, so no research is attempted.
+                answer["probability"] = 0.9 if name == "broadcast" else 0.1
             else:
                 answer["score"] = 1.0
             answers.append(answer)
@@ -226,7 +227,7 @@ class GmailAttributionPipelineTests(unittest.TestCase):
                 self.assertNotIn(MORGAN, refreshed["labels"])
                 for table in ("bundles", "facts", "labels"):
                     self.assertEqual(before[table][PHONE], refreshed[table][PHONE], table)
-                self.assertEqual(refreshed["worth"][CASEY][0:2], ("maybe", "human"))
+                self.assertEqual(refreshed["worth"][CASEY][0:2], ("no", "human"))
                 for candidate in (JORDAN, TAYLOR, PHONE):
                     self.assertEqual(before["worth"][candidate][0], refreshed["worth"][candidate][0])
                 bundle = json.loads(refreshed["bundles"][JORDAN][0])
@@ -296,7 +297,7 @@ class GmailAttributionPipelineTests(unittest.TestCase):
     @staticmethod
     def _human_decisions(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO worth (candidate_id, worth, decided_by, reason, created_at) "
-                     "VALUES (?, 'maybe', 'human', 'Keep my decision', ?)", (CASEY, STAMP))
+                     "VALUES (?, 'no', 'human', 'Keep my decision', ?)", (CASEY, STAMP))
         conn.execute("INSERT INTO person_tags (candidate_id, tags, relationship_kind, note, updated_at) "
                      "VALUES (?, 'trusted', 'close_friend', 'Human note', ?)", (CASEY, STAMP))
         conn.execute("INSERT INTO deleted_parents SELECT parent_id, ? FROM current_parent WHERE candidate_id=?",

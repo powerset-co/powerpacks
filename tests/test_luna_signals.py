@@ -25,7 +25,7 @@ from packs.ingestion.primitives.deep_context_v2.worth import worth as worth_modu
 from packs.ingestion.primitives.deep_context_v2.worth.worth import (
     DEFAULT_LIMIT, LABELS_TOKENS_PER_QUESTION, Worth,
 )
-from packs.ingestion.primitives.deep_context_v2.worth.reason import reason
+from packs.ingestion.primitives.deep_context_v2.worth.reason import decide, reason
 from packs.ingestion.primitives.share.labels import flag, labels_from_saved
 from packs.ingestion.primitives.share.questions import (
     CHOICE_LABELS, EVIDENCE_POLICY, NOUL_LABELS, SCORE_LABELS, label_questions,
@@ -98,7 +98,7 @@ class RequestTests(unittest.TestCase):
                          "[imessage_group  OTHER-IN-GROUP]: See you there.")
 
     def test_questions_use_messages_and_define_warmth_as_reachability_today(self) -> None:
-        self.assertEqual(luna.REQUEST_VERSION, "deep-context-luna-decisions-20261015")
+        self.assertEqual(luna.REQUEST_VERSION, "deep-context-luna-detectors-20261028")
         questions = label_questions() + luna.WORTH_QUESTIONS
         text = json.dumps(questions) + EVIDENCE_POLICY
         self.assertNotIn("facts", text)
@@ -210,7 +210,8 @@ class WorthRunTests(StoreTests):
         self.assertEqual(set(phases), {"labels"})
         labels = json.loads(self.conn.execute("SELECT labels_json FROM worth WHERE candidate_id = 'c1' "
                                               "ORDER BY seq DESC").fetchone()[0])
-        self.assertEqual((labels["worth"], labels["version"]), ("yes", luna.REQUEST_VERSION))
+        self.assertEqual((labels["broadcast"], labels["version"]), (0.1, luna.REQUEST_VERSION))
+        self.assertNotIn("worth", labels)
         self.assertNotIn("share_call", labels)
 
     def test_family_request_merges_member_messages_newest_first_and_prices_them(self) -> None:
@@ -325,11 +326,11 @@ class BoundedWorthTests(StoreTests):
             request = baseline._request(family)
             expected[decisions.request_digest(luna.REQUEST_VERSION, request)] = request
         self.assertEqual(list(expected), [
-            "85ed0d8b3d1208bd5e9ef6a0b04a567d3c6eb51b5730b824b20f58552157ec7a",
-            "18473699820d84d6738e88dd0f1c3503f31b18c961374a421ae70c08cc95909f",
-            "11c1720dc52dcd46a774979f08e19cc547d4a583f3bfe3facd23467399b74f5c",
-            "c17c92e6e452a85e0d2cce55faf198e989cfb4a634f17c2eff91955295895750",
-            "84c280f97300b91bd2c1fd711139794e802eb07d055203d193c9404fc7413cd5",
+            "0dcfe480709a49ed6afc74d48ef35ad4a7bb8a1817d4ba76fea9a32c7fc51a7f",
+            "0da5eeb9207a7a89ac2a4c094f02657407d495f5fd6be4e64e625537463c1a02",
+            "da54fceb57c60ec2cf3a66d02c6db918ce75991cb376cf7ffbbc4cb4e7627a52",
+            "740c96634e1256be7bde9500ca744156bf7a21deeb30bcc2720f39bf17a7b3b4",
+            "025f6387c31d45084d71efa544008cc6b746b2b20fa67f4d05730f6204473c1d",
         ])
         sent = []
         progress = []
@@ -360,7 +361,7 @@ class BoundedWorthTests(StoreTests):
         rows = self.conn.execute("SELECT candidate_id, worth, labels_json FROM worth ORDER BY candidate_id").fetchall()
         for row, request in zip(rows, expected.values()):
             labels = {**luna.labels(answers_for(request)), "version": luna.REQUEST_VERSION}
-            self.assertEqual((row["worth"], json.loads(row["labels_json"])), (labels["worth"], labels))
+            self.assertEqual((row["worth"], json.loads(row["labels_json"])), ("yes", labels))
 
     def test_duplicate_refused_request_is_only_asked_once_across_batches(self) -> None:
         node = Worth(self.conn, self.root, limit=DEFAULT_LIMIT)
@@ -444,13 +445,25 @@ class LabelsTests(unittest.TestCase):
         declined = [*ANSWERS, {"type": "refusal", "name": "is_minor"}]
         self.assertFalse(luna.refused(declined))
         self.assertNotIn("is_minor", luna.labels(declined))
+        # An unanswered detector is not a yes: the family is asked again.
+        self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "mailbox"}]))
 
-    def test_the_reason_names_what_points_to_the_verdict(self) -> None:
-        labels = {"real_relationship": 0.9, "work_signal": 0.7, "professional_standing": 0.5, "noise": 0.1,
-                  "transactional_only": 0.5, "evidence_incomplete": 0.2}
-        self.assertEqual(reason(labels, "yes"), "Looks like direct correspondence and work-related contact. "
-                                                "There's little evidence of unsolicited outreach or broadcasts.")
-        self.assertEqual(reason(labels, "maybe"), "The signals give no clear explanation to single out.")
+    def test_a_detector_at_the_threshold_is_no_and_the_reason_names_it(self) -> None:
+        fired = {"broadcast": 0.1, "mailbox": 0.98, "vendor_only": 0.2, "intermediary": 0.75}
+        self.assertEqual(decide(fired), "no")
+        self.assertEqual(reason(fired, "no"), "Looks like a shared mailbox or role account (0.98) and "
+                                               "an assistant acting for someone else (0.75).")
+
+    def test_below_the_threshold_is_yes_and_the_reason_names_the_closest_call(self) -> None:
+        quiet = {"broadcast": 0.1, "mailbox": 0.0, "vendor_only": 0.2, "intermediary": 0.3}
+        self.assertEqual((decide(quiet), reason(quiet, "yes")), ("yes", "Nothing automated or transactional stands out."))
+        near = {**quiet, "vendor_only": 0.6}
+        self.assertEqual(reason({**quiet, "mailbox": 0.7499}, "yes"), "Nothing automated or transactional stands out; "
+                                                                      "the closest call was a shared mailbox or role account (0.74).")
+        self.assertEqual((decide(near), reason(near, "yes")), ("yes", "Nothing automated or transactional stands out; "
+                                                                      "the closest call was a vendor the owner only buys from (0.60)."))
+        # A declined detector did not fire.
+        self.assertEqual(decide({"broadcast": 0.2}), "yes")
 
 
 def saved(**overrides: Any) -> dict[str, Any]:

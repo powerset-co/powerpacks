@@ -217,7 +217,8 @@ class SharePeople:
                 recency_days=cells.get("recency_days"),
                 cadence=str(cells.get("cadence") or ""),
                 direction=str(cells.get("direction") or ""),
-                worth=decision["worth"] if decision is not None else "",
+                # A machine "maybe" from before the detectors (2026-10-28) is not a call: not assessed.
+                worth=decision["worth"] if decision is not None and decision["worth"] != "maybe" else "",
                 worth_source=decision["decided_by"] if decision is not None else "",
                 relationship_kind=kind,
                 mode=str(cells.get("mode") or ""),
@@ -316,7 +317,7 @@ def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:
         return "human_worth"
     if flag:
         return flag
-    return f"worth_{decision['worth']}" if decision is not None else "unjudged"
+    return f"worth_{decision['worth']}" if decision is not None and decision["worth"] != "maybe" else "unjudged"
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))

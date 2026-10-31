@@ -51,7 +51,6 @@ export type TextKind =
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
   reason: {
     worth_yes: "Keep",
-    worth_maybe: "Maybe",
     worth_no: "Skip",
     unjudged: "Not assessed",
     owner: "You (the owner)",
@@ -66,7 +65,7 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     automated_sender: "Automated sender",
     stranger: "Stranger",
   },
-  worth: { yes: "Keep", maybe: "Maybe", no: "Skip", unjudged: "Not assessed" },
+  worth: { yes: "Keep", no: "Skip", unjudged: "Not assessed" },
   source: { human: "You", machine: "AI" },
   intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
   function: { founder_exec: "Founder or executive", people: "People and recruiting" },
