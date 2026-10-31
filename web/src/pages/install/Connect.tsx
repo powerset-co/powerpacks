@@ -52,31 +52,16 @@ function Line({ children, bad = false }: { children: ReactNode; bad?: boolean })
 const TODO: Record<ConnectSource, string> = {
   linkedin: "Sign in to LinkedIn in the window that opens.",
   gmail: "Sign in to Google in the window that opens.",
-  whatsapp: "In WhatsApp on your phone, go to Linked devices and scan this code.",
+  whatsapp: "In WhatsApp on your phone, go to Linked devices and scan the code.",
 }
 
-/** WhatsApp's code, in a box of its own size from the start, so nothing moves when it arrives. */
-/** The WhatsApp code, opened large on a light card as soon as WhatsApp waits on a scan: a phone
- *  reads a big, sharp code before it changes (every 20 seconds). Closed, the small one reopens it;
- *  both follow the same polled url. */
+/** The WhatsApp code, in one place: a large card that opens by itself as soon as WhatsApp waits on a
+ *  scan, so a phone reads it before it changes (every 20 seconds). Closed, "Show code" reopens it. */
 function CodeBox({ url }: { url?: string }) {
   const [open, setOpen] = useState(true)
-  const code = url ? (
-    <img src={url} alt="WhatsApp code to scan" className="size-full [image-rendering:pixelated]" />
-  ) : (
-    <Spinner />
-  )
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <span className="mt-1 flex flex-col items-start gap-1">
-        <DialogTrigger
-          aria-label="Show the WhatsApp code larger"
-          className="grid size-40 cursor-zoom-in place-items-center rounded-[var(--radius-s)] border-0 bg-white p-2 text-muted-foreground"
-        >
-          {code}
-        </DialogTrigger>
-        <DialogTrigger className={LINK}>Show larger</DialogTrigger>
-      </span>
+      <DialogTrigger className={LINK}>Show code</DialogTrigger>
       <DialogContent className="w-[min(420px,100%)] items-center border-0 bg-[#f2f2f2] p-6 text-[#111]">
         <DialogHeader className="w-full">
           <DialogTitle>Scan with WhatsApp</DialogTitle>
@@ -86,7 +71,11 @@ function CodeBox({ url }: { url?: string }) {
           </DialogDescription>
         </DialogHeader>
         <span className="grid size-80 place-items-center rounded-[var(--radius-s)] bg-white p-3 text-[#555]">
-          {code}
+          {url ? (
+            <img src={url} alt="WhatsApp code to scan" className="size-full [image-rendering:pixelated]" />
+          ) : (
+            <Spinner />
+          )}
         </span>
       </DialogContent>
     </Dialog>
