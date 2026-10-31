@@ -45,7 +45,13 @@ function ProfileForm({ busy, onAnswer }: { busy: boolean; onAnswer: (url: string
  *  screen before it starts (Connect.tsx); what it can still ask for gets a button here: a
  *  Powerset sign-in gone stale (in the default browser, then the app comes back forward), the
  *  owner's LinkedIn profile, and a step that stopped. */
-export function DesktopSetup({ data }: { data: InstallStatus }) {
+export function DesktopSetup({
+  data,
+  onContinue = continueSetup,
+}: {
+  data: InstallStatus
+  onContinue?: (answer: SetupAnswer) => Promise<void>
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const action = data.action
@@ -67,7 +73,7 @@ export function DesktopSetup({ data }: { data: InstallStatus }) {
       .catch((caught: unknown) => setError(errorText(caught)))
       .finally(() => setBusy(false))
   }, [])
-  const answer = (value: SetupAnswer) => run(() => continueSetup(value))
+  const answer = (value: SetupAnswer) => run(() => onContinue(value))
   const stopped =
     data.status === "failed" ||
     (data.status === "waiting" && !data.installer_pid && STOPPED.has(action?.kind ?? ""))

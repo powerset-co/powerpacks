@@ -155,6 +155,7 @@ TURBOPUFFER_FILTER_OPERATORS = {
     # Education prefilter namespace.
     "person_id": ["In"],
     "canonical_education_id": ["In"],
+    "education_id": ["In"],
     "school_name": ["ContainsAllTokens", "Eq"],
     "degree_normalized": ["In"],
     "field_of_study": ["ContainsAllTokens"],

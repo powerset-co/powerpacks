@@ -18,7 +18,7 @@ export interface UpdateProgress {
   total: number | null
 }
 
-export const UPDATE_INTERVAL_MS = 12 * 60 * 60 * 1000
+export const UPDATE_INTERVAL_MS = 30 * 60 * 1000
 const DISMISSED_KEY = "update.dismissed"
 
 function isUpdate(raw: unknown): raw is Update {

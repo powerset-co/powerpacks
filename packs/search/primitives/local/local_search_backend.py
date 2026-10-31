@@ -106,6 +106,14 @@ def namespace(logical_name: str = "people") -> Any:
     return local_store().namespace(logical_name)
 
 
+# The local index rolls schools up when it is built, so a parent's rows already carry its id.
+SCHOOL_FILTER_FIELD = "canonical_education_id"
+
+
+async def school_families(school_ids: list[str]) -> dict[str, list[str]]:
+    return {school_id: [school_id] for school_id in school_ids}
+
+
 async def filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple,

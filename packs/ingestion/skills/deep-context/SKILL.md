@@ -63,12 +63,12 @@ visible task/plan tool and keep them current yourself. The worker in tmux runs c
 prints stage lines; it never creates, updates or reports tasks, and never speaks to the user.
 
 1. Confirm owner profile
-2. Load imported contacts
-3. Collect messages and emails
-4. Build dossiers
-5. Merge duplicate people
-6. Assess network worth
-7. Enrich identities
+2. Discovering your contacts
+3. Reading your messages
+4. Learning about your contacts
+5. Combining duplicate contacts
+6. Grouping each person's contacts
+7. Enriching your contacts
 8. Export people, decide the share list and build the search index
 9. Review LinkedIn matches
 10. Update the index with reviewed matches

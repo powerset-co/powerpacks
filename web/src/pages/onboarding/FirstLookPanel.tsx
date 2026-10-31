@@ -10,7 +10,6 @@ import { AGENT } from "@/lib/nav"
 import { cn } from "@/lib/utils"
 
 import { Note } from "./Frame"
-import { STEPS } from "./steps"
 
 const SHOWN = 3
 const CHIP =
@@ -115,7 +114,6 @@ export function FirstLookPanel({
     retry: false,
   })
   const shown = recognizable(look.people)
-  const sources = STEPS.find((step) => step.key === "sources")
   const answered = asked !== null && answer.data !== undefined
   return (
     <div className="rise-in flex flex-col gap-5" data-first-look>
@@ -168,7 +166,7 @@ export function FirstLookPanel({
       {ready ? (
         <div className="flex flex-wrap gap-2">
           {sourcesNext ? (
-            <Button variant="primary" onClick={() => sources && void navigate(sources.href)}>
+            <Button variant="primary" onClick={() => void navigate("/accounts")}>
               Add more sources
             </Button>
           ) : null}

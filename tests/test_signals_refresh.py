@@ -133,7 +133,8 @@ class SignalsRefreshTests(StoreTests):
                 self.assertFalse(worker.is_alive(), "check blocked the request thread")
                 status = self.signals.status()
                 self.assertEqual((status["status"], status["message"], status["done"], status["total"]),
-                                 ("running", "Reading families", 1, 2))
+                                 ("running", "Grouping each person's contacts: 1 of 2", 1, 2))
+                print(status["message"], {"done": status["done"], "total": status["total"]})
                 self.assertIsNone(status["plan"])
                 with self.assertRaisesRegex(ValueError, "already"):
                     self.signals.start((), None)
@@ -167,11 +168,38 @@ class SignalsRefreshTests(StoreTests):
                 caller.join(0.1)
                 self.assertFalse(caller.is_alive(), "refresh blocked the request thread")
                 self.assertEqual(self.signals.status()["status"], "running")
+                self.assertEqual(self.signals.status()["message"], "Grouping each person's contacts")
             finally:
                 release.set()
                 caller.join(5)
                 status = self._finished()
         self.assertEqual(status["status"], "completed", status)
+
+    def test_check_starts_without_a_count_and_keeps_it_when_no_families_are_pending(self) -> None:
+        estimate = Worth.estimate
+
+        def empty_estimate(node):
+            self.assertEqual(self.signals.status()["message"], "Grouping each person's contacts")
+            result = estimate(node)
+            self.assertEqual(self.signals.status()["message"], "Grouping each person's contacts")
+            return result
+
+        with NO_CALLS, mock.patch.object(Worth, "_build_families", return_value=[]), \
+                mock.patch.object(Worth, "estimate", empty_estimate):
+            self.assertEqual(self._check(()).people, 0)
+
+    def test_refresh_updates_people_without_a_count(self) -> None:
+        self._cache(self.families[0])
+
+        def updating_people():
+            self.assertEqual(self.signals.status()["message"], "Updating People")
+            self.assertEqual((self.signals.status()["done"], self.signals.status()["total"]), (0, 0))
+
+        with NO_CALLS, mock.patch.object(PersonLabels, "execute", side_effect=updating_people) as labels:
+            self.signals.start(("p:a",), None)
+            status = self._finished()
+        self.assertEqual(status["status"], "completed", status)
+        labels.assert_called_once()
 
     def test_check_failure_is_reported_without_changing_signals_or_calling_providers(self) -> None:
         before = self._snapshot()

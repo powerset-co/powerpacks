@@ -1,9 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
-import { MemoryRouter } from "react-router-dom"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-
-import { useSetupDone } from "@/hooks/useSetupDone"
 
 import { Sidebar } from "./Sidebar"
 
@@ -24,12 +22,17 @@ vi.mock("@/lib/api/install", () => install)
 vi.mock("@/pages/agent/Chats", () => ({ Chats: () => null }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
 
+function Path() {
+  return <span data-testid="path">{useLocation().pathname}</span>
+}
+
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/agent"]}>
         <Sidebar />
+        <Path />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -51,32 +54,60 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   vi.unstubAllGlobals()
 })
 
-it("lists Setup until setup is done", async () => {
+it("lists the pages, Searches heading the chats instead of a page link", async () => {
   mount()
-  await waitFor(() => expect(screen.getByRole("link", { name: "Setup" })).toBeTruthy())
-  expect(screen.getByRole("link", { name: "People" })).toBeTruthy()
-  // Searches heads the chats section instead of being a page link.
+  await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
   expect(screen.queryByRole("link", { name: "Searches" })).toBeNull()
+  expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
 })
 
-it("turns the Setup item while setup runs, the running step's line as its tip", async () => {
+it("shows the import while it runs, with no dismiss, opening the Import screen", async () => {
   install.fetchInstall.mockResolvedValue({
     status: "running",
+    step: "index",
     message: "Building your search index",
+    updated_at: "2026-10-30T07:32:12Z",
     steps: {},
   })
   mount()
-  const setup = await screen.findByRole("link", { name: "Setup" })
-  await waitFor(() => expect(setup.getAttribute("title")).toBe("Building your search index"))
-  expect(setup.querySelector(".animate-spin")).toBeTruthy()
+  expect(await screen.findByText("Importing")).toBeTruthy()
+  expect(screen.getByText("Building your search index")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Dismiss this import" })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "View in Accounts" }))
+  await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/accounts"))
 })
 
-it("drops Setup once setup is done; Settings offers Repair setup instead", async () => {
-  vi.mocked(useSetupDone).mockReturnValue(true)
+it("keeps a stopped import, with no dismiss", async () => {
+  install.fetchInstall.mockResolvedValue({
+    status: "failed",
+    step: "gmail_sync",
+    message: "Gmail sync stopped",
+    updated_at: "2026-10-30T07:32:12Z",
+    steps: {},
+  })
+  mount()
+  expect(await screen.findByText("Import stopped")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Dismiss this import" })).toBeNull()
+})
+
+it("lets a finished import be dismissed, and stays dismissed for that run", async () => {
+  install.fetchInstall.mockResolvedValue({
+    status: "completed",
+    step: "ready",
+    message: "Search is ready: 378 people searchable.",
+    updated_at: "2026-10-30T07:37:30Z",
+    steps: {},
+  })
+  mount()
+  expect(await screen.findByText("Import done")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss this import" }))
+  expect(screen.queryByText("Import done")).toBeNull()
+  cleanup()
   mount()
   await waitFor(() => expect(screen.getByRole("link", { name: "People" })).toBeTruthy())
-  expect(screen.queryByRole("link", { name: "Setup" })).toBeNull()
+  expect(screen.queryByText("Import done")).toBeNull()
 })

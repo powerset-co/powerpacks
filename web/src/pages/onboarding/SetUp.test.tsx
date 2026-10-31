@@ -5,6 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import type { InstallStatus } from "@/types/install"
 
+import { Checklist } from "./Checklist"
+import { useRun } from "./run"
+function ImportProgress() {
+  return <Checklist run={useRun(() => true)} />
+}
 import { SetUp } from "./SetUp"
 
 const invoke = vi.fn((_command: string, _args?: unknown) => Promise.resolve(null))
@@ -80,13 +85,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function mount() {
+function mount(path = "/onboarding/setup") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/onboarding/setup"]}>
+      <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/onboarding/:step" element={<SetUp />} />
+          <Route path="/onboarding/setup" element={<SetUp />} />
+          <Route path="/accounts" element={<ImportProgress />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -197,28 +203,30 @@ it("a LinkedIn-only run lists its two rows, Modal's words with a count and time 
   ])
 })
 
-it("an import run lists every row in its plan, deep context with its count", async () => {
-  const plan = [
-    "account",
-    "sources",
-    "linkedin_login",
-    "gmail_tools",
-    "gmail_login",
-    "imessage_access",
-    "whatsapp_tools",
-    "whatsapp_login",
-    "linkedin",
-    "gmail_sync",
-    "gmail_import",
-    "imessage_import",
-    "whatsapp_sync",
-    "whatsapp_import",
-    "deep_context",
-    "enrich",
-    "index",
-    "validate",
-    "ready",
-  ]
+const IMPORT_PLAN = [
+  "account",
+  "sources",
+  "linkedin_login",
+  "gmail_tools",
+  "gmail_login",
+  "imessage_access",
+  "whatsapp_tools",
+  "whatsapp_login",
+  "linkedin",
+  "gmail_sync",
+  "gmail_import",
+  "imessage_import",
+  "whatsapp_sync",
+  "whatsapp_import",
+  "deep_context",
+  "enrich",
+  "index",
+  "validate",
+  "ready",
+]
+
+it("Import lists every row in its run's plan, deep context with its count", async () => {
+  const plan = IMPORT_PLAN
   const before = plan.slice(0, plan.indexOf("deep_context"))
   state.record = {
     ...READING,
@@ -232,7 +240,7 @@ it("an import run lists every row in its plan, deep context with its count", asy
     },
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
-  mount()
+  mount("/accounts")
   await screen.findByRole("heading", { name: "Learning who they are" })
   expect(rows()).toEqual([
     ["done", "whatsapp_login done"],
@@ -246,5 +254,11 @@ it("an import run lists every row in its plan, deep context with its count", asy
   ])
   expect(screen.getByText("Learning about your contacts: 40 of 298")).toBeTruthy()
   expect(screen.queryByRole("progressbar")).toBeNull()
-  expect(screen.getByRole("button", { name: "Start using Powerpacks now" })).toBeTruthy()
+})
+
+it("Set up never shows an import run's record", async () => {
+  state.record = { ...READING, plan: IMPORT_PLAN, step: "gmail_sync", message: "Syncing Gmail" }
+  mount("/onboarding/setup")
+  await screen.findByText("Reading your progress…")
+  expect(screen.queryByText("Syncing Gmail")).toBeNull()
 })

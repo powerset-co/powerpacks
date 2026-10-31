@@ -315,11 +315,12 @@ class ResultsWebTest(unittest.TestCase):
                 base, "quick", score=0.78, title="Technical Recruiter", company="Example Labs",
                 query="technical recruiters in Austin")["arm"]["artifacts"]
             record_quick_search(root, "recruiters-austin", query="technical recruiters in Austin",
-                                filters=filters, traits=traits, created_at="2026-10-16T00:00:00Z",
+                                title="Austin recruiters", filters=filters, traits=traits, created_at="2026-10-16T00:00:00Z",
                                 jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"],
                                 status="completed")
             search = load_search(root, "recruiters-austin")
         assert search is not None
+        self.assertEqual(search.title, "Austin recruiters")
         pond = search.ponds[0]
         self.assertEqual(pond.query, "technical recruiters in Austin")
         self.assertEqual(pond.filters, filters)
