@@ -306,7 +306,7 @@ it("shows Working from the click until the sign-in answer after its run is in, n
   expect(within(linkedin).queryByText("Sign in to LinkedIn in the window that opens.")).toBeNull()
 })
 
-it("gives WhatsApp's code its box from the click, and the code fills it", async () => {
+it("opens WhatsApp's code card from the click, and the code fills it", async () => {
   state.launch = {
     ...NOTHING,
     step: "whatsapp_tools",
@@ -318,9 +318,10 @@ it("gives WhatsApp's code its box from the click, and the code fills it", async 
   const whatsapp = row("WhatsApp")
   fireEvent.click(await within(whatsapp).findByRole("button", { name: "WhatsApp: Connect" }))
   expect(
-    within(whatsapp).getByText("In WhatsApp on your phone, go to Linked devices and scan this code."),
+    within(whatsapp).getByText("In WhatsApp on your phone, go to Linked devices and scan the code."),
   ).toBeTruthy()
-  expect(within(whatsapp).queryByAltText("WhatsApp code to scan")).toBeNull()
+  expect(await screen.findByRole("dialog", { name: "Scan with WhatsApp" })).toBeTruthy()
+  expect(screen.queryByAltText("WhatsApp code to scan")).toBeNull()
   await waitFor(() =>
     expect(state.posts).toContainEqual({ url: "/api/install/connect", body: { source: "whatsapp" } }),
   )
@@ -332,7 +333,7 @@ it("gives WhatsApp's code its box from the click, and the code fills it", async 
     message: "Connect WhatsApp",
     action: { kind: "qr", qr_url: "/api/install/qr?connect=1&t=1" },
   }
-  const code = await within(whatsapp).findByAltText("WhatsApp code to scan", {}, { timeout: 4_000 })
+  const code = await screen.findByAltText("WhatsApp code to scan", {}, { timeout: 4_000 })
   expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
   expect(within(whatsapp).queryByText("Connect WhatsApp")).toBeNull()
   expect(within(whatsapp).queryByText("Preparing")).toBeNull()
