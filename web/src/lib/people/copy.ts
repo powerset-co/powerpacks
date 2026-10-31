@@ -6,10 +6,42 @@ import { CHANNELS } from "@/lib/channels"
 import { parseDate, plural } from "@/lib/copy"
 import type { CalmPhase, UploadPhase } from "@/lib/people/upload"
 
-// Brand casing, keyed lowercase: the channel titles plus JEV.
-const BRANDS: Readonly<Record<string, string>> = {
+// Acronyms and fixed spellings in role and filter names: "ai engineer" -> "AI Engineer". "IT" stays out:
+// sentence case would turn every "it" into "IT".
+const ACRONYMS = [
+  "AI",
+  "ML",
+  "LLM",
+  "NLP",
+  "API",
+  "UI",
+  "UX",
+  "QA",
+  "SRE",
+  "HR",
+  "GTM",
+  "SDR",
+  "BDR",
+  "VP",
+  "SVP",
+  "EVP",
+  "CEO",
+  "CTO",
+  "CFO",
+  "COO",
+  "CMO",
+  "CPO",
+  "CRO",
+  "CISO",
+  "SaaS",
+  "iOS",
+]
+
+// Words that keep their own casing, keyed lowercase: the channel titles, JEV and the acronyms.
+const CASED: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(CHANNELS).map(([channel, { title }]) => [channel, title])),
   jev: "JEV",
+  ...Object.fromEntries(ACRONYMS.map((word) => [word.toLowerCase(), word])),
 }
 
 export type TextKind =
@@ -66,9 +98,9 @@ export function humanize(value: string | number | null | undefined): string {
     .trim()
 }
 
-/** Title case, brand names kept: "vice-president" -> "Vice-President", "vp finance" -> "Vp Finance". */
+/** Title case, brand names and acronyms kept: "vice-president" -> "Vice-President", "vp finance" -> "VP Finance". */
 export function titleCase(value: string | number | null | undefined): string {
-  const cap = (word: string) => BRANDS[word.toLowerCase()] ?? word.charAt(0).toUpperCase() + word.slice(1)
+  const cap = (word: string) => CASED[word.toLowerCase()] ?? word.charAt(0).toUpperCase() + word.slice(1)
   return humanize(value)
     .split(" ")
     .filter(Boolean)
@@ -76,13 +108,13 @@ export function titleCase(value: string | number | null | undefined): string {
     .join(" ")
 }
 
-/** Sentence case, brand names kept: "close_friend" -> "Close friend", "imessage" -> "iMessage". */
+/** Sentence case, brand names and acronyms kept: "close_friend" -> "Close friend", "imessage" -> "iMessage". */
 export function sentence(value: string | number | null | undefined): string {
   const words = humanize(value).split(" ").filter(Boolean)
   const [first] = words
   if (first === undefined) return ""
-  const cased = words.map((word) => BRANDS[word.toLowerCase()] ?? word)
-  if (!BRANDS[first.toLowerCase()]) cased[0] = first.charAt(0).toUpperCase() + first.slice(1)
+  const cased = words.map((word) => CASED[word.toLowerCase()] ?? word)
+  if (!CASED[first.toLowerCase()]) cased[0] = first.charAt(0).toUpperCase() + first.slice(1)
   return cased.join(" ")
 }
 
