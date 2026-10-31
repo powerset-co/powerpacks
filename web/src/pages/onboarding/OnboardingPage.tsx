@@ -1,6 +1,7 @@
 import { useEffect, type ComponentType } from "react"
 import { Navigate, useParams } from "react-router-dom"
 
+import { ChromeProfile } from "./ChromeProfile"
 import { Codex } from "./Codex"
 import { LinkedIn } from "./LinkedIn"
 import { SetUp } from "./SetUp"
@@ -8,13 +9,14 @@ import { SignUp } from "./SignUp"
 import { stepAt, type StepKey } from "./steps"
 
 const SCREENS: Record<StepKey, ComponentType> = {
+  chrome: ChromeProfile,
   signup: SignUp,
   codex: Codex,
   linkedin: LinkedIn,
   setup: SetUp,
 }
 
-/** The onboarding, one screen per step at /onboarding/<step>: sign up, ChatGPT, LinkedIn, set up (with the
+/** The onboarding, one screen per step at /onboarding/<step>: Chrome profile, sign up, ChatGPT, LinkedIn, set up (with the
  *  first look). Later sources and imports live in Accounts; old bookmarks land there. */
 export function OnboardingPage() {
   const { step } = useParams()

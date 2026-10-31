@@ -28,9 +28,7 @@ import json
 import sqlite3
 import subprocess
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +46,7 @@ from packs.ingestion.primitives.common.paths import (  # noqa: E402
 from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE  # noqa: E402
 from packs.ingestion.primitives.discover.messages.chatdb import apple_timestamp_to_iso  # noqa: E402
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB  # noqa: E402
+from packs.ingestion.primitives.setup.automations.chrome_profiles import has_cookie  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import auth as wacli_auth  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveFailed  # noqa: E402
@@ -68,7 +67,6 @@ STALE_LINKEDIN_DAYS = 30
 
 MSGVAULT_HOME = DEFAULT_MSGVAULT_DB.parent
 # Seconds from Chrome's cookie epoch (1601-01-01) to Unix time's.
-CHROME_EPOCH_SECONDS = 11_644_473_600
 # Reads Messages' store, or exits non-zero: run in a child process (_messages_readable).
 _MESSAGES_PROBE = ("import sqlite3, sys; sqlite3.connect(f'file:{sys.argv[1]}?mode=ro', uri=True)"
                    ".execute('SELECT COUNT(*) FROM sqlite_master').fetchone()")
@@ -123,16 +121,8 @@ def signed_in(signins: dict[str, SignIn] | None = None, sources: tuple[str, ...]
 
 
 def _linkedin_session() -> bool:
-    """The sign-in browser's LinkedIn session: an unexpired `li_at` cookie in its profile, read
-    without taking Chrome's lock."""
-    cookies = BROWSER_PROFILE.expanduser() / "Default" / "Cookies"
-    try:
-        with closing(sqlite3.connect(f"file:{cookies}?mode=ro&immutable=1", uri=True)) as conn:
-            (expires,) = conn.execute("SELECT MAX(expires_utc) FROM cookies WHERE host_key LIKE '%linkedin.com' "
-                                      "AND name = 'li_at'").fetchone()
-    except sqlite3.Error:
-        return False
-    return expires is not None and expires / 1_000_000 - CHROME_EPOCH_SECONDS > time.time()
+    """The sign-in browser's LinkedIn session: an unexpired `li_at` cookie in its profile."""
+    return has_cookie(BROWSER_PROFILE.expanduser() / "Default" / "Cookies", "linkedin.com", "li_at")
 
 
 def _messages_readable() -> bool:

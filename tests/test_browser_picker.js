@@ -77,3 +77,16 @@ assert.equal(picker([]).whichBrowser(), null);
 assert.equal(picker([]).output[0], "null");
 assert.throws(() => picker([]).browserTarget(), /Powerpacks could not download its browser/);
 console.log("Browser picker tests passed.");
+
+// A profile copied from Chrome opens in the installed Chrome with the real Keychain.
+{
+  const profile = "/fixture/.powerpacks/browser-profiles/linkedin";
+  const copied = picker([own, apps[0], chromium, `${profile}/chrome-profile.json`], ["chromium-1243"],
+    { POWERPACKS_BROWSERS_DIR: own });
+  assert.equal(copied.whichBrowser(profile).path, apps[0]);
+  assert.deepEqual(Array.from(copied.ignoredArgs(profile).ignoreDefaultArgs),
+    ["--enable-automation", "--use-mock-keychain", "--password-store=basic"]);
+  const empty = picker([own, apps[0], chromium], ["chromium-1243"], { POWERPACKS_BROWSERS_DIR: own });
+  assert.equal(empty.whichBrowser(profile).path, chromium);
+  assert.deepEqual(Array.from(empty.ignoredArgs(profile).ignoreDefaultArgs), ["--enable-automation"]);
+}
