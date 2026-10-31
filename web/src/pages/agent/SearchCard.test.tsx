@@ -77,7 +77,7 @@ it("shows the query, the traits and the filled filters read-only on a card that 
   expect(screen.getByText("New York Metropolitan Area").textContent).toContain("metro")
   expect(screen.getByText("Vice-President")).toBeTruthy()
   expect(screen.getByText("5 – any")).toBeTruthy()
-  expect(screen.getByText("Vp Finance")).toBeTruthy()
+  expect(screen.getByText("VP Finance")).toBeTruthy()
   expect(screen.getByText("Finance Lead")).toBeTruthy()
   expect(screen.queryByText("Companies")).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()

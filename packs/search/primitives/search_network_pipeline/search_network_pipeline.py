@@ -21,7 +21,7 @@ Changelog:
 """
 from __future__ import annotations
 
-import argparse, hashlib, json, os, re, shlex, subprocess, sys, threading, time
+import argparse, asyncio, hashlib, json, os, re, shlex, subprocess, sys, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -259,8 +259,17 @@ def reviewed_dir(value: str|None, label: str) -> str|None:
         raise Failed(f"{label} is not a readable directory: {path}")
     return str(path)
 
+TITLE_WORDS, TITLE_CHARS = 5, 48
+
+def clamp_title(text: str) -> str:
+    """The search's name in the side nav and headers: the agent's 3-5 words, cut to fit if it wrote more."""
+    title=" ".join(text.split()[:TITLE_WORDS])
+    return title if len(title)<=TITLE_CHARS else title[:TITLE_CHARS-1].rstrip()+"…"
+
 def execution_contract_suffix(args) -> str:
     parts: list[str]=cross_encoder_child_args(args)
+    if getattr(args,"title",""):
+        parts += ["--title",clamp_title(args.title)]
     if getattr(args,"evaluation_query",None):
         parts += ["--evaluation-query",args.evaluation_query]
     traits=normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
@@ -740,17 +749,35 @@ def configure_local_backend_mode(db_path: Path) -> None:
     search_backend_mode.configure_local_backend(db_path)
 
 def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
-    """Cheap filter-eligibility count so breadth is visible before LLM spend."""
+    """Count the people the run sends into filtering, before LLM spend.
+
+    A company-only search sends the company's people. With a role search, the run filters the
+    role search on the company only when filters_from_role_payload does (not in union mode), so
+    the count does the same.
+    """
     if not db_path.exists():
         return {"status": "skipped_no_db"}
     try:
         configure_local_backend_mode(db_path)
         from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
-        from search_common import filters_from_role_payload  # type: ignore
+        from local_resolve_companies import company_rows_for_names  # type: ignore
+        import local_search_backend  # type: ignore
+        from search_common import filters_from_role_payload, has_role_constraint  # type: ignore
 
-        store = LocalDuckDBSearchStore(str(db_path))
+        role_filters = payload_filters(payload)
+        if role_filters.get("company_names") and not role_filters.get("company_ids"):
+            local_search_backend.configure_local_backend(db_path)
+            rows = asyncio.run(company_rows_for_names(
+                role_filters["company_names"], None, top_k=20,
+            ))
+            role_filters["company_ids"] = [str(row["id"]) for row in rows if row.get("id")]
+        count_filter = filters_from_role_payload(role_filters)
+        if "company_ids" in role_filters and not has_role_constraint(role_filters):
+            company_filter = ("company_id", "In", role_filters["company_ids"])
+            count_filter = ("And", [count_filter, company_filter]) if count_filter else company_filter
+        store = LocalDuckDBSearchStore(str(db_path), read_only=True)
         try:
-            counts = store.filtered_people_count(filters_from_role_payload(payload_filters(payload)))
+            counts = store.filtered_people_count(count_filter)
         finally:
             store.conn.close()
         return {"status": "completed", **counts}
@@ -918,7 +945,9 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
-    l=load_ledger(lp); l["current_block"]=None; save(lp,l)
+    l=load_ledger(lp); l["current_block"]=None
+    if getattr(args,"title",""): l["title"]=clamp_title(args.title)
+    save(lp,l)
     normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
     args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
     args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
@@ -1003,6 +1032,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
     l=load_ledger(lp)
     l["mode"]="local_duckdb"; l["duckdb"]=str(db_path); l["current_block"]=None
+    if getattr(args,"title",""): l["title"]=clamp_title(args.title)
     save(lp,l)
     normalized_evaluation_traits_arg(getattr(args,"evaluation_traits_json",None))
     args.filter_system_file=reviewed_file(getattr(args,"filter_system_file",None),"filter system prompt")
@@ -1139,7 +1169,7 @@ def record_quick_run(result: dict[str, Any]) -> None:
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
     attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file"))
-    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], filters=filters,
+    record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], title=l.get("title"), filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
                         person_attribution=attribution, person_attribution_error=attribution_error)
@@ -1337,6 +1367,7 @@ def add_run(p):
     p.add_argument("--ledger")
     p.add_argument("--state")
     p.add_argument("--query", help="Retrieval strategy query recorded in task state")
+    p.add_argument("--title", default="", help="The search's 3-5 word name; longer is cut to fit")
     p.add_argument("--payload-json", help="Exact reviewed expansion payload; the only payload execution input")
     p.add_argument("--edits-json", help="The card's edits as one JSON file ({\"filters\": {key: value|null}, \"traits\": [...]}): applied to --payload-json before the run and logged in its folder's user-edits.jsonl")
     p.add_argument("--evaluation-query", help="Canonical plan/JD brief used only by filter/rerank")
@@ -1375,6 +1406,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
     p.add_argument("--query",required=True)
+    p.add_argument("--title", default="", help="The search's 3-5 word name, e.g. \"Open-source LLM builders\"; longer is cut to fit. Unstated: the query")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--output-dir")
     p.add_argument("--edits-json",help="The card's edits as one JSON file: its filters are applied to the prepared payload and logged in the output dir's user-edits.jsonl (the traits come from the query)")

@@ -60,6 +60,10 @@ def ensure_packages() -> None:
         raise RuntimeError("Missing required package: turbopuffer. Run bin/setup-python.")
 
 
+# People rows keep the school they wrote; a parent's filter is its family of ids.
+SCHOOL_FILTER_FIELD = "education_id"
+
+
 def namespace_name(logical_name: str = "people", *, config: Mapping[str, str] | None = None) -> str:
     config = os.environ if config is None else config
     env_key = f"POWERPACKS_TURBOPUFFER_{logical_name.upper()}_NAMESPACE"
@@ -92,6 +96,15 @@ def client() -> Any:
 
 def namespace(logical_name: str = "people") -> Any:
     return client().namespace(namespace_name(logical_name))
+
+
+async def school_families(school_ids: list[str]) -> dict[str, list[str]]:
+    """Each school with its children; a child has none, so naming one narrows to it."""
+    children = await filter_only_rows_for_namespace("schools", ("parent_id", "In", school_ids), ["parent_id"])
+    families = {school_id: [school_id] for school_id in school_ids}
+    for child in children:
+        families[child["parent_id"]].append(child["id"])
+    return families
 
 
 async def filter_only_rows_for_namespace(

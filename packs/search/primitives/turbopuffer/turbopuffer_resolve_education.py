@@ -31,6 +31,7 @@ from search_common import (  # noqa: E402
 
 
 STRONG_CONSISTENCY = {"level": "strong"}
+SCHOOL_ATTRIBUTES = ["school_name", "person_count", "parent_id"]
 
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -81,20 +82,23 @@ def is_affiliated_candidate(root_queries: list[str], school_name: str) -> bool:
     return bool(tokens and tokens[0] in set(root_queries))
 
 
-async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
-    filters = ("school_name", "ContainsAllTokens", query, {"last_as_prefix": True})
+async def query_schools(filters: tuple, *, limit: int) -> list[dict[str, Any]]:
     ns = turbopuffer_backend.namespace("schools")
 
     def run_query() -> Any:
         return ns.query(
             filters=filters,
             top_k=limit,
-            include_attributes=["school_name", "person_count"],
+            include_attributes=SCHOOL_ATTRIBUTES,
             consistency=STRONG_CONSISTENCY,
         )
 
     response = await asyncio.to_thread(run_query)
-    return [row_attrs(row, ["school_name", "person_count"]) for row in (response.rows or [])]
+    return [row_attrs(row, SCHOOL_ATTRIBUTES) for row in (response.rows or [])]
+
+
+async def query_school_rows(query: str, *, limit: int) -> list[dict[str, Any]]:
+    return await query_schools(("school_name", "ContainsAllTokens", query, {"last_as_prefix": True}), limit=limit)
 
 
 def without_alias(school_name: str) -> str:
@@ -122,11 +126,11 @@ async def query_people_school_ids(names: list[str], *, limit: int) -> list[dict[
                 filters=filters,
                 rank_by=("id", "asc"),
                 top_k=limit,
-                include_attributes=["canonical_education_id", "school_name"],
+                include_attributes=["education_id", "school_name"],
                 consistency=STRONG_CONSISTENCY,
             )
 
-        page = [row_attrs(row, ["canonical_education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
+        page = [row_attrs(row, ["education_id", "school_name"]) for row in ((await asyncio.to_thread(run_query)).rows or [])]
         rows.extend(page)
         if len(page) < limit:
             return rows
@@ -139,27 +143,42 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
     for query in [name, *root_queries]:
         query_rows.extend((query, row) for row in await query_school_rows(query, limit=limit))
 
+    # A match on a child stands for its parent: that is the id people are filed under.
+    parent_ids = sorted({str(row["parent_id"]) for _, row in query_rows if row.get("parent_id")})
+    parents = {row["id"]: row for row in await query_schools(("id", "In", parent_ids), limit=limit)} if parent_ids else {}
+
     counts: Counter[str] = Counter()
-    names_by_id: dict[str, Counter[str]] = {}
+    top_names: dict[str, str] = {}
+    matched_names: dict[str, set[str]] = {}
+    named_children: dict[str, dict[str, str]] = {}
     family_ids: set[str] = set()
+    query_words = set(school_tokens(name))
     for query, row in query_rows:
-        school_id = row.get("id")
+        school = parents[row["parent_id"]] if row.get("parent_id") else row
+        school_id = str(school.get("id") or "")
         if not school_id:
             continue
-        school_id = str(school_id)
-        counts[school_id] = max(counts[school_id], int(row.get("person_count") or 1))
-        school_name = str(row.get("school_name") or school_id)
-        names_by_id.setdefault(school_id, Counter())[school_name] += 1
-        if query in root_queries or is_affiliated_candidate(root_queries, school_name):
+        counts[school_id] = max(counts[school_id], int(school.get("person_count") or 1))
+        school_name = str(school.get("school_name") or school_id)
+        top_names[school_id] = school_name
+        matched_names.setdefault(school_id, {school_name}).add(str(row.get("school_name") or ""))
+        if row.get("parent_id") and query_words <= set(school_tokens(row.get("school_name"))):
+            named_children.setdefault(school_id, {})[str(row["id"])] = str(row["school_name"])
+        # A family is judged on the school's own name: a child called Columbian College doesn't put GWU in Columbia's.
+        if is_affiliated_candidate(root_queries, school_name) or (query in root_queries and any(word.startswith(query) for word in school_tokens(without_alias(school_name)))):
             family_ids.add(school_id)
 
+    # The index matches the last word as a prefix: a school holding the word itself beats a larger
+    # one that only starts with it ("TUM" is the Technical University of Munich, not "Tumor Immunology").
+    def has_query_words(school_id: str) -> bool:
+        return any(query_words <= set(school_tokens(school_name)) for school_name in matched_names[school_id])
+
     candidates = []
-    for school_id, count in counts.most_common(10):
-        display_name = names_by_id[school_id].most_common(1)[0][0]
+    for school_id, count in sorted(counts.most_common(10), key=lambda item: not has_query_words(item[0])):
         include = school_id in family_ids or (not candidates and not root_queries)
         candidates.append({
             "id": school_id,
-            "name": display_name,
+            "name": top_names[school_id],
             "matched_rows": count,
             "included": include,
             "match_family": bool(root_queries and school_id in family_ids),
@@ -170,12 +189,17 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
 
     # Every id people wrote one of the resolved names under, whatever the schools index calls it.
     lookup_names = list(dict.fromkeys([name, *(without_alias(c["name"]) for c in candidates if c["id"] in resolved_ids)]))
+    people_rows = await query_people_school_ids(lookup_names, limit=limit)
+    people_ids = sorted({str(row["education_id"]) for row in people_rows if row.get("education_id")})
+    schools = await query_schools(("id", "In", people_ids), limit=limit) if people_ids else []
+    top_ids = {str(school["id"]): str(school.get("parent_id") or school["id"]) for school in schools}
     people_counts: Counter[str] = Counter()
     people_names: dict[str, str] = {}
-    for row in await query_people_school_ids(lookup_names, limit=limit):
-        school_id = str(row.get("canonical_education_id") or "")
+    for row in people_rows:
+        school_id = str(row.get("education_id") or "")
         if not school_id:
             continue
+        school_id = top_ids.get(school_id, school_id)
         people_counts[school_id] += 1
         people_names.setdefault(school_id, str(row.get("school_name") or school_id))
     for school_id, count in people_counts.most_common():
@@ -190,10 +214,16 @@ async def resolve_name(name: str, *, limit: int) -> dict[str, Any]:
             "match_family": False,
             "from_people": True,
         })
+    resolved_ids = list(dict.fromkeys(resolved_ids))
+    children = await query_schools(("parent_id", "In", resolved_ids), limit=limit) if resolved_ids else []
     return {
         "query": name,
         "candidates": candidates,
-        "resolved_ids": list(dict.fromkeys(resolved_ids)),
+        "resolved_ids": resolved_ids,
+        "children": [{"id": child["id"], "name": child["school_name"], "parent_id": child["parent_id"], "matched_rows": int(child.get("person_count") or 0)}
+                     for child in children],
+        # The sub-schools this query names: passed as education_ids, they narrow a search to just them.
+        "named_child_ids": [child_id for school_id in resolved_ids for child_id in named_children.get(school_id, {})],
         "affiliated_queries": root_queries,
     }
 
@@ -236,10 +266,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         resolved_ids.extend(str(value) for value in resolution.get("resolved_ids") or [] if value)
 
     education_ids = list(dict.fromkeys([*existing_ids, *resolved_ids]))
+    # The prefilter reuses these children instead of asking the schools index again.
+    families: dict[str, list[str]] = {}
+    for resolution in resolutions:
+        for school_id in resolution.get("resolved_ids") or []:
+            families.setdefault(str(school_id), [str(school_id)])
+        for child in resolution.get("children") or []:
+            if child["id"] not in families[child["parent_id"]]:
+                families[child["parent_id"]].append(child["id"])
     return {
         "namespace": turbopuffer_backend.namespace_name("schools"),
         "education_names": names,
         "education_ids": education_ids,
+        "education_families": families,
         "resolutions": resolutions,
         "unresolved_names": [
             resolution["query"]
