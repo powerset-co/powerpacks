@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.52.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.51.0...powerpacks-v3.52.0) (2026-10-31)
+
+
+### Features
+
+* **worth:** yes unless a detector fires; no maybe ([#1001](https://github.com/powerset-co/powerpacks/issues/1001)) ([8de85d3](https://github.com/powerset-co/powerpacks/commit/8de85d389c6710e385e55653a2b4da22aed2418c))
+
 ## [3.51.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.50.0...powerpacks-v3.51.0) (2026-10-31)
 
 
