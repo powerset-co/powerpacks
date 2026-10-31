@@ -43,8 +43,10 @@ PROMPT = """For each school below, give its canonical institution name.
 Rules:
 1. A sub-school or program gets its parent university ("Harvard Business School" -> "Harvard University").
 2. A translation, abbreviation or spelling variant gets the common English name ("Kungliga tekniska högskolan" -> "KTH Royal Institute of Technology", "TU München" -> "Technical University of Munich").
-3. Leave out any school whose name is already canonical, and any you are unsure about.
-4. Campuses that are separate institutions stay separate ("University of California, Berkeley" stays itself).
+3. A rename gets the current name ("Ryerson University" -> "Toronto Metropolitan University"). An acquisition or merger does not: a college another school bought stays itself ("Mills College" stays itself).
+4. A high school, or a program for teenagers, stays itself even when a university's name is in it ("Tsinghua University High School" stays itself).
+5. A campus or college that is its own institution stays itself, even inside a system ("University of California, Berkeley" and "Hunter College" stay themselves).
+6. Two schools with similar names are not the same school ("Tulas University" is not the University of Tulsa). Leave out any school whose name is already canonical, and any you are unsure about.
 
 Schools:
 {schools}

@@ -17262,7 +17262,7 @@
 {"id": "a6b309a1-fc99-59b7-b18f-4e57ff2ab8cb", "key": "name:naval acadamy graduate", "parent_id": null, "school_name": "Naval Acadamy Graduate", "source": "llm"}
 {"id": "a6b41a7e-7190-5511-b9c1-6725ba9e8240", "key": "name:north salem high school", "parent_id": null, "school_name": "North Salem High School", "source": "llm"}
 {"id": "a6b4ff84-7a19-5116-9b54-168460affc6a", "key": "provider:6038985", "parent_id": null, "school_name": "Baptist University Of Florida", "source": "llm"}
-{"id": "a6bf8211-aba3-5ead-a197-3ef9a3a5394f", "key": "name:université paul sabatier toulouse iii", "parent_id": null, "school_name": "Université Paul Sabatier Toulouse III", "source": "llm"}
+{"id": "a6bf8211-aba3-5ead-a197-3ef9a3a5394f", "key": "name:université paul sabatier toulouse iii", "parent_id": "337eb22a-1e44-5ba8-aecb-e0a51a9572e3", "school_name": "Université Paul Sabatier Toulouse III", "source": "manual"}
 {"id": "a6c15cb0-1e0b-5c6b-b276-445398bdf9fb", "key": "name:saint marks school of texas", "parent_id": "379e675b-363a-5fe1-a7af-36aa0676f289", "school_name": "Saint Marks School of Texas", "source": "llm"}
 {"id": "a6c30f95-294b-5c2e-91be-91d1038bd631", "key": "name:enterprise state community college", "parent_id": "36178e0c-15bc-5809-b419-eda6844032a3", "school_name": "Enterprise State Community College", "source": "name"}
 {"id": "a6c4af86-af6f-50c8-a993-0f2ac2955030", "key": "name:lycee notre-dame providence", "parent_id": null, "school_name": "Lycee Notre-Dame Providence", "source": "llm"}
