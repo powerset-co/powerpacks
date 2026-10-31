@@ -10,6 +10,10 @@ parent. ``source`` says who decided: ``seed`` (the pre-RapidAPI mapping),
 ``manual``, ``name`` (same normalized name) or ``llm``. A null ``source`` means
 nobody has reviewed the row yet; ``update_school_parents`` only touches those.
 
+``school_name`` is written to the doc verbatim and is what released apps match a
+query against, so never trim an alias like "(MIT)" off a parent's name: an app
+that has not updated loses that search.
+
 ``data/education/school_parent_reviews.jsonl`` records why a reviewed rollup
 was kept or split: the flag, each independent check's reason, and the decision.
 """

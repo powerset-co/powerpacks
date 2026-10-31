@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 from packs.indexing.primitives.republish_school_parents.republish_school_parents import (
     PAGE_SIZE,
-    own_name,
     plan,
     run,
 )
@@ -22,14 +21,19 @@ def edge(edge_id, person, school):
     return {"id": edge_id, "person_id": person, "education_id": school, "canonical_education_id": school}
 
 
-class OwnNameTest(unittest.TestCase):
-    def test_a_name_a_child_covers_comes_off(self):
-        self.assertEqual(own_name("Harvard University (HARVARD COLLEGE)", ["Harvard College"]), "Harvard University")
-        self.assertEqual(own_name("UCLA (Bruins / Anderson)", ["The Anderson"]), "UCLA (Bruins)")
-
-    def test_an_acronym_no_child_covers_stays(self):
-        self.assertEqual(own_name("China Europe International Business School (CEIBS)", ["CEIBS Online"]), "China Europe International Business School (CEIBS)")
-        self.assertEqual(own_name("Universidad Central (CO)", []), "Universidad Central (CO)")
+class NameTest(unittest.TestCase):
+    def test_a_parent_keeps_its_name_exactly(self):
+        """Released apps match a query on the parent's name: trimming "(MIT)" broke "MIT" on 2026-10-31."""
+        rows = mapping(("mit", "Massachusetts Institute of Technology (MIT)", None), ("sloan", "MIT", "mit"))
+        schools = [
+            {"id": "mit", "school_name": "Massachusetts Institute of Technology (MIT)", "person_count": 1},
+            {"id": "sloan", "school_name": "MIT", "person_count": 1},
+        ]
+        writes = plan([edge("e1", "p1", "mit"), edge("e2", "p2", "sloan")], schools, rows)
+        self.assertEqual(
+            {patch["id"]: patch for patch in writes["school_patches"]},
+            {"mit": {"id": "mit", "person_count": 2}, "sloan": {"id": "sloan", "parent_id": "mit"}},
+        )
 
 
 class PlanTest(unittest.TestCase):
@@ -45,7 +49,7 @@ class PlanTest(unittest.TestCase):
     def test_counts_are_distinct_people_and_children_keep_their_docs(self):
         writes = plan(self.edges, self.schools, self.rows)
         self.assertEqual(writes["school_patches"], [
-            {"id": "kth", "school_name": "KTH", "person_count": 3},
+            {"id": "kth", "person_count": 3},
             {"id": "kungliga", "parent_id": "kth"},
             {"id": "empty", "parent_id": "kth"},
         ])
