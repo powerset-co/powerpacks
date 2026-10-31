@@ -12,6 +12,7 @@ from unittest import mock
 from packs.indexing.lib.artifacts import build_education_corpus, stable_school_uuid
 from packs.indexing.lib.identity import school_uuid
 from packs.indexing.lib.school_parents import (
+    MAPPING_PATH,
     add_schools,
     apply_canonical_names,
     apply_same_names,
@@ -25,6 +26,9 @@ from packs.indexing.primitives.update_school_parents import update_school_parent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packs/search/primitives/local"))
 import local_resolve_education  # noqa: E402
+
+
+REVIEWS_PATH = MAPPING_PATH.with_name("school_parent_reviews.jsonl")
 
 
 def row(school_id, name, key=None, parent_id=None, source=None):
@@ -152,6 +156,24 @@ class MappingFileTest(unittest.TestCase):
                 self.assertEqual(school_uuid(school["key"]), school["id"])
             if school["parent_id"]:
                 self.assertIsNone(rows[school["parent_id"]]["parent_id"])
+
+    def test_the_file_keeps_every_reviewed_decision(self):
+        rows = school_rows()
+        with REVIEWS_PATH.open(encoding="utf-8") as handle:
+            reviews = [json.loads(line) for line in handle if line.strip()]
+
+        def family(school):
+            return school["parent_id"] or school["id"]
+
+        tops_by_name = {}
+        for school in rows.values():
+            tops_by_name.setdefault(normalize_name(school["school_name"]), set()).add(family(school))
+        for review in reviews:
+            school = rows[review["id"]]
+            if review["decision"] == "merge":
+                self.assertIn(family(school), tops_by_name[normalize_name(review["parent"])], review["child"])
+            elif school["parent_id"] and review["decision"].startswith(("split", "reject")):
+                self.assertNotEqual(rows[school["parent_id"]]["school_name"], review["parent"], review["child"])
 
     def test_kth_rolls_up_in_the_built_corpus(self):
         people = [

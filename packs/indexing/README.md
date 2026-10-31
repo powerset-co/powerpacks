@@ -49,6 +49,24 @@ children. People rows stay as they are: search finds a parent, then filters
 which backs the school docs up first. `ALEPH_ENV` picks the family: unset is
 prod, `dev` is `_dev`. Correcting the mapping and rerunning undoes a merge.
 
+### Keeping the mapping right
+
+The file is the source of truth: `school_parents.jsonl` decides what the live
+docs say, and `school_parent_reviews.jsonl` records why a contested row went the
+way it did. A test holds the file to those reviews, so a later edit can't quietly
+undo one. The LLM only proposes rows for schools nobody has reviewed, from names
+alone, so treat `llm` rows as unconfirmed until they are checked; `manual` rows
+are never asked again.
+
+To change a merge, edit the row, set `"source": "manual"`, add a review line with
+the reason, then republish to dev, then prod.
+
+A live `school_name` is what clients match on. Before changing one on prod, check
+it against the resolver in the last release, not just the code on main:
+3.50.0 has no `parent_id` lookup, so taking "(MIT)" off a parent left its search
+with 24 of 978 people. Republish writes names exactly as this file has them, so
+parent names keep their parentheticals unless someone edits the file.
+
 
 ## Shared output contract
 
