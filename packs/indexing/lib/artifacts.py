@@ -20,6 +20,7 @@ from packs.indexing.lib.identity import (
     stable_location_id_from_key,
     summary_uuid,
 )
+from packs.indexing.lib.school_parents import parent_row
 
 
 def _clean(value: Any) -> str:
@@ -282,6 +283,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
     person_uuid = stable_person_uuid(row)
     school_payload = {**edu, "school_name": school_name}
     school_uuid = stable_school_uuid(school_payload)
+    parent = parent_row(school_uuid)
     degree = _first(edu, "degree", "degree_name")
     field = _first(edu, "field_of_study", "fieldOfStudy", "field", "major")
     start_year = _year(edu, "start_year", "starts_at", "start_date")
@@ -292,7 +294,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
         "person_id": person_uuid,
         "base_id": person_uuid,
         "education_id": school_uuid,
-        "canonical_education_id": school_uuid,
+        "canonical_education_id": parent["id"] if parent else school_uuid,
         "school_name": school_name,
         "degree": degree,
         "degree_normalized": _degree_normalized(degree),
@@ -318,7 +320,9 @@ def build_education_corpus(people_rows: list[dict[str, Any]], default_operator_i
                 continue
             education_by_id[rec["id"]] = rec
             sid = rec["canonical_education_id"]
-            schools.setdefault(sid, {"id": sid, "school_name": rec["school_name"], "person_count": 0, "canonical_key": rec["school_canonical_key"]})
+            parent = parent_row(rec["education_id"])
+            school_name, canonical_key = (parent["school_name"], parent["key"]) if parent else (rec["school_name"], rec["school_canonical_key"])
+            schools.setdefault(sid, {"id": sid, "school_name": school_name, "person_count": 0, "canonical_key": canonical_key})
             school_people.setdefault(sid, set()).add(rec["person_id"])
     for sid, people in school_people.items():
         schools[sid]["person_count"] = len(people)

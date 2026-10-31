@@ -86,7 +86,7 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
     ids = education_ids if education_ids is not None else payload.get("education_ids")
     clauses: list[tuple] = []
     if ids:
-        clauses.append(comparison("canonical_education_id", "In", ids))
+        clauses.append(comparison(search_backend().SCHOOL_FILTER_FIELD, "In", ids))
     if payload.get("degree_levels"):
         # Normalize to title-case to match TurboPuffer degree_normalized values
         degree_map = {"bachelors": "Bachelors", "masters": "Masters", "mba": "MBA", "phd": "PhD", "md": "MD", "jd": "JD"}
@@ -113,10 +113,14 @@ async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids
         return None
     education_ids = [str(value) for value in payload.get("education_ids") or [] if value]
     education_op = payload.get("education_op") or "or"
+    families = dict(payload.get("education_families") or {})
+    unknown = [school_id for school_id in education_ids if school_id not in families]
+    if unknown:
+        families |= await search_backend().school_families(unknown)
     if education_op == "and" and len(education_ids) > 1:
         sets: list[list[str]] = []
         for school_id in education_ids:
-            filters = education_filter(payload, [school_id])
+            filters = education_filter(payload, families[school_id])
             if filters is None:
                 continue
             rows = await filter_only_rows_for_namespace("education", filters, ["person_id"], page_size=page_size, max_results=max_ids)
@@ -130,7 +134,7 @@ async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids
             ids = [pid for pid in sets[0] if pid in allowed]
         return ids[:max_ids], {"stage": "education", "mode": "and", "input_count": len(education_ids), "matched": len(ids)}
 
-    filters = education_filter(payload)
+    filters = education_filter(payload, [member for school_id in education_ids for member in families[school_id]])
     if filters is None:
         return None
     rows = await filter_only_rows_for_namespace("education", filters, ["person_id"], page_size=page_size, max_results=max_ids)

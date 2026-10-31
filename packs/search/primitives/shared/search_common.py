@@ -558,6 +558,8 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     resolved_education = latest_step_output(state, "resolve_education")
     if isinstance(resolved_education, dict) and resolved_education.get("education_ids"):
         payload["education_ids"] = list(dict.fromkeys(str(eid) for eid in resolved_education["education_ids"] if eid))
+        if resolved_education.get("education_families"):
+            payload["education_families"] = resolved_education["education_families"]
 
     prefilters = latest_step_output(state, "apply_prefilters")
     if (
