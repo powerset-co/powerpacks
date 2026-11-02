@@ -123,14 +123,24 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         assert send.call_args.args[3]["request_id"] == message["id"]
         assert "answered_at" in saved(self.root, message)
 
-    def test_non_team_local_account_does_not_handle_support(self):
-        message = request(self.root)
+    def test_non_team_install_with_the_switch_on_answers_a_team_sender(self):
         self.enterContext(patch.object(account, "read", return_value={"email": "jordan@example.com"}))
+        features.save(self.root, features.FeatureFlags(support=True))
+        message = request(self.root)
+        with patch.object(agent_inbox, "send") as send:
+            support.answer_pending(repo_root=self.root, env_file=self.root / ".env")
+        send.assert_called_once()
+        assert send.call_args.args[3]["text"] == "Setup repaired and verified."
+        assert "answered_at" in saved(self.root, message)
+
+    def test_non_team_install_with_the_switch_off_by_default_says_it_is_off(self):
+        self.enterContext(patch.object(account, "read", return_value={"email": "jordan@example.com"}))
+        message = request(self.root)
         with patch.object(support.subprocess, "run") as run, patch.object(agent_inbox, "send") as send:
             support.answer_pending(repo_root=self.root, env_file=self.root / ".env")
         run.assert_not_called()
-        send.assert_not_called()
-        assert "answered_at" not in saved(self.root, message)
+        assert "off" in send.call_args.args[3]["text"]
+        assert "answered_at" in saved(self.root, message)
 
     def test_failed_send_reuses_codex_report(self):
         message = request(self.root)
