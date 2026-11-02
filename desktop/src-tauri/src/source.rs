@@ -52,17 +52,21 @@ pub fn plan(root: &Path, version: &str) -> Result<Plan, String> {
 pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String> {
     fs::create_dir_all(root)
         .map_err(|error| format!("Could not create {}: {error}", root.display()))?;
+    // The old code moves aside first: a process still running from it (a background job, a
+    // server) can write into it (`__pycache__`) while it is deleted, which fails a delete in
+    // place with "Directory not empty". A rename never races that, and the leftover is
+    // removed best effort, now and on the next install.
+    let old = root.join(OLD_DIR);
+    remove_leftover(&old);
     for entry in top_level_entries(archive)? {
         let path = root.join(&entry);
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
+        if fs::symlink_metadata(&path).is_err() {
             continue;
-        };
-        let removed = if metadata.is_dir() {
-            fs::remove_dir_all(&path)
-        } else {
-            fs::remove_file(&path)
-        };
-        removed.map_err(|error| format!("Could not replace {}: {error}", path.display()))?;
+        }
+        fs::create_dir_all(&old)
+            .map_err(|error| format!("Could not create {}: {error}", old.display()))?;
+        fs::rename(&path, old.join(&entry))
+            .map_err(|error| format!("Could not replace {}: {error}", path.display()))?;
     }
     tar(&[
         OsArg::from("-xzf"),
@@ -70,7 +74,19 @@ pub fn install(archive: &Path, root: &Path, version: &str) -> Result<(), String>
         "-C".into(),
         root.into(),
     ])?;
+    remove_leftover(&old);
     write_marker(root, version)
+}
+
+/// Where `install` moves the code it replaces: beside it (a rename stays on one volume), never
+/// in the archive, and not in `.powerpacks/`, which can link to a command-line install's data.
+const OLD_DIR: &str = ".replaced";
+
+/// Remove what an earlier install moved aside; whatever cannot go yet waits for the next one.
+fn remove_leftover(old: &Path) {
+    if fs::symlink_metadata(old).is_ok() {
+        let _ = fs::remove_dir_all(old);
+    }
 }
 
 const DATA_DIR: &str = ".powerpacks";
@@ -280,6 +296,48 @@ mod tests {
         assert!(fs::read_to_string(skills.join(SKILLS_STAMP))
             .unwrap()
             .contains("3.46.0"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_replaces_the_code_and_keeps_the_data() {
+        let tmp = std::env::temp_dir().join(format!("powerpacks-install-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("src");
+        fs::create_dir_all(src.join("packs/search")).unwrap();
+        fs::write(src.join("packs/search/new.py"), "new").unwrap();
+        fs::create_dir_all(src.join("bin")).unwrap();
+        fs::write(src.join("bin/onboard"), "").unwrap();
+        let archive = tmp.join("powerpacks.tar.gz");
+        tar(&[
+            "-czf".into(),
+            archive.clone().into(),
+            "-C".into(),
+            src.into(),
+            "packs".into(),
+            "bin".into(),
+        ])
+        .unwrap();
+
+        let root = tmp.join("app");
+        fs::create_dir_all(root.join("packs/search/__pycache__")).unwrap();
+        fs::write(root.join("packs/search/old.py"), "old").unwrap();
+        fs::write(root.join("packs/search/__pycache__/old.pyc"), "").unwrap();
+        fs::create_dir_all(root.join(".powerpacks/runs")).unwrap();
+        fs::write(root.join(".powerpacks/runs/keep"), "data").unwrap();
+        fs::write(root.join(".env"), "KEY=1").unwrap();
+        // A leftover an earlier install could not remove does not stop this one.
+        fs::create_dir_all(root.join(OLD_DIR).join("packs")).unwrap();
+
+        install(&archive, &root, "a").unwrap();
+        install(&archive, &root, "b").unwrap();
+
+        assert!(root.join("packs/search/new.py").is_file());
+        assert!(!root.join("packs/search/old.py").exists());
+        assert!(!root.join(OLD_DIR).exists());
+        assert_eq!(fs::read_to_string(root.join(".env")).unwrap(), "KEY=1");
+        assert!(root.join(".powerpacks/runs/keep").is_file());
+        assert_eq!(fs::read_to_string(root.join(MARKER)).unwrap(), "b");
         let _ = fs::remove_dir_all(&tmp);
     }
 }
