@@ -34,6 +34,12 @@ export function connectSource(source: ConnectSource, emails?: string[]): Promise
   return installAction("connect", { source, emails })
 }
 
+/** Link WhatsApp by phone number when the QR won't scan: the waiting link stops its QR and asks
+ *  WhatsApp for a pairing code, which fetchConnection then carries. */
+export function linkWhatsappByPhone(phone: string): Promise<void> {
+  return installAction("whatsapp-phone", { phone })
+}
+
 /** One person of the first look: from the index's people file (controller.first_look). */
 export interface FirstLookPerson {
   public_identifier: string

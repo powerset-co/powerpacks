@@ -33,7 +33,7 @@ export function live(record: InstallStatus): boolean {
 }
 
 export type Standing =
-  | { state: "working"; qr?: string }
+  | { state: "working"; qr?: string; pairCode?: string }
   | { state: "needed"; stopped: true; line: string; detail: string | null; command?: string }
   | { state: "checking" }
   | { state: "ready" }
@@ -55,7 +55,7 @@ export function standing(
   source: ConnectSource,
 ): Standing {
   const own = record && STEPS[source].includes(record.step) ? record : undefined
-  if (own && live(own)) return { state: "working", qr: own.action?.qr_url }
+  if (own && live(own)) return { state: "working", qr: own.action?.qr_url, pairCode: own.action?.pair_code }
   // Stopped: failed, or waiting with nothing left running (a password, a closed window). It comes
   // before the sign-in answer: a Gmail mailbox added to a signed-in one can stop.
   if (own && (own.status === "failed" || own.status === "waiting"))

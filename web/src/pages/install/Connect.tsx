@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import PhoneInput, { isPossiblePhoneNumber } from "react-phone-number-input/input"
 
 import { CHANNEL_ICON, PowersetMark, Spinner } from "@/components/shared"
 import {
@@ -27,6 +28,7 @@ import {
   continueSetup,
   fetchConnection,
   installAction,
+  linkWhatsappByPhone,
   type ConnectSource,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
@@ -56,29 +58,104 @@ const TODO: Record<ConnectSource, string> = {
 }
 
 /** The WhatsApp code, in one place: a large card that opens by itself as soon as WhatsApp waits on a
- *  scan, so a phone reads it before it changes (every 20 seconds). Closed, "Show code" reopens it. */
-function CodeBox({ url }: { url?: string }) {
+ *  scan, so a phone reads it before it changes (every 20 seconds). Closed, "Show code" reopens it.
+ *  When the scan won't work, the person links by phone number instead (US unless it starts with +):
+ *  WhatsApp sends a code to type on the phone, shown here the way the phone asks for it. */
+function CodeBox({ url, pairCode }: { url?: string; pairCode?: string }) {
   const [open, setOpen] = useState(true)
+  const [byPhone, setByPhone] = useState(false)
+  const [phone, setPhone] = useState<string | undefined>()
+  const [asked, setAsked] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const ask = (event: FormEvent) => {
+    event.preventDefault()
+    if (!phone) return
+    setError(null)
+    setAsked(true)
+    linkWhatsappByPhone(phone).catch((caught: unknown) => {
+      setAsked(false)
+      setError(errorText(caught))
+    })
+  }
+  const [title, line] = !byPhone
+    ? [
+        "Scan with WhatsApp",
+        "On your phone: Settings → Linked devices → Link a device. The code changes every 20 seconds; this one updates by itself.",
+      ]
+    : pairCode
+      ? [
+          "Enter this code on your phone",
+          "In WhatsApp: Settings → Linked devices → Link a device → Link with phone number instead.",
+        ]
+      : ["Link with your phone number", "WhatsApp sends a code for this number; you type it on your phone."]
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger className={LINK}>Show code</DialogTrigger>
       <DialogContent className="w-[min(420px,100%)] items-center border-0 bg-[#f2f2f2] p-6 text-[#111]">
         <DialogHeader className="w-full">
-          <DialogTitle>Scan with WhatsApp</DialogTitle>
-          <DialogDescription className="text-[#555]">
-            On your phone: Settings → Linked devices → Link a device. The code changes every 20 seconds; this
-            one updates by itself.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="text-[#555]">{line}</DialogDescription>
         </DialogHeader>
-        <span className="grid size-80 place-items-center rounded-[var(--radius-s)] bg-white p-3 text-[#555]">
-          {url ? (
-            <img src={url} alt="WhatsApp code to scan" className="size-full [image-rendering:pixelated]" />
-          ) : (
+        {!byPhone ? (
+          <>
+            <span className="grid size-80 place-items-center rounded-[var(--radius-s)] bg-white p-3 text-[#555]">
+              {url ? (
+                <img
+                  src={url}
+                  alt="WhatsApp code to scan"
+                  className="size-full [image-rendering:pixelated]"
+                />
+              ) : (
+                <Spinner />
+              )}
+            </span>
+            <button type="button" className={LINK} onClick={() => setByPhone(true)}>
+              QR not working? Use your phone number
+            </button>
+          </>
+        ) : pairCode ? (
+          <PairCode code={pairCode} />
+        ) : asked ? (
+          <span className="flex items-center gap-2 text-sm text-[#555]">
             <Spinner />
-          )}
-        </span>
+            Asking WhatsApp for a code…
+          </span>
+        ) : (
+          <form className="flex w-full flex-col gap-2" onSubmit={ask}>
+            <PhoneInput
+              aria-label="WhatsApp phone number"
+              defaultCountry="US"
+              value={phone}
+              onChange={setPhone}
+              placeholder="(415) 555-0100"
+              className="h-9 rounded-[var(--radius-s)] border border-[#ccc] bg-white px-3 text-sm text-[#111]"
+            />
+            <span className="text-xs text-[#555]">Outside the US? Start with + and your country code.</span>
+            {error ? <span className="text-xs text-bad">{error}</span> : null}
+            <Button type="submit" disabled={!phone || !isPossiblePhoneNumber(phone)}>
+              Get code
+            </Button>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** The pairing code as WhatsApp's phone screen asks for it: four boxes, a dash, four boxes. */
+function PairCode({ code }: { code: string }) {
+  const letters = code.replace(/[^0-9A-Za-z]/g, "").split("")
+  return (
+    <div role="group" aria-label={`Pairing code ${code}`} className="flex items-center gap-1">
+      {letters.map((letter, index) => (
+        <Fragment key={index}>
+          {index === 4 ? <span className="px-0.5 text-[20px] text-[#555]">–</span> : null}
+          <span className="grid h-11 w-9 place-items-center rounded-[6px] border border-[#ccc] bg-white font-mono text-[20px] font-semibold">
+            {letter}
+          </span>
+        </Fragment>
+      ))}
+    </div>
   )
 }
 
@@ -379,7 +456,10 @@ export function Connect({
         <>
           {at.state === "working" ? <Line>{TODO[name]}</Line> : null}
           {at.state === "working" && name === "whatsapp" ? (
-            <CodeBox url={"qr" in at ? at.qr : undefined} />
+            <CodeBox
+              url={"qr" in at ? at.qr : undefined}
+              pairCode={"pairCode" in at ? at.pairCode : undefined}
+            />
           ) : null}
           {command ? (
             <>

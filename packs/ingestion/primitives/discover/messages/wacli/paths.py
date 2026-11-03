@@ -6,6 +6,7 @@ the history-depth stage directory. Paths are fixed and overwritten in place —
 there are no run ids and no per-run subdirectories.
 
 Changelog:
+  2026-11-02: the phone-number request and pairing-code files, for linking without the QR.
   2026-07-30 (wacli split): extracted from the single-file `whatsapp_wacli.py`
     so the store/QR/depth modules share one definition instead of each holding
     its own copy. Values unchanged.
@@ -30,4 +31,7 @@ DEFAULT_HISTORY_DEPTH_DIR = DEFAULT_OUT_DIR / "history-depth"
 DEFAULT_QR_PNG = DEFAULT_OUT_DIR / "wacli-login-qr.png"
 DEFAULT_QR_HTML = DEFAULT_OUT_DIR / "wacli-login-qr.html"
 DEFAULT_AUTH_LOG = DEFAULT_OUT_DIR / "wacli-auth.log"
+# Linking by phone number: the number the page asked with, and the code WhatsApp sent back for it.
+DEFAULT_PHONE_REQUEST = DEFAULT_OUT_DIR / "wacli-phone.txt"
+DEFAULT_PAIR_CODE = DEFAULT_OUT_DIR / "wacli-pair-code.txt"
 DEFAULT_GROUP_PARTICIPANTS_CACHE = DEFAULT_OUT_DIR / "wacli.group-participants.json"

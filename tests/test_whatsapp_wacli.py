@@ -378,6 +378,47 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         self.assertFalse(update_qr_page.call_args.kwargs["open_page"])
 
+    def test_a_phone_number_from_the_page_relinks_by_phone_and_keeps_the_code_out_of_the_record(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            request, code = Path(td) / "wacli-phone.txt", Path(td) / "wacli-pair-code.txt"
+            outputs = [["2@qr-payload"], ['{"event":"pair_code","data":{"code":"ABCD-EFGH","phone":"14155550100"},"ts":1}',
+                                         '{"event":"connected","ts":2}']]
+
+            class FakeProc:
+                def __init__(self, cmd, *, stdout, **kwargs) -> None:
+                    self.cmd, self.returncode, self.terminated = cmd, None, False
+                    stdout.write("".join(f"{line}\n" for line in outputs[len(procs)]))
+                    stdout.flush()
+                    if not procs:
+                        request.write_text("14155550100")  # the page asks while the QR waits
+
+                def poll(self):
+                    return self.returncode
+
+                def terminate(self) -> None:
+                    self.terminated, self.returncode = True, -15
+
+                def wait(self) -> int:
+                    return self.returncode
+
+            procs: list[FakeProc] = []
+            with mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
+                    mock.patch.object(auth, "DEFAULT_PHONE_REQUEST", request), \
+                    mock.patch.object(auth, "DEFAULT_PAIR_CODE", code), \
+                    mock.patch.object(auth, "DEFAULT_QR_PNG", Path(td) / "qr.png"), \
+                    mock.patch.object(auth, "DEFAULT_QR_HTML", Path(td) / "qr.html"), \
+                    mock.patch.object(auth.subprocess, "Popen",
+                                      side_effect=lambda cmd, **kw: procs.append(FakeProc(cmd, **kw)) or procs[-1]), \
+                    mock.patch.object(qr, "update_qr_page"):
+                result = auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False)
+
+            self.assertTrue(result.connected_event)
+            self.assertTrue(procs[0].terminated)
+            self.assertIn("--qr-format", procs[0].cmd)
+            self.assertEqual(procs[1].cmd[procs[1].cmd.index("--phone") + 1], "14155550100")
+            self.assertEqual(code.read_text(), "ABCD-EFGH")
+            self.assertFalse(request.exists())
+
     def test_auth_that_ends_before_a_scan_asks_for_the_qr_again(self) -> None:
         with self.assertRaises(runtime.PrimitiveBlocked) as ctx:
             self.run_fake_auth(["2@qr-payload"], exits=1)

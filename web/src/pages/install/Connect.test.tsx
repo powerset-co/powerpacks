@@ -339,6 +339,37 @@ it("opens WhatsApp's code card from the click, and the code fills it", async () 
   expect(within(whatsapp).queryByText("Preparing")).toBeNull()
 })
 
+it("links WhatsApp by phone number when the QR won't scan, and shows the code WhatsApp sends", async () => {
+  const waiting = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: { kind: "qr", qr_url: "/api/install/qr?connect=1&t=1" },
+  }
+  state.connect = waiting
+  mount()
+  await screen.findByAltText("WhatsApp code to scan")
+  fireEvent.click(screen.getByRole("button", { name: "QR not working? Use your phone number" }))
+  expect(screen.getByRole("dialog", { name: "Link with your phone number" })).toBeTruthy()
+  const number = screen.getByLabelText<HTMLInputElement>("WhatsApp phone number")
+  fireEvent.change(number, { target: { value: "4155550100" } })
+  expect(number.value).toBe("(415) 555-0100")
+  fireEvent.click(screen.getByRole("button", { name: "Get code" }))
+  await waitFor(() =>
+    expect(state.posts).toContainEqual({
+      url: "/api/install/whatsapp-phone",
+      body: { phone: "+14155550100" },
+    }),
+  )
+  expect(screen.getByText("Asking WhatsApp for a code…")).toBeTruthy()
+  state.connect = { ...waiting, action: { kind: "qr", pair_code: "ABCD-EFGH" } }
+  const code = await screen.findByRole("group", { name: "Pairing code ABCD-EFGH" }, { timeout: 4_000 })
+  expect(code.textContent).toBe("ABCD–EFGH")
+  expect(screen.getByRole("dialog", { name: "Enter this code on your phone" })).toBeTruthy()
+})
+
 it("shows Powerset Working while you sign in in the browser, then Connected", async () => {
   state.account = { signed_in: false, email: null, name: null, picture: null }
   let finish!: () => void

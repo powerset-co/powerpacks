@@ -20,6 +20,8 @@ export interface InstallAction {
   provider?: "powerset" | "linkedin" | "google"
   command?: string
   qr_url?: string
+  // qr, after the person asked to link by phone number: the code WhatsApp sent for it.
+  pair_code?: string
   details?: unknown
 }
 /** The page's fixed words and rows, from packs/powerset/primitives/install/status.json. */
