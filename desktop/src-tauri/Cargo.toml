@@ -30,8 +30,10 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 core-foundation = "0.10"
 core-graphics = "0.25"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphicsContext", "NSImage", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSWorkspace", "NSRunningApplication", "NSScreen", "libc"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSObject", "NSString", "NSURL", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphicsContext", "NSImage", "NSImageRep", "NSApplication", "NSPasteboard", "NSResponder", "NSView", "NSWindow", "NSWorkspace", "NSRunningApplication", "NSScreen", "libc"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSProcessInfo", "NSString", "NSURL", "NSGeometry"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
+block2 = "0.6"
 
 [profile.release]
 lto = true

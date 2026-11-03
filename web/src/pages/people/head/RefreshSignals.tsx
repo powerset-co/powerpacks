@@ -23,7 +23,7 @@ import {
 } from "@/lib/api/signals"
 import { plural } from "@/lib/copy"
 
-import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
+import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleList"
 
 const SIGNALS_KEY = ["people-signals"]
 const TITLE = "Refresh signals"

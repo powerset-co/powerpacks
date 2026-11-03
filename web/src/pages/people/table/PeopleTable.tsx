@@ -12,7 +12,8 @@ import { PersonRow } from "./PersonRow"
 import "../styles/table.css"
 
 interface PeopleTableProps {
-  matching: readonly Person[]
+  // The view's rows in order; `null` where its slice has not loaded yet.
+  matching: readonly (Person | null)[]
   sort: Sort
   selected: ReadonlySet<string>
   allSelected: boolean
@@ -27,9 +28,13 @@ interface PeopleTableProps {
   onSelectAll: () => void
   onSelect: (id: string) => void
   onOpen: (id: string, index: number) => void
+  onRange: (start: number, end: number) => void
 }
 
 export type PeopleTableHandle = Pick<VirtualRowsHandle, "scrollToIndex" | "scrollToOffset">
+
+// A loaded row keeps its person's key; a row still loading holds its place.
+const slotKey = (row: Person | null, index: number): string => (row ? personKey(row) : `loading-${index}`)
 
 export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((props, ref) => {
   const { matching, selected, focus, openId, pending, onOpen, onSelect } = props
@@ -68,19 +73,24 @@ export const PeopleTable = forwardRef<PeopleTableHandle, PeopleTableProps>((prop
         role="rowgroup"
         items={matching}
         rowHeight={ROW_H}
-        getKey={personKey}
-        renderRow={(row, index) => (
-          <PersonRow
-            row={row}
-            index={index}
-            selected={selected.has(row.parent_id)}
-            focused={index === focus}
-            open={row.parent_id === openId}
-            pending={pending.has(row.parent_id)}
-            onOpen={onOpen}
-            onSelect={onSelect}
-          />
-        )}
+        getKey={slotKey}
+        onRange={props.onRange}
+        renderRow={(row, index) =>
+          row === null ? (
+            <div className="row row-loading" role="row" aria-busy="true" />
+          ) : (
+            <PersonRow
+              row={row}
+              index={index}
+              selected={selected.has(row.parent_id)}
+              focused={index === focus}
+              open={row.parent_id === openId}
+              pending={pending.has(row.parent_id)}
+              onOpen={onOpen}
+              onSelect={onSelect}
+            />
+          )
+        }
       />
       {matching.length ? null : <EmptyState data-empty>{props.empty}</EmptyState>}
     </section>

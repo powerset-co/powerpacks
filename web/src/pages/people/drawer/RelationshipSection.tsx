@@ -6,7 +6,7 @@ import type { Person, PersonDetail } from "@/types/people"
 
 import { Pair } from "./Pair"
 import type { SectionProps } from "./sections"
-import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
+import { patchPeople, refetchPeople } from "../hooks/usePeopleList"
 
 // The single-choice labels, each with the model's confidence in the choice; N/A carries none.
 const CHOICES = ["intro_source", "function"] as const
@@ -36,19 +36,13 @@ export function RelationshipSection({ row, detail, onRefresh, ...section }: Rela
     mutationFn: (kind: string) => writeRelationship(row.parent_id, kind),
     onSuccess: (results) => {
       const byId = new Map(results.map((result) => [result.parent_id, result]))
-      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) =>
-        current?.map((person) => {
-          const patch = byId.get(person.parent_id)
-          return patch
-            ? {
-                ...person,
-                relationship_kind: patch.relationship_kind,
-                flag: patch.flag,
-                reason: patch.reason,
-              }
-            : person
-        }),
-      )
+      patchPeople(client, (person) => {
+        const patch = byId.get(person.parent_id)
+        return patch
+          ? { ...person, relationship_kind: patch.relationship_kind, flag: patch.flag, reason: patch.reason }
+          : person
+      })
+      void refetchPeople(client)
       onRefresh()
     },
   })

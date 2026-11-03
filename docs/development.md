@@ -349,6 +349,15 @@ The examples are ingestion-flavored but the rules apply repo-wide.
   cold-start environment) and diff the outputs against the previous run —
   byte-identical, or every delta explained. Fast iteration is compile +
   targeted suites; full CI gates the merge.
+- **A web UI change is done when it works in the app's window**, not when
+  vitest passes. jsdom has no layout, no stacking, no real keystrokes and no
+  timing, so a menu under the drawer, a field that eats letters, a link that
+  opens nothing and a ten-second Keep all passed their unit tests. Add or
+  extend a scenario in `desktop/qa/scenarios.py` for the flow you touched and
+  run it with `desktop/qa/run.py` (see `desktop/qa/README.md`); report its
+  PASS/FAIL lines and timings. A budget miss is a bug in the query, not in
+  the budget: read the minimum for the first paint and fetch the rest when
+  it is opened.
 
 ### Checking work against these rules
 

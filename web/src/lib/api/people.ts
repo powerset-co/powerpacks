@@ -5,6 +5,8 @@ import { lastBucket, warmthBucket } from "@/lib/people/facets"
 import {
   PERSON_COLUMNS,
   type NameResult,
+  type PeoplePage,
+  type PeoplePagePayload,
   type PeoplePayload,
   type Person,
   type PersonDetail,
@@ -49,7 +51,7 @@ type PersonCells = Omit<Person, "last" | "warmthBucket" | "search" | "logbook">
 
 /** One `Person` per columnar row, decoded by column name, with the derived fields. Throws
  *  when the server stopped sending a column the page reads. */
-export function decodePeople(payload: PeoplePayload): Person[] {
+export function decodePeople(payload: Pick<PeoplePayload, "columns" | "rows">): Person[] {
   const missing = PERSON_COLUMNS.filter((column) => !payload.columns.includes(column))
   if (missing.length) throw new Error(`People payload is missing columns: ${missing.join(", ")}`)
   return payload.rows.map((values) => {
@@ -67,10 +69,30 @@ export function decodePeople(payload: PeoplePayload): Person[] {
   })
 }
 
-export async function fetchPeople(): Promise<Person[]> {
-  const response = await fetch(`${API}rows`)
+/** One slice of the view `query` (the page's own URL parameters, view.ts `viewQuery`). */
+export async function fetchPeoplePage(
+  query: string,
+  offset: number,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<PeoplePage> {
+  const response = await fetch(`${API}page?${query}&offset=${offset}&limit=${limit}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't load people.")
-  return decodePeople(await body<PeoplePayload>(response))
+  const payload = await body<PeoplePagePayload>(response)
+  const { yes = 0, no = 0, unjudged = 0 } = payload.totals
+  return {
+    matching: payload.matching,
+    totals: { all: yes + no + unjudged, yes, no, unjudged },
+    kinds: new Map(Object.entries(payload.kinds)),
+    rows: decodePeople(payload),
+  }
+}
+
+/** Every id the view `query` matches, in its order: select-all. */
+export async function fetchPeopleIds(query: string): Promise<string[]> {
+  const response = await fetch(`${API}page?${query}&ids=1`)
+  if (!response.ok) throw await failure(response, "Couldn't select everyone.")
+  return (await body<PeoplePagePayload>(response)).ids
 }
 
 export async function fetchPersonDetail(id: string, signal?: AbortSignal): Promise<PersonDetail> {

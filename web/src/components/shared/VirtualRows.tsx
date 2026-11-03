@@ -1,14 +1,13 @@
 import { useVirtualizer, type ScrollToOptions } from "@tanstack/react-virtual"
 import {
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
   type HTMLAttributes,
   type ReactNode,
   type Ref,
 } from "react"
-
-import { must } from "@/lib/must"
 
 const DEFAULT_OVERSCAN = 24
 
@@ -31,6 +30,8 @@ export interface VirtualRowsProps<T> extends Omit<HTMLAttributes<HTMLDivElement>
   renderRow: (item: T, index: number) => ReactNode
   // The owner's scroll control.
   handle?: Ref<VirtualRowsHandle>
+  // The first and last mounted rows, whenever they change: an owner loading rows a slice at a time.
+  onRange?: (start: number, end: number) => void
 }
 
 /**
@@ -47,12 +48,22 @@ export function VirtualRows<T>({
   getKey,
   renderRow,
   handle,
+  onRange,
   ...viewport
 }: VirtualRowsProps<T>) {
   const scrollRef = useRef<HTMLDivElement>(null)
   // Stable callbacks: the virtualizer re-measures every row whenever getItemKey changes identity.
   const estimateSize = useCallback(() => rowHeight, [rowHeight])
-  const getItemKey = useCallback((index: number) => getKey(must(items[index]), index), [items, getKey])
+  // An item may itself be null (a row still loading); only an index past the list is missing.
+  const at = useCallback(
+    (index: number): T => {
+      const item = items[index]
+      if (item === undefined) throw new Error(`missing row ${index}`)
+      return item
+    },
+    [items],
+  )
+  const getItemKey = useCallback((index: number) => getKey(at(index), index), [at, getKey])
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
@@ -82,10 +93,17 @@ export function VirtualRows<T>({
     [virtualizer],
   )
 
+  const mounted = virtualizer.getVirtualItems()
+  const start = mounted[0]?.index ?? 0
+  const end = mounted[mounted.length - 1]?.index ?? 0
+  useEffect(() => {
+    if (items.length) onRange?.(start, end)
+  }, [start, end, items.length, onRange])
+
   return (
     <div ref={scrollRef} {...viewport}>
       <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((row) =>
+        {mounted.map((row) =>
           measure ? (
             <div
               key={row.key}
@@ -94,7 +112,7 @@ export function VirtualRows<T>({
               className="absolute inset-x-0 top-0"
               style={{ transform: `translateY(${row.start}px)` }}
             >
-              {renderRow(must(items[row.index]), row.index)}
+              {renderRow(at(row.index), row.index)}
             </div>
           ) : (
             <div
@@ -102,7 +120,7 @@ export function VirtualRows<T>({
               className="absolute inset-x-0 top-0"
               style={{ height: rowHeight, transform: `translateY(${row.start}px)` }}
             >
-              {renderRow(must(items[row.index]), row.index)}
+              {renderRow(at(row.index), row.index)}
             </div>
           ),
         )}

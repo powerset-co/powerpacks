@@ -116,18 +116,15 @@ export const FACETS: readonly FacetDef[] = [
 
 const FACET_BY_KEY: ReadonlyMap<string, FacetDef> = new Map(FACETS.map((facet) => [facet.key, facet]))
 
-/** The Filters menu: each entry hides the rows its `hides` matches. Add a line here for a new one. */
+/** The Filters menu: each entry hides a kind of people; the server's list applies it (model.py HIDES). */
 export type HideKey = "linkedin_only"
 
 export interface HideDef {
   key: HideKey
   label: string
-  hides: (row: Person) => boolean
 }
 
-export const HIDES: readonly HideDef[] = [
-  { key: "linkedin_only", label: "Hide LinkedIn-only people", hides: (r) => r.linkedin_only },
-]
+export const HIDES: readonly HideDef[] = [{ key: "linkedin_only", label: "Hide LinkedIn-only people" }]
 
 export function isFacetKey(value: string): value is FacetKey {
   return FACET_BY_KEY.has(value)
@@ -162,23 +159,10 @@ export interface Sort {
   dir: 1 | -1
 }
 
-const WORTH_ORDER = ["yes", "no", ""]
-
-const SORTERS: Readonly<Record<SortKey, (a: Person, b: Person) => number>> = {
-  name: (a, b) => a.name.localeCompare(b.name),
-  relationship: (a, b) => (a.relationship_kind || "~").localeCompare(b.relationship_kind || "~"),
-  worth: (a, b) => WORTH_ORDER.indexOf(a.worth) - WORTH_ORDER.indexOf(b.worth),
-  warmth: (a, b) => (b.warmth ?? -1) - (a.warmth ?? -1),
-  last: (a, b) => (a.recency_days ?? 1e9) - (b.recency_days ?? 1e9),
-  messages: (a, b) => b.interactions - a.interactions,
-}
+const SORT_KEYS: readonly SortKey[] = ["name", "relationship", "worth", "warmth", "last", "messages"]
 
 export function isSortKey(value: unknown): value is SortKey {
-  return typeof value === "string" && Object.hasOwn(SORTERS, value)
-}
-
-export function sortRows(rows: readonly Person[], { key, dir }: Sort): Person[] {
-  return [...rows].sort((a, b) => dir * SORTERS[key](a, b))
+  return SORT_KEYS.some((key) => key === value)
 }
 
 /** The human's worth call, written for a selection or the open person. */

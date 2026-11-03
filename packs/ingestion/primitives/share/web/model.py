@@ -5,10 +5,12 @@ its `person_labels`, `current_tags` and `current_worth` -> `SharePerson` rows ->
 shows: the dossier (the review card's fragment), every label cell, the worth reason, the contact
 identifiers.
 
-The page filters client-side, so the list row carries only what a facet or a column reads; the
-27 probabilities and the dossier stay per-person.
+The list row is stored on the families table (schema 12) and the page reads it a slice at a time with its
+filters, search and sort in SQL; the row carries only what a facet or a column reads; the 27 probabilities
+and the dossier stay per-person.
 
 Changelog:
+  2026-11-03: the row is derived once per change and stored on families; `page` filters, sorts and slices in SQL.
   2026-10-23: the roster is the families table realize writes; no in-memory rows, no rebuild per request.
   2026-10-07: v2. A row is a family on its parent id; the roster is realize's rows.
   2026-09-26: created.
@@ -163,6 +165,147 @@ def _family_counts(counts: dict[str, int]) -> dict[str, int]:
     return families
 
 
+# The People row as the families table stores it (schema.py PEOPLE_ROW_COLUMNS): lists as JSON arrays.
+STORED_COLUMNS = ("in_progress", "channels", "interactions", "recency_days", "cadence", "direction", "worth",
+                  "worth_source", "relationship_kind", "mode", "hierarchy", "intro_source", "seniority", "function",
+                  "warmth", "labels", "flag", "reason", "tags", "is_owner", "linkedin_only", "group_chat_only",
+                  "shared_employer", "shared_school")
+_LISTS = ("channels", "labels", "tags")
+_FLAGS = ("in_progress", "is_owner", "linkedin_only", "group_chat_only", "shared_employer", "shared_school")
+
+
+def _stored(value: Any) -> Any:
+    return json.dumps(list(value)) if isinstance(value, tuple) else value
+
+
+def _person(row: sqlite3.Row) -> SharePerson:
+    """A families row as the page's row."""
+    cells = {column: row[column] for column in STORED_COLUMNS}
+    cells.update({column: tuple(json.loads(row[column])) for column in _LISTS})
+    cells.update({column: bool(row[column]) for column in _FLAGS})
+    return SharePerson(parent_id=row["parent_id"], public_identifier=row["public_identifier"], name=row["name"],
+                       avatar_url=row["profile_picture_url"], title=row["title"], company=row["company"],
+                       location=row["location"], last_interaction=row["last_interaction"], confidence=None, **cells)
+
+
+# The page's buckets (web/src/types/people.ts LAST and WARMTH), as SQL over the stored row.
+LAST_BUCKET = ("CASE WHEN recency_days IS NULL THEN 'Never' WHEN recency_days < 365 THEN '< 1 year' "
+               "WHEN recency_days <= 730 THEN '1–2 years' ELSE '> 2 years' END")
+WARMTH_BUCKET = ("CASE WHEN warmth IS NULL THEN '' WHEN warmth < 1 THEN 'Distant (0–1)' WHEN warmth < 2 THEN "
+                 "'Friendly (1–2)' WHEN warmth < 3 THEN 'Close (2–3)' ELSE 'Inner circle (3–4)' END")
+EVIDENCE = {"No relationship labels": "linkedin_only", "Group chats only": "group_chat_only",
+            "Shared employer": "shared_employer", "Shared school": "shared_school"}
+
+# A facet (web/src/lib/people/facets.ts FACETS) -> the SQL value a held value is matched against; lists match
+# when any of their items is held.
+FACET_VALUES = {
+    "reason": "reason",
+    "worth": "CASE worth WHEN '' THEN 'unjudged' ELSE worth END",
+    "relationship_kind": "relationship_kind",
+    "last": LAST_BUCKET,
+    "linkedin": "CASE WHEN public_identifier != '' THEN 'Has LinkedIn' ELSE 'No LinkedIn' END",
+    "worth_source": "worth_source",
+    "function": "function",
+    "warmth": WARMTH_BUCKET,
+    "direction": "direction",
+    "intro_source": "intro_source",
+}
+FACET_LISTS = ("channels", "tags", "labels")
+HIDES = {"linkedin_only": "linkedin_only"}
+SORTS = {
+    "name": "name COLLATE NOCASE",
+    "relationship": "CASE relationship_kind WHEN '' THEN '~' ELSE relationship_kind END",
+    "worth": "CASE worth WHEN 'yes' THEN 0 WHEN 'no' THEN 1 ELSE 2 END",
+    "warmth": "-COALESCE(warmth, -1)",
+    "last": "COALESCE(recency_days, 1000000000)",
+    "messages": "-interactions",
+}
+TABS = ("all", "yes", "no", "unjudged")
+
+
+def _tab(tab: str) -> tuple[str, tuple[str, ...]]:
+    if tab == "all":
+        return "1", ()
+    return "worth = ?", ("" if tab == "unjudged" else tab,)
+
+
+def _held(values: tuple[str, ...]) -> str:
+    return "(" + ",".join("?" * len(values)) + ")"
+
+
+@dataclass(frozen=True)
+class PeopleQuery:
+    """The page's view as the query string writes it (web/src/lib/people/view.ts): tab, q, sort, dir,
+    filter.<facet> (repeated), show (the hides turned off), and the slice."""
+
+    tab: str
+    text: str
+    sort: str
+    desc: bool
+    filters: tuple[tuple[str, tuple[str, ...]], ...]
+    hide: tuple[str, ...]
+    offset: int
+    limit: int
+    ids: bool
+    person: str  # `id`: that one family, for a drawer opened on a row not in a loaded slice
+
+    @classmethod
+    def parse(cls, query: dict[str, list[str]]) -> "PeopleQuery":
+        one = lambda key, default: (query.get(key) or [default])[0]  # noqa: E731
+        facets = (*FACET_VALUES, *FACET_LISTS, "logbook", "evidence")
+        return cls(
+            tab=one("tab", "all") if one("tab", "all") in TABS else "all",
+            text=one("q", "").strip().lower(),
+            sort=one("sort", "name") if one("sort", "name") in SORTS else "name",
+            desc=one("dir", "") == "desc",
+            filters=tuple((key, tuple(query[f"filter.{key}"])) for key in facets if query.get(f"filter.{key}")),
+            hide=tuple(key for key in HIDES if key not in query.get("show", [])),
+            offset=max(0, int(one("offset", "0"))),
+            limit=min(500, max(1, int(one("limit", "200")))),
+            ids=one("ids", "") == "1",
+            person=one("id", ""),
+        )
+
+    def where(self, logbooks: frozenset[str]) -> tuple[list[str], list[Any]]:
+        """The search text and the held facets as SQL conditions and their arguments."""
+        where: list[str] = []
+        args: list[Any] = []
+        if self.person:
+            where.append("parent_id = ?")
+            args.append(self.person)
+        if self.text:
+            where.append("instr(lower(name || ' ' || title || ' ' || company || ' ' || location), ?) > 0")
+            args.append(self.text)
+        for key, values in self.filters:
+            if key in FACET_VALUES:
+                where.append(f"{FACET_VALUES[key]} IN {_held(values)}")
+                args.extend(values)
+            elif key in FACET_LISTS:
+                where.append(f"EXISTS (SELECT 1 FROM json_each({key}) WHERE value IN {_held(values)})")
+                args.extend(values)
+            elif key == "evidence":
+                where.append("(" + " OR ".join(f"{EVIDENCE[value]} = 1" for value in values if value in EVIDENCE)
+                             + " OR 0)")
+            else:  # logbook: the families with a saved logbook, from the logbook catalog
+                held = [f"parent_id {'' if value == 'Has logbook' else 'NOT '}IN {_held(tuple(logbooks))}"
+                        for value in values]
+                where.append("(" + " OR ".join(held) + ")")
+                args.extend([parent for _ in values for parent in logbooks])
+        return where, args
+
+
+@dataclass(frozen=True)
+class PeoplePage:
+    """GET /api/people/page: how many match, the tab totals and relationship counts, and the slice (or every
+    matching id)."""
+
+    matching: int
+    totals: dict[str, int]
+    kinds: dict[str, int]
+    rows: tuple[SharePerson, ...]
+    ids: tuple[str, ...]
+
+
 class SharePeople:
     """The families joined to the store: realize's `families` table (the roster: one row per family the owner has
     talked to, as the last realize wrote it) with `person_labels`, `current_tags` and `current_worth`. Construct
@@ -179,9 +322,9 @@ class SharePeople:
         """Hide each family from the page for good; `load` leaves deleted families out."""
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
 
-    def load(self, parents: tuple[str, ...] = ()) -> tuple[SharePerson, ...]:
-        """Every family's row, or with `parents` only those families' rows: what a write answers with. A family
-        realize wrote is shown even when it has no message context or machine labels."""
+    def _derive(self, parents: tuple[str, ...]) -> tuple[SharePerson, ...]:
+        """The People row of every family, or with `parents` only those: realize's columns joined with the
+        family's labels, tags and worth. A family realize wrote is shown even with no message context or labels."""
         rows: dict[str, sqlite3.Row] = queries_share.families(self.conn, parents)
         labels: dict[str, Labels] = queries_share.labels_by_parent(self.conn, parents)
         tags: dict[str, Tags] = queries_share.current_tags(self.conn, parents)
@@ -239,6 +382,60 @@ class SharePeople:
                 confidence=None,
             ))
         return tuple(people)
+
+    def refresh(self) -> None:
+        """Derive the People row of every family a write marked (`derived = 0`, schema.py's triggers) and store it
+        on the families table, so a read is a SELECT."""
+        stale = tuple(row[0] for row in self.conn.execute("SELECT parent_id FROM families WHERE derived = 0"))
+        if not stale:
+            return
+        total = self.conn.execute("SELECT COUNT(*) FROM families").fetchone()[0]
+        # Every family at once reads each input table once; a few read only theirs.
+        people = self._derive(() if len(stale) * 4 > total else stale)
+        derived = {person.parent_id for person in people}
+        with self.conn:
+            # A family a merge emptied (or deleted) is no longer one: realize would not write it again.
+            self.conn.executemany("DELETE FROM families WHERE parent_id = ?",
+                                  [(parent_id,) for parent_id in stale if parent_id not in derived])
+            self.conn.executemany(
+                f"UPDATE families SET derived = 1, {', '.join(f'{column} = ?' for column in STORED_COLUMNS)} "
+                "WHERE parent_id = ?",
+                [(*(_stored(getattr(person, column)) for column in STORED_COLUMNS), person.parent_id)
+                 for person in people])
+
+    def load(self, parents: tuple[str, ...] = ()) -> tuple[SharePerson, ...]:
+        """Every family's row, or with `parents` only those families' rows: what a write answers with."""
+        self.refresh()
+        return tuple(_person(row) for row in self.conn.execute(
+            "SELECT * FROM families"
+            + (" WHERE parent_id IN (" + ",".join("?" * len(parents)) + ")" if parents else "")
+            + " ORDER BY parent_id", parents))
+
+    def page(self, query: PeopleQuery, logbooks: frozenset[str]) -> PeoplePage:
+        """One page of the list for the page's view: its filters, search and sort in SQL; the tab totals and the
+        relationship counts over the tab; `ids` alone when asked (select-all)."""
+        self.refresh()
+        tab_where, tab_args = _tab(query.tab)
+        where, args = query.where(logbooks)
+        hides = [hide for hide in query.hide
+                 if self.conn.execute(f"SELECT 1 FROM families WHERE NOT {HIDES[hide]} LIMIT 1").fetchone()]
+        clause = " AND ".join([tab_where, *where, *(f"NOT {HIDES[hide]}" for hide in hides)])
+        params = (*tab_args, *args)
+        totals = dict(self.conn.execute(
+            "SELECT CASE worth WHEN '' THEN 'unjudged' ELSE worth END, COUNT(*) FROM families GROUP BY 1").fetchall())
+        kinds = dict(self.conn.execute(
+            f"SELECT relationship_kind, COUNT(*) FROM families WHERE {tab_where} AND relationship_kind != '' "
+            "GROUP BY 1", tab_args).fetchall())
+        matching = self.conn.execute(f"SELECT COUNT(*) FROM families WHERE {clause}", params).fetchone()[0]
+        order = f"{SORTS[query.sort]} {'DESC' if query.desc else 'ASC'}, name COLLATE NOCASE, parent_id"
+        if query.ids:
+            ids = tuple(row[0] for row in self.conn.execute(
+                f"SELECT parent_id FROM families WHERE {clause} ORDER BY {order}", params))
+            return PeoplePage(matching, totals, kinds, (), ids)
+        rows = tuple(_person(row) for row in self.conn.execute(
+            f"SELECT * FROM families WHERE {clause} ORDER BY {order} LIMIT ? OFFSET ?",
+            (*params, query.limit, query.offset)))
+        return PeoplePage(matching, totals, kinds, rows, ())
 
     def detail(self, parent_id: str) -> PersonDetail | None:
         row = queries_share.families(self.conn, (parent_id,)).get(parent_id)
@@ -321,6 +518,18 @@ def _reason(is_owner: bool, decision: sqlite3.Row | None, flag: str) -> str:
 
 
 PEOPLE_COLUMNS = tuple(field.name for field in fields(SharePerson))
+
+
+def page_payload(page: PeoplePage) -> dict[str, Any]:
+    """GET /api/people/page: the slice as columnar rows, as `people_payload` sends them."""
+    return {
+        "matching": page.matching,
+        "totals": page.totals,
+        "kinds": page.kinds,
+        "columns": list(PEOPLE_COLUMNS),
+        "rows": [list(astuple(row)) for row in page.rows],
+        "ids": list(page.ids),
+    }
 
 
 def people_payload(rows: tuple[SharePerson, ...]) -> dict[str, Any]:

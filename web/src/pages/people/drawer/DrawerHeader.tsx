@@ -9,7 +9,7 @@ import { monthYear, plural } from "@/lib/copy"
 import { label } from "@/lib/people/copy"
 import type { Person, PersonDetail } from "@/types/people"
 
-import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
+import { patchPeople, refetchPeople } from "../hooks/usePeopleList"
 
 interface DrawerHeaderProps {
   row: Person
@@ -36,12 +36,11 @@ function Name({ row, onRefresh }: { row: Person; onRefresh: () => void }) {
     mutationFn: (name: string) => writeName(row.parent_id, name),
     onSuccess: (results) => {
       const byId = new Map(results.map((result) => [result.parent_id, result.name]))
-      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) =>
-        current?.map((person) => {
-          const name = byId.get(person.parent_id)
-          return name === undefined ? person : { ...person, name, search: searchText({ ...person, name }) }
-        }),
-      )
+      patchPeople(client, (person) => {
+        const name = byId.get(person.parent_id)
+        return name === undefined ? person : { ...person, name, search: searchText({ ...person, name }) }
+      })
+      void refetchPeople(client)
       setDraft(null)
       onRefresh()
     },

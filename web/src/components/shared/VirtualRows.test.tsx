@@ -35,6 +35,25 @@ afterEach(cleanup)
 describe("VirtualRows", () => {
   beforeEach(() => stubViewportSize(VIEWPORT))
 
+  it("renders rows that are still loading (null) and reports the mounted range", () => {
+    const rows: (string | null)[] = Array.from({ length: 1000 }, (_, index) =>
+      index < 5 ? `p${index}` : null,
+    )
+    const ranges: [number, number][] = []
+    const { container } = render(
+      <VirtualRows
+        items={rows}
+        rowHeight={ROW}
+        getKey={(row, index) => row ?? `loading-${index}`}
+        renderRow={(row) => <span>{row ?? "loading"}</span>}
+        onRange={(start, end) => ranges.push([start, end])}
+      />,
+    )
+    expect(container.textContent).toContain("p4")
+    expect(container.textContent).toContain("loading")
+    expect(ranges.at(-1)?.[0]).toBe(0)
+  })
+
   it("mounts only the visible window plus overscan inside a full-height spacer", () => {
     const { container } = render(
       <VirtualRows

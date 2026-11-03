@@ -1,7 +1,6 @@
 // The Logbook reader's route and its reading of saved messages: days, times, senders.
 
 import type { LogbookConversation, LogbookEntry, LogbookMessage, LogbookParticipant } from "@/lib/api/logbook"
-import type { Person } from "@/types/people"
 import { plural } from "@/lib/copy"
 import { isRecord } from "@/lib/utils"
 
@@ -15,14 +14,6 @@ const ENTRY_PARAM = "entry"
 export function readerHref(slugs: readonly string[]): string {
   const query = new URLSearchParams(slugs.map((slug) => [ENTRY_PARAM, slug])).toString()
   return query ? `${LOGBOOK_PATH}?${query}` : LOGBOOK_PATH
-}
-
-/** The rows with each parent's saved entry slug, "" for a parent without one. */
-export function withLogbooks(rows: readonly Person[], entries: readonly LogbookEntry[]): Person[] {
-  const saved = new Map(
-    entries.flatMap(({ parent_id, slug }) => (parent_id ? [[parent_id, slug] as const] : [])),
-  )
-  return rows.map((row) => ({ ...row, logbook: saved.get(row.parent_id) ?? "" }))
 }
 
 /** The history state a reader opened from People carries: Back returns there. */

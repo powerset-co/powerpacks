@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useState } from "react"
 
 import { EMPTY, toggled } from "@/lib/sets"
 
 /**
- * Selected ids; select-all works on every matching item, not just the mounted rows.
- * `keyOf` must be stable (module scope): `toggleAll` changes whenever it does.
+ * Selected ids out of a list of `count` matching items that is read a slice at a time: select-all
+ * asks `allIds` for every matching id, not just the loaded rows. The owner clears the selection
+ * when the list changes (a new tab, filter or search), so a selection is always within it.
  */
-export function useSelection<T>(matching: readonly T[], keyOf: (item: T) => string) {
+export function useSelection(count: number, allIds: () => Promise<readonly string[]>) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(EMPTY)
 
   const toggle = useCallback((id: string) => {
@@ -15,21 +16,16 @@ export function useSelection<T>(matching: readonly T[], keyOf: (item: T) => stri
 
   const clear = useCallback(() => setSelected(EMPTY), [])
 
-  const selectedHere = useMemo(
-    () => matching.filter((item) => selected.has(keyOf(item))).length,
-    [matching, selected, keyOf],
-  )
-  const allSelected = matching.length > 0 && selectedHere === matching.length
+  const allSelected = count > 0 && selected.size >= count
 
-  // All matching selected already: clear; otherwise add every matching item.
+  // All matching selected already: clear; otherwise every matching id.
   const toggleAll = useCallback(() => {
-    setSelected((current) => {
-      if (matching.every((item) => current.has(keyOf(item)))) return EMPTY
-      const next = new Set(current)
-      for (const item of matching) next.add(keyOf(item))
-      return next
-    })
-  }, [matching, keyOf])
+    if (allSelected) {
+      setSelected(EMPTY)
+      return
+    }
+    void allIds().then((ids) => setSelected(new Set(ids)))
+  }, [allSelected, allIds])
 
-  return { selected, toggle, toggleAll, clear, allSelected, someSelected: selectedHere > 0 && !allSelected }
+  return { selected, toggle, toggleAll, clear, allSelected, someSelected: selected.size > 0 && !allSelected }
 }

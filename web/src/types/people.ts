@@ -121,6 +121,25 @@ export interface PeoplePayload {
   rows: PersonCell[][]
 }
 
+/** GET /api/people/page: one slice of the page's view, how many match it, the decision totals
+ *  over everyone and the relationship counts over the tab; `ids` only when every id was asked. */
+export interface PeoplePagePayload {
+  matching: number
+  totals: Partial<Record<Exclude<WorthTab, "all">, number>>
+  kinds: Record<string, number>
+  columns: string[]
+  rows: PersonCell[][]
+  ids: string[]
+}
+
+/** One fetched slice, decoded. */
+export interface PeoplePage {
+  matching: number
+  totals: Record<WorthTab, number>
+  kinds: ReadonlyMap<string, number>
+  rows: Person[]
+}
+
 /** One dated line of the relationship. */
 export interface FactEvent {
   date: string

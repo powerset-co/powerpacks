@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from packs.ingestion.primitives.common.jsonio import write_json
+from packs.ingestion.primitives.deep_context_v2.db.schema import SCHEMA_VERSION
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.db import queries, queries_review, queries_share
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
@@ -78,7 +79,7 @@ class FamiliesTableTests(unittest.TestCase):
             conn.close()
             conn = open_store(root / "store.sqlite")
             self.addCleanup(conn.close)
-            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], "10")
+            self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM families").fetchone()[0], 0)
             people = SharePeople(conn, root)
             self.assertEqual([row["name"] for row in conn.execute("SELECT name FROM families")], ["Jordan Bravo"])

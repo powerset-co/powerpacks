@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-02: mount the full server at start, so the first People open after launch does not wait ~1 s for its imports.
 - 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
 - 2026-10-14: GET /api/search/scope: the sets and local index chat can search (search_scope.py); the chat pins its pick through Codex since 2026-10-29.
 - 2026-10-13: POST /api/feedback files the People drawer's flag note with Powerset (feedback.py).
@@ -192,7 +193,18 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 mounted["handler"] = mounted_handler(root)
             return mounted["handler"]
 
+    def mount_now() -> None:
+        """Mount at start, so the first page that reads the store (People) does not wait ~1 s for the imports."""
+        while True:
+            try:
+                mount()
+                return
+            except ModuleNotFoundError:
+                time.sleep(2)  # Setup can start the server before the project environment exists.
+
     class Handler(BaseHTTPRequestHandler):
+        warm = staticmethod(mount_now)
+
         def handle(self) -> None:
             # A request that throws is logged, so it reports itself (report.py).
             try:
@@ -508,7 +520,9 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(url)
         return 0
     report.install(root)
-    with ThreadingHTTPServer((args.host, args.port), persistent_handler(root)) as server:
+    handler = persistent_handler(root)
+    with ThreadingHTTPServer((args.host, args.port), handler) as server:
+        threading.Thread(target=handler.warm, name="warm", daemon=True).start()
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
