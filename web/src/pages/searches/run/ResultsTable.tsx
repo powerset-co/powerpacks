@@ -107,8 +107,9 @@ export function ResultsTable({ items, ranked, labels, empty, rowContext }: Resul
 
   const choices = useMemo(() => rubricChoices(rowContext.rubric), [rowContext.rubric])
   const candidate = current?.candidate
+  // Only a job-description run is scored; a plain run's rows take tags, pins and feedback.
   const rate = (score: number) => {
-    if (!candidate) return false
+    if (!ranked || !candidate) return false
     const record = buildScoreFeedback(rowContext.runId, candidate, score, "")
     context.onSaved(record)
     send(rowContext, record)
@@ -149,7 +150,7 @@ export function ResultsTable({ items, ranked, labels, empty, rowContext }: Resul
       return key !== undefined
     },
     tag: () => press("tag"),
-    score: () => press("score"),
+    score: () => ranked && press("score"),
     pin,
     rate: (digit) => {
       const choice = choices.find((option) => String(option.score) === digit)
@@ -208,18 +209,21 @@ export function ResultsTable({ items, ranked, labels, empty, rowContext }: Resul
             context={context}
             onClose={close}
           />
-          <ReviewBar
-            label={current?.row.name ?? null}
-            choices={choices}
-            score={score}
-            scorable={candidate !== undefined}
-            tagsLoading={rowContext.tags.loading}
-            pinned={candidate ? isPinned(rowContext.tags.tagged, candidate.person_id) : false}
-            onScore={rate}
-            onTag={() => press("tag")}
-            onPin={pin}
-            onClose={close}
-          />
+          {/* Scoring is a job-description run's; a plain run has no review bar. */}
+          {ranked ? (
+            <ReviewBar
+              label={current?.row.name ?? null}
+              choices={choices}
+              score={score}
+              scorable={candidate !== undefined}
+              tagsLoading={rowContext.tags.loading}
+              pinned={candidate ? isPinned(rowContext.tags.tagged, candidate.person_id) : false}
+              onScore={rate}
+              onTag={() => press("tag")}
+              onPin={pin}
+              onClose={close}
+            />
+          ) : null}
         </>,
         document.body,
       )}

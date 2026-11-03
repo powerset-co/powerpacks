@@ -59,6 +59,8 @@ export interface Position {
   headcount: number
   stage: string
   funding: number
+  // The company's logo from the local companies index; runs saved before it have none.
+  logo_url: string
 }
 
 export interface Education {
@@ -94,6 +96,8 @@ export interface PondCandidate {
   cross_encoder_threshold: number | null
   cross_encoder_passed: boolean | null
   cross_encoder_status: string
+  // The person's own headline; the row shows it under their current role.
+  headline: string
 }
 
 export interface CandidatePond {

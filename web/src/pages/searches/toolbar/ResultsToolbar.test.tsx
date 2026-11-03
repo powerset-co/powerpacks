@@ -9,8 +9,18 @@ import type { Tagged } from "@/types/searches"
 
 import { ResultsToolbar, type ResultsToolbarProps } from "./ResultsToolbar"
 
+const LABELLED = resultRow("p-jordan", "Jordan Bravo", {
+  overall: 5,
+  operators: [operator("op-1", "Drew Kilo")],
+})
 const ROWS = [
-  resultRow("p-jordan", "Jordan Bravo", { overall: 5, operators: [operator("op-1", "Drew Kilo")] }),
+  {
+    ...LABELLED,
+    candidate: LABELLED.candidate && {
+      ...LABELLED.candidate,
+      team_similarity: { rank: 2, candidate_count: 3, score: 0.8, method: "embedding", closest_names: [] },
+    },
+  },
   resultRow("p-casey", "Casey Delta", { overall: 4 }),
   resultRow("p-morgan", "Morgan Echo", { overall: 2 }),
 ]
@@ -77,6 +87,11 @@ describe("ResultsToolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Labels", pressed: true }))
     expect(lastFilters(onFiltersChange)?.labels).toBe(false)
     expect(sessionStorage.getItem("powerpacks:search-labels")).toBe("false")
+  })
+
+  it("hides Labels when no row carries a label", () => {
+    toolbar({ rows: ROWS.slice(1) })
+    expect(screen.queryByRole("button", { name: "Labels" })).toBeNull()
   })
 
   it("adds overall scores and All scores clears them", () => {

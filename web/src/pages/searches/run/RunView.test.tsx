@@ -177,6 +177,21 @@ describe("RunView", () => {
     expect(within(drawer() ?? document.body).getByText("90%")).toBeTruthy()
   })
 
+  it("gives a plain run's rows the feedback flag, no Score, no Labels and no review bar", () => {
+    renderRun(null, NOT_STOPPED, QUICK_RUN)
+    const jordan = row("p-jordan")
+    expect(jordan.queryByRole("button", { name: /^Score / })).toBeNull()
+    expect(jordan.getByRole("button", { name: "Send feedback about Jordan Bravo" })).toBeTruthy()
+    // Nobody here carries a judge's label, so there is nothing for Labels to hide.
+    expect(screen.queryByRole("button", { name: "Labels" })).toBeNull()
+    fireEvent.click(main("p-jordan"))
+    expect(drawerOpen()).toBe("true")
+    expect(screen.queryByRole("toolbar", { name: "Review" })).toBeNull()
+    // s and a rubric digit score nothing in a plain run.
+    key("s")
+    expect(screen.queryByRole("dialog", { name: /^Score / })).toBeNull()
+  })
+
   it("holds a plain run's rows back while it is still ranking", () => {
     renderRun(null, NOT_STOPPED, QUICK_RUN, "running")
     expect(screen.getByText("2 screened, ranking…")).toBeTruthy()
@@ -223,8 +238,13 @@ describe("RunView", () => {
     renderEveryPond()
     const jordan = row("p-jordan")
     expect(jordan.getByTitle("Gmail").textContent).toBe("42")
+    // Current role · company on one line, the location under it.
     expect(jordan.getByText("Staff Engineer")).toBeTruthy()
-    expect(jordan.getByText("Example Labs · Oakland, CA")).toBeTruthy()
+    expect(jordan.getByText("Example Labs")).toBeTruthy()
+    expect(jordan.getByText("Staff Engineer").parentElement?.textContent).toBe(
+      "Staff Engineer · Example Labs",
+    )
+    expect(jordan.getByText("Oakland, CA")).toBeTruthy()
     expect(
       row("p-casey")
         .getAllByRole("img")

@@ -108,16 +108,44 @@
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+/* Current role · company: the row's second line, built from positions (not the headline). */
 .result-title {
-  display: flex;
-  align-items: center;
-  font-size: 12px;
+  display: block;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
-.result-who small {
+.result-at {
   color: var(--muted);
+  font-weight: 400;
+}
+.result-unknown {
+  color: var(--muted);
+  font-weight: 400;
+}
+.result-headline {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-who small {
+  color: var(--faint);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+/* The current company's logo on the avatar's edge, ringed in whatever sits behind the row. */
+.avatar-logo {
+  box-shadow: 0 0 0 2px var(--background);
+}
+.result-row[data-open="true"] .avatar-logo {
+  box-shadow: 0 0 0 2px var(--surface-2);
+}
+.drawer .avatar-logo {
+  box-shadow: 0 0 0 2px var(--card);
 }
 /* rendering.py .network-context: the source pills, then the operator stack beside them (the
    person column is wide here; at its right edge the stack sat far from what it attributes). */
@@ -167,6 +195,10 @@
   position: relative;
   min-width: 0;
   padding-right: 132px;
+}
+/* A plain run's only control there is the feedback flag. */
+.result-indicators[data-ranked="false"] {
+  padding-right: 40px;
 }
 .result-actions {
   position: absolute;
@@ -373,14 +405,50 @@ section.review-sections {
 .drawer-inner .review-sections p {
   font-size: 13px;
 }
-.evidence-clamped {
+/* Clamp: three lines, then an underlined Show more with a caret, so it reads as a link. */
+.clamp-3 {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
-.evidence-more,
-.evidence-more:hover,
+.show-more {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color var(--t-fast) var(--ease-out);
+}
+.show-more:hover {
+  text-decoration-color: var(--foreground);
+}
+.show-more:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+.show-more svg {
+  width: 13px;
+  height: 13px;
+  color: var(--muted);
+  transition: transform var(--t-fast) var(--ease-out);
+}
+.show-more svg[data-open="true"] {
+  transform: rotate(180deg);
+}
 .evidence-chips {
   display: flex;
   flex-wrap: wrap;
@@ -427,6 +495,17 @@ section.review-sections {
   padding: 7px 0;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
+}
+/* A role: its company's logo beside the title, company, dates and description. */
+.career li.career-role {
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.career-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
 }
 .career li:first-child {
   padding-top: 0;
@@ -479,6 +558,13 @@ section.review-sections {
 .career p {
   margin: 4px 0 0;
   color: var(--muted);
+}
+.drawer-inner .career p {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.career .show-more {
+  margin-top: 4px;
 }
 
 .results-empty {

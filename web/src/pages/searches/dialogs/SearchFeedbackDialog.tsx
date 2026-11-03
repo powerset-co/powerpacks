@@ -10,6 +10,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { buildPersonFeedback, buildSearchFeedback } from "@/lib/searches/feedback"
+import { cn } from "@/lib/utils"
 import type { Candidate } from "@/types/searches"
 
 import { send, type FeedbackSink } from "./send"
@@ -20,6 +21,8 @@ export interface SearchFeedbackDialogProps extends FeedbackSink {
   title: string
   /** Set on a candidate's flag: the note is about them, not the search. */
   candidate?: Pick<Candidate, "person_id" | "name">
+  /** Extra classes on the flag (a row reveals it on hover). */
+  className?: string
 }
 
 /** The flag button on a search (or, in the drawer, on a candidate), which opens a note on
@@ -30,6 +33,7 @@ export function SearchFeedbackDialog({
   candidate,
   submit,
   onToast,
+  className,
 }: SearchFeedbackDialogProps) {
   const [open, setOpen] = useState(false)
   const notes = useRef<HTMLTextAreaElement>(null)
@@ -48,7 +52,11 @@ export function SearchFeedbackDialog({
       <DialogTrigger
         aria-label={`Send feedback about ${about}`}
         title="Send feedback"
-        className="inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform] duration-fast ease-out hover:bg-line-strong active:translate-y-px"
+        data-feedback-flag
+        className={cn(
+          "inline-grid min-h-8 min-w-8 cursor-pointer place-items-center rounded-full border border-border bg-secondary px-2 py-1.5 text-foreground transition-[background-color,transform,opacity] duration-fast ease-out hover:bg-line-strong active:translate-y-px",
+          className,
+        )}
       >
         <FlagIcon className="size-[13px]" />
       </DialogTrigger>

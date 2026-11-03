@@ -102,6 +102,7 @@ function row(
         headcount: 120,
         stage: "Series B",
         funding: 40_000_000,
+        logo_url: "https://example.com/example-labs.png",
       },
       {
         title: "Software Engineer",
@@ -114,6 +115,7 @@ function row(
         headcount: 0,
         stage: "",
         funding: 0,
+        logo_url: "",
       },
     ],
     education: [
@@ -132,6 +134,7 @@ function row(
     cross_encoder_threshold: null,
     cross_encoder_passed: null,
     cross_encoder_status: "ok",
+    headline: "",
     ...fields,
   }
 }
