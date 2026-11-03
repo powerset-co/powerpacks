@@ -233,6 +233,19 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
             self.assertAlmostEqual(rows["miss"][0], 0.9, places=6)
             self.assertEqual(rows["miss"][1], 1.0)
 
+    def test_all_embedding_cache_misses_preserve_replay_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_jsonl(root / "input.jsonl", [{"person_id": "miss", "text": "New"}])
+            cache = root / "cache.parquet"
+            write_parquet_rows(cache, [{"person_id": "unrelated", "embedding": [0.1, 0.2]}])
+            with patch.object(embedder, "openai_embedding_batches", return_value=[[[0.9, 1.0]]]):
+                manifest = embedder.run(embedding_args(root, cache, allow_paid=True, api_key="test-key"))
+            self.assertEqual(manifest["provider"], "input-embeddings+openai")
+            self.assertEqual(manifest["counts"]["artifact_hits"], 0)
+            self.assertEqual(manifest["counts"]["artifact_misses"], 1)
+            self.assertEqual(manifest["counts"]["paid_calls"], 1)
+
     def test_parquet_cache_merge_preserves_old_rows_and_new_rows_win(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -283,7 +296,7 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
                 artifact_id_set(cache, "title_hash", require_vector=True),
                 {"has-vector"},
             )
-            embeddings = load_input_embeddings(str(cache), "title_hash", "dense_embedding")
+            embeddings = load_input_embeddings(str(cache), "title_hash", "dense_embedding", needed_keys={"has-vector", "empty-vector"})
             self.assertEqual(embeddings["has-vector"].typecode, "f")
             self.assertEqual(list(embeddings["has-vector"]), [0.125, 0.25])
             self.assertEqual(
@@ -321,7 +334,7 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
             source = Path(tmp) / "summary.jsonl"
             write_jsonl(source, [{"person_id": "one", "embedding": [0.1, 0.2]}])
             with self.assertRaisesRegex(SystemExit, "input embeddings must use a .parquet path"):
-                load_input_embeddings(str(source), "person_id", "embedding")
+                load_input_embeddings(str(source), "person_id", "embedding", needed_keys={"one"})
 
     def test_embedding_loader_rejects_wrong_dimension_and_non_finite_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,7 +346,7 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SystemExit, "dimension mismatch"):
                 load_input_embeddings(
-                    str(source), "person_id", "embedding", expected_dimension=2
+                    str(source), "person_id", "embedding", expected_dimension=2, needed_keys={"one"}
                 )
 
             write_parquet_rows(
@@ -343,7 +356,7 @@ class ParquetEmbeddingCacheTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SystemExit, "non-finite"):
                 load_input_embeddings(
-                    str(source), "person_id", "embedding", expected_dimension=2
+                    str(source), "person_id", "embedding", expected_dimension=2, needed_keys={"one"}
                 )
 
 

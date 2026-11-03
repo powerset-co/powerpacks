@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
-from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.indexing.lib.io import iter_jsonl, read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 from packs.indexing.lib.llm_config import (  # noqa: E402
@@ -438,16 +438,17 @@ def shape_company(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def load_company_artifact(path: str | None) -> dict[str, dict[str, Any]]:
+def load_company_artifact(path: str | None, *, needed_keys: set[str]) -> dict[str, dict[str, Any]]:
     if not path:
         return {}
     artifact_path = Path(path)
     if not artifact_path.exists():
         raise SystemExit(f"missing company artifact: {artifact_path}")
     index: dict[str, dict[str, Any]] = {}
-    for row in read_jsonl(artifact_path):
+    for row in iter_jsonl(artifact_path):
         for key in company_index_keys(row):
-            index.setdefault(key, row)
+            if key in needed_keys:
+                index.setdefault(key, row)
     return index
 
 
@@ -954,13 +955,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"company provider '{args.provider}' is not supported; no paid API was called")
     if not input_path.exists():
         raise SystemExit(f"missing company input JSONL: {input_path}")
-    artifact = load_company_artifact(getattr(args, "artifact_path", None)) if getattr(args, "artifact_path", None) else {}
+    artifact = load_company_artifact(
+        getattr(args, "artifact_path", None),
+        needed_keys={key for row in read_jsonl(input_path) for key in company_index_keys(row)},
+    ) if getattr(args, "artifact_path", None) else {}
     if getattr(args, "dry_run", False) or getattr(args, "estimate", False):
         return estimate_payload(input_path, provider, artifact, getattr(args, "model", None))
     allow_paid = bool(getattr(args, "allow_paid", False))
-    if provider == "openai" and not artifact and not allow_paid:
+    if provider == "openai" and not getattr(args, "artifact_path", None) and not allow_paid:
         raise SystemExit("company provider 'openai' requires --allow-paid; no paid API was called")
-    state_provider = "artifact+openai" if artifact and allow_paid else provider
+    state_provider = "artifact+openai" if getattr(args, "artifact_path", None) and allow_paid else provider
     state = load_state(output_dir, input_path, int(args.checkpoint_every), state_provider, getattr(args, "artifact_path", None), bool(args.force))
     if state.get("status") == "completed" and output_path.exists() and not args.force:
         manifest = output_dir / "manifest.json"
@@ -1156,7 +1160,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise SystemExit(str(exc)) from exc
             state["artifact_hits"] = int(state.get("artifact_hits") or 0) + 1
         else:
-            if artifact:
+            if getattr(args, "artifact_path", None):
                 state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
             if skip_unresolved and not company_slug(row):
                 state["skipped_unresolved"] = int(state.get("skipped_unresolved") or 0) + 1

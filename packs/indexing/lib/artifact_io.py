@@ -271,9 +271,15 @@ def merge_parquet_chunks(
         tmp.unlink(missing_ok=True)
 
 
-def iter_artifact_rows(path: Path, columns: Iterable[str] | None = None) -> Iterator[dict[str, Any]]:
+def iter_artifact_rows(
+    path: Path,
+    columns: Iterable[str] | None = None,
+    *,
+    key_field: str | None = None,
+    needed_keys: set[str] | None = None,
+) -> Iterator[dict[str, Any]]:
     """Yield artifact rows without requiring pandas or PyArrow."""
-    if path.suffix.lower() != ".parquet":
+    if path.suffix.lower() != ".parquet" and needed_keys is None:
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -288,14 +294,27 @@ def iter_artifact_rows(path: Path, columns: Iterable[str] | None = None) -> Iter
     con = duckdb.connect(":memory:")
     try:
         con.execute("SET enable_progress_bar=false")
-        cursor = con.execute(f"SELECT {projection} FROM read_parquet(?)", [str(path)])
+        parameters: list[Any] = [str(path)]
+        predicate = ""
+        parquet = path.suffix.lower() == ".parquet"
+        if needed_keys is not None:
+            key = _qident(key_field) if parquet else "json_extract_string(json, ?)"
+            if not parquet:
+                parameters.append(f'$."{key_field}"')
+            predicate = f" WHERE trim(CAST({key} AS VARCHAR)) IN (SELECT unnest(?))"
+            parameters.append(sorted(needed_keys))
+        source = "read_parquet(?)" if parquet else "read_json_objects(?, format='newline_delimited') WITH ORDINALITY"
+        query = f"SELECT {projection if parquet else 'json'} FROM {source}" + predicate
+        if not parquet:
+            query += " ORDER BY ordinality"
+        cursor = con.execute(query, parameters)
         names = [str(item[0]) for item in cursor.description]
         while True:
             batch = cursor.fetchmany(2048)
             if not batch:
                 break
             for values in batch:
-                yield dict(zip(names, values))
+                yield dict(zip(names, values)) if parquet else json.loads(values[0])
     finally:
         con.close()
 
