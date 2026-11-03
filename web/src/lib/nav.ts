@@ -20,7 +20,7 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "accounts", label: "Accounts", href: "/accounts" },
   // Memory (/memory) is reachable but not listed: it is not ready for the nav.
   { key: "sets", label: "Sets", href: "/sets" },
-  { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
+  { key: "tasks", label: "Refresh", href: "/tasks" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.
   { key: "team", label: "Team", href: "/team" },
 ]

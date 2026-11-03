@@ -50,7 +50,11 @@ export function AccountsPanel({
   error: string | null
 }) {
   const [params, setParams] = useSearchParams()
-  const [selected, setSelected] = useState<ConnectRow>("imessage")
+  // A refresh problem links here with ?source=<row> to open that source.
+  const [selected, setSelected] = useState<ConnectRow>(() => {
+    const source = params.get("source")
+    return SOURCES.find((key) => key === source) ?? "imessage"
+  })
   const [guide, setGuide] = useState<GuideSource | null>(null)
   const [previous, setPrevious] = useState<InstallStatus>()
   const [startError, setStartError] = useState<string | null>(null)
@@ -196,7 +200,7 @@ export function AccountsPanel({
                 {active || starting
                   ? "Updating in the background."
                   : accounts?.scheduled
-                    ? "Refreshes daily at 6:00 AM."
+                    ? `Refreshes daily at ${accounts.scheduled}.`
                     : "Enrich when you're ready."}
               </p>
               <Popover open={nudge && canSync && !connecting && !active && !starting} onOpenChange={setNudge}>

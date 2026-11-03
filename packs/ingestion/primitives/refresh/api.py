@@ -1,10 +1,12 @@
-"""The Scheduled tasks page's JSON routes.
+"""The Refresh page's JSON routes (the native daily refresh, daily.py).
 
-GET  /tasks/api/task       the refresh task: where it's installed and its past runs
-POST /tasks/api/install    runner=codex|claude, cadence, time, day, timezone: install or update
-POST /tasks/api/uninstall  runner=...: remove that runner's install
+GET  /tasks/api/refresh            settings, next run, the running run and past runs
+POST /tasks/api/refresh/settings   enabled=true|false, time=HH:MM
+POST /tasks/api/refresh/run        start a refresh now (the running one when there is one)
 
 Changelog:
+  2026-11-03: the native daily refresh replaces the Codex/Claude install routes; tasks.py keeps
+    their code for the CLI.
   2026-09-28: created for the local Scheduled tasks page.
 """
 
@@ -17,46 +19,56 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from packs.ingestion.primitives.refresh.tasks import RUNNERS, Schedule, install, read_task, uninstall
+from packs.ingestion.primitives.refresh import daily
 
-TASK_PATH = "/tasks/api/task"
-INSTALL_PATH = "/tasks/api/install"
-UNINSTALL_PATH = "/tasks/api/uninstall"
+REFRESH_PATH = "/tasks/api/refresh"
+SETTINGS_PATH = "/tasks/api/refresh/settings"
+RUN_PATH = "/tasks/api/refresh/run"
+
+
+def refresh_payload(root: Path) -> dict:
+    settings = daily.read_settings(root)
+    current = daily.running(root)
+    runs = daily.list_runs(root)
+    last = daily._parse(runs[0].started_at) if runs else None
+    upcoming = daily.next_run_at(daily.now(), settings, last)
+    return {
+        "settings": {"enabled": settings.enabled, "time": settings.time, "label": settings.label()},
+        "next_run_at": upcoming.isoformat(timespec="seconds") if upcoming and not current else None,
+        "running": asdict(current) if current else None,
+        "runs": [asdict(run) for run in runs],
+    }
 
 
 class TasksApi:
-    def __init__(self) -> None:
-        self.repo = Path.cwd().resolve()
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = (root or Path.cwd()).resolve()
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path != TASK_PATH:
+        if parsed.path != REFRESH_PATH:
             return False
-        _send_json(handler, asdict(read_task(self.repo)))
+        _send_json(handler, refresh_payload(self.root))
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in (INSTALL_PATH, UNINSTALL_PATH):
+        if parsed.path not in (SETTINGS_PATH, RUN_PATH):
             return False
         length = int(handler.headers.get("Content-Length") or 0)
-        fields = urllib.parse.parse_qs(handler.rfile.read(length).decode())
-        runner = (fields.get("runner") or [""])[0]
-        if runner not in RUNNERS:
-            _send_json(handler, {"error": f"runner must be one of {', '.join(RUNNERS)}"}, HTTPStatus.BAD_REQUEST)
-            return True
+        fields = {key: values[0] for key, values in urllib.parse.parse_qs(handler.rfile.read(length).decode()).items()}
         try:
-            if parsed.path == INSTALL_PATH:
-                schedule = Schedule((fields.get("cadence") or ["daily"])[0], (fields.get("time") or ["06:00"])[0],
-                                    (fields.get("day") or ["MO"])[0], (fields.get("timezone") or [""])[0])
-                install(runner, self.repo, schedule)
+            if parsed.path == SETTINGS_PATH:
+                current = daily.read_settings(self.root)
+                enabled = fields.get("enabled", str(current.enabled).lower()) == "true"
+                daily.write_settings(self.root, enabled, fields.get("time") or current.time)
             else:
-                uninstall(runner)
-        except ValueError as error:
+                daily.start(self.root, "manual")
+        except (ValueError, RuntimeError) as error:
             _send_json(handler, {"error": str(error)}, HTTPStatus.BAD_REQUEST)
             return True
-        except Exception as error:  # noqa: BLE001 - the page shows why the install failed
+        except Exception as error:  # noqa: BLE001 - the page shows why
             _send_json(handler, {"error": str(error)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return True
-        _send_json(handler, asdict(read_task(self.repo)))
+        _send_json(handler, refresh_payload(self.root))
         return True
 
 

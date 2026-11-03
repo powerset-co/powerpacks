@@ -135,11 +135,11 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
   )
 }
 
-function ScheduleLine({ scheduled }: { scheduled: boolean }) {
+function ScheduleLine({ scheduled }: { scheduled: string | null }) {
   return (
     <p className="m-0 text-xs text-muted-foreground">
       {scheduled ? (
-        "Refreshes daily at 6:00 AM."
+        `Refreshes daily at ${scheduled}.`
       ) : (
         <>
           Daily refresh is off.{" "}

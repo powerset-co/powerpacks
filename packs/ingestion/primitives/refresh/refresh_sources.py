@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Refresh the already-connected message sources. No model runs in here.
 
-A Codex or Claude scheduled task runs this every morning (tasks.py installs
-it) and reports the JSON it prints. Expired Gmail grants get one renewal attempt
+A Codex or Claude scheduled task installed from the command line (tasks.py) runs
+this and reports the JSON it prints; the app's own daily refresh is daily.py. Expired Gmail grants get one renewal attempt
 using the saved Google session, with sign-in handed to the user when needed.
 WhatsApp unlinked and Full Disk Access off are reported. Nothing runs past import:
 no fan-in, Deep Context, LLM, paid lookup, index or upload.
