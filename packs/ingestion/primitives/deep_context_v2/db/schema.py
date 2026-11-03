@@ -19,6 +19,8 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-11-03 (schema 12): the People page's row on the families table (PEOPLE_ROW_COLUMNS), derived by the
+  page server and marked for re-derivation by triggers on worth, person_tags, person_labels and candidate_parent.
 - 2026-11-02 (schema 11): current_worth ranks the keys alone and joins the winning row back; its labels
   JSON (44 MB on 6.3k families) was sorted along. The People rows read went from 0.63 s to 0.43 s.
 - 2026-10-28 (schema 10): LinkedIn sources; confirmed profiles prefer their current imported URL.
@@ -52,7 +54,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -152,11 +154,58 @@ BEGIN
 END;
 """
 
+# Schema 12: the People page's row for the family, beside realize's columns, so the page's list is a SELECT with
+# WHERE, ORDER BY and LIMIT. share/web/model.py derives these from the family's labels, tags and worth; `derived`
+# is 0 until it has, and every write to those inputs sets it back to 0 for the family (the triggers below), so the
+# next read derives that family again. Lists are JSON arrays.
+PEOPLE_ROW_COLUMNS = (
+    "derived INTEGER NOT NULL DEFAULT 0",
+    "in_progress INTEGER NOT NULL DEFAULT 0",
+    "channels TEXT NOT NULL DEFAULT '[]'",
+    "interactions INTEGER NOT NULL DEFAULT 0",
+    "recency_days INTEGER",  # NULL: no dated message
+    "cadence TEXT NOT NULL DEFAULT ''",
+    "direction TEXT NOT NULL DEFAULT ''",
+    "worth TEXT NOT NULL DEFAULT ''",
+    "worth_source TEXT NOT NULL DEFAULT ''",
+    "relationship_kind TEXT NOT NULL DEFAULT ''",
+    "mode TEXT NOT NULL DEFAULT ''",
+    "hierarchy TEXT NOT NULL DEFAULT ''",
+    "intro_source TEXT NOT NULL DEFAULT ''",
+    "seniority TEXT NOT NULL DEFAULT ''",
+    "function TEXT NOT NULL DEFAULT ''",
+    "warmth REAL",  # NULL: no warmth score
+    "labels TEXT NOT NULL DEFAULT '[]'",
+    "flag TEXT NOT NULL DEFAULT ''",
+    "reason TEXT NOT NULL DEFAULT ''",
+    "tags TEXT NOT NULL DEFAULT '[]'",
+    "is_owner INTEGER NOT NULL DEFAULT 0",
+    "linkedin_only INTEGER NOT NULL DEFAULT 0",
+    "group_chat_only INTEGER NOT NULL DEFAULT 0",
+    "shared_employer INTEGER NOT NULL DEFAULT 0",
+    "shared_school INTEGER NOT NULL DEFAULT 0",
+)
+PEOPLE_ROW_COLUMNS_DDL = ",\n  ".join(PEOPLE_ROW_COLUMNS)
+_FAMILY_OF = "(SELECT parent_id FROM candidate_parent WHERE candidate_id = NEW.candidate_id ORDER BY seq DESC LIMIT 1)"
+_REDERIVES = (("worth", "INSERT"), ("person_tags", "INSERT"), ("person_tags", "UPDATE"), ("person_labels", "INSERT"),
+              ("person_labels", "UPDATE"))
+# The triggers' own reads and writes belong to the schema, not to the node whose write fired them (node.py).
+REDERIVE_TRIGGERS = frozenset({f"{table}_{event.lower()}_rederives" for table, event in _REDERIVES}
+                              | {"candidate_parent_insert_rederives"})
+PEOPLE_ROW_TRIGGERS_DDL = "\n".join(
+    f"CREATE TRIGGER IF NOT EXISTS {table}_{event.lower()}_rederives AFTER {event} ON {table} BEGIN\n"
+    f"  UPDATE families SET derived = 0 WHERE parent_id = {_FAMILY_OF};\nEND;"
+    for table, event in _REDERIVES
+) + """
+CREATE TRIGGER IF NOT EXISTS candidate_parent_insert_rederives BEFORE INSERT ON candidate_parent BEGIN
+  UPDATE families SET derived = 0 WHERE parent_id IN (NEW.parent_id, """ + _FAMILY_OF + """);
+END;"""
+
 # Schema 8: one row per family the owner has talked to, written whole by realize beside people.csv. The People
 # page and the labels pass read it instead of rebuilding every row from the profile cache per request (29 s on a
 # 6k-family store). The profile columns come from the family's confirmed LinkedIn cache or research; name, title,
 # company and location fall back to the family's facts. A family deleted on the People page is not written.
-FAMILIES_DDL = """
+FAMILIES_DDL = f"""
 CREATE TABLE IF NOT EXISTS families (
   parent_id TEXT NOT NULL PRIMARY KEY,
   public_identifier TEXT NOT NULL,
@@ -169,8 +218,10 @@ CREATE TABLE IF NOT EXISTS families (
   profile_picture_url TEXT NOT NULL,
   source_channels TEXT NOT NULL,     -- ','-joined people.csv channel names
   interaction_counts TEXT NOT NULL CHECK (json_valid(interaction_counts)),  -- channel -> messages, as imported
-  last_interaction TEXT NOT NULL
+  last_interaction TEXT NOT NULL,
+  {PEOPLE_ROW_COLUMNS_DDL}
 );
+{PEOPLE_ROW_TRIGGERS_DDL}
 """
 
 # Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page

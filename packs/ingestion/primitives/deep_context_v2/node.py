@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, ClassVar
 
-from packs.ingestion.primitives.deep_context_v2.db.schema import VIEW_TABLES
+from packs.ingestion.primitives.deep_context_v2.db.schema import REDERIVE_TRIGGERS, VIEW_TABLES
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 
 MANIFEST_RELATIVE_DIR = Path("deep-context") / "v2-manifests"
@@ -89,7 +89,7 @@ class Node(ABC):
         return self._finish(started, "completed", counts, None)
 
     def _authorizer(self, action: int, table: str | None, column: str | None, db: str | None, trigger: str | None) -> int:
-        if table is None or table.startswith("sqlite_"):
+        if table is None or table.startswith("sqlite_") or trigger in REDERIVE_TRIGGERS:
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_READ:
             allowed = (table in self.reads or table in self.writes or table in _ALWAYS_READABLE

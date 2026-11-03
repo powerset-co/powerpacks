@@ -11,6 +11,7 @@ from packs.ingestion.primitives.deep_context_v2.db.store import open_store
 from packs.ingestion.primitives.deep_context_v2.lookup import matches
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import OwnedIdentifiers, SynthesizedFacts
 from packs.ingestion.primitives.share.store import TagStore
+from packs.ingestion.primitives.deep_context_v2.db.queries_realize import FAMILY_COLUMNS
 
 NOW = "2026-10-07T20:00:00Z"
 LATER = "2026-10-07T21:00:00Z"
@@ -131,10 +132,33 @@ class PeopleWorthTests(StoreTests):
             self.assertEqual({tuple(row) for row in human}, {(c, choice, "human", None, None) for c in ("c1", "c2")})
         self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM person_labels")], labels)
         self.assertEqual(queries_share.current_tags(self.conn)["p:a"].note, "keep note")
-        # The write touches worth only: the families row realize wrote stands.
-        before = [tuple(row) for row in self.conn.execute("SELECT * FROM families")]
-        self.post("/api/people/worth", {"ids": ["p:a"], "worth": "yes"})
-        self.assertEqual([tuple(row) for row in self.conn.execute("SELECT * FROM families")], before)
+        # The write touches worth only: realize's columns of the families row stand; the People row follows worth.
+        realized = f"SELECT {', '.join(FAMILY_COLUMNS)} FROM families"
+        before = [tuple(row) for row in self.conn.execute(realized)]
+        self.post("/api/people/worth", {"ids": ["p:a"], "worth": "no"})
+        self.assertEqual([tuple(row) for row in self.conn.execute(realized)], before)
+        self.assertEqual(self.conn.execute("SELECT worth, reason FROM families").fetchone()[:], ("no", "human_worth"))
+
+    def get(self, path: str):
+        from test_logbook_people import Handler
+        from urllib.parse import urlparse
+        handler = Handler()
+        self.assertTrue(self.routes.get(handler, urlparse(path)))
+        return json.loads(handler.wfile.getvalue())
+
+    def test_the_page_reads_its_view_from_the_table_and_follows_a_write(self) -> None:
+        page = self.get("/api/people/page?limit=50")
+        self.assertEqual((page["matching"], page["totals"], page["ids"]), (1, {"unjudged": 1}, []))
+        row = dict(zip(page["columns"], page["rows"][0]))
+        self.assertEqual((row["parent_id"], row["name"], row["tags"]), ("p:a", "Jordan Bravo", ["is_recruiter"]))
+        self.assertEqual(self.get("/api/people/page?q=bravo")["matching"], 1)
+        self.assertEqual(self.get("/api/people/page?q=casey")["matching"], 0)
+        self.assertEqual(self.get("/api/people/page?filter.tags=is_recruiter&filter.channels=gmail")["matching"], 1)
+        self.assertEqual(self.get("/api/people/page?filter.channels=whatsapp")["matching"], 0)
+        self.assertEqual(self.get("/api/people/page?tab=no")["matching"], 0)
+        self.post("/api/people/worth", {"ids": ["p:a"], "worth": "no"})
+        page = self.get("/api/people/page?tab=no&ids=1")
+        self.assertEqual((page["matching"], page["totals"], page["ids"], page["rows"]), (1, {"no": 1}, ["p:a"], []))
 
     def test_tags_keep_their_route_and_cannot_write_retired_decisions(self) -> None:
         code, payload = self.post("/api/people/tags", {"people": [{"parent_id": "p:a", "tags": ["is_family"]}]})

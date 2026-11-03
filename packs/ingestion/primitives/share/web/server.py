@@ -14,8 +14,12 @@ POST `/api/people/sets/invite` {set_id, email} sends an invite over the relay; P
 {invite_id, accepted} answers one (sets.py).
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
+GET `/api/people/page?offset=&limit=&tab=&q=&sort=&dir=&filter.<facet>=&show=` is the page's list: one slice in the
+view's order, how many match, the tab totals and relationship counts; `ids=1` answers every matching id instead.
+GET `/api/people/rows` is every row at once, for the agent acting on a set.
 
 Changelog:
+  2026-11-03: GET /api/people/page: the list as a SELECT over the families table, one slice at a time.
   2026-10-19: delete hides the family instead of removing its rows; an import or a rerun keeps it hidden.
   2026-10-16: POST /api/people/delete.
   2026-10-07: v2 store; a decision writes every member of the family.
@@ -50,7 +54,7 @@ from packs.ingestion.primitives.share.web.signals import PeopleSignals
 from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
-from packs.ingestion.primitives.share.web.model import SharePeople, SharePerson, people_payload
+from packs.ingestion.primitives.share.web.model import PeopleQuery, SharePeople, SharePerson, page_payload, people_payload
 from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
 from packs.ingestion.primitives.share.web.upload import ShareUpload
 from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
@@ -218,6 +222,9 @@ class ShareRoutes:
             self._answer_sets(handler, lambda: None)  # a read: nothing to change
         elif parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
+        elif parsed.path == f"{API_PREFIX}page":
+            logbooks = frozenset(entry.parent_id for entry in self.archive.entries() if entry.parent_id)
+            self._send_json(handler, page_payload(self.people.page(PeopleQuery.parse(query), logbooks)))
         elif parsed.path == f"{API_PREFIX}upload":
             self._send_json(handler, self.upload.status())
         elif parsed.path == f"{API_PREFIX}logbook":
