@@ -8,7 +8,7 @@ from typing import Any
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, SCORE_LABELS
 
 # Message channels that carry group traffic rather than DMs.
-GROUP_CHANNELS = frozenset({"imessage_group"})
+GROUP_CHANNELS = frozenset({"imessage_group", "whatsapp_group"})
 
 
 @dataclass(frozen=True)

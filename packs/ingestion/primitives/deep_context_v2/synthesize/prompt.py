@@ -89,8 +89,18 @@ def render_batch(person: CollectionBundle, batch: Sequence[MessageEntry], *,
     if any(message.channel == MessageChannel.GMAIL for message in batch):
         lines.append("Gmail headers give actual addressing; Cc does not imply nonparticipation. "
                      "Bodies are excerpts and may retain quoted or forwarded words; do not assign those to the sender.")
+    if any(message.channel in (MessageChannel.IMESSAGE_GROUP, MessageChannel.WHATSAPP_GROUP) for message in batch):
+        lines.append("Group senders: (me) is the owner, (them) is the CONTACT, (other) is a third participant. "
+                     "The contact's own facts come only from (them) lines.")
     for message in batch:
         date = (message.at or "")[:10]
+        if message.channel in (MessageChannel.IMESSAGE_GROUP, MessageChannel.WHATSAPP_GROUP):
+            role = message.direction.removeprefix("from_")
+            head = f"[{message.subject}({message.channel}) {date} ({role})"
+            if message.sender:
+                head += f" {message.sender}"
+            lines.append(f"{head}]: {message.text or ''}")
+            continue
         if message.channel == MessageChannel.GMAIL:
             role = "" if message.email_headers is not None else f" {_DIRECTION_LABEL[message.direction]}; recipients unavailable"
             head = f"[{message.channel} {date}{role}]"
