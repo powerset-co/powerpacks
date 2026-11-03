@@ -1,6 +1,7 @@
-import { ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
+import { CompanyLogo, ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import { teamLikeness } from "@/lib/searches/copy"
+import { currentRole, roleLine, shownHeadline } from "@/lib/searches/person"
 import type { ResultRow } from "@/lib/searches/ranking"
 
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
@@ -9,6 +10,7 @@ import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { ConnectedVia } from "./Operators"
+import { RoleLine } from "./ResultRow"
 import type { RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
 
@@ -22,7 +24,7 @@ interface ResultDrawerProps {
   onClose: () => void
 }
 
-// One candidate in the shared drawer: who they are, the feedback flag and Close, the saved
+// One candidate in the shared drawer: who they are (as the row shows them), the feedback flag and Close, the saved
 // overall and the judges' labels, then the evidence, their career, who they came through and
 // their team likeness.
 export function ResultDrawer({ result, open, ranked, labels, context, onClose }: ResultDrawerProps) {
@@ -53,19 +55,38 @@ interface DrawerBodyProps {
 
 function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProps) {
   const { row, candidate } = result
-  const role = [row.title, row.company].filter(Boolean).join(" · ")
+  const current = currentRole(row)
+  const role = roleLine(current)
+  const headline = shownHeadline(row, current)
   const similarity = candidate?.team_similarity
   return (
     <>
       <div className="drawer-top">
-        <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
+        <ProxiedLinkedinAvatar
+          name={row.name}
+          size={40}
+          src={row.avatar_url || undefined}
+          badge={
+            current.company ? (
+              <CompanyLogo
+                company={current.company}
+                src={current.logo || undefined}
+                size={14}
+                className="avatar-logo"
+              />
+            ) : null
+          }
+        />
         <div className="who">
           <div className="review-name">
             <h2>{row.name}</h2>
             <LinkedInLink row={row} />
           </div>
-          <div className="sub review-role">{role || "Current role unknown"}</div>
-          {row.location ? <div className="sub">{row.location}</div> : null}
+          <div className="review-role">
+            <RoleLine title={current.title} company={current.company} />
+          </div>
+          {headline ? <div className="sub review-headline">{headline}</div> : null}
+          {row.location ? <div className="sub review-location">{row.location}</div> : null}
         </div>
         <span className="review-tools">
           {candidate ? (
@@ -80,10 +101,12 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
           <DrawerClose onClose={onClose} />
         </span>
       </div>
-      <div className="review-scores">
-        {ranked ? <ScoreCell result={result} ranked={ranked} /> : null}
-        <JudgeBadges candidate={candidate} shown={labels} />
-      </div>
+      {ranked ? (
+        <div className="review-scores">
+          <ScoreCell result={result} ranked={ranked} />
+          <JudgeBadges candidate={candidate} shown={labels} />
+        </div>
+      ) : null}
       <Evidence result={result} ranked={ranked} />
       <Career row={row} />
       <ConnectedVia operators={candidate?.network_attribution?.operators ?? []} />

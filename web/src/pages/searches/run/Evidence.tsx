@@ -1,10 +1,9 @@
-import { useState } from "react"
-
 import { Badge } from "@/components/ui/badge"
 import { scoreBand, type ResultRow } from "@/lib/searches/ranking"
 import type { TraitScore } from "@/types/searches"
 
-const ABOUT_CLAMP = 200
+import { Clamp } from "./Clamp"
+
 const TRAIT_VARIANT = { high: "ok", medium: "warn", low: "bad" } as const
 
 // rendering.py _trait_indicator: each trait's share as a badge, then its name and reason.
@@ -29,12 +28,9 @@ interface EvidenceProps {
 }
 
 // rendering.py _person_details: the overall reason, trait scores with reasons, what they matched
-// on, location and about. The drawer's first sections.
+// on and about. The drawer's first sections; the location is in its header.
 export function Evidence({ result, ranked }: EvidenceProps) {
   const { row } = result
-  const [aboutOpen, setAboutOpen] = useState(false)
-  const locationMatched = row.vertical_sources.includes("location")
-  const clamp = row.summary.length > ABOUT_CLAMP
   return (
     <div className="review-sections" data-evidence>
       {ranked ? (
@@ -61,21 +57,10 @@ export function Evidence({ result, ranked }: EvidenceProps) {
           </p>
         </section>
       ) : null}
-      {row.profile_location && locationMatched ? (
-        <section>
-          <h4>Location</h4>
-          <p>{row.profile_location}</p>
-        </section>
-      ) : null}
       {row.summary ? (
         <section>
           <h4>About</h4>
-          <p className={clamp && !aboutOpen ? "evidence-clamped" : undefined}>{row.summary}</p>
-          {clamp ? (
-            <button type="button" className="evidence-more" onClick={() => setAboutOpen(!aboutOpen)}>
-              {aboutOpen ? "Show less" : "Show more"}
-            </button>
-          ) : null}
+          <Clamp text={row.summary} />
         </section>
       ) : null}
     </div>

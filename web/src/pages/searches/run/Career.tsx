@@ -1,5 +1,8 @@
+import { CompanyLogo } from "@/components/shared"
 import { monthYear } from "@/lib/copy"
 import type { Education, PondCandidate, Position } from "@/types/searches"
+
+import { Clamp } from "./Clamp"
 
 // rendering.py _company_note: size, stage and money raised.
 function companyNote(position: Position): string {
@@ -53,26 +56,30 @@ function Positions({ positions, matched }: PositionsProps) {
           <li
             key={`${position.company}:${position.start_date}:${index}`}
             data-matched={matched.includes(index)}
+            className="career-role"
           >
-            <span className="career-head">
-              <b>{position.title}</b>
-              {matched.includes(index) ? <em className="career-chip">Matched</em> : null}
-              {position.is_current ? <em className="career-chip current">Current</em> : null}
-            </span>
-            <span className="career-org">
-              {position.company_url ? (
-                <a href={position.company_url} target="_blank" rel="noreferrer">
-                  {position.company}
-                </a>
-              ) : (
-                position.company
-              )}
-              {note ? <small> · {note}</small> : null}
-            </span>
-            <span className="career-dates">
-              {monthYear(position.start_date)} – {end}
-            </span>
-            {position.description ? <p>{position.description}</p> : null}
+            <CompanyLogo company={position.company} src={position.logo_url || undefined} size={24} />
+            <div className="career-text">
+              <span className="career-head">
+                <b>{position.title}</b>
+                {matched.includes(index) ? <em className="career-chip">Matched</em> : null}
+                {position.is_current ? <em className="career-chip current">Current</em> : null}
+              </span>
+              <span className="career-org">
+                {position.company_url ? (
+                  <a href={position.company_url} target="_blank" rel="noreferrer">
+                    {position.company}
+                  </a>
+                ) : (
+                  position.company
+                )}
+                {note ? <small> · {note}</small> : null}
+              </span>
+              <span className="career-dates">
+                {monthYear(position.start_date)} – {end}
+              </span>
+              {position.description ? <Clamp text={position.description} /> : null}
+            </div>
           </li>
         )
       })}

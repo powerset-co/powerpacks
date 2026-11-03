@@ -1,14 +1,14 @@
 import { memo, type MouseEvent } from "react"
 
-import { ProxiedLinkedinAvatar } from "@/components/shared"
+import { CompanyLogo, ProxiedLinkedinAvatar } from "@/components/shared"
+import { currentRole, shownHeadline } from "@/lib/searches/person"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
-import type { PondCandidate } from "@/types/searches"
 
 import { TraitList } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { NetworkSources } from "./NetworkSources"
-import { RowScore, RowTags, type RowContext } from "./RowActions"
+import { RowFlag, RowScore, RowTags, type RowContext } from "./RowActions"
 import { ScoreCell } from "./ScoreCell"
 
 interface ResultRowProps {
@@ -22,10 +22,6 @@ interface ResultRowProps {
   onToggle: (key: string) => void
 }
 
-function company(row: PondCandidate): string {
-  return [row.company || "Company unknown", row.location].filter(Boolean).join(" · ")
-}
-
 // A click born on a control inside the row (the LinkedIn link, a source's popover trigger,
 // the actions) is theirs; so is one that bubbled in from a portal (a dialog, a popover), which
 // React routes through the row without the row's DOM ever holding it.
@@ -35,11 +31,11 @@ function onControl(event: MouseEvent<HTMLElement>): boolean {
 }
 
 /**
- * One person as rendering.py _candidate_row lays them out: who they are on the left, the tags
- * and pin over them, their sources and who they came through under them; the overall score
- * with its reasoning and the judges' labels on the right, Score over them. A click on the row
- * opens them in the drawer, or closes it when they are open. `group/row` shows the tag
- * trigger and pin on hover.
+ * One person: who they are on the left (name, current role · company from their positions,
+ * headline, location, sources), their company's logo on the avatar, the tags and pin over
+ * them; the scores and reasoning on the right. A ranked (job description) run puts Score over
+ * the reasoning; a plain run puts the feedback flag there. A click on the row opens them in the
+ * drawer, or closes it when they are open. `group/row` shows the row's controls on hover.
  */
 export const ResultRow = memo(function ResultRow({
   result,
@@ -51,6 +47,8 @@ export const ResultRow = memo(function ResultRow({
   onToggle,
 }: ResultRowProps) {
   const { row, candidate } = result
+  const role = currentRole(row)
+  const headline = shownHeadline(row, role)
   return (
     <div
       className="result-row group/row"
@@ -76,22 +74,41 @@ export const ResultRow = memo(function ResultRow({
             </span>
           ) : null}
           <div className="result-person">
-            <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
+            <ProxiedLinkedinAvatar
+              name={row.name}
+              size={40}
+              src={row.avatar_url || undefined}
+              badge={
+                role.company ? (
+                  <CompanyLogo
+                    company={role.company}
+                    src={role.logo || undefined}
+                    size={14}
+                    className="avatar-logo"
+                  />
+                ) : null
+              }
+            />
             <span className="result-who">
               <span className="flex items-center gap-1.5">
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
               </span>
-              <span className="result-title">{row.title || "Current role unknown"}</span>
-              <small>{company(row)}</small>
+              <RoleLine title={role.title} company={role.company} />
+              {headline ? <span className="result-headline">{headline}</span> : null}
+              {row.location ? <small className="result-location">{row.location}</small> : null}
               <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
             </span>
           </div>
         </div>
-        <div className="result-indicators">
+        <div className="result-indicators" data-ranked={ranked}>
           {candidate ? (
             <span className="result-actions">
-              <RowScore result={result} candidate={candidate} context={context} />
+              {ranked ? (
+                <RowScore result={result} candidate={candidate} context={context} />
+              ) : (
+                <RowFlag candidate={candidate} context={context} />
+              )}
             </span>
           ) : null}
           <Score result={result} ranked={ranked} labels={labels} />
@@ -100,6 +117,18 @@ export const ResultRow = memo(function ResultRow({
     </div>
   )
 })
+
+// Current role and company, the company quieter; whichever is known, else a plain note.
+export function RoleLine({ title, company }: { title: string; company: string }) {
+  if (!title && !company) return <span className="result-title result-unknown">Current role unknown</span>
+  return (
+    <span className="result-title">
+      {title ? <span className="result-role">{title}</span> : null}
+      {title && company ? <span className="result-at"> · </span> : null}
+      {company ? <span className="result-company">{company}</span> : null}
+    </span>
+  )
+}
 
 // rendering.py _overall_indicator. A ranked row shows the one score the list is ranked by (the
 // judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an

@@ -5,6 +5,7 @@ import { isPinned, PIN_TAG } from "@/lib/searches/tags"
 import type { Candidate, FeedbackRecord, Ratings } from "@/types/searches"
 
 import { ScoreDialog } from "../dialogs/ScoreDialog"
+import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
 import type { SearchTags } from "../hooks/useSearchTags"
 import { TagEditor } from "../toolbar/TagEditor"
@@ -74,6 +75,26 @@ export function RowScore({ result, candidate, context }: RowScoreProps) {
       onSaved={context.onSaved}
       submit={context.submit}
       onToast={context.onToast}
+    />
+  )
+}
+
+interface RowFlagProps {
+  candidate: Candidate
+  context: RowContext
+}
+
+// A plain run's rows take no score: the feedback flag sits where Score would, shown on the
+// row's hover (or while focused), and sends a note about the person.
+export function RowFlag({ candidate, context }: RowFlagProps) {
+  return (
+    <SearchFeedbackDialog
+      runId={context.runId}
+      title={[candidate.title, candidate.company].filter(Boolean).join(" · ")}
+      candidate={candidate}
+      submit={context.submit}
+      onToast={context.onToast}
+      className="min-h-7 min-w-7 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[open=true]/row:opacity-100"
     />
   )
 }
