@@ -152,6 +152,20 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.problems[0].href, "/accounts")
 
 
+class RenewTests(unittest.TestCase):
+    def test_every_mailbox_that_needs_a_sign_in_is_signed_back_in_once(self):
+        from packs.ingestion.primitives.setup.automations import accounts
+        check = {"accounts_to_authorize": ["casey@example.com", "jordan@example.com"],
+                 "expired_accounts": ["casey@example.com"]}
+        with patch("packs.ingestion.primitives.setup.automations.accounts.stored_mailboxes",
+                   return_value=("casey@example.com", "jordan@example.com")), \
+                patch.object(accounts, "check_accounts_payload", return_value=check), \
+                patch.object(accounts, "add_account") as signed:
+            daily.renew_gmail()
+        self.assertEqual([(call.args[1], call.kwargs["force"]) for call in signed.call_args_list],
+                         [("casey@example.com", True), ("jordan@example.com", False)])
+
+
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
