@@ -156,6 +156,9 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
             .path()
             .resolve(source::ARCHIVE_RESOURCE, BaseDirectory::Resource)
             .map_err(|error| format!("The app is missing Powerpacks: {error}"))?;
+        // Python still running from the old code (a server or job the last run never got to
+        // stop) keeps writing into it, and replacing the folder then fails as not empty.
+        children::stop_matching(&root.join(".venv/bin/python").to_string_lossy());
         source::install(&archive, &root, &version)?;
     }
     source::ensure_env(&root)?;
