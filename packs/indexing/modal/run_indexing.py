@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-sandbox orchestrator: seed -> pipeline -> duckdb -> persist -> status.
+"""In-sandbox orchestrator: seed -> pipeline -> duckdb -> persist -> status -> cache merge.
 
 Runs as the Modal sandbox entrypoint so the whole processing run completes
 server-side even if the dispatching laptop disconnects. Progress and the final
@@ -18,7 +18,6 @@ drop other operators' cached rows.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import re
@@ -39,17 +38,16 @@ _STEP_DONE = re.compile(r"^\[build-processing\] completed (\S+)")
 _COMPANIES = re.compile(r"^\[enrich-companies\] fetched (\d+)/(\d+) company profiles\s*$")
 _COMPANY_FETCH = re.compile(r"^\[enrich-companies\] fetching (\d+) company profiles at ([\d.]+) rpm")
 # Seconds each phase takes, measured on 378 (Arthur) and 1,071 (Patrick) people, 2026-10-29/30.
-# The company fetch is misses / rpm; the cache merge grows with the network; the rest did not.
-PHASE_SECONDS = {"estimate": 60, "steps": 180, "cache_per_person": 0.2, "duckdb": 30, "persist": 30}
-PHASES = ("estimate", "pipeline", "refresh-cache", "duckdb", "persist")
+# The company fetch is misses / rpm; cache merging happens after the index is ready.
+PHASE_SECONDS = {"estimate": 60, "steps": 180, "duckdb": 30, "persist": 30}
+PHASES = ("estimate", "pipeline", "duckdb", "persist")
 
 
-def seconds_left(phase: str, people: int, *, company_seconds: float = 0.0, steps_done: int = 0) -> float:
+def seconds_left(phase: str, *, company_seconds: float = 0.0, steps_done: int = 0) -> float:
     """The time to the end of the build from `phase`: what is left of this phase plus every phase
     after it. One number for the row that only falls."""
     cost = {"estimate": PHASE_SECONDS["estimate"],
             "pipeline": company_seconds + PHASE_SECONDS["steps"] * (len(STEPS) - steps_done) / len(STEPS),
-            "refresh-cache": PHASE_SECONDS["cache_per_person"] * people,
             "duckdb": PHASE_SECONDS["duckdb"], "persist": PHASE_SECONDS["persist"]}
     return sum(cost[name] for name in PHASES[PHASES.index(phase):])
 
@@ -141,11 +139,7 @@ def main() -> int:
     os.environ.setdefault("POWERPACKS_DUCKDB_THREADS", str(max(1, args.compute_threads)))
     os.environ.setdefault("POWERPACKS_CACHE_THREADS", "8")
     status = {"status": "running", "phase": "seed", "started_at": now_iso()}
-    # CSV rows, not lines: profile fields carry newlines (378 people were 993 lines).
-    csv.field_size_limit(sys.maxsize)
-    with open(args.people_csv, encoding="utf-8", errors="replace", newline="") as handle:
-        people = sum(1 for _ in csv.DictReader(handle))
-    write_status(run_vol, status | {"code": "seed", "left_seconds": seconds_left("estimate", people)})
+    write_status(run_vol, status | {"code": "seed", "left_seconds": seconds_left("estimate")})
 
     (work / "unified/roles").mkdir(parents=True, exist_ok=True)
     seed_map = {
@@ -190,7 +184,7 @@ def main() -> int:
         # Estimate gate: dry-run the same command, persist the estimate, and
         # refuse to spend past --max-usd. The paid run itself still only pays
         # for cache misses; covered rows replay free.
-        write_status(run_vol, status | {"phase": "estimate", "code": "estimate", "left_seconds": seconds_left("estimate", people)})
+        write_status(run_vol, status | {"phase": "estimate", "code": "estimate", "left_seconds": seconds_left("estimate")})
         dry = subprocess.run(pipeline_cmd[3:] + ["--dry-run"], capture_output=True, text=True)
         estimated_usd = None
         try:
@@ -214,7 +208,7 @@ def main() -> int:
         ]
 
     write_status(run_vol, status | {"phase": "pipeline", "code": "pipeline",
-                                   "left_seconds": seconds_left("pipeline", people)})
+                                   "left_seconds": seconds_left("pipeline")})
     pipeline = subprocess.Popen(pipeline_cmd, stderr=subprocess.PIPE, text=True)
     steps_done = 0
     company_rpm = DEFAULT_COMPANY_MAX_RPM
@@ -233,7 +227,7 @@ def main() -> int:
             continue
         if progress := progress_line(line, steps_done, company_rpm):
             code, done, total, company_seconds = progress
-            left = seconds_left("pipeline", people, company_seconds=company_seconds, steps_done=steps_done)
+            left = seconds_left("pipeline", company_seconds=company_seconds, steps_done=steps_done)
             write_status(run_vol, status | {"phase": "pipeline", "code": code, "done": done,
                                            "total": total, "left_seconds": left})
     pipeline_code = pipeline.wait()
@@ -241,59 +235,57 @@ def main() -> int:
         write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "pipeline", "exit_code": pipeline_code, "error": f"the search build stopped (exit {pipeline_code})", "finished_at": now_iso()})
         return pipeline_code
 
-    # Refresh the shared caches BEFORE the duckdb build so the expensive
-    # enrichment (company corpus, roles, summary embeddings) persists to the
-    # volume even if the heavy duckdb build fails — we never want to re-pay the
-    # LLM enrichment because of a downstream packaging failure.
-    if not args.no_refresh_cache:
-        write_status(run_vol, status | {"phase": "refresh-cache", "code": "refresh-cache", "left_seconds": seconds_left("refresh-cache", people)})
-        for rel_src, rel_cache in WORK_TO_CACHE.items():
-            src = work / rel_src
-            if not src.exists() or src.stat().st_size == 0:
+    try:
+        write_status(run_vol, status | {"phase": "duckdb", "code": "duckdb", "left_seconds": seconds_left("duckdb")})
+        # Feed the same people.csv that fed the processing pipeline as the
+        # person-profiles source so the shim also builds local_person_profiles
+        # (the denormalized contacts table the /contacts UI reads). It is loaded
+        # through the same flatten_people path as --input, so no reshaping is
+        # needed; LinkedIn-only rows simply carry sparse email/phone.
+        duckdb_code = subprocess.run([
+            sys.executable, str(BENCH), str(run_vol / "bench-duckdb.json"),
+            sys.executable, str(DUCKDB_SHIM),
+            "--records-dir", str(work),
+            "--output-dir", str(work),
+            "--operator-id", args.operator_id,
+            "--person-profiles-csv", args.people_csv,
+            "--force",
+        ]).returncode
+        if duckdb_code != 0:
+            write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "duckdb", "exit_code": duckdb_code, "error": f"the search build stopped (exit {duckdb_code})", "finished_at": now_iso()})
+            return duckdb_code
+
+        write_status(run_vol, status | {"phase": "persist", "code": "persist", "left_seconds": seconds_left("persist")})
+        keep = ["ledger.json", "manifest.json", "stats", "local-search.duckdb"]
+        for name in keep:
+            src = work / name
+            if not src.exists():
                 continue
-            new_count, kept_count = merge_cache_file(
-                src,
-                cache_root / rel_cache,
-                CACHE_KEYS[rel_cache],
-            )
-            print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
+            dest = run_vol / name
+            if src.is_dir():
+                shutil.copytree(src, dest, dirs_exist_ok=True)
+            else:
+                shutil.copyfile(src, dest)
+        if args.persist_artifacts and (work / "records").exists():
+            shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
 
-    write_status(run_vol, status | {"phase": "duckdb", "code": "duckdb", "left_seconds": seconds_left("duckdb", people)})
-    # Feed the same people.csv that fed the processing pipeline as the
-    # person-profiles source so the shim also builds local_person_profiles
-    # (the denormalized contacts table the /contacts UI reads). It is loaded
-    # through the same flatten_people path as --input, so no reshaping is
-    # needed; LinkedIn-only rows simply carry sparse email/phone.
-    duckdb_code = subprocess.run([
-        sys.executable, str(BENCH), str(run_vol / "bench-duckdb.json"),
-        sys.executable, str(DUCKDB_SHIM),
-        "--records-dir", str(work),
-        "--output-dir", str(work),
-        "--operator-id", args.operator_id,
-        "--person-profiles-csv", args.people_csv,
-        "--force",
-    ]).returncode
-    if duckdb_code != 0:
-        write_status(run_vol, status | {"status": "failed", "code": "failed", "phase": "duckdb", "exit_code": duckdb_code, "error": f"the search build stopped (exit {duckdb_code})", "finished_at": now_iso()})
-        return duckdb_code
-
-    write_status(run_vol, status | {"phase": "persist", "code": "persist", "left_seconds": seconds_left("persist", people)})
-    keep = ["ledger.json", "manifest.json", "stats", "local-search.duckdb"]
-    for name in keep:
-        src = work / name
-        if not src.exists():
-            continue
-        dest = run_vol / name
-        if src.is_dir():
-            shutil.copytree(src, dest, dirs_exist_ok=True)
-        else:
-            shutil.copyfile(src, dest)
-    if args.persist_artifacts and (work / "records").exists():
-        shutil.copytree(work / "records", run_vol / "records", dirs_exist_ok=True)
-
-    write_status(run_vol, status | {"status": "completed", "phase": "done", "code": "done", "finished_at": now_iso()})
-    print("[run-in-sandbox] completed", flush=True)
-    return 0
+        write_status(run_vol, status | {"status": "completed", "phase": "done", "code": "done", "finished_at": now_iso()})
+        print("[run-in-sandbox] completed", flush=True)
+        return 0
+    finally:
+        # Save paid enrichment even when DuckDB or persistence fails. The process
+        # stays alive through the merge; app.py commits until it exits.
+        if not args.no_refresh_cache:
+            for rel_src, rel_cache in WORK_TO_CACHE.items():
+                src = work / rel_src
+                if not src.exists() or src.stat().st_size == 0:
+                    continue
+                new_count, kept_count = merge_cache_file(
+                    src,
+                    cache_root / rel_cache,
+                    CACHE_KEYS[rel_cache],
+                )
+                print(f"[run-in-sandbox] cache {rel_cache}: {new_count} from run + {kept_count} preserved", flush=True)
 
 
 if __name__ == "__main__":

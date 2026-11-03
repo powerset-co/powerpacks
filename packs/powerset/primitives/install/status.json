@@ -952,11 +952,6 @@
       "state": "running",
       "line": "Checking the index"
     },
-    "index.building.refresh-cache": {
-      "step": "index",
-      "state": "running",
-      "line": "Saving reusable results"
-    },
     "index.building.duckdb": {
       "step": "index",
       "state": "running",
