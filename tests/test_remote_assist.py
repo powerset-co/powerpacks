@@ -78,7 +78,8 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
                             "sandbox_workspace_write.network_access=true", "exec", "--skip-git-repo-check",
                             "--sandbox", "workspace-write",
                             "--add-dir", str((root / ".powerpacks").resolve()),
-                            "--add-dir", str(Path.home() / ".cache/uv"), "--output-last-message"]
+                            "--add-dir", str(Path.home() / ".cache/uv"),
+                            "--add-dir", str(Path.home() / ".msgvault"), "--output-last-message"]
         assert record["cwd"] == str(root)
         assert record["home"] == str(root / support.CODEX_HOME)
         assert args[-2] == str(root / support.REPORTS / f"{current['id']}.md")
