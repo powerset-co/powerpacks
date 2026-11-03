@@ -11,7 +11,7 @@ import { desktopPlatform, isDesktop } from "@/lib/desktop"
 
 // Every page the app shows, including the ones outside the side nav.
 const PAGES = [
-  { label: "Onboarding", href: "/onboarding/signup" },
+  { label: "Onboarding", href: "/onboarding/chrome" },
   { label: "Set up (progress)", href: "/onboarding/setup" },
   { label: "Add sources", href: "/accounts" },
   { label: "LinkedIn review", href: "/" },
@@ -62,7 +62,7 @@ function DesktopDebugMenu() {
     resetData()
       .then(() => {
         void client.invalidateQueries()
-        void navigate("/onboarding/signup")
+        void navigate("/onboarding/chrome")
       })
       .catch((caught: unknown) => setError(errorText(caught)))
   }

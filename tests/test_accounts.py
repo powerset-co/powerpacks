@@ -15,6 +15,7 @@ from unittest.mock import Mock
 from urllib.parse import urlparse
 
 from packs.ingestion.primitives.accounts import accounts
+from packs.ingestion.primitives.setup.automations.chrome_profiles import CHROME_EPOCH_SECONDS
 from packs.ingestion.primitives.accounts.accounts import _GmailRow, _gmail_health
 from packs.ingestion.primitives.accounts.api import AccountsApi, Job
 from packs.ingestion.primitives.refresh.refresh_sources import SourceResult, _run_status
@@ -157,7 +158,7 @@ class SignedInTest(unittest.TestCase):
 
     def cookie(self, *, expires_in_days: float) -> None:
         (self.profile / "Default").mkdir(parents=True)
-        expires = int((time.time() + expires_in_days * 86_400 + accounts.CHROME_EPOCH_SECONDS) * 1_000_000)
+        expires = int((time.time() + expires_in_days * 86_400 + CHROME_EPOCH_SECONDS) * 1_000_000)
         with closing(sqlite3.connect(self.profile / "Default" / "Cookies")) as conn:
             conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, expires_utc INTEGER)")
             conn.execute("INSERT INTO cookies VALUES ('.www.linkedin.com', 'li_at', ?)", (expires,))

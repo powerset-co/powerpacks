@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils"
 
 import { flows, mountDemo, type GuideSource, type Person } from "./demos"
 import "./guide.css"
+import "./chrome.css"
 
 const WIDTH = 640
 const HEIGHT = 510

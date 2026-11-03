@@ -1,0 +1,101 @@
+/* The Chrome profile guide's stage. Written here, not in guide.css, which is generated from the preview page. */
+.guide .chrome .browser-bar {
+  position: relative;
+  z-index: 1;
+}
+.guide .chrome .empty-field {
+  height: 40px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid #c9c9c9;
+  border-radius: 6px;
+  color: #8a8a8a;
+  font-size: 12px;
+}
+.guide .chrome .sign-in-button {
+  margin-top: 16px;
+  padding: 11px;
+  border-radius: 20px;
+  background: #0a66c2;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+.guide .chrome .profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 34px;
+}
+.guide .chrome .profile-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 18px 8px;
+  border: 1px solid #e3e3e3;
+  border-radius: 12px;
+  font-size: 11px;
+  transition:
+    border-color 0.3s,
+    background 0.3s;
+}
+.guide .chrome .profile-tile span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.guide .chrome .profile-tile .avatar {
+  width: 48px;
+  height: 48px;
+  font-size: 20px;
+}
+.guide .chrome[data-beat="3"] .picked {
+  border-color: #e45b35;
+  background: #fdf0ec;
+}
+.guide .chrome .signed-note {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #e4f3ea;
+  color: #258653;
+  font-size: 11px;
+  font-weight: 600;
+}
+.guide .chrome .connection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.guide .chrome .connection .avatar {
+  background: #d7e7ed;
+}
+.guide .chrome .connection i {
+  height: 10px;
+  border-radius: 5px;
+  background: #e6e6e6;
+}
+.guide .chrome[data-phase="0"] .empty-page,
+.guide .chrome[data-phase="1"] .pick-page,
+.guide .chrome[data-phase="2"] .signed-page {
+  opacity: 1;
+  transform: none;
+}
+.guide .chrome .cursor {
+  left: 62%;
+  top: 420px;
+  opacity: 0;
+}
+.guide .chrome[data-phase="1"] .cursor {
+  opacity: 1;
+}
+.guide .chrome[data-beat="3"] .cursor {
+  left: 22%;
+  top: 240px;
+}

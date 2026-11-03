@@ -35,6 +35,26 @@ export async function fetchSignedIn(signal?: AbortSignal): Promise<SignedIn> {
   return body<SignedIn>(response)
 }
 
+/** One of the user's Chrome profiles holding a LinkedIn or Google session (chrome_profiles.py). */
+export interface ChromeProfile {
+  folder: string
+  name: string
+  email: string
+  linkedin: boolean
+  google: boolean
+}
+
+export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeProfile[]> {
+  const response = await fetch("/accounts/api/chrome-profiles", { signal })
+  if (!response.ok) throw await failure(response, "Couldn't read your Chrome profiles.")
+  return (await body<{ profiles: ChromeProfile[] }>(response)).profiles
+}
+
+/** Copies one profile's sign-ins and saved passwords into the browser Powerpacks signs in with. */
+export function copyChromeProfile(folder: string): Promise<void> {
+  return post("/accounts/api/chrome-profile", { folder }, "Couldn't copy that Chrome profile.")
+}
+
 /** Syncs one card now: a Gmail account by its address, or iMessage / WhatsApp. */
 export function syncAccount(account: Account): Promise<void> {
   const form: Record<string, string> =

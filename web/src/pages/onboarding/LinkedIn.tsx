@@ -137,7 +137,7 @@ export function LinkedIn() {
             "Nothing is posted, liked or sent",
             "If LinkedIn slows down, we stop and ask for your data export instead",
           ]}
-          note="Your LinkedIn password never touches Powerpacks."
+          note="Powerpacks never reads your LinkedIn password."
         />
       }
     />

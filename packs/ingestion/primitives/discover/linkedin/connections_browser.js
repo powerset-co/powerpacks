@@ -44,7 +44,7 @@
 
 const fs = require("fs");
 const { chromium } = require("playwright-core");
-const { browserTarget, desktopUserAgent, returnFocus } = require("../../common/browser.js");
+const { browserTarget, desktopUserAgent, ignoredArgs, returnFocus } = require("../../common/browser.js");
 const { shownCount } = require("./count.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
@@ -90,7 +90,7 @@ function launch(profileDir, headless) {
     headless,
     viewport: null,
     userAgent: desktopUserAgent(profileDir),
-    ignoreDefaultArgs: ["--enable-automation"],
+    ...ignoredArgs(profileDir),
     args: ["--disable-blink-features=AutomationControlled", "--disable-infobars", "--disable-extensions"],
   });
 }
