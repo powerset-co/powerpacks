@@ -1,6 +1,6 @@
 import { useFeatures } from "@/lib/features"
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
 import { useFullAccessTip } from "@/lib/agent/fullAccessTip"
@@ -10,7 +10,7 @@ import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
-import { writeStored } from "@/lib/storage"
+import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { searchRunKey } from "@/pages/searches/hooks/useSearchRun"
@@ -28,6 +28,8 @@ import { useCollaboration } from "./collaboration/useCollaboration"
 
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
+// The unsent message, kept for the tab so leaving the chat page (Accounts, People) doesn't lose it.
+const DRAFT_KEY = "agent-draft"
 
 function Welcome() {
   return (
@@ -69,6 +71,13 @@ function Conversation({
   const pinned = useRef(true)
   const waiting = agent.running && agent.approvals.length === 0 && agent.entries.at(-1)?.kind !== "agent"
   const tip = useFullAccessTip()
+  const [draft, updateDraft] = useState(
+    () => readStored("session", DRAFT_KEY, (value) => (typeof value === "string" ? value : null)) ?? "",
+  )
+  const setDraft = (text: string) => {
+    updateDraft(text)
+    writeStored("session", DRAFT_KEY, text)
+  }
   // Full access on retires the tip for good; the switch and the tip's button both go through here.
   const fullAccess = (on: boolean) => {
     if (on) tip.dismiss()
@@ -164,6 +173,8 @@ function Conversation({
         onSend={(text) => void send(text)}
         onStop={() => void stop()}
         onFullAccess={fullAccess}
+        draft={draft}
+        onDraftChange={setDraft}
         footer={
           <>
             <SearchScope />
