@@ -13,6 +13,7 @@ from packs.ingestion.primitives.setup.automations.chrome_profiles import (
     CHROME_EPOCH_SECONDS,
     COPIED_FROM,
     chrome_profiles,
+    copied_from,
     use_chrome_profile,
 )
 
@@ -59,12 +60,14 @@ class ChromeProfilesTest(unittest.TestCase):
         target = self.root / "browser-profiles" / "linkedin"
         target.mkdir(parents=True)
         (target / "old").write_text("kept")
+        self.assertIsNone(copied_from(target))
 
         use_chrome_profile("Default", data=self.data, app=self.app, targets=(target,))
 
         self.assertEqual((target / "Default" / "Login Data").read_text(), "saved")
         self.assertTrue((target / "Local State").is_file())
         self.assertEqual(json.loads((target / COPIED_FROM).read_text())["folder"], "Default")
+        self.assertEqual(copied_from(target), "Default")
         self.assertFalse((target / "Default" / "Cache").exists())
         self.assertFalse((target / "Default" / "Sessions").exists())
         (backup,) = target.parent.glob("linkedin.bkup-*")

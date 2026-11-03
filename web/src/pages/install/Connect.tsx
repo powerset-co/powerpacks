@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Fragment, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { Globe } from "lucide-react"
 import PhoneInput, { isPossiblePhoneNumber } from "react-phone-number-input/input"
 
 import { CHANNEL_ICON, PowersetMark, Spinner } from "@/components/shared"
@@ -19,7 +20,7 @@ import {
 } from "@/components/ui/dialog"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { fetchAccount } from "@/lib/api/account"
-import { fetchSignedIn } from "@/lib/api/accounts"
+import { fetchChromeProfiles, fetchSignedIn } from "@/lib/api/accounts"
 import { signIn } from "@/lib/api/feedback"
 import { errorText } from "@/lib/api/http"
 import { desktopPlatform, invoke, listen } from "@/lib/desktop"
@@ -32,6 +33,7 @@ import {
   type ConnectSource,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
+import { BrowserProfiles } from "@/pages/settings/BrowserProfiles"
 import { CodexDetails } from "@/pages/settings/CodexDetails"
 import { cn } from "@/lib/utils"
 import { live, POLL_MS, prepare, standing } from "./sources"
@@ -287,7 +289,8 @@ function Mailboxes({
  *  Full Disk Access comes before the browser sign-ins: turning it on makes macOS restart the app.
  *  After an import (`onDone`) there is no setup to run: the data is in, so Done, and no Back; the
  *  onboarding's Sources starts setup from the same button, so it names it Start (`doneLabel`). */
-export type ConnectRow = "powerset" | "codex" | "imessage" | "linkedin" | "gmail" | "whatsapp"
+// "browser" shows on Accounts alone, so it is not one of the rows Connect lists by itself.
+export type ConnectRow = "powerset" | "codex" | "browser" | "imessage" | "linkedin" | "gmail" | "whatsapp"
 const ALL_ROWS: readonly ConnectRow[] = ["powerset", "codex", "imessage", "linkedin", "gmail", "whatsapp"]
 
 export function Connect({
@@ -330,6 +333,12 @@ export function Connect({
   const [asking, setAsking] = useState(false)
 
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
+  // Only Accounts shows the browser row.
+  const chrome = useQuery({
+    queryKey: ["chrome-profiles"],
+    queryFn: ({ signal }) => fetchChromeProfiles(signal),
+    enabled: details !== undefined,
+  })
   const signedIn = account.data?.signed_in === true
   const powerset: State = account.isPending
     ? "checking"
@@ -508,6 +517,13 @@ export function Connect({
             : "needed",
       action: { label: "Connect", onClick: codex.connect, disabled: !codex.status?.installed },
       children: codex.login ? <Line>Finish signing in to ChatGPT in your browser.</Line> : null,
+    },
+    browser: {
+      icon: <Globe className="size-[18px]" />,
+      title: "Browser",
+      why: "The Chrome profile Powerpacks signs in to LinkedIn and Google with, so it finds your logins and saved passwords.",
+      state: chrome.isPending ? "checking" : chrome.data?.linked ? "ready" : "needed",
+      children: details ? <BrowserProfiles /> : null,
     },
     imessage: {
       icon: <MessagesIcon className="size-[18px]" />,
