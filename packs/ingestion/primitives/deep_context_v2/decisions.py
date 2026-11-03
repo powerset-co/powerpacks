@@ -120,13 +120,14 @@ def _log_usage(request: dict[str, Any], response: dict[str, Any], stage: str, la
     usage = response.get("usage") or {}
     reported = usage.get("input_tokens")
     tokens: int = reported if isinstance(reported, int) else input_tokens(request)
+    details = usage.get("input_tokens_details") or {}  # cache reads and writes, both inside input_tokens
     append_usage_row({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": MODEL,
         "stage": stage,
         "prompt_tokens": tokens,
-        "cached_tokens": 0,
-        "cache_write_tokens": 0,
+        "cached_tokens": int(details.get("cached_tokens") or 0),
+        "cache_write_tokens": int(details.get("cache_write_tokens") or 0),
         "completion_tokens": 0,
         "reasoning_tokens": 0,
         "latency_ms": latency_ms,

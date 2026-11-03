@@ -4,7 +4,6 @@ import type { Tab } from "@/lib/people/view"
 const NOBODY: Record<Tab, string> = {
   all: "No people yet.",
   yes: "No one kept yet.",
-  maybe: "No one on the fence.",
   no: "No one skipped yet.",
   unjudged: "Everyone has a decision.",
 }
