@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
+import { Check, TriangleAlert, X } from "lucide-react"
 
 import { EmptyState, Page, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { REFRESH_KEY, refreshNow, saveRefreshSettings } from "@/lib/api/refresh"
 import { cn } from "@/lib/utils"
-import type { RefreshRun, RefreshState } from "@/types/refresh"
+import type { RefreshRun, RefreshState, SourceRun } from "@/types/refresh"
 
 import { added, clock, lower, people, SOURCE_TITLE, stamp, took, trigger, when, lastLine } from "./format"
 import { useRefresh } from "./useRefresh"
@@ -20,6 +21,23 @@ const STATUS: Readonly<
   ok: { label: "Synced", variant: "ok" },
   needs_you: { label: "Needs you", variant: "warn" },
   failed: { label: "Failed", variant: "bad" },
+}
+
+// A synced source is green with a check, a skipped one (signed out) yellow with a warning, a failed
+// one red with an X.
+const SOURCE_STATUS: Readonly<
+  Record<SourceRun["status"], { label: string; variant: "ok" | "warn" | "bad" }>
+> = {
+  synced: { label: "Synced", variant: "ok" },
+  skipped: { label: "Skipped: not signed in", variant: "warn" },
+  failed: { label: "Failed", variant: "bad" },
+}
+
+function StatusIcon({ variant }: { variant: "ok" | "warn" | "bad" | "info" }) {
+  if (variant === "ok") return <Check aria-hidden className="size-3" strokeWidth={3} />
+  if (variant === "warn") return <TriangleAlert aria-hidden className="size-3" strokeWidth={2.5} />
+  if (variant === "bad") return <X aria-hidden className="size-3" strokeWidth={3} />
+  return <Spinner className="size-3" />
 }
 
 // Every hour of the day, as the time picker offers them.
@@ -203,22 +221,24 @@ function History({ runs, selected, onSelect }: HistoryProps) {
                       {trigger(run)}
                     </td>
                     <td className="border-b border-line px-2.5 py-2.5">
-                      <Badge variant={STATUS[run.status].variant}>{STATUS[run.status].label}</Badge>
+                      <Badge variant={STATUS[run.status].variant}>
+                        <StatusIcon variant={STATUS[run.status].variant} />
+                        {STATUS[run.status].label}
+                      </Badge>
                     </td>
                     <td className="border-b border-line px-2.5 py-2.5">
                       <span className="flex gap-1">
                         {run.sources.map((source) => (
-                          <span
+                          <Badge
                             key={source.source}
-                            title={source.status}
-                            className={cn(
-                              "inline-flex h-5 items-center rounded-full bg-secondary px-2 text-[10.5px] text-muted-foreground",
-                              source.status !== "synced" && "line-through opacity-60",
-                            )}
+                            variant={SOURCE_STATUS[source.status].variant}
+                            title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
+                            data-source-status={source.status}
                           >
+                            <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
                             {SOURCE_TITLE[source.source]}
                             {source.accounts.length > 1 ? ` · ${source.accounts.length}` : ""}
-                          </span>
+                          </Badge>
                         ))}
                       </span>
                     </td>
@@ -247,7 +267,7 @@ function RunDetail({ run }: { run: RefreshRun }) {
     ["Finished", run.finished_at ? stamp(run.finished_at) : "Still running"],
     ...run.sources.map((source): [string, string] => [
       SOURCE_TITLE[source.source],
-      `${source.status === "synced" ? "Synced" : source.status === "failed" ? "Failed" : "Skipped"}${
+      `${SOURCE_STATUS[source.status].label}${
         source.accounts.length ? ` · ${source.accounts.join(", ")}` : ""
       }`,
     ]),

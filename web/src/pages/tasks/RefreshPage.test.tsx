@@ -137,6 +137,9 @@ it("lists runs with people added and what to do", async () => {
   expect(await screen.findByText("+14")).toBeTruthy()
   expect(screen.getByText("Daily · caught up 2 days")).toBeTruthy()
   expect(screen.getByText("Rebuilt")).toBeTruthy()
+  // A skipped source is a yellow warning badge, a synced one a green check, never struck through.
+  expect(screen.getByTitle("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
+  expect(screen.getByTitle("WhatsApp: Synced").dataset.sourceStatus).toBe("synced")
   expect(screen.getByRole("link", { name: "Reconnect Gmail" }).getAttribute("href")).toBe(
     "/accounts?source=gmail",
   )
