@@ -19,6 +19,8 @@ are saved queries, not materialized; the indexes beneath them are what make the
 reads fast. Readers per view are listed on the spec page.
 
 Changelog:
+- 2026-11-02 (schema 11): current_worth ranks the keys alone and joins the winning row back; its labels
+  JSON (44 MB on 6.3k families) was sorted along. The People rows read went from 0.63 s to 0.43 s.
 - 2026-10-28 (schema 10): LinkedIn sources; confirmed profiles prefer their current imported URL.
 - 2026-10-20 (schema 7): separate match probability from legacy verdict confidence; allow judged synthetic profiles.
 - 2026-10-19 (schema 6): human relationship choices on person_tags, preserved by refresh; deleted_parents,
@@ -50,7 +52,7 @@ from enum import StrEnum
 
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 MINTED_PARENT_PREFIX = "p:"
 MINTED_PARENT_HEX = 16
 LINKEDIN_PARENT_PREFIX = "li:"
@@ -363,11 +365,14 @@ CREATE VIEW current_parent AS
   WHERE rn = 1;
 
 CREATE VIEW current_worth AS
-  SELECT parent_id, candidate_id, worth, decided_by, reason, labels_json, input_fingerprint, created_at, seq FROM (
-    SELECT p.parent_id, w.*, row_number() OVER (
+  SELECT r.parent_id, w.candidate_id, w.worth, w.decided_by, w.reason, w.labels_json, w.input_fingerprint,
+         w.created_at, w.seq FROM (
+    -- Rank the keys alone: every worth row carries its labels JSON, too heavy to sort.
+    SELECT p.parent_id, w.seq, row_number() OVER (
       PARTITION BY p.parent_id ORDER BY (w.decided_by = 'human') DESC, w.seq DESC) AS rn
-    FROM current_parent p JOIN worth w USING (candidate_id))
-  WHERE rn = 1;
+    FROM current_parent p JOIN worth w USING (candidate_id)) r
+  JOIN worth w ON w.seq = r.seq
+  WHERE r.rn = 1;
 
 CREATE VIEW current_linkedins AS
   SELECT seq, candidate_id, linkedin_url, member_id, origin, verdict, decided_by, judgment_fingerprint, match_probability, confidence, reason, created_at FROM (

@@ -72,6 +72,9 @@ def open_store(path: Path, *, shared: bool = False) -> sqlite3.Connection:
     if version == 9:
         _migrate_9_to_10(conn)
         version = 10
+    if version == 10:
+        _migrate_10_to_11(conn)
+        version = 11
     if version != SCHEMA_VERSION:
         conn.close()
         raise StoreError(f"{path} has schema version {version}, this code is {SCHEMA_VERSION}; move the file aside")
@@ -187,3 +190,13 @@ def _migrate_9_to_10(conn: sqlite3.Connection) -> None:
         conn.execute("DROP VIEW current_profile")
         conn.execute(profile.strip().removesuffix(";"))
         conn.execute("UPDATE meta SET value = '10' WHERE key = 'schema_version'")
+
+
+def _migrate_10_to_11(conn: sqlite3.Connection) -> None:
+    """current_worth ranks narrow rows; nothing saved changes."""
+    view = DDL[DDL.index("CREATE VIEW current_worth AS"):DDL.index("CREATE VIEW current_linkedins AS")]
+    with conn:
+        conn.execute("BEGIN")
+        conn.execute("DROP VIEW current_worth")
+        conn.execute(view.strip().removesuffix(";"))
+        conn.execute("UPDATE meta SET value = '11' WHERE key = 'schema_version'")

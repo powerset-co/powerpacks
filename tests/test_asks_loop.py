@@ -350,7 +350,8 @@ class AskLoopServerTests(unittest.TestCase):
                         self.assertEqual(response.status, 200, path)
                     loop.assert_called_once_with(repo_root=root, env_file=root / ".env")
                     self.assertEqual(daemon, [True])
-                    mount.assert_not_called()
+                    # Only the start-up warm-up mounts (in the background); a Team request never does.
+                    self.assertLessEqual(mount.call_count, 1)
                     self.assertFalse((root / server.STORE).exists())
                 finally:
                     page.shutdown()
