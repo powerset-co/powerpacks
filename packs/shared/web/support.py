@@ -63,6 +63,8 @@ def _run(message: dict, repo_root: Path) -> str:
                  "--add-dir", str((repo_root / ".powerpacks").resolve()),
                  # uv keeps its cache here; without it every bin/* command dies on "Failed to initialize cache".
                  "--add-dir", str(Path.home() / ".cache/uv"),
+                 # msgvault writes its own database on every command, so Gmail can't be checked without it.
+                 "--add-dir", str(Path.home() / ".msgvault"),
                  "--output-last-message", str(report), prompt],
                 cwd=repo_root, env={**os.environ, "CODEX_HOME": str(home)},
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, timeout=RUN_TIMEOUT_SECONDS,
