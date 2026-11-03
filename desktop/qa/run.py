@@ -23,7 +23,7 @@ from scenarios import SCENARIOS
 
 HERE = Path(__file__).resolve().parent
 QA_APP = HERE.parent / "src-tauri/target/release/bundle/macos/Powerpacks QA.app"
-PORT = 8799
+PORT = 8813
 
 
 def installed_running() -> bool:

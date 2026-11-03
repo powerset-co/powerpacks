@@ -123,8 +123,8 @@ class App:
         while not json.loads(self._post("/focus"))["key"]:
             if time.time() > deadline:
                 raise Failed("the window did not come forward")
-            # macOS may refuse an app's own activation while another app is in use.
-            subprocess.run(["osascript", "-e", f'tell application id "{QA_APP_ID}" to activate'])
+            # macOS refuses an app's own activation when it was started from a shell; Launch Services may.
+            subprocess.run(["open", "-b", QA_APP_ID])
             time.sleep(0.2)
 
     def click(self, target: dict, nth: int = 0) -> None:
