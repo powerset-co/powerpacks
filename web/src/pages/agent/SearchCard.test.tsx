@@ -20,8 +20,9 @@ import { isRecord } from "@/lib/utils"
 
 import { SearchCard } from "./SearchCard"
 
-const store = vi.hoisted(() => ({ send: vi.fn() }))
+const store = vi.hoisted(() => ({ send: vi.fn(), useAgent: () => ({ scope: null }) }))
 vi.mock("@/lib/agent/store", () => store)
+vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
 afterEach(() => {
   cleanup()
@@ -44,6 +45,7 @@ const SEARCH: PreparedSearch = {
   notes: [],
   blockers: [],
   local: false,
+  estimate: null,
 }
 
 /** The one message the card sent. */
@@ -67,21 +69,33 @@ function sent(): { query?: string; filters: Record<string, unknown>; traits?: un
 }
 
 function execute() {
-  fireEvent.click(screen.getByRole("button", { name: "Execute" }))
+  fireEvent.click(screen.getByRole("button", { name: "Run Search" }))
 }
 
-it("shows the query, the traits and the filled filters read-only on a card that no longer asks", () => {
+it("folds a card that no longer asks under its query, and opens to the traits and filters read-only", () => {
   render(<SearchCard search={SEARCH} actions={false} />)
-  expect(screen.getByRole("heading", { name: "VP of finance in New York" })).toBeTruthy()
-  expect(screen.getByText("VP of Finance").textContent).toContain("(current)")
-  expect(screen.getByText("New York Metropolitan Area").textContent).toContain("metro")
+  expect(screen.getByRole("heading", { name: "“VP of finance in New York”" })).toBeTruthy()
+  expect(screen.getByText("+5 filters")).toBeTruthy()
+  expect(screen.queryByText("Search Filters")).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "Show filters" }))
+  expect(screen.getByText("VP of Finance").parentElement?.textContent).toContain("Current")
+  expect(screen.getByText("Metro Areas:")).toBeTruthy()
+  expect(screen.getByText("New York Metropolitan Area")).toBeTruthy()
   expect(screen.getByText("Vice-President")).toBeTruthy()
   expect(screen.getByText("5 – any")).toBeTruthy()
   expect(screen.getByText("VP Finance")).toBeTruthy()
   expect(screen.getByText("Finance Lead")).toBeTruthy()
-  expect(screen.queryByText("Companies")).toBeNull()
+  expect(screen.getByText("5 filters applied")).toBeTruthy()
+  expect(screen.queryByText("Companies:")).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
-  expect(screen.queryByRole("button")).toBeNull()
+  // Only the fold toggle: nothing edits a card that no longer asks.
+  expect(screen.getAllByRole("button")).toHaveLength(1)
+})
+
+it("shows the estimate the prepare counted", () => {
+  render(<SearchCard search={{ ...SEARCH, estimate: 1531 }} actions={true} />)
+  expect(screen.getByText("~1,500")).toBeTruthy()
+  expect(screen.getByText("estimated results")).toBeTruthy()
 })
 
 it("sends execute when nothing changed, an edit put back included", () => {
@@ -100,12 +114,9 @@ it("sends a changed query and the traits as a new search, without the filters ed
   fireEvent.change(screen.getByRole("textbox", { name: "Query" }), {
     target: { value: "Finance leaders in NYC" },
   })
-  // A location with a comma inside stays one name.
-  fireEvent.change(screen.getByRole("textbox", { name: "Location 1" }), {
-    target: { value: "Washington, DC" },
-  })
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
-  pick("Add Seniority", "C-Suite")
+  fireEvent.click(screen.getByRole("button", { name: "Edit Seniority" }))
+  fireEvent.click(screen.getByRole("checkbox", { name: "C-Suite" }))
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years max" }), { target: { value: "12" } })
   fireEvent.click(screen.getByRole("button", { name: "Add Keywords" }))
   const keyword = screen.getByRole("textbox", { name: "Add Keywords" })
@@ -139,8 +150,8 @@ it("sends a removed filter as null and an emptied list as null", () => {
 
 it("adds a filter the search did not come with through the Edit Filters modal", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
-  expect(screen.queryByText("Companies")).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  expect(screen.queryByText("Companies:")).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "Edit Filters" }))
   const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
   // The modal opens on the prepared search: the seniority picker already lists its two bands.
   expect(within(dialog).getByText("Vice President, Director")).toBeTruthy()
@@ -150,7 +161,7 @@ it("adds a filter the search did not come with through the Edit Filters modal", 
   fireEvent.keyDown(company, { key: "Enter" })
   fireEvent.click(within(dialog).getByRole("button", { name: "Apply Filters" }))
   // Applied: the card's preview layer shows the company beside the prepared rows.
-  expect(screen.getByText("Companies")).toBeTruthy()
+  expect(screen.getByText("Companies:")).toBeTruthy()
   expect(screen.getByRole<HTMLInputElement>("textbox", { name: "Companies 1" }).value).toBe("Stripe")
   execute()
   expect(sent().filters).toEqual({ company_names: ["Stripe"] })
@@ -162,7 +173,7 @@ it("clears both ends of a range from the modal, and keeps a typed location under
     filters: [...SEARCH.filters, { key: "headcount_min", value: 50 }, { key: "headcount_max", value: 500 }],
   }
   render(<SearchCard search={search} actions={true} />)
-  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  fireEvent.click(screen.getByRole("button", { name: "Edit Filters" }))
   const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
   fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
   // Headcount's clear fires two updates in one click; both must land.
@@ -184,14 +195,14 @@ it("clears both ends of a range from the modal, and keeps a typed location under
 
 it("drops the modal's edits on Cancel", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
-  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  fireEvent.click(screen.getByRole("button", { name: "Edit Filters" }))
   const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
   fireEvent.click(within(dialog).getByRole("button", { name: /^Company/ }))
   const company = within(dialog).getByPlaceholderText("e.g., Google")
   fireEvent.change(company, { target: { value: "Stripe" } })
   fireEvent.keyDown(company, { key: "Enter" })
   fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
-  expect(screen.queryByText("Companies")).toBeNull()
+  expect(screen.queryByText("Companies:")).toBeNull()
   execute()
   expect(store.send).toHaveBeenCalledWith("execute")
 })
@@ -239,15 +250,14 @@ it("sends a changed end of a select pair, the other end untouched", () => {
   expect(sent().filters).toEqual({ funding_stage_max: "series_b" })
 })
 
-it("cycles the temporal from a click anywhere on the trait chip, not only its text", () => {
+it("cycles the temporal from the trait chip and edits its value behind the pencil", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
-  const text = screen.getByRole("button", { name: "VP of Finance: current" })
-  if (!text.parentElement) throw new Error("the temporal has no chip")
-  fireEvent.click(text.parentElement)
+  fireEvent.click(screen.getByRole("button", { name: "VP of Finance: current" }))
   expect(screen.getByRole("button", { name: "VP of Finance: past" })).toBeTruthy()
-  // A click in the field edits the value; it does not cycle.
-  fireEvent.click(screen.getByRole("textbox", { name: "Trait 1" }))
-  expect(screen.getByRole("button", { name: "VP of Finance: past" })).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "Edit VP of Finance" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Trait 1" }), { target: { value: "CFO" } })
+  fireEvent.click(screen.getByRole("button", { name: "Done editing" }))
+  expect(screen.getByRole("button", { name: "CFO: past" })).toBeTruthy()
 })
 
 it("sends a temporal change with the filter edits beside it: an in-place edit, not a new search", () => {
@@ -281,7 +291,7 @@ it("drops a row emptied before Execute once the card is read-only, and offers no
   fireEvent.change(screen.getByRole("spinbutton", { name: "Years min" }), { target: { value: "" } })
   // Still there while editing, so it can be refilled.
   expect(screen.getByRole("spinbutton", { name: "Years min" })).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "More filters…" }))
+  fireEvent.click(screen.getByRole("button", { name: "Edit Filters" }))
   const dialog = screen.getByRole("dialog", { name: "Edit Filters" })
   fireEvent.click(within(dialog).getByRole("button", { name: /^Interactions/ }))
   expect(within(dialog).getByText("Individual (You)")).toBeTruthy()
@@ -292,7 +302,7 @@ it("drops a row emptied before Execute once the card is read-only, and offers no
   execute()
   expect(sent().filters).toEqual({ years_experience_min: null })
   rerender(<SearchCard search={{ ...SEARCH, local: true }} actions={false} />)
-  expect(screen.queryByText("Years")).toBeNull()
+  expect(screen.queryByText("Years:")).toBeNull()
 })
 
 it("sends an empty traits list when every trait is removed", () => {
@@ -311,10 +321,10 @@ it("keeps showing what it sent once the card no longer asks", () => {
   fireEvent.change(screen.getByRole("textbox", { name: "Add trait" }), { target: { value: "CFO" } })
   execute()
   rerender(<SearchCard search={SEARCH} actions={false} />)
-  expect(screen.getByRole("heading", { name: "CFOs in NYC" })).toBeTruthy()
+  expect(screen.getByRole("heading", { name: "“CFOs in NYC”" })).toBeTruthy()
   expect(screen.queryByText("Director")).toBeNull()
-  expect(screen.getByText("CFO").textContent).toContain("(current)")
-  expect(screen.queryByRole("button")).toBeNull()
+  expect(screen.getByText("CFO").parentElement?.textContent).toContain("Current")
+  expect(screen.getAllByRole("button")).toHaveLength(1)
 })
 
 it("adds canonical role ids through the picker", async () => {
@@ -380,14 +390,14 @@ it("resets every edit to the prepared search", () => {
     "VP of finance in New York",
   )
   expect(screen.getByText("Director")).toBeTruthy()
-  expect(screen.getByRole("textbox", { name: "Trait 1" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "VP of Finance: current" })).toBeTruthy()
   execute()
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
 it("sends a blocked card's changes without running it", () => {
   render(<SearchCard search={{ ...SEARCH, blockers: ["bm25_queries is empty"] }} actions={true} />)
-  expect(screen.queryByRole("button", { name: "Execute" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
   const changes = screen.getByRole<HTMLButtonElement>("button", { name: "Send changes" })
   expect(changes.disabled).toBe(true)
   fireEvent.click(screen.getByRole("button", { name: "Remove director" }))

@@ -2,7 +2,8 @@ import { useFeatures } from "@/lib/features"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 
-import { EmptyState, PowersetMark, Spinner } from "@/components/shared"
+import { EmptyState, PowersetMark, ResizeHandle, Spinner } from "@/components/shared"
+import { useStoredSize } from "@/hooks/useStoredSize"
 import { useFullAccessTip } from "@/lib/agent/fullAccessTip"
 import { answer, send, setFullAccess, stop, useAgent } from "@/lib/agent/store"
 import { chatRun } from "@/lib/agent/searchRun"
@@ -11,7 +12,6 @@ import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { useThreads } from "@/lib/agent/useThreads"
 import { isDesktop } from "@/lib/desktop"
 import { readStored, writeStored } from "@/lib/storage"
-import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { searchRunKey } from "@/pages/searches/hooks/useSearchRun"
 import { RunColumn } from "@/pages/searches/RunColumn"
@@ -28,6 +28,12 @@ import { useCollaboration } from "./collaboration/useCollaboration"
 
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
+// The results' share of the room beside the chat, as last dragged: 3/5 until then. The results keep
+// 380px and the chat 320px however far the divider goes.
+const SPLIT_KEY = "agent.results-share"
+const DEFAULT_SHARE = 0.6
+const MIN_RESULTS_PX = 380
+const MIN_CHAT_PX = 320
 // The unsent message, kept for the tab so leaving the chat page (Accounts, People) doesn't lose it.
 const DRAFT_KEY = "agent-draft"
 
@@ -242,19 +248,39 @@ function Workspace() {
       writeStored("local", `search-thread:${runId}`, agent.threadId)
   }, [runId, agent.threadId, listed])
 
-  // Results open beside the chat, splitting the room 2:3; the results keep 380px at the narrowest
-  // window (960px).
+  // Results open beside the chat, splitting the room 2:3 until the divider is dragged; the results
+  // keep 380px at the narrowest window (960px).
   const showing = runId !== null && listed.has(runId)
+  const [share, setShare] = useStoredSize(SPLIT_KEY, DEFAULT_SHARE)
+  const room = useRef<HTMLElement>(null)
+  const bounded = (next: number) => {
+    const width = room.current?.clientWidth ?? 0
+    if (width <= MIN_RESULTS_PX + MIN_CHAT_PX) return DEFAULT_SHARE
+    return Math.min(1 - MIN_CHAT_PX / width, Math.max(MIN_RESULTS_PX / width, next))
+  }
   return (
     <main
-      className={cn(
-        "grid min-h-0 grid-cols-[minmax(0,1fr)]",
-        showing && "grid-cols-[minmax(0,2fr)_minmax(380px,3fr)]",
-      )}
+      ref={room}
+      className="grid min-h-0"
+      style={{
+        gridTemplateColumns: showing
+          ? `minmax(${MIN_CHAT_PX}px, ${1 - share}fr) minmax(${MIN_RESULTS_PX}px, ${share}fr)`
+          : "minmax(0, 1fr)",
+      }}
     >
       <Conversation runTitle={runTitle} runId={runId} collaboration={collaboration} />
       {runId && listed.has(runId) && (
-        <div className="searches-main border-l border-line" aria-label="Search results">
+        <div className="searches-main relative border-l border-line" aria-label="Search results">
+          <ResizeHandle
+            label="Resize search results"
+            edge="left"
+            onDrag={(clientX) => {
+              const box = room.current?.getBoundingClientRect()
+              if (box) setShare(bounded((box.right - clientX) / box.width))
+            }}
+            onStep={(direction) => setShare(bounded(share + direction * 0.03))}
+            onReset={() => setShare(DEFAULT_SHARE)}
+          />
           <RunColumn runId={runId} />
         </div>
       )}

@@ -35,6 +35,8 @@ export interface PreparedSearch {
   blockers: string[]
   /** Prepared on the local index (`mode: local_duckdb`): no investors and no set interactions. */
   local: boolean
+  /** How many people the hard filters match, when the prepare counted them (the local index's pool estimate). */
+  estimate: number | null
 }
 
 /** The value as the payload holds it, or null for anything empty or of another shape. */
@@ -113,5 +115,9 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
     notes: lines(preview.runtime_notes),
     blockers,
     local: value.mode === "local_duckdb",
+    estimate:
+      isRecord(preview.pool_estimate) && typeof preview.pool_estimate.matched_people === "number"
+        ? preview.pool_estimate.matched_people
+        : null,
   }
 }

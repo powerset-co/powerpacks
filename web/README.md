@@ -13,6 +13,9 @@ Change log:
   `FeedbackFooter` moved to the shared components; the side nav's footer shows the
   signed-in picture, name and email, each on one line; People's Sharing select offers All, and
   Refresh signals and Share network moved to the right end of its search line.
+- 2026-11-03: the chat's search card is laid out as the cloud app's search screen (Query and
+  set, Traits, Search Filters, the estimate, Edit Filters beside Run Search); the side nav, the
+  chat/results divider and the drawers resize by dragging their edge (`ResizeHandle`), kept per machine.
 
 # web
 
