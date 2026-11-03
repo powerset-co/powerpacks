@@ -44,10 +44,16 @@ export interface ChromeProfile {
   google: boolean
 }
 
-export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeProfile[]> {
+/** The profiles to pick from, and the folder the sign-in browser was copied from (null before a copy). */
+export interface ChromeProfiles {
+  profiles: ChromeProfile[]
+  linked: string | null
+}
+
+export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeProfiles> {
   const response = await fetch("/accounts/api/chrome-profiles", { signal })
   if (!response.ok) throw await failure(response, "Couldn't read your Chrome profiles.")
-  return (await body<{ profiles: ChromeProfile[] }>(response)).profiles
+  return body<ChromeProfiles>(response)
 }
 
 /** Copies one profile's sign-ins and saved passwords into the browser Powerpacks signs in with. */

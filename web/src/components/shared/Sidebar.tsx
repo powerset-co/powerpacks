@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
 import { AGENT, PAGES, type Page, type PageKey } from "@/lib/nav"
-import { COLLAPSED_KEY } from "@/lib/sidebar"
+import { COLLAPSED_KEY, DEFAULT_WIDTH, MAX_WIDTH, MIN_WIDTH, WIDTH_KEY } from "@/lib/sidebar"
 import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { Chats } from "@/pages/agent/Chats"
@@ -25,6 +25,9 @@ import {
 import { HiveIcon } from "./icons/actions"
 import { CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
+import { useStoredSize } from "@/hooks/useStoredSize"
+
+import { ResizeHandle } from "./ResizeHandle"
 import { SidebarFooter } from "./SidebarFooter"
 
 // Below this width the nav is always the icon rail; the pages' own panels need the room.
@@ -67,20 +70,35 @@ export function Sidebar() {
   )
   const railOnly = useMedia(RAIL_ONLY_QUERY)
   const rail = collapsed || railOnly
+  // Open, the nav is as wide as it was last dragged.
+  const [width, setWidth] = useStoredSize(WIDTH_KEY, DEFAULT_WIDTH)
+  const bounded = (next: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(next)))
+  const [nav, setNav] = useState<HTMLElement | null>(null)
   const toggle = () => {
     setCollapsed(!collapsed)
     writeStored("local", COLLAPSED_KEY, !collapsed)
   }
   return (
     <nav
+      ref={setNav}
       aria-label="Pages"
       data-collapsed={rail}
+      style={rail ? undefined : { width: bounded(width) }}
       className={cn(
         // min-h-0: the window's height bounds the nav, so a long chat list scrolls inside it.
         "relative z-10 flex h-full min-h-0 flex-col border-r border-line bg-[var(--sidebar-bg)] transition-[width] duration-med ease-out",
-        rail ? "w-14" : "w-[260px]",
+        rail && "w-14",
       )}
     >
+      {!rail && (
+        <ResizeHandle
+          label="Resize sidebar"
+          edge="right"
+          onDrag={(clientX) => setWidth(bounded(clientX - (nav?.getBoundingClientRect().left ?? 0)))}
+          onStep={(direction) => setWidth(bounded(width + direction * 16))}
+          onReset={() => setWidth(DEFAULT_WIDTH)}
+        />
+      )}
       <div
         data-tauri-drag-region
         data-sidebar-brand
