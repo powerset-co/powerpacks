@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 import { EMPTY_AGENT } from "@/lib/agent/store"
@@ -21,7 +21,11 @@ vi.mock("@/lib/agent/store", async (original) => ({
   useAgent: () => ({ ...EMPTY_AGENT, running: true, searchRun: openRun }),
 }))
 vi.mock("./collaboration/useCollaboration", () => ({ useCollaboration: () => ({ data: undefined }) }))
-vi.mock("./Composer", () => ({ Composer: () => null }))
+vi.mock("./Composer", () => ({
+  Composer: ({ draft, onDraftChange }: { draft: string; onDraftChange: (text: string) => void }) => (
+    <textarea aria-label="Message" value={draft} onChange={(event) => onDraftChange(event.target.value)} />
+  ),
+}))
 vi.mock("@/pages/searches/RunColumn", () => ({
   RunColumn: ({ runId }: { runId: string }) => <div data-testid="results">{runId}</div>,
 }))
@@ -50,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  sessionStorage.clear()
 })
 
 function renderPage() {
@@ -84,4 +89,13 @@ it("does not read a finished run again when the chat switches to it from a runni
   rerender()
   expect(screen.getByTestId("results").textContent).toBe(FINISHED)
   expect(runReads()).toEqual([])
+})
+
+it("keeps the unsent message when the page is left and opened again", async () => {
+  renderPage()
+  fireEvent.change(await screen.findByLabelText("Message"), { target: { value: "who knows Morgan" } })
+  cleanup()
+
+  renderPage()
+  expect((await screen.findByLabelText<HTMLTextAreaElement>("Message")).value).toBe("who knows Morgan")
 })
