@@ -7,7 +7,8 @@ GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in)
                               setup will take, as its Connect screen shows it
                               Jobs and health arrive together, so a finished job never
                               shows next to the account's pre-sync health.
-GET  /accounts/api/chrome-profiles  the user's Chrome profiles with a LinkedIn or Google session
+GET  /accounts/api/chrome-profiles  the user's Chrome profiles with a LinkedIn or Google session,
+                              and the folder the sign-in browser was copied from
 POST /accounts/api/chrome-profile   folder=<profile>: copy it into the sign-in browsers
 POST /accounts/api/sync       source=imessage|whatsapp, or source=gmail&email=<address>:
                               sync that one card
@@ -46,7 +47,7 @@ from packs.ingestion.primitives.refresh.refresh_sources import (
 )
 from packs.ingestion.primitives.refresh.tasks import installed_runners
 from packs.ingestion.primitives.setup.automations.accounts import add_account
-from packs.ingestion.primitives.setup.automations.chrome_profiles import chrome_profiles, use_chrome_profile
+from packs.ingestion.primitives.setup.automations.chrome_profiles import chrome_profiles, copied_from, use_chrome_profile
 
 ACCOUNTS_PATH = "/accounts/api/accounts"
 SIGNED_IN_PATH = "/accounts/api/signed-in"
@@ -79,7 +80,8 @@ class AccountsApi:
             _send_json(handler, asdict(signed_in(self._signins)))
             return True
         if parsed.path == CHROME_PROFILES_PATH:
-            _send_json(handler, {"profiles": [asdict(profile) for profile in chrome_profiles()]})
+            _send_json(handler, {"profiles": [asdict(profile) for profile in chrome_profiles()],
+                                 "linked": copied_from()})
             return True
         if parsed.path != ACCOUNTS_PATH:
             return False
