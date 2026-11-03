@@ -18,7 +18,7 @@ const PAGES = [
   { label: "Chat", href: "/agent" },
   { label: "Searches", href: "/searches" },
   { label: "People", href: "/people" },
-  { label: "Scheduled tasks", href: "/tasks" },
+  { label: "Refresh", href: "/tasks" },
   { label: "Settings", href: "/settings" },
 ] as const
 

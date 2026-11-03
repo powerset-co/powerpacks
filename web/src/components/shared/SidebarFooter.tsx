@@ -32,6 +32,7 @@ import { CheckIcon, CLOSE_MARK } from "./icons/actions"
 import { CirclePlus } from "lucide-react"
 import { SettingsIcon, SetupIcon } from "./icons/nav"
 import { ProgressBar } from "./ProgressBar"
+import { RefreshPane } from "./RefreshPane"
 import { RelayDot } from "./RelayDot"
 import { Spinner } from "./Spinner"
 import { Tip } from "./Tip"
@@ -40,13 +41,14 @@ import { Tip } from "./Tip"
 const SIGNED_OUT_POLL_MS = 5_000
 
 /** The side nav's bottom: the import pane while an import shows, otherwise the sources prompt
- *  (never both), the update pane when a newer app is out, then who is signed in, whose row opens
+ *  (never both), what the last daily refresh needs from the person, the update pane when a newer app is out, then who is signed in, whose row opens
  *  the account menu (Settings, Send feedback, Reconnect). */
 export function SidebarFooter({ rail }: { rail: boolean }) {
   const run = useImport()
   return (
     <div className="mt-auto flex flex-col">
       {run ? <ImportPane rail={rail} {...run} /> : <SourcesPane rail={rail} />}
+      <RefreshPane rail={rail} />
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
     </div>

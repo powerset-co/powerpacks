@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-03: run the native daily refresh's clock (refresh/daily.py) with the server.
 - 2026-11-02: mount the full server at start, so the first People open after launch does not wait ~1 s for its imports.
 - 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
 - 2026-10-14: GET /api/search/scope: the sets and local index chat can search (search_scope.py); the chat pins its pick through Codex since 2026-10-29.
@@ -130,7 +131,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     searches = search_routes(data_root / "deep-search", base="/searches")
     searches_json = search_api(searches, LazySets(), store_lock)
     accounts = AccountsApi()
-    tasks = TasksApi()
+    tasks = TasksApi(root)
     memory = MemoryApi(root)
 
     class Handler(BaseHTTPRequestHandler):
@@ -496,6 +497,19 @@ def _run_asks(root: Path) -> None:
     asks_loop.run(repo_root=root, env_file=root / ".env")
 
 
+def _run_refresh(root: Path) -> None:
+    """The native daily refresh's clock (refresh/daily.py), once the project packages import."""
+    while True:
+        _load_project_packages(root)
+        try:
+            from packs.ingestion.primitives.refresh import daily
+        except ModuleNotFoundError:
+            time.sleep(2)
+            continue
+        break
+    daily.scheduler(root)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="The one local Powerpacks page server.")
     parser.add_argument("command", choices=("serve", "start"), help="serve in the foreground, or start detached")
@@ -524,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
     with ThreadingHTTPServer((args.host, args.port), handler) as server:
         threading.Thread(target=handler.warm, name="warm", daemon=True).start()
         threading.Thread(target=_run_asks, args=(root,), name="asks", daemon=True).start()
+        threading.Thread(target=_run_refresh, args=(root,), name="refresh", daemon=True).start()
         _announce("serving", url, repo_root=str(root), pid=os.getpid())
         if args.open:
             webbrowser.open(url)

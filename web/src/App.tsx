@@ -20,7 +20,7 @@ import { SearchesPage } from "@/pages/searches/SearchesPage"
 import { SetsPage } from "@/pages/sets/SetsPage"
 import { AccountsPage } from "@/pages/settings/AccountsPage"
 import { SettingsPage } from "@/pages/settings/SettingsPage"
-import { TasksPage } from "@/pages/tasks/TasksPage"
+import { RefreshPage } from "@/pages/tasks/RefreshPage"
 
 // The side nav, then the page: the page owns its own scrolling and any panel of its own.
 function Shell() {
@@ -101,7 +101,7 @@ export function App() {
             />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/team" element={<TeamPage />} />
-            <Route path="/tasks" element={<TasksPage />} />
+            <Route path="/tasks" element={<RefreshPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             {desktop ? <Route path="/debug/broken" element={<BrokenPage />} /> : null}
             <Route path="*" element={<Navigate to={HOME.href} replace />} />
