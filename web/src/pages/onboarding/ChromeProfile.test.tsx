@@ -6,7 +6,13 @@ import { afterEach, beforeAll, expect, it, vi } from "vitest"
 import { ChromeProfile } from "./ChromeProfile"
 
 beforeAll(() => {
-  vi.stubGlobal("ResizeObserver", class { observe = vi.fn(); disconnect = vi.fn() })
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe = vi.fn()
+      disconnect = vi.fn()
+    },
+  )
   vi.stubGlobal("matchMedia", () => ({ matches: true }))
 })
 
@@ -18,7 +24,9 @@ const json = (value: unknown) =>
   new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } })
 
 function show(profiles: unknown[]) {
-  const fetchMock = vi.fn((url: string) => Promise.resolve(json(url.endsWith("profiles") ? { profiles } : { status: "copied" })))
+  const fetchMock = vi.fn((url: string) =>
+    Promise.resolve(json(url.endsWith("profiles") ? { profiles } : { status: "copied" })),
+  )
   vi.stubGlobal("fetch", fetchMock)
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -35,10 +43,15 @@ function show(profiles: unknown[]) {
 }
 
 it("copies the profile the user picks, then moves on to sign up", async () => {
-  const fetchMock = show([{ folder: "Default", name: "Person 1", email: "a@example.com", linkedin: true, google: true }])
+  const fetchMock = show([
+    { folder: "Default", name: "Person 1", email: "a@example.com", linkedin: true, google: true },
+  ])
   fireEvent.click(await screen.findByRole("button", { name: /a@example.com/ }))
   await screen.findByText("sign up")
-  expect(fetchMock).toHaveBeenCalledWith("/accounts/api/chrome-profile", expect.objectContaining({ method: "POST" }))
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/accounts/api/chrome-profile",
+    expect.objectContaining({ method: "POST" }),
+  )
 })
 
 it("goes straight to sign up without a profile to pick", async () => {

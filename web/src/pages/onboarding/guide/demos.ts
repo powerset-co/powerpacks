@@ -19,12 +19,9 @@ export const flows: Record<GuideSource, Flow> = {
   chrome: {
     title: "Skip the sign-ins.",
     eyebrow: "CHROME · ON THIS MAC",
-    intro: "Powerpacks keeps a copy of one Chrome profile on this Mac, so it can sync for you in the background without asking you to sign in.",
-    steps: [
-      "Powerpacks' browser starts empty.",
-      "Pick the profile you already use.",
-      "No sign-in required.",
-    ],
+    intro:
+      "Powerpacks keeps a copy of one Chrome profile on this Mac, so it can sync for you in the background without asking you to sign in.",
+    steps: ["Powerpacks' browser starts empty.", "Pick the profile you already use.", "No sign-in required."],
     captions: [
       "Without a profile, you would sign in to everything again with no saved passwords.",
       "A copy of its logins and saved passwords is saved on this Mac.",
@@ -147,10 +144,13 @@ function mac() {
   return `<div class="mac-window"><aside><div class="lights"><i></i><i></i><i></i></div><div class="search">⌕ <span>Search</span></div>${sideRows.map(([s, g, c], i) => `<div class="side-row ${i === 3 ? "selected" : ""}">${tile(g, c)}${s}</div>`).join("")}</aside><div class="mac-main"><div class="mac-title"><span class="back">${tiles.back}</span><strong>Full Disk Access</strong></div><p>Allow the applications below to access data like Mail, Messages, Safari, Home, Time Machine backups, and certain administrative settings for all users on this Mac.</p><div class="permission-list">${row('<b class="app-icon terminal">›_</b>', "Terminal", toggle)}<div class="power-row">${row(mark, "Powerpacks", toggle)}</div><div class="add-row">＋ <span>−</span></div></div></div></div><div class="drop-guide"><div>↑ &nbsp; Drag Powerpacks into the list above</div><div class="drag-source">${mark}<span>Powerpacks</span><span class="grip">⠿</span></div></div><div class="drag-copy">${mark}</div><div class="restart-dialog"><div>${mark}</div><strong>“Powerpacks” will not have full disk access until it is quit.</strong><p>You may choose to quit “Powerpacks” now, or do it on your own later.</p><div><span class="pick">Later</span><b>Quit &amp; Reopen</b></div></div>${cursor}`
 }
 function chrome(person: Person) {
-  const bar = '<div class="browser-bar"><div class="lights"><i></i><i></i><i></i></div><span>🔒 linkedin.com</span></div>'
+  const bar =
+    '<div class="browser-bar"><div class="lights"><i></i><i></i><i></i></div><span>🔒 linkedin.com</span></div>'
   const tileFor = (name: string, cls: string) =>
     `<div class="profile-tile ${cls}"><b class="avatar">${name.slice(0, 1).toUpperCase()}</b><span>${name}</span></div>`
-  const rows = ["72%", "58%", "66%"].map((width) => `<div class="connection"><b class="avatar plain"></b><i style="width:${width}"></i></div>`)
+  const rows = ["72%", "58%", "66%"].map(
+    (width) => `<div class="connection"><b class="avatar plain"></b><i style="width:${width}"></i></div>`,
+  )
   return `<div class="browser">${bar}<div class="google-page empty-page"><h2>Sign in</h2><p>Stay updated on your professional world</p><div class="empty-field">Email</div><div class="empty-field">Password</div><div class="sign-in-button">Sign in</div></div><div class="google-page pick-page"><h2>Who's using Chrome?</h2><div class="profile-grid">${tileFor(person.email, "picked")}${tileFor("Work", "")}${tileFor("Guest", "")}</div></div><div class="google-page signed-page"><div class="signed-note">✓ Syncing in the background</div><h2>Your connections</h2>${rows.join("")}</div></div>${cursor}`
 }
 function gmail(person: Person) {
