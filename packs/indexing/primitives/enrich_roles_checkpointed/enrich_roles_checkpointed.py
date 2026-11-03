@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
+from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
@@ -304,14 +305,14 @@ def role_input(person: dict[str, Any], position: dict[str, Any]) -> dict[str, An
     }
 
 
-def load_input_classifications(path: str | None) -> dict[str, dict[str, Any]]:
+def load_input_classifications(path: str | None, *, needed_keys: set[str]) -> dict[str, dict[str, Any]]:
     if not path:
         return {}
     input_path = Path(path)
     if not input_path.exists():
         raise SystemExit(f"missing input role classifications: {input_path}")
     out: dict[str, dict[str, Any]] = {}
-    for row in read_jsonl(input_path):
+    for row in iter_artifact_rows(input_path, key_field="title_hash", needed_keys=needed_keys):
         th = clean(row.get("title_hash"))
         if th:
             out[th] = shape_role(row)
@@ -838,15 +839,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     requested_provider = str(args.provider)
     if args.provider not in {"openai", "tlm"}:
         raise SystemExit("role provider must be openai/tlm; no fake/mock/local provider is available")
-    input_classifications = load_input_classifications(getattr(args, "input_classifications", None))
+    input_classifications = load_input_classifications(
+        getattr(args, "input_classifications", None),
+        needed_keys={role["title_hash"] for role in collect_role_inputs(flattened)},
+    )
     allow_paid = bool(getattr(args, "allow_paid", False))
-    provider = "input-classifications" if input_classifications else requested_provider
-    if input_classifications and allow_paid:
+    provider = "input-classifications" if getattr(args, "input_classifications", None) else requested_provider
+    if getattr(args, "input_classifications", None) and allow_paid:
         provider = f"input-classifications+{requested_provider}"
     api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
-    if not input_classifications and not allow_paid:
+    if not getattr(args, "input_classifications", None) and not allow_paid:
         raise SystemExit(f"role provider '{args.provider}' requires --allow-paid; no paid API was called")
-    if not input_classifications and not api_key:
+    if not getattr(args, "input_classifications", None) and not api_key:
         raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
     base_url = getattr(args, "base_url", None) or os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1")
     model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
@@ -951,7 +955,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 seen_hashes.add(base["title_hash"])
                 batch.append(role)
             else:
-                if input_classifications:
+                if getattr(args, "input_classifications", None):
                     state["artifact_misses"] = int(state.get("artifact_misses") or 0) + 1
                 if not allow_paid:
                     raise SystemExit(f"missing input role classification for title_hash={base['title_hash']}")

@@ -80,6 +80,7 @@ def load_input_embeddings(
     embedding_field: str,
     *,
     expected_dimension: int | None = None,
+    needed_keys: set[str],
 ) -> dict[str, array.array]:
     if not path:
         return {}
@@ -89,7 +90,7 @@ def load_input_embeddings(
     if input_path.suffix.lower() != ".parquet":
         raise SystemExit(f"input embeddings must use a .parquet path: {input_path}")
     out: dict[str, array.array] = {}
-    for row in iter_artifact_rows(input_path, [id_field, embedding_field]):
+    for row in iter_artifact_rows(input_path, [id_field, embedding_field], key_field=id_field, needed_keys=needed_keys):
         rid = clean(row.get(id_field))
         embedding = row.get(embedding_field)
         if rid and isinstance(embedding, list):
@@ -374,6 +375,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         getattr(args, "input_id_field", None) or args.id_field,
         getattr(args, "input_embedding_field", "embedding"),
         expected_dimension=dimension,
+        needed_keys={clean(row.get(args.id_field)) for row in iter_jsonl(input_path) if clean(row.get(args.id_field))},
     )
     usage_tier = getattr(args, "openai_usage_tier", None)
     concurrency = int(
@@ -386,7 +388,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     allow_paid = bool(getattr(args, "allow_paid", False))
-    if input_embeddings:
+    if getattr(args, "input_embeddings", None):
         provider = "input-embeddings+openai" if allow_paid else "input-embeddings"
         api_key = getattr(args, "api_key", None) or os.getenv("OPENAI_API_KEY", "")
     else:
@@ -413,7 +415,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             return
         flush_started = time.perf_counter()
         outputs: list[dict[str, Any]] = []
-        if input_embeddings:
+        if getattr(args, "input_embeddings", None):
             replay_started = time.perf_counter()
             missing: list[tuple[str, str, dict[str, Any]]] = []
             for rid, text, copied in pending:
