@@ -28,7 +28,7 @@ import { HowItWorks } from "./how-it-works/HowItWorks"
 // Remembered on this Mac once How Deep Context works is closed; the "here" link opens it again.
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
-const SERVICES: readonly ConnectRow[] = ["codex"]
+const SERVICES: readonly ConnectRow[] = ["codex", "browser"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
   linkedin: "Your connections",
@@ -36,6 +36,7 @@ const SUBTITLE: Record<ConnectRow, string> = {
   whatsapp: "Your chats",
   powerset: "Your Powerpacks account",
   codex: "Your ChatGPT plan",
+  browser: "Your Chrome profile",
 }
 
 /** One connection controller, with its rows on the left and its actions and guides on the right. */
@@ -186,7 +187,7 @@ export function AccountsPanel({
             </div>
             <div>
               <h2 className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[.1em] text-faint">
-                Chat
+                Account Profiles
               </h2>
               {list(SERVICES)}
             </div>

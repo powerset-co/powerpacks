@@ -68,6 +68,12 @@ def chrome_profiles(data: Path = CHROME_DATA, app: Path = CHROME_APP) -> list[Ch
                   key=lambda profile: not profile.linkedin)
 
 
+def copied_from(target: Path = BROWSER_PROFILE) -> str | None:
+    """The Chrome profile folder the sign-in browser was copied from, or None before any copy."""
+    marker = target.expanduser() / COPIED_FROM
+    return json.loads(marker.read_text(encoding="utf-8"))["folder"] if marker.is_file() else None
+
+
 def use_chrome_profile(folder: str, *, data: Path = CHROME_DATA, app: Path = CHROME_APP,
                        targets: tuple[Path, ...] = (BROWSER_PROFILE, DEFAULT_BROWSER_PROFILE)) -> None:
     """Copy one of chrome_profiles into each sign-in profile; what was there moves to a .bkup."""
