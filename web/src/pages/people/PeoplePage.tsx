@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Outlet, useLocation, useMatch, useNavigate, useSearchParams } from "react-router-dom"
 
-import { EmptyState, Toast, type ToastMessage } from "@/components/shared"
+import { Toast, type ToastMessage } from "@/components/shared"
 import { useInert } from "@/hooks/useInert"
 import {
   LOGBOOK_PATH,
@@ -12,10 +12,7 @@ import {
 } from "@/lib/people/logbook"
 
 import { useLogbook } from "./hooks/useLogbook"
-import { usePeopleQuery } from "./hooks/usePeopleQuery"
 import type { ReaderContext } from "./logbook/LogbookReader"
-import { PeopleLoading } from "./PeopleLoading"
-import { PeopleShell } from "./PeopleShell"
 import { PeopleWorkspace } from "./PeopleWorkspace"
 import "./styles/page.css"
 
@@ -28,7 +25,6 @@ import "./styles/page.css"
  */
 export function PeoplePage() {
   const reading = useMatch(LOGBOOK_PATH) !== null
-  const people = usePeopleQuery()
   const list = useRef<HTMLDivElement>(null)
   const returnTo = useRef<Element | null>(null)
 
@@ -76,19 +72,10 @@ export function PeoplePage() {
   const logbook = useLogbook(setToast, openBuilt)
   const context: ReaderContext = { building: logbook.building, build: logbook.build }
 
-  let content
-  if (people.data) {
-    content = (
-      <PeopleWorkspace people={people.data} reading={reading} logbook={logbook} onView={openLogbooks} />
-    )
-  } else if (people.error) {
-    content = <PeopleShell main={<EmptyState data-empty>{people.error.message}</EmptyState>} />
-  } else content = <PeopleLoading />
-
   return (
     <div className="people-page" data-reading={reading || undefined}>
       <div ref={list} className="people-page-list" aria-hidden={reading || undefined}>
-        {content}
+        <PeopleWorkspace reading={reading} logbook={logbook} onView={openLogbooks} />
       </div>
       <Outlet context={context} />
       <Toast toast={toast} onDismiss={dismiss} className="toast leading-[1.45]" />

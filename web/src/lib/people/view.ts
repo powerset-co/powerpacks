@@ -62,3 +62,8 @@ export function writeView(
   for (const { key } of HIDES) if (!hide.has(key)) params.append("show", key)
   return params
 }
+
+/** The view as the server's list reads it (GET /api/people/page): the same parameters as the URL. */
+export function viewQuery(view: PeopleView): string {
+  return writeView(view, new URLSearchParams()).toString()
+}

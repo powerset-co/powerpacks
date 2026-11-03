@@ -27,6 +27,7 @@ import {
   type PersonDetail,
 } from "@/types/people"
 import { PLAN, uploadResponse, uploadStatus } from "@/testing/upload-fixture"
+import { deleteOnServer, pageResponse, resetPeopleServer, writeWorthOnServer } from "@/testing/people-server"
 
 import { LogbookReader } from "./logbook/LogbookReader"
 import { PeoplePage } from "./PeoplePage"
@@ -99,6 +100,12 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   const archive = serveSaved(url)
   if (archive) return Promise.resolve(archive)
   if (url.endsWith("/worth")) return Promise.resolve(worthResponse(init))
+  if (url.endsWith("/delete")) {
+    const sent: unknown = JSON.parse(typeof init?.body === "string" ? init.body : "{}")
+    const ids = sent && typeof sent === "object" && "ids" in sent && Array.isArray(sent.ids) ? sent.ids : []
+    deleteOnServer(ids.map(String))
+    return Promise.resolve(respond({ deleted: ids.length }))
+  }
   if (url.endsWith("/api/features"))
     return Promise.resolve(
       respond({ sets: false, auto_reply: false, share: true, support: false, team: false }),
@@ -109,6 +116,7 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
   if (url.endsWith("/signals"))
     return Promise.resolve(respond({ status: "idle", message: null, plan: null, error: null }))
   if (url.includes("/sets")) return Promise.resolve(respond(SETS))
+  if (url.includes("/page?")) return Promise.resolve(pageResponse(url, PAYLOAD))
   return Promise.resolve(respond(PAYLOAD))
 }
 
@@ -152,6 +160,7 @@ function respond(body: unknown, status = 200): Response {
 /** A worth response echoing what was posted: each id with the human's call. */
 function worthResponse(init?: RequestInit): Response {
   const { ids, worth } = sentWorth(init)
+  writeWorthOnServer(ids, worth)
   return respond({
     rows: ids.map((parent_id) => ({
       parent_id,
@@ -177,6 +186,14 @@ function sentWorth(init?: RequestInit): { ids: string[]; worth: string } {
     throw new Error("the worth request carried no ids")
   }
   return { ids: sent.ids.map(String), worth: sent.worth }
+}
+
+/** Select-all asks the server for every matching id; the rows are checked once it answers. */
+async function selectAll(container: HTMLElement) {
+  fireEvent.click(must(container.querySelector("[data-select-all]")))
+  await waitFor(() =>
+    expect(container.querySelector<HTMLInputElement>("[data-select-all]")?.checked).toBe(true),
+  )
 }
 
 /** Where the router is, for the reader's tests: path and query on a hidden node. */
@@ -205,6 +222,7 @@ function renderPage(path = "/people") {
 }
 
 beforeEach(() => {
+  resetPeopleServer()
   stubLayout()
   sessionStorage.clear()
   saved = []
@@ -245,6 +263,8 @@ describe("PeoplePage", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search people" }), {
       target: { value: "Jordan" },
     })
+    // The server answers the search: one row.
+    await waitFor(() => expect(first.container.querySelectorAll(".row")).toHaveLength(1))
     fireEvent.click(screen.getByRole("button", { name: /^Interactions/ }))
     fireEvent.click(must(first.container.querySelector(".row")))
     const relationship = await screen.findByRole("button", { name: "Relationship", expanded: false })
@@ -315,22 +335,28 @@ describe("PeoplePage", () => {
     vi.stubGlobal("fetch", fetch)
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByText("3 selected")).toBeTruthy()
     fireEvent.click(within(bar).getByRole("button", { name: "Keep Y" }))
     await waitFor(() => expect(screen.getByText("Kept 3 people.")).toBeTruthy())
     expect(screen.getByText("No one skipped yet.")).toBeTruthy()
-    expect(
-      fetch.mock.calls.filter(
-        ([url]) =>
-          !url.endsWith("/upload") &&
-          !url.includes("/logbook") &&
-          !url.includes("/sets") &&
-          !url.endsWith("/signals") &&
-          !url.endsWith("/api/features"),
-      ),
-    ).toHaveLength(2)
+    // The slice, every matching id, the one write, then the slice again (the tab's rows follow the write).
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls
+          .map(([url]) => url)
+          .filter(
+            (url) =>
+              !url.endsWith("/upload") &&
+              !url.includes("/logbook") &&
+              !url.includes("/sets") &&
+              !url.endsWith("/signals") &&
+              !url.endsWith("/api/features"),
+          )
+          .map((url) => (url.includes("ids=1") ? "ids" : url.includes("/page?") ? "page" : "worth")),
+      ).toEqual(["page", "ids", "worth", "page"]),
+    )
   })
 
   it("checks on its own after a worth edit and marks what the check found", async () => {
@@ -365,7 +391,7 @@ describe("PeoplePage", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("current"),
     )
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     fireEvent.click(
       within(must(container.querySelector<HTMLElement>("[data-action-bar]"))).getByRole("button", {
         name: "Keep Y",
@@ -386,7 +412,7 @@ describe("PeoplePage", () => {
     const row = must(payload.rows[0])
     row[payload.columns.indexOf("in_progress")] = true
     const fetch = vi.fn((url: string, init?: RequestInit) =>
-      url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
+      url.includes("/page?") ? Promise.resolve(pageResponse(url, payload)) : serve(url, init),
     )
     vi.stubGlobal("fetch", fetch)
     const { container } = renderPage("/people?tab=no")
@@ -396,7 +422,7 @@ describe("PeoplePage", () => {
     fireEvent.click(updating)
     const drawer = must(container.querySelector<HTMLElement>("[data-drawer]"))
     expect(within(drawer).getByText("Jordan Bravo is being updated; finish the run first.")).toBeTruthy()
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Keep Y" }).disabled).toBe(true)
     expect(within(bar).getByRole<HTMLButtonElement>("button", { name: "Skip N" }).disabled).toBe(true)
@@ -410,14 +436,14 @@ describe("PeoplePage", () => {
     const fetch = vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith("/delete")) {
         sent.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}"))
-        return Promise.resolve(respond({ deleted: 3 }))
+        return serve(url, init)
       }
       return serve(url, init)
     })
     vi.stubGlobal("fetch", fetch)
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     fireEvent.keyDown(document.body, { key: "d" })
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     expect(bar.classList.contains("confirming")).toBe(true)
@@ -520,7 +546,7 @@ describe("PeoplePage logbook", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Interactions/ }))
     const viewport = must(container.querySelector<HTMLElement>("[data-viewport]"))
     viewport.scrollTop = 120
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     const order = [...container.querySelectorAll(".row .who b")].map((el) => el.textContent)
     fireEvent.click(within(bar).getByRole("button", { name: "Build logbook" }))
@@ -834,7 +860,7 @@ describe("PeoplePage logbook", () => {
     vi.stubGlobal("fetch", serveLogbook(refused).fetch)
     const { container } = renderPage("/people?tab=no")
     await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(3))
-    fireEvent.click(must(container.querySelector("[data-select-all]")))
+    await selectAll(container)
     const bar = must(container.querySelector<HTMLElement>("[data-action-bar]"))
     fireEvent.click(within(bar).getByRole("button", { name: "Build logbook" }))
 
@@ -939,7 +965,7 @@ it("hides LinkedIn-only people until the Filters menu shows them, and keeps that
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) =>
-      url.endsWith("/rows") ? Promise.resolve(respond(payload)) : serve(url, init),
+      url.includes("/page?") ? Promise.resolve(pageResponse(url, payload)) : serve(url, init),
     ),
   )
   const { container } = renderPage()
@@ -1007,7 +1033,7 @@ it("keeps human edits and leaves out message actions for a LinkedIn-only person"
   vi.stubGlobal(
     "fetch",
     vi.fn((url: string, init?: RequestInit) => {
-      if (url.endsWith("/rows")) return Promise.resolve(respond(payload))
+      if (url.includes("/page?")) return Promise.resolve(pageResponse(url, payload))
       if (url.includes("/person?"))
         return Promise.resolve(respond(url.includes("li%3A7001") ? sourceOnly : DETAIL))
       if (url.endsWith("/worth") || url.endsWith("/relationship")) {

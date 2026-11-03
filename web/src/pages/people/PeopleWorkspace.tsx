@@ -2,16 +2,14 @@ import { useQuery } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { PageHeader, Toast } from "@/components/shared"
+import { EmptyState, PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
+import { fetchPeopleIds, fetchPeoplePage } from "@/lib/api/people"
 import { useFeatures } from "@/lib/features"
 import type { FacetSet, HideKey } from "@/lib/people/facets"
-import { filterRows } from "@/lib/people/filter"
 import { LOGBOOK } from "@/lib/people/copy"
-import { withLogbooks } from "@/lib/people/logbook"
 import { writeView, type Tab } from "@/lib/people/view"
-import { personKey, worthTab, type Person } from "@/types/people"
 
 import { BulkBar, type LogbookAction } from "./BulkBar"
 import { PersonDrawer } from "./drawer/PersonDrawer"
@@ -21,7 +19,9 @@ import { useDecisions } from "./hooks/useDecisions"
 import { useDrawer } from "./hooks/useDrawer"
 import { useFilters } from "./hooks/useFilters"
 import type { useLogbook } from "./hooks/useLogbook"
+import { PEOPLE_QUERY_KEY, usePeopleList } from "./hooks/usePeopleList"
 import { usePeopleShortcuts } from "./hooks/usePeopleShortcuts"
+import { PeopleLoading } from "./PeopleLoading"
 import { PeopleShell } from "./PeopleShell"
 import { entriesQuery } from "./logbook/queries"
 import { EmptyText } from "./table/EmptyText"
@@ -29,7 +29,6 @@ import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
 import { ShareUpload } from "./upload/ShareUpload"
 
 interface PeopleWorkspaceProps {
-  people: Person[]
   // The Logbook reader covers the page: its keys are off.
   reading: boolean
   // The page's one Logbook build (PeoplePage), and opening saved logbooks in the reader.
@@ -37,26 +36,33 @@ interface PeopleWorkspaceProps {
   onView: (slugs: readonly string[]) => void
 }
 
-// The loaded page: every person once, filtered client-side, with one write for the worth call.
-export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWorkspaceProps) {
-  // The saved logbooks fill the Logbook column; while they can't be read the rows still show.
-  const catalog = useQuery(entriesQuery)
-  const rows = useMemo(
-    () => (catalog.data ? withLogbooks(people, catalog.data) : people),
-    [people, catalog.data],
-  )
+// The page: the view's list read from the server a slice at a time (its filters, search and sort
+// in SQL), with one write for the worth call.
+export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspaceProps) {
   const [params, setParams] = useSearchParams()
   const initialParams = reading ? new URLSearchParams() : params
   const filters = useFilters(initialParams)
   const { view } = filters
-  const { matching, kinds } = useMemo(() => filterRows(rows, view), [rows, view])
-  const byId = useMemo(() => new Map(rows.map((row) => [row.parent_id, row])), [rows])
-  const totals = useMemo(() => {
-    const counts: Record<Tab, number> = { all: rows.length, yes: 0, no: 0, unjudged: 0 }
-    for (const row of rows) counts[worthTab(row.worth)] += 1
-    return counts
-  }, [rows])
-  const selection = useSelection(matching, personKey)
+  const list = usePeopleList(view)
+  // The saved logbooks fill the Logbook column; while they can't be read the rows still show.
+  const catalog = useQuery(entriesQuery)
+  const matching = useMemo(() => {
+    if (!catalog.data) return list.rows
+    const saved = new Map(
+      catalog.data.flatMap(({ parent_id, slug }) => (parent_id ? [[parent_id, slug] as const] : [])),
+    )
+    return list.rows.map((row) => row && { ...row, logbook: saved.get(row.parent_id) ?? "" })
+  }, [list.rows, catalog.data])
+  const { kinds, totals } = list
+  const byId = useMemo(
+    () => new Map(matching.flatMap((row) => (row ? [[row.parent_id, row] as const] : []))),
+    [matching],
+  )
+  const { query } = list
+  const selection = useSelection(
+    list.matching,
+    useCallback(() => fetchPeopleIds(query), [query]),
+  )
   const drawer = useDrawer(initialParams)
   const { sections } = drawer
   useEffect(() => {
@@ -69,6 +75,13 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
   }, [view, drawer.openId, sections, reading, params, setParams])
   const [focusAt, setFocus] = useState(-1)
   const focus = Math.min(focusAt, matching.length - 1)
+  // The open person when their row is not in a loaded slice (a link to them, a later page).
+  const openRow = useQuery({
+    queryKey: [...PEOPLE_QUERY_KEY, "person", drawer.shownId],
+    queryFn: () => fetchPeoplePage(`id=${encodeURIComponent(drawer.shownId ?? "")}&show=linkedin_only`, 0, 1),
+    enabled: drawer.shownId !== null && !byId.has(drawer.shownId),
+    staleTime: Infinity,
+  })
   const table = useRef<PeopleTableHandle>(null)
   const search = useRef<HTMLInputElement>(null)
 
@@ -184,7 +197,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
     targets,
   })
 
-  const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? null) : null
+  const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? openRow.data?.rows[0] ?? null) : null
   // The search line's right end; it changes with the selection, never with j/k.
   const { showToast } = decisions
   // The upload is a local feature (the Share network switch); without it the page is worth and tags.
@@ -202,6 +215,8 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
       </>
     )
   }, [selection.selected, byId, refresh, showToast, features.share])
+  if (list.loading) return <PeopleLoading />
+  if (list.error) return <PeopleShell main={<EmptyState data-empty>{list.error.message}</EmptyState>} />
   return (
     <PeopleShell
       main={
@@ -214,7 +229,7 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             totals={totals}
             relationship={[...(view.filters.get("relationship_kind") ?? [])][0] ?? ""}
             kinds={kinds}
-            shown={matching.length}
+            shown={list.matching}
             onText={setText}
             onTab={setTab}
             onRelationship={setRelationship}
@@ -243,9 +258,10 @@ export function PeopleWorkspace({ people, reading, logbook, onView }: PeopleWork
             openId={openId}
             pending={decisions.pending}
             view={view}
+            onRange={list.want}
             empty={
               <EmptyText
-                hasPeople={rows.length > 0}
+                hasPeople={totals.all > 0}
                 filtered={view.filters.size > 0 || view.text !== ""}
                 tab={view.tab}
                 onClear={clearFilters}

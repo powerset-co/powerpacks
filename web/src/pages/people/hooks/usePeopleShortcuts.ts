@@ -14,7 +14,8 @@ interface ShortcutTargets {
   active: boolean
   search: RefObject<HTMLInputElement>
   table: RefObject<PeopleTableHandle>
-  matching: readonly Person[]
+  // The view's rows; `null` where a slice is not loaded yet.
+  matching: readonly (Person | null)[]
   focus: number
   setFocus: (index: number) => void
   setTab: (tab: Tab) => void

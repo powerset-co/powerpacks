@@ -150,8 +150,9 @@ class App:
         self._post("/click", {"x": spot["x"], "y": spot["y"]})
 
     def reload(self) -> None:
-        """A fresh page for the next scenario."""
-        self.js("(location.reload(), true)")
+        """A fresh page, with no view kept, for the next scenario."""
+        # A clean start: the page keeps its view (tab, search, filters) in the URL and session storage.
+        self.js("(sessionStorage.clear(), location.assign(location.origin + '/agent'), true)")
         deadline = time.time() + 30
         while time.time() < deadline:
             try:

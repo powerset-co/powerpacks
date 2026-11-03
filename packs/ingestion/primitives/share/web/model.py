@@ -247,6 +247,7 @@ class PeopleQuery:
     offset: int
     limit: int
     ids: bool
+    person: str  # `id`: that one family, for a drawer opened on a row not in a loaded slice
 
     @classmethod
     def parse(cls, query: dict[str, list[str]]) -> "PeopleQuery":
@@ -262,12 +263,16 @@ class PeopleQuery:
             offset=max(0, int(one("offset", "0"))),
             limit=min(500, max(1, int(one("limit", "200")))),
             ids=one("ids", "") == "1",
+            person=one("id", ""),
         )
 
     def where(self, logbooks: frozenset[str]) -> tuple[list[str], list[Any]]:
         """The search text and the held facets as SQL conditions and their arguments."""
         where: list[str] = []
         args: list[Any] = []
+        if self.person:
+            where.append("parent_id = ?")
+            args.append(self.person)
         if self.text:
             where.append("instr(lower(name || ' ' || title || ' ' || company || ' ' || location), ?) > 0")
             args.append(self.text)

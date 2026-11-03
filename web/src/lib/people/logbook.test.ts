@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { decodePeople } from "@/lib/api/people"
 import { DM, MESSAGES, THREAD, THREAD_PEOPLE, monthlyMessages, savedEntry } from "@/testing/logbook-fixture"
-import { PAYLOAD } from "@/testing/people-fixture"
 
 import {
   conversationMeta,
@@ -17,7 +15,6 @@ import {
   readerScope,
   scopedEntries,
   span,
-  withLogbooks,
 } from "./logbook"
 
 describe("reader route", () => {
@@ -40,21 +37,6 @@ describe("reader route", () => {
       "recent",
     ])
     expect(scopedEntries([old, undated, recent], []).map((e) => e.slug)).toEqual(["recent", "old", "undated"])
-  })
-})
-
-describe("withLogbooks", () => {
-  it("gives each parent its saved entry and everyone else none; groups name no parent", () => {
-    const rows = withLogbooks(decodePeople(PAYLOAD), [
-      savedEntry(),
-      savedEntry({ slug: "family", kind: "group", parent_id: null }),
-    ])
-    expect(rows.map((row) => [row.parent_id, row.logbook])).toEqual([
-      ["p1", ""],
-      ["p2", "casey-delta-p2"],
-      ["p3", ""],
-      ["p4", ""],
-    ])
   })
 })
 

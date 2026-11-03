@@ -6,8 +6,8 @@ import { label } from "@/lib/people/copy"
 import type { Person, PersonDetail, Worth } from "@/types/people"
 
 import type { SectionProps } from "./sections"
-import { patchRows } from "../hooks/useDecisions"
-import { PEOPLE_QUERY_KEY } from "../hooks/usePeopleQuery"
+import { patchWorth } from "../hooks/useDecisions"
+import { refetchPeople } from "../hooks/usePeopleList"
 
 const CALLS = [
   { value: "yes", label: label("worth", "yes") },
@@ -26,7 +26,8 @@ export function DecisionSection({
   const save = useMutation({
     mutationFn: (worth: Worth) => writeWorth([row.parent_id], worth),
     onSuccess: (results) => {
-      client.setQueryData<Person[]>(PEOPLE_QUERY_KEY, (current) => patchRows(current, results))
+      patchWorth(client, results)
+      void refetchPeople(client)
       onRefresh()
     },
   })

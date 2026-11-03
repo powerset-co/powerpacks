@@ -112,6 +112,52 @@ def people_delete(app: App) -> None:
     )
 
 
+LOADING = "document.querySelectorAll('[data-viewport] .row-loading').length === 0"
+ROW_COUNT = "Number(document.querySelector('[aria-rowcount]').getAttribute('aria-rowcount')) - 1"
+
+
+def people_scroll(app: App) -> None:
+    """Scrolling past the first slice fills the rows in fast (the list loads 200 at a time)."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    for fraction in (0.5, 1):
+        app.mark = app.js("performance.now()")
+        app.js(f"(() => {{ const v = document.querySelector('[data-viewport]'); v.scrollTop = v.scrollHeight * {fraction}; return true }})()")
+        app.wait_for(f"({LOADING}) && document.querySelectorAll('[data-viewport] .row').length > 0", WRITE,
+                     f"the rows {int(fraction * 100)}% down load")
+
+
+def people_search(app: App) -> None:
+    """Typing in the search box narrows the list fast."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    total = app.js(ROW_COUNT)
+    app.click({"css": "[data-bar] input[type=search]"})
+    app.type("aaron")
+    app.wait_for(f"({ROW_COUNT}) < {total} && ({LOADING})", WRITE, "the search narrows the list")
+    names = app.js("[...document.querySelectorAll('[data-viewport] .row .who')].map((n) => n.innerText.toLowerCase())")
+    if not names or not all("aaron" in name for name in names):
+        raise Failed(f"rows that don't match 'aaron': {[n for n in names if 'aaron' not in n][:3]}")
+
+
+def people_tab(app: App) -> None:
+    """Picking Skip in the Decision filter shows only skipped people, fast."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    app.click({"css": "[data-bar] [aria-label='Decision']"})
+    app.wait_for({"css": "[role=listbox] [role=option]"}, CLICK, "the Decision filter opens")
+    app.click({"css": "[role=listbox] [role=option]", "text": "Skip"})
+    app.wait_for("location.search.includes('tab=no')", CLICK, "the tab changes")
+    app.wait_for(f"({LOADING}) && [...document.querySelectorAll('[data-viewport] .row')].every((r) => r.innerText.includes('Skip'))",
+                 WRITE, "only skipped people show")
+
+
+def people_select_all(app: App) -> None:
+    """Select-all selects every matching person, not just the loaded rows."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    total = app.js(ROW_COUNT)
+    app.click({"css": "[data-select-all]"})
+    app.wait_for(f"(document.querySelector('[data-action-bar]')?.innerText ?? '').includes('{total:,} selected')",
+                 WRITE, f"{total:,} selected")
+
+
 def search_set_picker(app: App) -> None:
     """The chat's Search in picker opens, and a pick shows at once."""
     app.go("/agent", {"text": "Search in"}, PAGE)
@@ -133,5 +179,9 @@ SCENARIOS = {
     "people-rename": people_rename,
     "people-linkedin": people_linkedin,
     "people-delete": people_delete,
+    "people-scroll": people_scroll,
+    "people-search": people_search,
+    "people-tab": people_tab,
+    "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
 }
