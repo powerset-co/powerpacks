@@ -1,6 +1,8 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-11-02: `POST /api/install/whatsapp-phone` links WhatsApp by phone number when the QR won't
+      scan (wacli/auth.py reruns with --phone); the Connect record carries the pairing code.
   2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
       connections file and its record aside (`.bkup-<time>`), so the onboarding page's LinkedIn
       steps can be run again from the sign-in.
@@ -47,6 +49,9 @@ INDEXED_PEOPLE = ".powerpacks/search-index/people.csv"
 # The sources the Connect screen signs in to before setup: the rest need no login (Full Disk
 # Access is a macOS setting) or none at all.
 CONNECTABLE = ("linkedin", "gmail", "whatsapp")
+# Linking WhatsApp by phone number (wacli/paths.py): the number asked with, and the code it got.
+PHONE_REQUEST = ".powerpacks/messages/wacli-phone.txt"
+PAIR_CODE = ".powerpacks/messages/wacli-pair-code.txt"
 
 
 
@@ -110,6 +115,9 @@ class InstallController:
         qr = self.qr(record)
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
+        code = self.root / PAIR_CODE
+        if record["status"] == "waiting" and (record.get("action") or {}).get("kind") == "qr" and code.is_file():
+            record["action"]["pair_code"] = code.read_text(encoding="utf-8").strip()
         return record
 
     def first_look(self, limit: int = 3) -> dict:
@@ -177,6 +185,21 @@ class InstallController:
                 moved.append(str(target))
         return {"status": "forgotten", "moved": moved}
 
+    def link_by_phone(self, phone: object) -> dict:
+        """Hand the waiting WhatsApp link a phone number: it stops the QR and asks WhatsApp for a
+        pairing code instead. A number is a US one unless it starts with + and its country code;
+        wacli takes the country code and number as digits."""
+        text = str(phone or "").strip()
+        digits = "".join(char for char in text if char.isdigit())
+        if not text.startswith("+") and len(digits) == 10:
+            digits = "1" + digits
+        if not 8 <= len(digits) <= 15 or (not text.startswith("+") and not (len(digits) == 11 and digits[0] == "1")):
+            raise ValueError("Enter a 10-digit US number, or start with + and the country code")
+        request = self.root / PHONE_REQUEST
+        request.parent.mkdir(parents=True, exist_ok=True)
+        request.write_text(digits, encoding="utf-8")
+        return {"status": "started"}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -229,6 +252,8 @@ class InstallController:
                 response = self.install(self._body(handler).get("item"))
             elif path == "/api/install/linkedin-forget":
                 response = self.forget_linkedin()
+            elif path == "/api/install/whatsapp-phone":
+                response = self.link_by_phone(self._body(handler).get("phone"))
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))

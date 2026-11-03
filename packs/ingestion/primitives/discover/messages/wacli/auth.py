@@ -9,6 +9,9 @@ retain typed fields until report serialization; the pairing state is the typed
 `PairingStatus`.
 
 Changelog:
+  2026-11-02: link by phone number when the QR won't scan: a number written to
+      DEFAULT_PHONE_REQUEST (the Connect page's "use your phone number") stops the QR
+      wait and reruns wacli with --phone; its pair_code event goes to DEFAULT_PAIR_CODE.
   2026-10-14: no qrencode check: qr.py draws the QR in Python, so nothing is installed for it.
   2026-10-09: a new QR attempt stops the wacli an ended setup run left waiting on an
       unlinked store; it held the lock and every retry failed.
@@ -45,6 +48,8 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.discover.messages.wacli import binary, depth_db, pairing, qr, runtime  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: E402
     DEFAULT_AUTH_LOG,
+    DEFAULT_PAIR_CODE,
+    DEFAULT_PHONE_REQUEST,
     DEFAULT_QR_HTML,
     DEFAULT_QR_PNG,
 )
@@ -120,25 +125,11 @@ def stop_unlinked_holder(store: Path) -> None:
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
     runtime.emit_status("WhatsApp needs a QR scan.")
     stop_unlinked_holder(store)
-    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
-    cmd = [
-        binary.wacli_bin() or "wacli",
-        "--store", str(store),
-        "--events",
-        "auth",
-        "--qr-format", "text",
-        "--follow=false",
-        "--idle-exit", idle_exit,
-    ]
-    # The phone sends the history only while this device stays connected, so the
-    # download wacli starts at the scan runs on in its own session after this returns.
-    DEFAULT_AUTH_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with DEFAULT_AUTH_LOG.open("w", encoding="utf-8") as log:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True,
-                                env=pairing.wacli_device_env(), start_new_session=True)
+    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PHONE_REQUEST, DEFAULT_PAIR_CODE)
     output: list[str] = []
     opened = False
     connected = False
+    phone = ""
     deadline = time.time() + timeout
 
     def handle_line(text: str) -> None:
@@ -156,6 +147,10 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                 qr.update_qr_page(payload, DEFAULT_QR_PNG, DEFAULT_QR_HTML, open_page=open_qr_page and not opened)
                 opened = True
                 runtime.emit_status("Refreshed WhatsApp QR page.")
+            elif event.get("event") == "pair_code" and isinstance(code, str):
+                output[-1] = "Pairing code received."  # the code and the number stay out of the record
+                DEFAULT_PAIR_CODE.write_text(code, encoding="utf-8")
+                runtime.emit_status("WhatsApp sent a pairing code: enter it on your phone.")
             elif event.get("event") == "connected":
                 connected = True
             return
@@ -165,28 +160,52 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             opened = True
             runtime.emit_status("Refreshed WhatsApp QR page.")
 
-    with DEFAULT_AUTH_LOG.open(encoding="utf-8") as log:
-        pending = ""
-        while not connected:
-            chunk = log.readline()
-            if chunk:
-                pending += chunk
-                if pending.endswith("\n"):
-                    if pending.strip():
-                        handle_line(pending.strip())
-                    pending = ""
-                continue
-            if proc.poll() is not None:
-                for line in (pending + log.read()).splitlines():
-                    if line.strip():
-                        handle_line(line.strip())
-                break
-            if time.time() > deadline:
-                proc.kill()
-                proc.wait()
-                output.append(f"command timed out after {timeout}s")
-                break
-            time.sleep(0.2)
+    # One wacli run per way of linking: the QR first; a phone number from the page stops it and
+    # starts the run that links by that number instead.
+    while True:
+        cmd = [binary.wacli_bin() or "wacli", "--store", str(store), "--events", "auth"]
+        cmd += ["--phone", phone] if phone else ["--qr-format", "text"]
+        cmd += ["--follow=false", "--idle-exit", idle_exit]
+        # The phone sends the history only while this device stays connected, so the
+        # download wacli starts at the scan runs on in its own session after this returns.
+        DEFAULT_AUTH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DEFAULT_AUTH_LOG.open("w", encoding="utf-8") as log:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True,
+                                    env=pairing.wacli_device_env(), start_new_session=True)
+        asked = ""
+        with DEFAULT_AUTH_LOG.open(encoding="utf-8") as log:
+            pending = ""
+            while not connected:
+                chunk = log.readline()
+                if chunk:
+                    pending += chunk
+                    if pending.endswith("\n"):
+                        if pending.strip():
+                            handle_line(pending.strip())
+                        pending = ""
+                    continue
+                if not phone and DEFAULT_PHONE_REQUEST.is_file():
+                    asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
+                    DEFAULT_PHONE_REQUEST.unlink()
+                    proc.terminate()
+                    proc.wait()
+                    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
+                    break
+                if proc.poll() is not None:
+                    for line in (pending + log.read()).splitlines():
+                        if line.strip():
+                            handle_line(line.strip())
+                    break
+                if time.time() > deadline:
+                    proc.kill()
+                    proc.wait()
+                    output.append(f"command timed out after {timeout}s")
+                    break
+                time.sleep(0.2)
+        if not asked:
+            break
+        phone = asked
+        runtime.emit_status("Linking WhatsApp by phone number.")
     joined = qr.redact_qr_payloads("\n".join(output))
     if linked_device_blocked(joined):
         raise PrimitiveBlocked({

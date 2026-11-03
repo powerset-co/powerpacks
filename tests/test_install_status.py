@@ -7,6 +7,7 @@ import logging
 import os
 import tempfile
 import unittest
+from http import HTTPStatus
 from pathlib import Path
 
 import duckdb
@@ -393,6 +394,23 @@ class ConnectTests(unittest.TestCase):
         self.assertEqual(self.controller.qr_image(connect=True), b"png")
         self.assertIsNone(self.controller.qr_image())
         self.assertFalse((self.root / ".powerpacks/install/manifest.json").exists())
+
+    def test_a_phone_number_reaches_the_waiting_link_and_its_code_reaches_the_record(self) -> None:
+        handler = MagicMock()
+        handler.headers = {}
+        for typed, sent in (("(415) 555-0100", "14155550100"), ("1 (415) 555-0100", "14155550100"),
+                            ("+1 415 555 0100", "14155550100"), ("+44 20 7946 0958", "442079460958")):
+            with self.subTest(typed=typed), patch.object(self.controller, "_body", return_value={"phone": typed}):
+                self.assertTrue(self.controller.post(handler, "/api/install/whatsapp-phone"))
+                self.assertEqual((self.root / controller.PHONE_REQUEST).read_text(), sent)
+        for typed in ("555-0100", "7946 0958", "+1 555"):
+            with self.subTest(typed=typed), patch.object(self.controller, "_body", return_value={"phone": typed}):
+                self.controller.post(handler, "/api/install/whatsapp-phone")
+                self.assertEqual(handler._json.call_args.args[1], HTTPStatus.BAD_REQUEST)
+        InstallStatus(self.root, "connect").write("whatsapp.qr", pid=os.getpid(),
+                                                  retry_command="bin/onboard --source whatsapp --logins-only")
+        (self.root / controller.PAIR_CODE).write_text("ABCD-EFGH\n")
+        self.assertEqual(self.controller.connection()["action"]["pair_code"], "ABCD-EFGH")
 
 if __name__ == "__main__":
     unittest.main()
