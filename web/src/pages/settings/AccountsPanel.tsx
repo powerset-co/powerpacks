@@ -28,7 +28,7 @@ import { HowItWorks } from "./how-it-works/HowItWorks"
 // Remembered on this Mac once How Deep Context works is closed; the "here" link opens it again.
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
-const SERVICES: readonly ConnectRow[] = ["codex", "browser"]
+const SERVICES: readonly ConnectRow[] = ["browser", "codex"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
   linkedin: "Your connections",
