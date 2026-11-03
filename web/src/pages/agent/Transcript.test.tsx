@@ -5,8 +5,9 @@ import type { Entry } from "@/types/agent"
 
 import { Transcript } from "./Transcript"
 
-const store = vi.hoisted(() => ({ send: vi.fn() }))
+const store = vi.hoisted(() => ({ send: vi.fn(), useAgent: () => ({ scope: null }) }))
 vi.mock("@/lib/agent/store", () => store)
+vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
 afterEach(() => {
   cleanup()
@@ -108,7 +109,7 @@ const PREVIEW = {
   },
 }
 
-it("shows a prepared search as a card in its command's place, its query, traits and filters editable; Execute sends execute", () => {
+it("shows a prepared search as a card in its command's place, its query, traits and filters editable; Run Search sends execute", () => {
   render(
     <Transcript
       entries={[
@@ -128,23 +129,21 @@ it("shows a prepared search as a card in its command's place, its query, traits 
     within(within(card).getByRole("list", { name }))
       .getAllByRole("listitem")
       .map((item) => item.textContent)
-  expect(within(card).getByRole<HTMLInputElement>("textbox", { name: "Trait 1" }).value).toBe("VP of Finance")
-  expect(within(card).getByRole<HTMLInputElement>("textbox", { name: "Location 1" }).value).toBe(
-    "New York Metropolitan Area",
-  )
+  expect(within(card).getByRole("button", { name: "VP of Finance: current" })).toBeTruthy()
+  expect(within(card).getByText("New York Metropolitan Area")).toBeTruthy()
   expect(within(card).getByText("Vice-President")).toBeTruthy()
-  expect(within(card).getByRole<HTMLInputElement>("textbox", { name: "Keywords 1" }).value).toBe("vp finance")
+  expect(within(card).getByText("VP Finance")).toBeTruthy()
   // The traits carry currentness, so the current-only toggle is not offered beside them.
   expect(within(card).queryByRole("checkbox", { name: "Current role only" })).toBeNull()
-  // No count on the card: the pool estimate stays in the prepare output only.
-  expect(within(card).queryByText(/people/)).toBeNull()
+  // The pool estimate shows as the cloud app shows its count, rounded.
+  expect(within(card).getByText("~1,000")).toBeTruthy()
   expect(lines("Notes")).toEqual([
     "age_min 30 filters on LLM-inferred birth year",
     "broad search: consider narrowing",
   ])
-  expect(within(card).getByRole("button", { name: "More filters…" })).toBeTruthy()
+  expect(within(card).getByRole("button", { name: "Edit Filters" })).toBeTruthy()
 
-  fireEvent.click(within(card).getByRole("button", { name: "Execute" }))
+  fireEvent.click(within(card).getByRole("button", { name: "Run Search" }))
   expect(store.send).toHaveBeenCalledWith("execute")
 })
 
@@ -158,14 +157,19 @@ it("asks only on the newest card while the agent waits", () => {
   const cards = screen.getAllByRole("region", { name: "Search" })
   const [older, newest] = cards
   if (cards.length !== 2 || !older || !newest) throw new Error("Expected two search cards")
-  expect(within(older).queryByRole("button")).toBeNull()
+  // The older card only folds: it edits nothing.
+  expect(
+    within(older)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label")),
+  ).toEqual(["Show filters"])
   expect(within(older).queryByRole("textbox")).toBeNull()
-  expect(within(newest).getByRole("button", { name: "Execute" })).toBeTruthy()
-  expect(within(newest).getByRole("button", { name: "More filters…" })).toBeTruthy()
+  expect(within(newest).getByRole("button", { name: "Run Search" })).toBeTruthy()
+  expect(within(newest).getByRole("button", { name: "Edit Filters" })).toBeTruthy()
   expect(screen.queryByRole("list", { name: "Work" })).toBeNull()
 
   rerender(<Transcript entries={entries} running={true} />)
-  expect(screen.queryByRole("button", { name: "Execute" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
 })
 
 it("keeps asking when a command other than the run lands after the card", () => {
@@ -188,7 +192,7 @@ it("keeps asking when a command other than the run lands after the card", () => 
       running={false}
     />,
   )
-  expect(screen.getByRole("button", { name: "Execute" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Run Search" })).toBeTruthy()
 })
 
 it("never offers a search again once the search ran after its card", () => {
@@ -218,7 +222,7 @@ it("never offers a search again once the search ran after its card", () => {
     />,
   )
   expect(screen.getByRole("region", { name: "Search" })).toBeTruthy()
-  expect(screen.queryByRole("button", { name: "Execute" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Modify" })).toBeNull()
 })
 
@@ -246,7 +250,7 @@ it("shows a blocked search's blockers under its notes and offers only Send chang
       .getAllByRole("listitem")
       .map((item) => item.textContent),
   ).toEqual(["role_search_filters has no semantic_query", "bm25_queries is empty"])
-  expect(within(card).queryByRole("textbox", { name: "Trait 1" })).toBeNull()
-  expect(within(card).queryByRole("button", { name: "Execute" })).toBeNull()
+  expect(within(card).queryByRole("button", { name: /^VP of Finance/ })).toBeNull()
+  expect(within(card).queryByRole("button", { name: "Run Search" })).toBeNull()
   expect(within(card).getByRole("button", { name: "Send changes" })).toBeTruthy()
 })

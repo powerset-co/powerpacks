@@ -323,3 +323,12 @@ html[data-desktop="mac"] [data-sidebar-brand] {
 html[data-desktop="mac"] [data-collapsed="true"] [data-sidebar-brand] {
   height: auto;
 }
+
+/* While a panel is dragged wider (components/shared/ResizeHandle), everything follows the pointer:
+   the resize cursor everywhere, no text selected, no width transitions trailing behind. */
+:root[data-resizing],
+:root[data-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+  transition: none !important;
+}
