@@ -11,6 +11,7 @@ import {
   type ResultFilters,
   type ScoreOf,
 } from "@/lib/searches/filters"
+import { hasJudgeLabel } from "@/lib/searches/person"
 import type { ResultRow } from "@/lib/searches/ranking"
 import { heldTags } from "@/lib/searches/tags"
 import { cn } from "@/lib/utils"
@@ -44,7 +45,8 @@ export interface ResultsToolbarProps {
   className?: string
 }
 
-// rendering.py _results_toolbar: Tagged (n), Labels, Overall score, Operators, tag filter,
+// rendering.py _results_toolbar: Tagged (n), Overall score, Operators, tag filter, Labels (when a
+// row has one),
 // then the count and Untag all on page / Copy / CSV / Clear all. Export and copy take every
 // filtered row, never only the mounted ones.
 export function ResultsToolbar({
@@ -65,6 +67,7 @@ export function ResultsToolbar({
   const count = taggedCount(rows, tagged)
   const exported = filterRows(rows, filters, tagged, exportScore)
   const total = new Set(rows.map((row) => row.row.person_id)).size
+  const labelled = rows.some((row) => hasJudgeLabel(row.candidate))
   const change = (patch: Partial<ResultFilters>) => onFiltersChange({ ...live, ...patch })
 
   const exportCsv = () => {
@@ -94,16 +97,6 @@ export function ResultsToolbar({
           </span>
         </Chip>
       </Appear>
-      <Chip
-        pressed={live.labels}
-        title="Show or hide Taste, Suggested pin and Team similarity labels"
-        onClick={() => {
-          saveLabels(!live.labels)
-          change({ labels: !live.labels })
-        }}
-      >
-        Labels
-      </Chip>
       {scored ? <ScoreFilter scores={live.scores} onChange={(scores) => change({ scores })} /> : null}
       <OperatorPicker
         operators={operatorOptions(rows)}
@@ -112,6 +105,19 @@ export function ResultsToolbar({
       />
       <Appear show={live.taggedOnly && tagged.tags.length > 0}>
         <TagFilters tags={tagged.tags} selected={live.tags} onChange={(tags) => change({ tags })} />
+      </Appear>
+      {/* Last in the group, so its arrival moves nothing; only when some row carries a label. */}
+      <Appear show={labelled}>
+        <Chip
+          pressed={live.labels}
+          title="Show or hide Taste, Suggested pin and Team similarity labels"
+          onClick={() => {
+            saveLabels(!live.labels)
+            change({ labels: !live.labels })
+          }}
+        >
+          Labels
+        </Chip>
       </Appear>
       <span className="ml-auto inline-flex flex-wrap items-center gap-1.5">
         <ResultCount shown={shown.length} total={total} />

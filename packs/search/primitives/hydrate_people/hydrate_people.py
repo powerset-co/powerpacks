@@ -433,6 +433,7 @@ def local_position(row: dict[str, Any]) -> dict[str, Any]:
         "company_id": row.get("company_id"),
         "company_domain": row.get("company_domain"),
         "company_linkedin_url": row.get("company_linkedin_url"),
+        "company_logo_url": row.get("company_logo_url"),
         "company_description": row.get("company_description"),
         "company_sector_types": row.get("company_sector_types") or [],
         "company_entity_types": row.get("company_entity_types") or [],
@@ -600,6 +601,31 @@ def build_local_person_rows(
     return rows
 
 
+def attach_company_logos(conn: Any, position_rows: list[dict[str, Any]]) -> None:
+    """Copy each position's company logo from local_companies (joined on company_id), so the
+    results page can badge a person's avatar with where they work now."""
+    if {"id", "logo_url"} - set(table_columns(conn, "local_companies")):
+        return
+    ids = sorted({str(row["company_id"]) for row in position_rows if row.get("company_id")})
+    if not ids:
+        return
+    conn.execute("drop table if exists temp._hydrate_company_ids")
+    conn.execute("create temporary table _hydrate_company_ids(id varchar)")
+    conn.executemany("insert into _hydrate_company_ids values (?)", [(cid,) for cid in ids])
+    logos = {
+        str(company_id): str(logo)
+        for company_id, logo in conn.execute(
+            "select cast(c.id as varchar), c.logo_url from local_companies c "
+            "join _hydrate_company_ids r on cast(c.id as varchar) = r.id "
+            "where coalesce(c.logo_url, '') <> ''"
+        ).fetchall()
+    }
+    for row in position_rows:
+        logo = logos.get(str(row.get("company_id") or ""))
+        if logo and not row.get("company_logo_url"):
+            row["company_logo_url"] = logo
+
+
 def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[str, Any]]:
     import duckdb  # type: ignore
 
@@ -608,6 +634,7 @@ def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[s
         profile_table = "local_person_profiles" if table_exists(conn, "local_person_profiles") else "local_people_profiles" if table_exists(conn, "local_people_profiles") else ""
         profile_rows = local_rows(conn, profile_table, select_columns=LOCAL_PROFILE_HYDRATE_COLUMNS) if profile_table else []
         position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
+        attach_company_logos(conn, position_rows)
         summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
         education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
         interaction_counts = local_interaction_counts(conn, person_ids)

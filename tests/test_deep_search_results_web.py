@@ -113,11 +113,13 @@ class ResultsWebTest(unittest.TestCase):
                 "person_id": self.PERSON,
                 "profile_picture_url": f"https://example.com/{name}.jpg",
                 "summary": "Jordan Bravo leads reliability work on large distributed systems.",
+                "headline": "Reliability at scale",
                 "location": "Oakland, California, United States",
                 "positions": [
                     {"position_title": "Senior Software Engineer",
                      "company_name": "Bravo Systems",
                      "company_domain": "bravo.example.com",
+                     "company_logo_url": "https://example.com/bravo-logo.png",
                      "company_headcount": 120, "company_stage": "SERIES_B",
                      "company_funding_total": 45000000, "is_current": True,
                      "start_date": "2023-01-01T00:00:00Z", "end_date": None,
@@ -301,6 +303,10 @@ class ResultsWebTest(unittest.TestCase):
                 for pond in search.ponds}
         self.assertEqual(rows["jordan-role-prior"].traits[0].name, "Works across teams")
         self.assertEqual(rows["jordan-role"].final_score, 0.72)
+        # The page badges the avatar with the current company's logo and shows the headline.
+        self.assertEqual(rows["jordan-role"].positions[0].logo_url, "https://example.com/bravo-logo.png")
+        self.assertEqual(rows["jordan-role"].positions[1].logo_url, "")
+        self.assertEqual(rows["jordan-role"].headline, "Reliability at scale")
         self.assertEqual(rows["jordan-role-prior"].final_score, 0.88)
 
     def test_quick_search_records_the_filters_and_traits_it_ran_with(self):

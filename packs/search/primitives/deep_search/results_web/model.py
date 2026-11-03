@@ -5,6 +5,8 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
+  2026-11-03: positions carry the company's `logo_url` and candidates their `headline`, so the
+      page can badge the avatar with the current company and show the headline under the role.
   2026-10-09: `record_quick_search` saves a quick search as a one-pond run, its
       rows ranked by the reranker's score and trait scores, no screen.
   2026-09-26: explicit catalog registration and cached counts; one-run loads
@@ -77,6 +79,7 @@ class Position:
     headcount: int
     stage: str
     funding: float
+    logo_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,7 @@ class PondCandidate:
     cross_encoder_threshold: float | None = None
     cross_encoder_passed: bool | None = None
     cross_encoder_status: str = ""
+    headline: str = ""
 
 
 @dataclass(frozen=True)
@@ -461,6 +465,7 @@ def _positions(value: Any) -> tuple[Position, ...]:
             headcount=int(_number(raw.get("company_headcount"))),
             stage=_text(raw.get("company_stage")),
             funding=_number(raw.get("company_funding_total")),
+            logo_url=_text(raw.get("company_logo_url") or raw.get("logo_url")),
         ))
     return tuple(positions)
 
@@ -509,6 +514,7 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             vertical_sources=sources,
             matched_positions=matched,
             summary=_text(profile.get("summary")),
+            headline=_text(row.get("headline") or profile.get("headline")),
             profile_location=_text(profile.get("location")),
             positions=_positions(profile.get("positions")),
             education=_education(profile.get("education")),

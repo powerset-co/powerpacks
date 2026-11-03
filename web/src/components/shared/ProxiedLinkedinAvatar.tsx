@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 
 import { thumbnail } from "@/lib/api/thumbnails"
 import { cn } from "@/lib/utils"
@@ -16,24 +16,33 @@ interface ProxiedLinkedinAvatarProps {
   name: string
   src?: string
   size: AvatarSize
+  // A badge over the bottom-right edge, such as the person's current company logo.
+  badge?: ReactNode
 }
 
-export function ProxiedLinkedinAvatar({ name, src, size }: ProxiedLinkedinAvatarProps) {
-  return (
+export function ProxiedLinkedinAvatar({ name, src, size, badge }: ProxiedLinkedinAvatarProps) {
+  const face = (
     <span
       className={cn(
         "relative grid shrink-0 grow-0 place-items-center overflow-hidden rounded-full border border-border bg-secondary font-extrabold text-muted-foreground",
         SIZE_CLASS[size],
       )}
     >
-      {src ? <AvatarImage key={src} src={src} /> : null}
+      {src ? <ProxiedImage key={src} src={src} /> : null}
       <span>{initials(name)}</span>
+    </span>
+  )
+  if (!badge) return face
+  return (
+    <span className="relative inline-grid shrink-0 grow-0" data-avatar-badged>
+      {face}
+      <span className="absolute -bottom-[3px] -right-[3px] z-[2] grid">{badge}</span>
     </span>
   )
 }
 
-// Keyed by src, so a new person's picture starts hidden and fades in over the initials.
-function AvatarImage({ src }: { src: string }) {
+// Keyed by src, so a new picture starts hidden and fades in over what sits under it.
+export function ProxiedImage({ src }: { src: string }) {
   const proxied = src.startsWith("https://media.licdn.com/")
   const [resolved, setResolved] = useState<string | undefined>(proxied ? undefined : src)
   const [loaded, setLoaded] = useState(false)
