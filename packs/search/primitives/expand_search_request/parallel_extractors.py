@@ -458,10 +458,9 @@ def _merge(
         filters["age_min"] = int(temporal["age_min"])
     if temporal.get("age_max") is not None:
         filters["age_max"] = int(temporal["age_max"])
-    if temporal.get("years_experience_min") is not None:
-        filters["years_experience_min"] = int(temporal["years_experience_min"])
-    if temporal.get("years_experience_max") is not None:
-        filters["years_experience_max"] = int(temporal["years_experience_max"])
+    # Years of experience is extracted but not emitted, matching cloud
+    # (multi_index_strategy_v2: "YOE filter disabled until data quality
+    # improves"). A value typed on the search card still filters.
     if temporal.get("is_current") is not None:
         current = bool(temporal["is_current"])
         filters.setdefault("is_current_role", current)
