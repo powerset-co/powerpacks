@@ -161,7 +161,8 @@ it("refreshes all sources then shows Deep Context progress without leaving Accou
   expect(screen.queryByText("Search is ready")).toBeNull()
   record = {
     ...idle,
-    updated_at: idle.updated_at,
+    // The new run's first line, written after the click.
+    updated_at: new Date().toISOString(),
     status: "running",
     event: "deep_context.learning",
     step: "deep_context",
@@ -175,6 +176,36 @@ it("refreshes all sources then shows Deep Context progress without leaving Accou
   expect(await screen.findByText(record.message)).toBeTruthy()
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enriching…" }).disabled).toBe(true)
   expect(within(screen.getByRole("list", { name: "Setup stages" })).getByText("Gmail imported")).toBeTruthy()
+})
+it("never shows onboarding's LinkedIn setup as Enrich's progress", async () => {
+  record = { ...idle, retry_command: "/app/bin/linkedin-setup" }
+  mount("/accounts?view=sync")
+  const start = await screen.findByRole<HTMLButtonElement>("button", { name: "Enrich imported data" })
+  await waitFor(() => expect(start.disabled).toBe(false))
+  expect(screen.queryByText("Search is ready")).toBeNull()
+  expect(screen.queryByRole("list", { name: "Setup stages" })).toBeNull()
+})
+it("lists no row after the running one as done from the last run", async () => {
+  record = {
+    ...idle,
+    updated_at: new Date().toISOString(),
+    status: "running",
+    event: "account.checking",
+    step: "account",
+    installer_pid: 123,
+    plan: ["account", "linkedin", "gmail_import", "deep_context", "index", "ready"],
+    // What the last run left: its source and processing steps clear once this run selects sources.
+    steps: {
+      linkedin: { status: "completed", message: "Read 400 connections" },
+      deep_context: { status: "completed", message: "Learned about 298 people" },
+    },
+    message: "Checking your account",
+  }
+  mount("/accounts?view=sync")
+  const stages = await screen.findByRole("list", { name: "Setup stages" })
+  expect(within(stages).queryByText("Read 400 connections")).toBeNull()
+  expect(within(stages).queryByText("Learned about 298 people")).toBeNull()
+  expect(stages.querySelectorAll('[data-stage="done"]').length).toBe(0)
 })
 it("asks to enrich imported data once a source finishes syncing", async () => {
   jobs = { "jordan@example.com": { state: "running", step: "sync" } }

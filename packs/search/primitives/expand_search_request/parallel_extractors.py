@@ -458,10 +458,9 @@ def _merge(
         filters["age_min"] = int(temporal["age_min"])
     if temporal.get("age_max") is not None:
         filters["age_max"] = int(temporal["age_max"])
-    if temporal.get("years_experience_min") is not None:
-        filters["years_experience_min"] = int(temporal["years_experience_min"])
-    if temporal.get("years_experience_max") is not None:
-        filters["years_experience_max"] = int(temporal["years_experience_max"])
+    # Years of experience is extracted but not emitted, matching cloud
+    # (multi_index_strategy_v2: "YOE filter disabled until data quality
+    # improves"). A value typed on the search card still filters.
     if temporal.get("is_current") is not None:
         current = bool(temporal["is_current"])
         filters.setdefault("is_current_role", current)
@@ -625,6 +624,53 @@ def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     return [{"regex": "\\b(" + "|".join(escaped) + ")\\b", "examples": examples[:15]}]
 
 
+# network-search-api api_v2/routes/search_v3.py _ROLE_FUNCTION_MAP.
+_ROLE_FUNCTION_MAP = {
+    "founder": "founder",
+    "executive": "founder",
+    "engineer": "engineer",
+    "software_engineer": "engineer",
+    "backend_engineer": "engineer",
+    "frontend_engineer": "engineer",
+    "fullstack_engineer": "engineer",
+    "mobile_engineer": "engineer",
+    "embedded_engineer": "engineer",
+    "devops_engineer": "engineer",
+    "sre": "engineer",
+    "platform_engineer": "engineer",
+    "infrastructure_engineer": "engineer",
+    "security_engineer": "engineer",
+    "data_scientist": "data_ml",
+    "ml_engineer": "data_ml",
+    "data_engineer": "data_ml",
+    "data_analyst": "data_ml",
+    "ai_researcher": "data_ml",
+    "product_manager": "product",
+    "product_designer": "product",
+    "ux_designer": "product",
+    "marketing_manager": "marketing",
+    "growth_marketer": "marketing",
+    "content_marketer": "marketing",
+    "sales_representative": "sales",
+    "account_executive": "sales",
+    "sales_manager": "sales",
+}
+
+
+def _derive_role_function(role_ids: list[str], departments: list[str]) -> str | None:
+    """Cloud's _derive_role_function: role_function from agent role ids, then department."""
+    if not role_ids:
+        return None
+    if "founder" in role_ids:
+        return "founder"
+    for role_id in role_ids:
+        if role_id in _ROLE_FUNCTION_MAP:
+            return _ROLE_FUNCTION_MAP[role_id]
+    if departments and departments[0] != "general":
+        return departments[0]
+    return None
+
+
 def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
     """Apply prod-compatible deterministic role expansion to local query output.
 
@@ -656,7 +702,9 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
     is_founder = bool(role_ids_lower & {"founder", "cofounder", "co-founder"})
     if is_founder:
         csuite_bm25 = [bm25 for spec in csuite_expansions for bm25 in spec["bm25"]]
-        filters["role_ids"] = ["founder"]
+        # Cloud: founder role_id plus any C-suite ids named (founder CEOs whose
+        # title lacks "founder").
+        filters["role_ids"] = _dedupe_strings(["founder", *[spec["role_id"] for spec in csuite_expansions]])
         filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *FOUNDER_BM25_QUERIES, *csuite_bm25])
         if len(str(filters.get("semantic_query") or "")) < 80:
             filters["semantic_query"] = FOUNDER_SEMANTIC_QUERY
@@ -666,11 +714,10 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
         display_values = [spec["display"] for spec in csuite_expansions]
         filters["csuite_shortcut_role_id"] = csuite_expansions[0]["role_id"]
         filters["role_ids"] = _dedupe_strings([spec["role_id"] for spec in csuite_expansions])
-        filters["bm25_queries"] = _dedupe_strings([
-            *(filters.get("bm25_queries") or []),
-            *[bm25 for spec in csuite_expansions for bm25 in spec["bm25"]],
-        ])
-        filters.setdefault("seniority_bands", ["c-suite"])
+        # Cloud replaces the role keywords with the C-suite aliases and pins
+        # seniority to c-suite rather than merging with the agent's.
+        filters["bm25_queries"] = _dedupe_strings([bm25 for spec in csuite_expansions for bm25 in spec["bm25"]])
+        filters["seniority_bands"] = ["c-suite"]
         if len(str(filters.get("semantic_query") or "")) < 80:
             filters["semantic_query"] = (
                 f"Executive leader serving as {', '.join(display_values)}, responsible for strategic direction, "
@@ -685,6 +732,13 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
         # injections below) and never reach the search as a filter, because
         # they were too narrow. Drop them here so local search matches.
         filters.pop("role_ids", None)
+        if role_ids:
+            # Not a filter: scopes local title clustering like cloud's agent ids.
+            filters["role_agent_ids"] = role_ids
+        role_function = _derive_role_function(role_ids, filters.get("role_departments") or [])
+        if role_function and not filters.get("role_function"):
+            # Cloud picks union-mode adjacency queries by role_function.
+            filters["role_function"] = role_function
 
     agent_and_shortcut_ids = _dedupe_strings([*role_ids, *(filters.get("role_ids") or [])])
     injected_titles = [title for role_id in agent_and_shortcut_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]

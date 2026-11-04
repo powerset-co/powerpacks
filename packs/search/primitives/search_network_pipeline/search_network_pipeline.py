@@ -671,7 +671,7 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
     filters = payload_filters(payload)
     if not filters or not db_path.exists():
         return _with_local_title_clustering_status(payload, {"status": "skipped_no_filters_or_db"})
-    if not any(filters.get(key) for key in ["role_ids", "role_tracks", "seniority_bands", "company_ids"]):
+    if not any(filters.get(key) for key in ["role_ids", "role_agent_ids", "role_tracks", "seniority_bands", "company_ids"]):
         return _with_local_title_clustering_status(payload, {"status": "skipped_no_title_scope"})
     try:
         for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:

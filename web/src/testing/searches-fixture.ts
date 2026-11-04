@@ -325,6 +325,8 @@ export const QUICK_RUN: SearchRunPayload = {
           bm25_queries: ["technical recruiter", "technology recruiter"],
           metro_areas: ["Austin Metropolitan Area"],
           years_experience_min: 3,
+          role_ids: ["technical_recruiter"],
+          role_function: "recruiting",
         },
         traits: [{ value: "Technical recruiter", temporal: "current", meaning: "role" }],
       }),

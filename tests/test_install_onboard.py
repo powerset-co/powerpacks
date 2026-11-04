@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
+from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.onboard import Onboarding, main
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 
@@ -132,6 +133,18 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(count_call[2], {"set_id": "own", "is_current": True,
                                       "search_summary": False, "search_company_signal": False})
 
+    def test_account_lines_carry_the_runs_plan(self):
+        """The run's own rows from its first line, never the last run's (LinkedIn setup's)."""
+        status = InstallStatus(self.root)
+        status.write("linkedin.reading", pid=0, plan=["linkedin", "index", "validate", "ready"],
+                     retry_command="bin/linkedin-setup")
+        plan = ["account", "linkedin", "gmail_import", "deep_context", "index", "ready"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            Onboarding(self.root, pid=os.getpid(), retry_command="bin/onboard", plan=plan).run()
+        manifest = json.loads((self.root / ".powerpacks/install/manifest.json").read_text())
+        self.assertEqual(manifest["plan"], plan)
+        self.assertEqual(manifest["retry_command"], "bin/onboard")
+
     def test_expired_account_refreshes_without_browser(self):
         self.save_credentials(expired=True)
         with patch.object(auth, "cmd_login") as login:
@@ -232,6 +245,7 @@ class OnboardingTests(unittest.TestCase):
             sources.return_value.run.return_value = {"status": "waiting", "step": "deep_context",
                                                      "message": "Gmail: 1 contacts"}
             sources.return_value.retry_command = "bin/onboard"
+            sources.return_value.plan = ["account", "gmail_import"]
             sources.return_value.gmail_emails = ("jordan@example.com",)
             with self.assertRaises(SystemExit) as result:
                 main()
