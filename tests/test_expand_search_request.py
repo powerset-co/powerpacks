@@ -224,6 +224,25 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertNotIn("company_cities", filters)
         self.assertNotIn("cities", filters)
 
+    def test_extracted_years_of_experience_is_not_a_filter(self):
+        # Cloud disables the YOE filter (multi_index_strategy_v2), so local
+        # expand must not emit it either.
+        mod = load_module()
+        filters = mod._merge(
+            {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
+            {},
+            {},
+            {},
+            {"years_experience_min": 3, "years_experience_max": 5, "position_start_year": 2018},
+            {},
+            {},
+            "software engineers with 3-5 years of experience since 2018",
+        )
+
+        self.assertNotIn("years_experience_min", filters)
+        self.assertNotIn("years_experience_max", filters)
+        self.assertEqual(filters["position_after_date"], "2018")
+
     def test_founder_role_expansion_matches_prod_shortcut_shape(self):
         mod = load_module()
         filters = mod._merge(

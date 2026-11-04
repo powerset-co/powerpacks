@@ -450,6 +450,28 @@ class TurbopufferPrimitiveTests(unittest.TestCase):
 
         self.assertEqual(filters, ("role_track", "In", ["engineering"]))
 
+    def test_company_union_with_hard_company_filters_filters_role_search(self) -> None:
+        # Cloud verticals.py: hard company filters (funding stage, investors,
+        # YC batch, company location) restrict role search even in union mode.
+        for key, value in [
+            ("funding_stage_max", "series_a"),
+            ("yc_batches", ["W21"]),
+            ("company_countries", ["United States"]),
+        ]:
+            with self.subTest(key=key):
+                payload = {
+                    "role_tracks": ["engineering"],
+                    "company_ids": ["urn:harmonic:company:fintech"],
+                    "company_semantic_queries": ["fintech companies"],
+                    "sector_types": ["financial_services"],
+                    key: value,
+                }
+
+                self.assertEqual(turbopuffer_client.search_mode_for_payload(payload), "COMPANY_UNION")
+                self.assertTrue(turbopuffer_client.company_filter_applies_to_role_search(payload))
+                filters = turbopuffer_client.filters_from_role_payload(payload)
+                self.assertIn(("company_id", "In", ["urn:harmonic:company:fintech"]), filters[1])
+
     def test_summarize_filter_truncates_large_id_lists(self) -> None:
         filters = ("base_id", "In", [f"p{i}" for i in range(25)])
         summary = turbopuffer_client.summarize_filter(filters, max_list_values=3)
