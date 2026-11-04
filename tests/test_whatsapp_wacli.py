@@ -204,8 +204,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(sync.resolve_effective_max(10000, 25000), 26000)
         self.assertEqual(sync.resolve_effective_max(10000, 0), 10000)
 
-    def test_cold_bootstrap_default_allows_three_hours(self) -> None:
-        self.assertEqual(auth.DEFAULT_AUTH_TIMEOUT, 10800)
+    def test_link_waits_three_minutes_and_history_sync_three_hours(self) -> None:
+        self.assertEqual(auth.DEFAULT_AUTH_TIMEOUT, 180)
         self.assertEqual(sync.DEFAULT_SYNC_TIMEOUT, 10800)
 
     def test_history_depth_defaults_are_paced(self) -> None:

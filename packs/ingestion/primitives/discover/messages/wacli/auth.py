@@ -59,8 +59,9 @@ from packs.ingestion.primitives.discover.messages.wacli.util import linked_devic
 
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
 HISTORY_COUNT_SECONDS = 10
-# How long one QR run waits for a scan.
-DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "10800"))
+# How long one QR or phone-number run waits for the link, in seconds; then the sign-in stops and
+# Try again starts a new one.
+DEFAULT_AUTH_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_AUTH_TIMEOUT", "180"))
 
 
 def auth_status(store: Path) -> AuthStatus:
