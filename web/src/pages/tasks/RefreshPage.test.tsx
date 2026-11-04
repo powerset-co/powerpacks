@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { RefreshPane } from "@/components/shared/RefreshPane"
+import type { AccountsPayload } from "@/types/accounts"
 import type { RefreshRun, RefreshState } from "@/types/refresh"
 
 import { pick } from "@/testing/select"
@@ -30,9 +31,9 @@ const run: RefreshRun = {
     {
       source: "gmail",
       title: "Gmail sign-in expired for casey@example.com",
-      detail: "Reconnect it on Accounts; the next refresh picks up all the mail since.",
+      detail: "Reconnect it here; it syncs right after, with all the mail since.",
       action: "Reconnect Gmail",
-      href: "/accounts?source=gmail",
+      href: "/tasks",
     },
     {
       source: "whatsapp",
@@ -62,9 +63,27 @@ function mount(element: React.ReactElement) {
   )
 }
 
+// GET /accounts/api/accounts: one mailbox expired, one healthy.
+const mailbox = { messages: 1, contacts: 1, latest_message_at: null, last_sync_at: null }
+let accounts: AccountsPayload = {
+  accounts: [
+    { ...mailbox, source: "gmail", name: "casey@example.com", health: "error", note: "Sign-in expired." },
+    { ...mailbox, source: "gmail", name: "work@example.com", health: "ok", note: "Signed in." },
+  ],
+  jobs: {},
+  scheduled: null,
+}
+
 function serve(answer: (url: string, options?: RequestInit) => RefreshState) {
   const fetch = vi.fn((url: string, options?: RequestInit) =>
-    Promise.resolve(new Response(JSON.stringify(answer(url, options)), { status: 200 })),
+    Promise.resolve(
+      new Response(
+        url === "/accounts/api/accounts" ? JSON.stringify(accounts) : JSON.stringify(answer(url, options)),
+        {
+          status: 200,
+        },
+      ),
+    ),
   )
   vi.stubGlobal("fetch", fetch)
   return fetch
@@ -84,10 +103,10 @@ afterEach(() => {
 
 it("turns the daily refresh on before the server answers, then saves it", async () => {
   let answer: (response: Response) => void = () => undefined
-  const fetch = vi.fn((_url: string, options?: RequestInit) =>
+  const fetch = vi.fn((url: string, options?: RequestInit) =>
     options?.method === "POST"
       ? new Promise<Response>((resolve) => (answer = resolve))
-      : Promise.resolve(new Response(JSON.stringify(state))),
+      : Promise.resolve(new Response(JSON.stringify(url === "/accounts/api/accounts" ? accounts : state))),
   )
   vi.stubGlobal("fetch", fetch)
   mount(<RefreshPage />)
@@ -141,9 +160,29 @@ it("lists runs with people added and what to do", async () => {
   // A skipped source is a yellow warning badge, a synced one a green check, never struck through.
   expect(screen.getByTitle("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
   expect(screen.getByTitle("WhatsApp: Synced").dataset.sourceStatus).toBe("synced")
-  expect(screen.getByRole("link", { name: "Reconnect Gmail" }).getAttribute("href")).toBe(
-    "/accounts?source=gmail",
+  expect(screen.getByRole("link", { name: "Link WhatsApp" }).getAttribute("href")).toBe(
+    "/accounts?source=whatsapp",
   )
+})
+
+it("reconnects an expired Gmail mailbox on the page and lists only the expired ones", async () => {
+  const fetch = serve(() => state)
+  mount(<RefreshPage />)
+  fireEvent.click(await screen.findByRole("button", { name: "Reconnect" }))
+  expect(screen.queryByText("work@example.com")).toBeNull()
+  await waitFor(() => {
+    const sent = fetch.mock.calls.find(([url]) => url === "/accounts/api/reconnect")?.[1]?.body
+    expect(sent instanceof URLSearchParams ? sent.toString() : "").toBe("email=casey%40example.com")
+  })
+})
+
+it("says when every mailbox is signed in again", async () => {
+  const saved = accounts
+  accounts = { ...accounts, accounts: accounts.accounts.map((account) => ({ ...account, health: "ok" })) }
+  serve(() => state)
+  mount(<RefreshPage />)
+  expect(await screen.findByText("Every mailbox is signed in now.")).toBeTruthy()
+  accounts = saved
 })
 
 it("the sidebar pane says what to do and stays dismissed for that run", async () => {

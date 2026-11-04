@@ -125,7 +125,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.status, "needs_you")
         self.assertEqual([p.source for p in run.problems], ["gmail", "whatsapp"])
         self.assertIn("a@x.com", run.problems[0].title)
-        self.assertEqual(run.problems[0].href, "/accounts?source=gmail")
+        self.assertEqual(run.problems[0].href, "/tasks")
 
     def test_an_expired_mailbox_is_reported_while_the_healthy_one_syncs(self):
         manifest = {"status": "completed", "message": "Search is ready.",
