@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState } from "react"
 
 import { thumbnail } from "@/lib/api/thumbnails"
 import { cn } from "@/lib/utils"
@@ -16,12 +16,10 @@ interface ProxiedLinkedinAvatarProps {
   name: string
   src?: string
   size: AvatarSize
-  // A badge over the bottom-right edge, such as the person's current company logo.
-  badge?: ReactNode
 }
 
-export function ProxiedLinkedinAvatar({ name, src, size, badge }: ProxiedLinkedinAvatarProps) {
-  const face = (
+export function ProxiedLinkedinAvatar({ name, src, size }: ProxiedLinkedinAvatarProps) {
+  return (
     <span
       className={cn(
         "relative grid shrink-0 grow-0 place-items-center overflow-hidden rounded-full border border-border bg-secondary font-extrabold text-muted-foreground",
@@ -30,13 +28,6 @@ export function ProxiedLinkedinAvatar({ name, src, size, badge }: ProxiedLinkedi
     >
       {src ? <ProxiedImage key={src} src={src} /> : null}
       <span>{initials(name)}</span>
-    </span>
-  )
-  if (!badge) return face
-  return (
-    <span className="relative inline-grid shrink-0 grow-0" data-avatar-badged>
-      {face}
-      <span className="absolute -bottom-[3px] -right-[3px] z-[2] grid">{badge}</span>
     </span>
   )
 }

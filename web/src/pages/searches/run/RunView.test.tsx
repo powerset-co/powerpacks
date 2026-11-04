@@ -241,9 +241,13 @@ describe("RunView", () => {
     // Current role · company on one line, the location under it.
     expect(jordan.getByText("Staff Engineer")).toBeTruthy()
     expect(jordan.getByText("Example Labs")).toBeTruthy()
-    expect(jordan.getByText("Staff Engineer").parentElement?.textContent).toBe(
-      "Staff Engineer · Example Labs",
-    )
+    expect(jordan.getByText("·")).toBeTruthy()
+    // The company's logo sits just before its name, not on the avatar.
+    const company = jordan.getByText("Example Labs").parentElement
+    expect(company?.querySelector("[data-company-logo]")?.getAttribute("title")).toBe("Example Labs")
+    expect(
+      document.querySelector("[data-person-id='p-jordan'] .result-person > [data-company-logo]"),
+    ).toBeNull()
     expect(jordan.getByText("Oakland, CA")).toBeTruthy()
     expect(
       row("p-casey")
