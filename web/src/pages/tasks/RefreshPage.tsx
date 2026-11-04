@@ -3,7 +3,7 @@ import { useState } from "react"
 import { Link } from "react-router-dom"
 import { Check, TriangleAlert, X } from "lucide-react"
 
-import { EmptyState, Page, Spinner } from "@/components/shared"
+import { EmptyState, Page, Select, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
@@ -108,20 +108,15 @@ export function RefreshPage() {
                   />
                 </button>
                 <span>Every day at</span>
-                <select
+                <Select
                   aria-label="Time of day"
                   value={data.settings.time}
-                  onChange={(event) => change({ time: event.target.value })}
-                  className="h-7 cursor-pointer rounded-[var(--radius-s)] border border-border bg-secondary px-2 text-xs text-foreground"
-                >
-                  {(HOURS.includes(data.settings.time) ? HOURS : [data.settings.time, ...HOURS]).map(
-                    (time) => (
-                      <option key={time} value={time}>
-                        {clock(time)}
-                      </option>
-                    ),
+                  onChange={(time) => change({ time })}
+                  options={(HOURS.includes(data.settings.time) ? HOURS : [data.settings.time, ...HOURS]).map(
+                    (time) => ({ value: time, label: clock(time) }),
                   )}
-                </select>
+                  className="h-7 min-w-[96px] text-xs"
+                />
                 <span className="text-faint">
                   {data.running
                     ? "Refreshing now"

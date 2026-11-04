@@ -110,7 +110,9 @@
 }
 /* Current role · company: the row's second line, built from positions (not the headline). */
 .result-title {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   color: var(--foreground);
   font-size: 13px;
   font-weight: 550;
@@ -118,6 +120,7 @@
   overflow-wrap: anywhere;
 }
 .result-at {
+  padding: 0 5px;
   color: var(--muted);
   font-weight: 400;
 }
@@ -137,15 +140,12 @@
   font-size: 11px;
   overflow-wrap: anywhere;
 }
-/* The current company's logo on the avatar's edge, ringed in whatever sits behind the row. */
-.avatar-logo {
-  box-shadow: 0 0 0 2px var(--background);
-}
-.result-row[data-open="true"] .avatar-logo {
-  box-shadow: 0 0 0 2px var(--surface-2);
-}
-.drawer .avatar-logo {
-  box-shadow: 0 0 0 2px var(--card);
+/* The company with its logo just before the name, centred on the text. */
+.result-company {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
 }
 /* rendering.py .network-context: the source pills, then the operator stack beside them (the
    person column is wide here; at its right edge the stack sat far from what it attributes). */

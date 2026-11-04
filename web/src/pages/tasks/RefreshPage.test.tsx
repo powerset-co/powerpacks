@@ -6,6 +6,8 @@ import { afterEach, expect, it, vi } from "vitest"
 import { RefreshPane } from "@/components/shared/RefreshPane"
 import type { RefreshRun, RefreshState } from "@/types/refresh"
 
+import { pick } from "@/testing/select"
+
 import { clock, when } from "./format"
 import { RefreshPage } from "./RefreshPage"
 
@@ -114,9 +116,8 @@ it("changes the time from the picker", async () => {
       : state,
   )
   mount(<RefreshPage />)
-  fireEvent.change(await screen.findByRole("combobox", { name: "Time of day" }), {
-    target: { value: "07:00" },
-  })
+  await screen.findByRole("combobox", { name: "Time of day" })
+  pick("Time of day", "7:00 AM")
   await waitFor(() => {
     expect(posted(fetch)).toBe("time=07%3A00")
   })
