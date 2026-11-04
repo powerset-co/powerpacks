@@ -4,7 +4,8 @@ GET  /accounts/api/accounts   every connected account (accounts.read_accounts), 
                               Sync/Reconnect jobs this server started (by card key),
                               and the daily refresh's time when it is on.
 GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in): what
-                              setup will take, as its Connect screen shows it
+                              setup will take, as its Connect screen shows it;
+                              ?sources=imessage,... reads only those
                               Jobs and health arrive together, so a finished job never
                               shows next to the account's pre-sync health.
 GET  /accounts/api/chrome-profiles  the user's Chrome profiles with a LinkedIn or Google session,
@@ -17,12 +18,14 @@ POST /accounts/api/reconnect  email=<gmail>: open msgvault's Google sign-in, the
 
 One user, one process. Jobs live in memory, keyed by card, so a reloaded page still
 sees a running sync (a server restart forgets it; msgvault resumes on the next sync).
+Gmail's sign-in check (msgvault list-accounts, then verify per mailbox) takes seconds on a large
+mailbox, so both routes reuse one check until a job ends, a sign-in writes a token, or it is
+SIGNIN_TTL_SECONDS old; a screen polling for Full Disk Access asks only for iMessage.
 Starting a job that is already running is a no-op. The sync functions take turns on
 refresh_sources' lock file (shared with the scheduled run); a Reconnect waits for the
-browser sign-in before that, so an abandoned sign-in never blocks other syncs. Accounts polls reuse
-Gmail sign-in checks until a job ends, the stored mailbox list changes, or signed-in refreshes them.
-
+browser sign-in before that, so an abandoned sign-in never blocks other syncs. 
 Changelog:
+  2026-11-04: signed-in takes ?sources=; both routes share one Gmail check (token change, job end, TTL).
   2026-11-03: `scheduled` is the native daily refresh's time, or null while it is off.
   2026-10-30: Chrome profiles to pick from.
   2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.parse
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
@@ -40,7 +44,15 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Callable, Literal
 
-from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME, SignIn, gmail_signins, read_accounts, signed_in
+from packs.ingestion.primitives.accounts.accounts import (
+    ALL_SOURCES,
+    MSGVAULT_HOME,
+    SignIn,
+    gmail_signins,
+    gmail_tokens,
+    read_accounts,
+    signed_in,
+)
 from packs.ingestion.primitives.refresh.refresh_sources import (
     SourceResult,
     sync_gmail,
@@ -62,6 +74,9 @@ MESSAGE_SYNCS: dict[str, Callable[[], SourceResult]] = {"imessage": sync_imessag
 
 
 BUSY = ("running",)
+# How long a Gmail sign-in check stands when no token changed: Google can still expire a grant
+# without msgvault writing anything, and setup checks again itself before it takes Gmail.
+SIGNIN_TTL_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -75,11 +90,15 @@ class AccountsApi:
         self.jobs: dict[str, Job] = {}
         self._starting = threading.Lock()
         self._signins: dict[str, SignIn] | None = None
+        self._tokens: tuple[tuple[str, int], ...] = ()
+        self._checked = 0.0
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path == SIGNED_IN_PATH:
-            self._signins = gmail_signins()
-            _send_json(handler, asdict(signed_in(self._signins)))
+            asked = urllib.parse.parse_qs(parsed.query).get("sources", [""])[0].split(",")
+            sources = tuple(source for source in ALL_SOURCES if source in asked) or ALL_SOURCES
+            signins = self._gmail() if "gmail" in sources else {}
+            _send_json(handler, asdict(signed_in(signins, sources)))
             return True
         if parsed.path == CHROME_PROFILES_PATH:
             _send_json(handler, {"profiles": [asdict(profile) for profile in chrome_profiles()],
@@ -87,13 +106,21 @@ class AccountsApi:
             return True
         if parsed.path != ACCOUNTS_PATH:
             return False
-        self._signins = gmail_signins(self._signins)
         _send_json(handler, {
-            "accounts": [asdict(account) for account in read_accounts(self._signins)],
+            "accounts": [asdict(account) for account in read_accounts(self._gmail())],
             "jobs": {key: asdict(job) for key, job in self.jobs.items()},
             "scheduled": self._schedule(),
         })
         return True
+
+    def _gmail(self) -> dict[str, SignIn]:
+        """Every mailbox's sign-in, checked again only once the last check is out of date."""
+        tokens = gmail_tokens()
+        stale = time.monotonic() - self._checked > SIGNIN_TTL_SECONDS
+        if self._signins is None or tokens != self._tokens or stale:
+            self._signins = gmail_signins()
+            self._tokens, self._checked = tokens, time.monotonic()
+        return self._signins
 
     @staticmethod
     def _schedule() -> str | None:

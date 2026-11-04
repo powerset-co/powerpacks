@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from packs.ingestion.primitives.accounts import accounts
 from packs.ingestion.primitives.setup.automations.chrome_profiles import CHROME_EPOCH_SECONDS
 from packs.ingestion.primitives.accounts.accounts import _GmailRow, _gmail_health
+from packs.ingestion.primitives.accounts import api as api_module
 from packs.ingestion.primitives.accounts.api import AccountsApi, Job
 from packs.ingestion.primitives.refresh.refresh_sources import SourceResult, _run_status
 from packs.ingestion.primitives.refresh.tasks import PROMPT, _claude_task_start, _strip_codex_citations
@@ -86,17 +87,21 @@ class AccountsJobsTest(unittest.TestCase):
                 self.assertEqual(accounts._gmail_accounts(None)[0].health, "off")
             probe.assert_not_called()
 
-    def test_accounts_reuse_signins_and_signed_in_refreshes_the_cache(self):
+    def test_both_routes_share_one_gmail_check_until_it_is_out_of_date(self):
+        # Each msgvault command opens its whole database: on a large mailbox a check takes
+        # seconds, so polls reuse it until a job ends, a sign-in writes a token, or it ages out.
         with tempfile.TemporaryDirectory() as tmp:
-            db = Path(tmp) / "msgvault.db"
+            home = Path(tmp)
+            (home / "tokens").mkdir()
             api = AccountsApi()
-            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db), \
+            with patch.object(accounts, "MSGVAULT_HOME", home), \
+                 patch.object(accounts, "DEFAULT_MSGVAULT_DB", home / "msgvault.db"), \
                  patch.object(accounts, "stored_mailboxes", return_value=("casey@example.com",)) as held, \
                  patch.object(accounts, "check_account", return_value=SimpleNamespace(status="reauthorization_required")) as probe, \
                  patch("packs.ingestion.primitives.accounts.api.read_accounts", return_value=[]), \
                  patch("packs.ingestion.primitives.accounts.api.read_settings", return_value=SimpleNamespace(enabled=False)), \
                  patch.object(accounts, "_linkedin_session", return_value=False), \
-                 patch.object(accounts, "_messages_readable", return_value=False), \
+                 patch.object(accounts, "_messages_readable", return_value=False) as messages, \
                  patch.object(accounts, "_whatsapp_linked", return_value=False):
                 def get(path):
                     handler = Mock(wfile=io.BytesIO())
@@ -105,29 +110,50 @@ class AccountsJobsTest(unittest.TestCase):
 
                 get("/accounts/api/accounts")
                 get("/accounts/api/accounts")
-                self.assertEqual(probe.call_count, 1)
-                self.assertEqual(api._signins, {"casey@example.com": "reauthorization_required"})
-                probe.return_value = SimpleNamespace(status="healthy")
                 self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["casey@example.com"])
+                self.assertEqual((held.call_count, probe.call_count), (1, 1))
+                # The Full Disk Access poll asks for iMessage alone: msgvault is never run.
+                self.assertEqual(get("/accounts/api/signed-in?sources=imessage"),
+                                 {"linkedin": False, "gmail": False, "imessage": False, "whatsapp": False,
+                                  "mailboxes": []})
+                self.assertEqual((held.call_count, probe.call_count, messages.call_count), (1, 1, 2))
+                # A sign-in writes the mailbox's token.
+                probe.return_value = SimpleNamespace(status="healthy")
+                (home / "tokens" / "casey@example.com.json").write_text("{}")
+                self.assertTrue(get("/accounts/api/signed-in")["gmail"])
                 self.assertEqual(probe.call_count, 2)
-                self.assertEqual(api._signins, {"casey@example.com": "healthy"})
                 get("/accounts/api/accounts")
                 self.assertEqual(probe.call_count, 2)
+                # A running job keeps the check; a finished one drops it.
                 api.jobs["whatsapp"] = Job("running", "Syncing…")
                 get("/accounts/api/accounts")
                 self.assertEqual(probe.call_count, 2)
+                api._sync("whatsapp", lambda: [])
                 held.return_value = ("casey@example.com", "jordan@example.com")
                 get("/accounts/api/accounts")
                 self.assertEqual(set(api._signins), {"casey@example.com", "jordan@example.com"})
                 self.assertEqual(probe.call_count, 4)
-                get("/accounts/api/accounts")
-                self.assertEqual(probe.call_count, 4)
-                held.return_value = ("jordan@example.com",)
-                self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["jordan@example.com"])
-                self.assertEqual(probe.call_count, 5)
-                api._sync("whatsapp", lambda: [])
-                get("/accounts/api/accounts")
+                # Google can expire a grant without msgvault writing a file.
+                api._checked -= api_module.SIGNIN_TTL_SECONDS + 1
+                get("/accounts/api/signed-in")
                 self.assertEqual(probe.call_count, 6)
+
+    def test_accounts_lists_the_mailboxes_its_check_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "msgvault.db"
+            with closing(sqlite3.connect(db)) as conn:
+                conn.executescript("""
+                    CREATE TABLE sources (id INTEGER, source_type TEXT, identifier TEXT, last_sync_at TEXT);
+                    CREATE TABLE messages (source_id INTEGER, sent_at TEXT);
+                    CREATE TABLE sync_runs (source_id INTEGER, status TEXT, error_message TEXT, started_at TEXT);
+                    INSERT INTO sources VALUES (1, 'gmail', 'casey@example.com', NULL);
+                """)
+                conn.commit()
+            with patch.object(accounts, "DEFAULT_MSGVAULT_DB", db), \
+                 patch.object(accounts, "stored_mailboxes") as held:
+                [gmail] = accounts._gmail_accounts({"casey@example.com": "healthy"})
+            held.assert_not_called()
+            self.assertEqual(gmail.name, "casey@example.com")
 
     def test_a_finished_reconnect_rechecks_sign_ins_while_another_sync_still_runs(self):
         api = AccountsApi()

@@ -29,8 +29,14 @@ export interface SignedIn {
   mailboxes: string[]
 }
 
-export async function fetchSignedIn(signal?: AbortSignal): Promise<SignedIn> {
-  const response = await fetch("/accounts/api/signed-in", { signal, cache: "no-store" })
+/** `sources` reads only those: asking for iMessage alone never runs msgvault's Gmail check,
+ *  which takes seconds on a large mailbox. */
+export async function fetchSignedIn(
+  signal?: AbortSignal,
+  sources?: (keyof Omit<SignedIn, "mailboxes">)[],
+): Promise<SignedIn> {
+  const query = sources ? `?sources=${sources.join(",")}` : ""
+  const response = await fetch(`/accounts/api/signed-in${query}`, { signal, cache: "no-store" })
   if (!response.ok) throw await failure(response, "Couldn't check your sign-ins.")
   return body<SignedIn>(response)
 }

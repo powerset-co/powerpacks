@@ -18,6 +18,8 @@ sign-in writes it (msgvault's tokens, macOS's Full Disk Access, wacli's link, th
 sign-in browser's LinkedIn session).
 
 Changelog:
+  2026-11-04: `gmail_tokens`, so the server reuses a Gmail check until a sign-in writes a token;
+              Accounts lists the mailboxes its sign-in check found instead of asking msgvault again.
   2026-10-13: `signed_in`, shared by setup and its Connect screen.
   2026-09-28: created for the local Accounts page.
 """
@@ -140,6 +142,16 @@ def _whatsapp_linked() -> bool:
         return False
 
 
+def gmail_tokens() -> tuple[tuple[str, int], ...]:
+    """msgvault's saved Google tokens and when each was written. A sign-in writes one, so a
+    change here means a Gmail check is out of date; nothing else reads a token's contents."""
+    try:
+        return tuple(sorted((token.name, token.stat().st_mtime_ns)
+                            for token in (MSGVAULT_HOME / "tokens").glob("*.json")))
+    except OSError:
+        return ()
+
+
 def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:
     """Every account. `signins` reuses earlier Gmail sign-in checks; None checks now."""
     return [*_gmail_accounts(signins), _imessage_account(), _whatsapp_account(), _linkedin_account()]
@@ -169,12 +181,14 @@ class _GmailRow:
 
 
 def _gmail_accounts(signins: dict[str, SignIn] | None) -> list[Account]:
-    emails = stored_mailboxes(MSGVAULT_HOME)
+    # A sign-in check names every mailbox msgvault held when it ran; each msgvault command
+    # opens (and migrates) its whole database, which takes seconds on a large mailbox.
+    if signins is None:
+        signins = gmail_signins()
+    emails = tuple(signins)
     if not emails:
         return [Account("gmail", "Gmail", "off", "Not connected", 0, 0, None, None)]
     rows = _gmail_rows(DEFAULT_MSGVAULT_DB, emails)
-    if signins is None:
-        signins = gmail_signins()
     contacts = _gmail_contacts()
     return [_gmail_account(row, signins[row.email], contacts.get(row.email, 0)) for row in rows]
 

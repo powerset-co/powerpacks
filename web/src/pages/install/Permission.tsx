@@ -13,8 +13,9 @@ import { POLL_MS } from "./sources"
 export function Permission() {
   const [error, setError] = useState<string | null>(null)
   const signed = useQuery({
-    queryKey: ["signed-in"],
-    queryFn: ({ signal }) => fetchSignedIn(signal),
+    // Polled while the person turns on Full Disk Access: only iMessage's answer is needed.
+    queryKey: ["signed-in", "imessage"],
+    queryFn: ({ signal }) => fetchSignedIn(signal, ["imessage"]),
     refetchInterval: POLL_MS,
     refetchIntervalInBackground: true,
   })
