@@ -252,7 +252,7 @@ function History({ runs, open, onToggle }: HistoryProps) {
           <table className="w-full border-collapse text-xs" aria-label="Runs">
             <thead>
               <tr className="text-left text-[11px] text-faint">
-                {["When", "Status", "Sources", "People"].map((name) => (
+                {["When", "Status", "Sources", "New people"].map((name) => (
                   <th key={name} className="border-b border-line px-2.5 pb-2 font-semibold whitespace-nowrap">
                     {name}
                   </th>
