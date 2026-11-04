@@ -61,9 +61,5 @@
       "@swc/core",
       "esbuild"
     ]
-  },
-  "trustedDependencies": [
-    "@swc/core",
-    "esbuild"
-  ]
+  }
 }
