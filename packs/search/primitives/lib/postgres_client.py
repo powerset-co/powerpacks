@@ -16,6 +16,7 @@ import os
 import base64
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from powerpacks_contracts import POSTGRES_TABLES, assert_columns_in_contract, postgres_required_columns
 
@@ -392,6 +393,42 @@ def fetch_person_rows(person_ids: list[str], env_file: Path | None = None) -> li
     for row in all_rows:
         row["hydrated_context"] = json_value(row.get("hydrated_context"))
     return all_rows
+
+
+def fetch_company_logos(company_ids: list[str], env_file: Path | None = None) -> dict[str, str]:
+    """Each company's logo_url by id, for ids that have one. Any failure yields no logos."""
+    wanted = {str(cid) for cid in company_ids if cid}
+    if not wanted:
+        return {}
+    load_env_file(env_file)
+    fixture = fixture_rows("companies")
+    if fixture is not None:
+        return {str(row.get("id")): str(row["logo_url"]) for row in fixture if str(row.get("id")) in wanted and row.get("logo_url")}
+    assert_columns_in_contract("companies", ["id", "logo_url"])
+    ensure_psycopg2()
+    uuids = [cid for cid in sorted(wanted) if _is_uuid(cid)]
+    if not uuids:
+        return {}
+    query = """
+        SELECT id::text, logo_url
+        FROM companies
+        WHERE id = ANY(%s::uuid[]) AND coalesce(logo_url, '') <> ''
+    """
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (uuids,))
+                return {str(row[0]): str(row[1]) for row in cur.fetchall()}
+    except Exception:
+        return {}
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        UUID(str(value))
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def fetch_interaction_counts(

@@ -226,18 +226,20 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
         self.assertEqual(stage.normalize_website_domain(None), "")
 
     def test_apply_rapidapi_context_backfills_without_overwriting(self) -> None:
-        record = {"headcount": None, "founded_year": "", "website_domain": ""}
-        context = {"headcount": 42, "founded_year": 2019, "website": "https://www.acme.ai/about"}
+        record = {"headcount": None, "founded_year": "", "website_domain": "", "logo_url": ""}
+        context = {"headcount": 42, "founded_year": 2019, "website": "https://www.acme.ai/about", "logo_url": "https://media.licdn.com/x/acme"}
         stage.apply_rapidapi_context(record, context)
         self.assertEqual(record["headcount"], 42)
         self.assertEqual(record["founded_year"], 2019)
         self.assertEqual(record["website_domain"], "acme.ai")
+        self.assertEqual(record["logo_url"], "https://media.licdn.com/x/acme")
 
-        existing = {"headcount": 100, "founded_year": 1999, "website_domain": "existing.com"}
+        existing = {"headcount": 100, "founded_year": 1999, "website_domain": "existing.com", "logo_url": "https://cdn/existing.png"}
         stage.apply_rapidapi_context(existing, context)
         self.assertEqual(existing["headcount"], 100)
         self.assertEqual(existing["founded_year"], 1999)
         self.assertEqual(existing["website_domain"], "existing.com")
+        self.assertEqual(existing["logo_url"], "https://cdn/existing.png")
 
         untouched = {"headcount": 0, "founded_year": 0, "website_domain": ""}
         stage.apply_rapidapi_context(untouched, {})

@@ -101,12 +101,16 @@ class CompanyIdentityTests(unittest.TestCase):
         self.assertEqual(converted["company_public_identifier"], "acme")
         self.assertEqual(converted["company_linkedin_url"], "https://www.linkedin.com/company/acme")
         self.assertEqual(converted["company_key"], "linkedin_company:acme")
+        self.assertEqual(converted["company_logo_url"], "")
         self.assertEqual(converted["starts_at"], {"year": 2020, "month": 5, "day": 1})
         self.assertEqual(converted["ends_at"], {"year": 2022, "month": None, "day": None})
         self.assertFalse(converted["is_current_position"])
         self.assertEqual(converted["location"], "NYC")
         self.assertEqual(converted["source"], "rapidapi")
         self.assertEqual(converted["title_hash"], generate_title_hash("CEO", "Built things"))
+
+        with_logo = rapidapi_experience_to_powerpacks({"title": "VP", "companyName": "Acme", "companyLogo": " https://media.licdn.com/dms/image/v2/C/company-logo_400_400/0/1?e=1 "})
+        self.assertEqual(with_logo["company_logo_url"], "https://media.licdn.com/dms/image/v2/C/company-logo_400_400/0/1?e=1")
 
         current = rapidapi_experience_to_powerpacks({"title": "Now", "start_year": "2023"})
         self.assertEqual(current["starts_at"], {"year": 2023, "month": None, "day": None})

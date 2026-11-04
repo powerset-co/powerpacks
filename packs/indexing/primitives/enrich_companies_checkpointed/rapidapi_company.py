@@ -399,4 +399,20 @@ def extract_company_context(response: dict[str, Any]) -> dict[str, Any]:
     if website and isinstance(website, str):
         result["website"] = website.strip()
 
+    logo = company_logo_url(data)
+    if logo:
+        result["logo_url"] = logo
+
     return result
+
+
+def company_logo_url(data: dict[str, Any]) -> str:
+    """The company's LinkedIn logo: the 200 px entry of ``logos`` (or ``logo``), else ``Images.logo``."""
+    for key in ("logos", "logo"):
+        entries = [entry for entry in (data.get(key) or []) if isinstance(entry, dict) and isinstance(entry.get("url"), str)]
+        if entries:
+            preferred = next((entry for entry in entries if entry.get("width") == 200), entries[0])
+            return preferred["url"].strip()
+    images = data.get("Images")
+    image = images.get("logo") if isinstance(images, dict) else None
+    return image.strip() if isinstance(image, str) else ""

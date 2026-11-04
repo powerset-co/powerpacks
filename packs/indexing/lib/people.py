@@ -385,6 +385,7 @@ def _position_to_profile(exp: dict[str, Any], index: int) -> dict[str, Any]:
         "company_id": company_id or None,
         "company_domain": _first(exp, ("company_domain", "domain", "website_domain")) or None,
         "company_linkedin_url": _first(exp, ("company_linkedin_url", "linkedin_url", "company_url")) or None,
+        "company_logo_url": _first(exp, ("company_logo_url", "companyLogo")) or None,
         "company_description": _first(exp, ("company_description",)) or None,
         "company_sector_types": exp.get("company_sector_types") or [],
         "company_entity_types": exp.get("company_entity_types") or [],

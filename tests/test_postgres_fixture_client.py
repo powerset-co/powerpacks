@@ -20,6 +20,8 @@ OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 OUT_OF_SCOPE_OPERATOR_ID = "20000000-0000-0000-0000-0000000000ff"
 PERSON_1 = "00000000-0000-0000-0000-000000000001"
 PERSON_2 = "00000000-0000-0000-0000-000000000002"
+COMPANY_1 = "30000000-0000-0000-0000-000000000001"
+COMPANY_2 = "30000000-0000-0000-0000-000000000002"
 
 
 class PostgresFixtureClientTests(unittest.TestCase):
@@ -71,6 +73,10 @@ class PostgresFixtureClientTests(unittest.TestCase):
                     "hydrated_context": {"name": "Grace Systems", "positions": []},
                 },
             ],
+            "companies": [
+                {"id": COMPANY_1, "name": "Roblox", "logo_url": "https://media.licdn.com/x/roblox"},
+                {"id": COMPANY_2, "name": "Blank", "logo_url": ""},
+            ],
             "person_source_summary": [
                 {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 2, "source_channel": "gmail"},
                 {"person_id": PERSON_1, "operator_id": OPERATOR_ID, "total_interactions": 5, "source_channel": "linkedin"},
@@ -108,6 +114,12 @@ class PostgresFixtureClientTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in rows], [PERSON_2, PERSON_1])
         self.assertEqual(rows[0]["hydrated_context"]["name"], "Grace Systems")
         self.assertEqual(rows[1]["hydrated_context"]["name"], "Ada Backend")
+
+    def test_fetch_company_logos_returns_only_companies_with_a_logo(self) -> None:
+        logos = postgres_client.fetch_company_logos([COMPANY_1, COMPANY_2, "30000000-0000-0000-0000-0000000000ff"])
+
+        self.assertEqual(logos, {COMPANY_1: "https://media.licdn.com/x/roblox"})
+        self.assertEqual(postgres_client.fetch_company_logos([]), {})
 
     def test_fetch_interaction_counts_aggregates_fixture_rows(self) -> None:
         # Unscoped (legacy): aggregates all operators globally, including the
