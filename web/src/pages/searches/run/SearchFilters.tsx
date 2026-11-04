@@ -1,5 +1,5 @@
 import { ReadRow, Row, TraitChips } from "@/components/shared"
-import { filledFields } from "@/lib/agent/searchFields"
+import { previewFields, previewTitle } from "@/lib/agent/searchFields"
 import type { Pond } from "@/types/searches"
 
 interface SearchFiltersProps {
@@ -9,8 +9,9 @@ interface SearchFiltersProps {
 }
 
 // A one-pond run's search where the chain would sit: its query unless the title already is it,
-// its traits and the filters it ran with, as the chat card showed them before Execute. A pond
-// saved without them (a deep run) shows its query alone.
+// its traits and the filters it ran with, as the chat card's preview shows them (the cloud app's
+// rows and titles; role ids and the other hidden keys stay out). A pond saved without them (a deep
+// run) shows its query alone.
 export function SearchFilters({ title, pond }: SearchFiltersProps) {
   const values = new Map(Object.entries(pond.filters))
   return (
@@ -25,8 +26,8 @@ export function SearchFilters({ title, pond }: SearchFiltersProps) {
           <TraitChips traits={pond.traits} />
         </Row>
       )}
-      {filledFields(values, values).map((field) => (
-        <ReadRow key={field.label} field={field} values={values} />
+      {previewFields(values).map((field) => (
+        <ReadRow key={field.label} field={{ ...field, label: previewTitle(field) }} values={values} />
       ))}
     </section>
   )
