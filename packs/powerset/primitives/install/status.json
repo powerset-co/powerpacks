@@ -485,6 +485,12 @@
       "line": "WhatsApp is linked. Your message history is downloading in the background.",
       "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
     },
+    "whatsapp.expired": {
+      "step": "whatsapp_login",
+      "state": "waiting",
+      "line": "The WhatsApp code expired. Connect again for a new one.",
+      "action": "expired"
+    },
     "whatsapp.blocked": {
       "step": "whatsapp_login",
       "state": "waiting",

@@ -120,6 +120,8 @@ export function AccountsPanel({
       selected === "imessage" || selected === "gmail" || selected === "whatsapp" ? selected : null
     const showGuide = sourceGuide && (!connected || guide === sourceGuide)
     const connecting = Object.values(items).some((entry) => entry.state === "working")
+    // A sign-in, a sync or Enrich under way holds every other account's Connect.
+    const held = item.state === "needed" && (connecting || syncing || active || starting)
     const canSync = SOURCES.some((key) => items[key].state === "ready")
     const list = (keys: readonly ConnectRow[]) => (
       <div className="flex flex-col gap-1">
@@ -211,7 +213,9 @@ export function AccountsPanel({
                 <PopoverAnchor asChild>
                   <Button
                     variant="primary"
-                    disabled={!isDesktop() || !run.latest || !canSync || connecting || active || starting}
+                    disabled={
+                      !isDesktop() || !run.latest || !canSync || connecting || syncing || active || starting
+                    }
                     onClick={() => {
                       setNudge(false)
                       void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
@@ -314,6 +318,13 @@ export function AccountsPanel({
                     )}
                   </Button>
                 ) : null}
+                {held ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    {connecting
+                      ? "Another account is connecting. This one can connect once it finishes."
+                      : "Wait for the sync to finish to connect this one."}
+                  </p>
+                ) : null}
                 {connected && !showGuide ? item.details : null}
                 {connected && sourceGuide ? (
                   <button
@@ -339,7 +350,12 @@ export function AccountsPanel({
   }
   return (
     <>
-      <Connect disabled={active || starting} details={details} onGuide={setGuide} layout={layout} />
+      <Connect
+        disabled={active || starting || syncing}
+        details={details}
+        onGuide={setGuide}
+        layout={layout}
+      />
       <HowItWorks open={howItWorks} onOpenChange={openHowItWorks} />
     </>
   )

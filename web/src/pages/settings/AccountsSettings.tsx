@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchAccounts, reconnectGmail, syncAccount } from "@/lib/api/accounts"
+import { fetchConnection } from "@/lib/api/install"
 import { errorText } from "@/lib/api/http"
 import { CHANNELS } from "@/lib/channels"
 import { ago, stamp } from "@/lib/copy"
@@ -16,6 +17,7 @@ import type { Account, AccountSource, AccountHealth, Job, JobsPayload } from "@/
 import { AccountsPanel } from "./AccountsPanel"
 import { Connect } from "@/pages/install/Connect"
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
+import { live, POLL_MS } from "@/pages/install/sources"
 
 const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
   ok: { label: "Healthy", variant: "ok" },
@@ -49,6 +51,15 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
     refetchIntervalInBackground: true,
   })
 
+  // A sign-in under way (the Connect screen's record) holds every card's Sync and Reconnect too.
+  const connection = useQuery({
+    queryKey: ["install", "connect"],
+    queryFn: ({ signal }) => fetchConnection(signal),
+    refetchInterval: POLL_MS,
+  })
+  const locked =
+    (connection.data !== undefined && live(connection.data)) ||
+    Object.values(accounts.data?.jobs ?? {}).some(busy)
   const [actionError, setActionError] = useState<string | null>(null)
   const start = (action: Promise<void>) => {
     setActionError(null)
@@ -69,6 +80,7 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
             key={account.name}
             account={account}
             job={jobFor(account, data.jobs)}
+            locked={locked}
             onReconnect={() => start(reconnectGmail(account.name))}
             onSync={() => start(syncAccount(account))}
           />
@@ -155,11 +167,13 @@ function ScheduleLine({ scheduled }: { scheduled: string | null }) {
 interface AccountDetailsProps {
   account: Account
   job: Job | undefined
+  /** Another sign-in or sync is under way: this card's action waits. */
+  locked: boolean
   onReconnect: () => void
   onSync: () => void
 }
 
-function AccountDetails({ account, job, onReconnect, onSync }: AccountDetailsProps) {
+function AccountDetails({ account, job, locked, onReconnect, onSync }: AccountDetailsProps) {
   const health = HEALTH[account.health]
   const running = busy(job)
   const note = job && (running || job.state === "failed") ? job.step : account.note
@@ -179,7 +193,9 @@ function AccountDetails({ account, job, onReconnect, onSync }: AccountDetailsPro
           {running && <Spinner />}
           {note}
         </span>
-        {!running && <CardAction account={account} onReconnect={onReconnect} onSync={onSync} />}
+        {!running && (
+          <CardAction account={account} locked={locked} onReconnect={onReconnect} onSync={onSync} />
+        )}
       </div>
       <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
         {account.source === "linkedin" ? (
@@ -201,10 +217,10 @@ function AccountDetails({ account, job, onReconnect, onSync }: AccountDetailsPro
 }
 
 /** Reconnect for an expired Gmail sign-in; Sync for a signed-in source that has gone stale. */
-function CardAction({ account, onReconnect, onSync }: Omit<AccountDetailsProps, "job">) {
+function CardAction({ account, locked, onReconnect, onSync }: Omit<AccountDetailsProps, "job">) {
   if (account.source === "gmail" && account.health === "error") {
     return (
-      <Button size="sm" variant="bad" onClick={onReconnect}>
+      <Button size="sm" variant="bad" disabled={locked} onClick={onReconnect}>
         Reconnect
       </Button>
     )
@@ -223,7 +239,7 @@ function CardAction({ account, onReconnect, onSync }: Omit<AccountDetailsProps, 
     )
   }
   return (
-    <Button size="sm" onClick={onSync}>
+    <Button size="sm" disabled={locked} onClick={onSync}>
       Sync
     </Button>
   )

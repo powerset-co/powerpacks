@@ -32,6 +32,7 @@ from packs.ingestion.primitives.setup.automations import accounts
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
+from packs.powerset.primitives.install import workflow
 from packs.powerset.primitives.install.workflow import SourceOnboarding
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.shared.csv_io import CsvIO
@@ -869,6 +870,16 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['steps']['whatsapp_login']['status'], 'waiting')
         self.assertEqual(result['action']['details']['message'], 'Allow linked devices on your phone')
         self.assert_preserved()
+
+    def test_connect_screen_whatsapp_link_expires_instead_of_holding_the_lock(self):
+        expired = PrimitiveBlocked({'status': 'blocked_user_action', 'message': 'Scan the QR',
+                                    'detail': 'command timed out after 600s'})
+        with patch.object(auth, 'auth_report', side_effect=[expired, {'status': 'linked'}]) as link:
+            result = SourceOnboarding(self.root, sources=('whatsapp',), record='connect').connect()
+        link.assert_called_once()
+        self.assertEqual(link.call_args.kwargs['auth_timeout'], workflow.CONNECT_LINK_SECONDS)
+        self.assertEqual(result['event'], 'whatsapp.expired')
+        self.assertEqual(result['installer_pid'], 0)
 
     def test_changed_whatsapp_store_never_reuses_other_accounts_contacts(self):
         current = import_common.ImportManifest.from_payload('messages', {'status': 'completed'})

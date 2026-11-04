@@ -1,6 +1,8 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-11-04: the Connect record carries `qr_failed` once WhatsApp refused a scan and the link
+      waits for a phone number instead.
   2026-11-02: `POST /api/install/whatsapp-phone` links WhatsApp by phone number when the QR won't
       scan (wacli/auth.py reruns with --phone); the Connect record carries the pairing code.
   2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
@@ -52,6 +54,7 @@ CONNECTABLE = ("linkedin", "gmail", "whatsapp")
 # Linking WhatsApp by phone number (wacli/paths.py): the number asked with, and the code it got.
 PHONE_REQUEST = ".powerpacks/messages/wacli-phone.txt"
 PAIR_CODE = ".powerpacks/messages/wacli-pair-code.txt"
+QR_FAILED = ".powerpacks/messages/wacli-qr-failed.txt"
 
 
 
@@ -115,9 +118,13 @@ class InstallController:
         qr = self.qr(record)
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
+        waiting = record["status"] == "waiting" and (record.get("action") or {}).get("kind") == "qr"
         code = self.root / PAIR_CODE
-        if record["status"] == "waiting" and (record.get("action") or {}).get("kind") == "qr" and code.is_file():
+        if waiting and code.is_file():
             record["action"]["pair_code"] = code.read_text(encoding="utf-8").strip()
+        failed = self.root / QR_FAILED
+        if waiting and failed.is_file():
+            record["action"]["qr_failed"] = failed.read_text(encoding="utf-8").strip()
         return record
 
     def first_look(self, limit: int = 3) -> dict:
