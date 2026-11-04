@@ -355,13 +355,21 @@ export function Connect({
   const record = connection.data
   // What is signed in, from where each sign-in lives; asked again on coming back to the window
   // (from System Settings or a browser) and once a sign-in here ends.
-  const signed = useQuery({
-    queryKey: SIGNED_IN,
-    queryFn: ({ signal }) => fetchSignedIn(signal),
+  const signed = useQuery({ queryKey: SIGNED_IN, queryFn: ({ signal }) => fetchSignedIn(signal) })
+  const ready = signed.data
+  // While Full Disk Access is being turned on, only iMessage's answer is polled: the full check
+  // also asks Gmail and WhatsApp, which can take seconds, and the row would flip that much later.
+  const messages = useQuery({
+    queryKey: [...SIGNED_IN, "imessage"],
+    queryFn: ({ signal }) => fetchSignedIn(signal, ["imessage"]),
+    enabled: asking,
     refetchInterval: asking ? POLL_MS : false,
     refetchIntervalInBackground: true,
   })
-  const ready = signed.data
+  const imessage = messages.data?.imessage === true ? true : ready?.imessage
+  useEffect(() => {
+    if (messages.data?.imessage) void client.invalidateQueries({ queryKey: SIGNED_IN, exact: true })
+  }, [messages.data?.imessage, client])
   useEffect(() => {
     const again = () => void client.invalidateQueries({ queryKey: SIGNED_IN })
     window.addEventListener("focus", again)
@@ -375,7 +383,7 @@ export function Connect({
     })
   }, [client])
   useEffect(() => {
-    if (!asking || ready?.imessage !== false) return
+    if (!asking || imessage !== false) return
     let active = true
     const mac = desktopPlatform() === "mac"
     void installAction("permissions")
@@ -387,7 +395,7 @@ export function Connect({
       active = false
       if (mac) void invoke("permission_end").catch((caught: unknown) => setError(errorText(caught)))
     }
-  }, [asking, ready?.imessage])
+  }, [asking, imessage])
   const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
   const busy = disabled || queued !== null || running
@@ -409,7 +417,7 @@ export function Connect({
   const known = ready?.mailboxes ?? []
   // Deep context starts from your LinkedIn profile: needed once any source will be processed and
   // LinkedIn's sign-in (which reads it) is not used. With nothing signed in setup processes nothing.
-  const processed = ready !== undefined && (ready.imessage || ready.gmail || ready.whatsapp)
+  const processed = ready !== undefined && (imessage === true || ready.gmail || ready.whatsapp)
   const needsProfile = !linkedin && profile === null && processed
   const connectGmail = (emails: string[]) => {
     setAsked(emails)
@@ -530,7 +538,7 @@ export function Connect({
       title: "Messages",
       details: details?.imessage,
       why: "iMessage and Contacts, with Full Disk Access.",
-      state: ready === undefined ? "checking" : ready.imessage ? "ready" : asking ? "working" : "needed",
+      state: imessage ? "ready" : ready === undefined ? "checking" : asking ? "working" : "needed",
       onIcon: onGuide ? () => onGuide("imessage") : undefined,
       action: {
         label: "Connect",
@@ -541,7 +549,7 @@ export function Connect({
         },
       },
       children:
-        asking && ready?.imessage === false ? (
+        asking && imessage === false ? (
           <Line>
             Drag Powerpacks into Full Disk Access, then turn it on. We'll check automatically.{" "}
             <button type="button" className={LINK} onClick={() => setAsking(false)}>
