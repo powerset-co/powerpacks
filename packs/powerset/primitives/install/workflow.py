@@ -314,19 +314,13 @@ class SourceOnboarding:
 
     def _whatsapp_link(self) -> bool:
         linked = auth.auth_status(self.wacli_store).authenticated
-        # auth_report stays alive while wacli refreshes the QR artifact.
+        # auth_report stays alive while wacli refreshes the QR artifact, up to its own timeout; a QR
+        # never scanned by then stops the sign-in, and Try again starts a new one.
         if linked:
             self._write("whatsapp.checking")
         else:
             self._write("whatsapp.qr", details={"store": str(self.wacli_store)})
-        while True:
-            try:
-                result = auth.auth_report(self.wacli_store, open_qr_page=False)
-                break
-            except PrimitiveBlocked as blocked:
-                if "command timed out after" not in blocked.payload.get("detail", ""):
-                    raise
-                self._write("whatsapp.qr.refreshed")
+        result = auth.auth_report(self.wacli_store, open_qr_page=False)
         return self._result(result, "whatsapp.already_linked" if linked else "whatsapp.linked",
                             waiting="whatsapp.blocked", failed="whatsapp.failed")
 

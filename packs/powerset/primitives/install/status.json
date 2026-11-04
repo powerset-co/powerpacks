@@ -467,13 +467,6 @@
       "note": "Scan the code with WhatsApp. I’ll continue automatically.",
       "action": "qr"
     },
-    "whatsapp.qr.refreshed": {
-      "step": "whatsapp_login",
-      "state": "waiting",
-      "line": "Refreshing your WhatsApp QR code",
-      "note": "Scan the code with WhatsApp. I’ll continue automatically.",
-      "action": "qr"
-    },
     "whatsapp.already_linked": {
       "step": "whatsapp_login",
       "state": "completed",
@@ -1069,8 +1062,7 @@
     "network.not_searchable": "Powerset is still preparing them; setup continues with your contacts.",
     "gmail.connect.waiting": "Finish connecting Gmail in your browser; Powerpacks continues here.",
     "imessage.permission": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into Full Disk Access and turn it on; Powerpacks continues on its own.",
-    "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own.",
-    "whatsapp.qr.refreshed": "Scan the code with WhatsApp; Powerpacks continues on its own."
+    "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own."
   },
   "desktop_phrases": {
     "I'm checking what happened.": "Try again to pick up from here.",

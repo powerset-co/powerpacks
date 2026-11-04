@@ -848,16 +848,17 @@ class SourceOnboardingTests(unittest.TestCase):
         discover.assert_not_called()
         self.assertEqual(result['step'], 'deep_context')
 
-    def test_expired_whatsapp_qr_renews_inside_the_owned_command(self):
+    def test_expired_whatsapp_qr_stops_the_sign_in(self):
         expired = PrimitiveBlocked({'status': 'blocked_user_action', 'message': 'Scan the QR',
-                                    'detail': 'command timed out after 600s'})
-        with patch.object(auth, 'auth_report', side_effect=[expired, {'status': 'linked'}]) as link, \
-             patch.object(MessagesDiscovery, 'run', return_value=payload(status='completed')), \
-             patch.object(MessagesImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+                                    'detail': 'command timed out after 180s'})
+        with patch.object(auth, 'auth_report', side_effect=expired) as link, \
+             patch.object(MessagesDiscovery, 'run') as sync:
             result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
-        self.assertEqual(link.call_count, 2)
-        self.assertEqual(result['step'], 'deep_context')
-        self.assertEqual(result['steps']['whatsapp_login']['status'], 'completed')
+        link.assert_called_once()
+        sync.assert_not_called()
+        self.assertEqual(result['status'], 'waiting')
+        self.assertEqual(result['installer_pid'], 0)
+        self.assertEqual(result['steps']['whatsapp_login']['status'], 'waiting')
 
     def test_native_whatsapp_user_block_is_waiting_not_a_sync_failure(self):
         blocked = PrimitiveBlocked({'status': 'blocked_user_action', 'message': 'Allow linked devices on your phone'})
