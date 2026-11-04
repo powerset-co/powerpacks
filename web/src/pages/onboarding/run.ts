@@ -1,5 +1,6 @@
 // The setup record a screen shows: read every POLL_MS, kept only when it is the screen's own run
-// (Set up's LinkedIn run, Import's run over every source) and newer than the click that opened it.
+// (Set up's LinkedIn run, or the run over the sources that Accounts' Enrich, the daily refresh and
+// Try again start) and newer than the click that opened it.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useState } from "react"
@@ -50,13 +51,23 @@ function useNow(ticking: boolean): number {
 
 const MESSAGE_IMPORTS = ["gmail_import", "imessage_import", "whatsapp_import"]
 
-/** Whether the run imports messages: Import's run (Sources' Start), never Set up's (LinkedIn). */
+/** Whether the run imports messages: never Set up's (LinkedIn). */
 export function importsMessages(data: InstallStatus): boolean {
   return MESSAGE_IMPORTS.some((step) => data.plan?.includes(step))
 }
 
+/** Whether the record is onboarding's LinkedIn setup (bin/linkedin-setup), not a run over the
+ *  sources (bin/onboard: Enrich, the daily refresh), which may be LinkedIn alone too. */
+export function linkedinSetup(data: InstallStatus): boolean {
+  // A record from an older app may carry none.
+  const command: unknown = data.retry_command
+  return typeof command === "string" && (command.split(/\s+/)[0] ?? "").endsWith("bin/linkedin-setup")
+}
+
 export interface Run {
   data: InstallStatus | undefined
+  /** The record as read, whichever run wrote it: whether any run is going right now. */
+  latest: InstallStatus | undefined
   /** The running step's count, for the screens' own pictures. */
   count: { read: number; total: number } | null
   /** Seconds left in the running step: Modal's estimate, else the pace so far. */
@@ -73,8 +84,9 @@ export interface Run {
 }
 
 /** The setup record when it is this screen's run (`mine`) and newer than the click that opened
- *  the screen; the record is the last run's until the new one writes. */
-export function useRun(mine: (data: InstallStatus) => boolean, previous?: InstallStatus): Run {
+ *  the screen (the location state's `startedAt`); the record is the last run's until the new one
+ *  writes. */
+export function useRun(mine: (data: InstallStatus) => boolean): Run {
   const client = useQueryClient()
   const [retryError, setRetryError] = useState<string | null>(null)
   // Try again after a stop; the spinner stays until the record shows the run.
@@ -103,7 +115,6 @@ export function useRun(mine: (data: InstallStatus) => boolean, previous?: Instal
   const data =
     record &&
     mine(record) &&
-    record !== previous &&
     (startedAt === undefined || Date.parse(record.updated_at) >= Math.floor(startedAt / 1000) * 1000)
       ? record
       : undefined
@@ -132,11 +143,12 @@ export function useRun(mine: (data: InstallStatus) => boolean, previous?: Instal
   }
   return {
     data,
+    latest: record,
     count,
     left,
     ready: data?.event === "search.ready",
     failed: data?.status === "failed",
-    starting: data === undefined && (startedAt !== undefined || previous !== undefined),
+    starting: data === undefined && startedAt !== undefined,
     error: install.error,
     retry,
     retrying,

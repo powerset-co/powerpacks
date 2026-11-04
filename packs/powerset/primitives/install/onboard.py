@@ -53,7 +53,7 @@ class Network:
 
 
 class Onboarding:
-    def __init__(self, root: Path, *, pid: int, retry_command: str) -> None:
+    def __init__(self, root: Path, *, pid: int, retry_command: str, plan: list[str] | None = None) -> None:
         self.root = root.resolve()
         self.env_path = self.root / ".env"
         self.config = keys._read_env_file(self.root / "packs/powerset/templates/env.powerset.example")
@@ -63,13 +63,16 @@ class Onboarding:
         self.base = self.config.get("POWERSET_API_URL", keys.DEFAULT_API_BASE).rstrip("/")
         self.pid = pid
         self.retry_command = retry_command
+        # The whole run's plan from its first line, so the page never lists the last run's rows.
+        self.plan = plan
         self.status = InstallStatus(self.root)
         self.step = InstallStep.ACCOUNT
         self.token = ""
         self.email = ""
 
     def progress(self, event: str, **values) -> dict:
-        record = self.status.write(event, step=self.step, pid=self.pid, retry_command=self.retry_command, **values)
+        record = self.status.write(event, step=self.step, pid=self.pid, retry_command=self.retry_command,
+                                   plan=self.plan, **values)
         self.step = InstallStep(record["step"])
         return record
 
@@ -317,8 +320,7 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
         print("FAILED: The progress page could not start. Check the installation log.", flush=True)
         raise SystemExit(1) from error
     print(f"STATUS PAGE: {page['url']}", flush=True)
-    onboarding = Onboarding(root, pid=os.getpid(),
-                            retry_command=flow.retry_command)
+    onboarding = Onboarding(root, pid=os.getpid(), retry_command=flow.retry_command, plan=flow.plan)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = onboarding.run()

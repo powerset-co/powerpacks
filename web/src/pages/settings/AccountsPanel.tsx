@@ -19,8 +19,7 @@ import { Guide } from "@/pages/onboarding/guide/Guide"
 import type { GuideSource } from "@/pages/onboarding/guide/demos"
 import { Checklist } from "@/pages/onboarding/Checklist"
 import { PageShot } from "@/pages/onboarding/PageShot"
-import { useRun } from "@/pages/onboarding/run"
-import type { InstallStatus } from "@/types/install"
+import { linkedinSetup, useRun } from "@/pages/onboarding/run"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
 import { HowItWorks } from "./how-it-works/HowItWorks"
@@ -56,8 +55,9 @@ export function AccountsPanel({
     return SOURCES.find((key) => key === source) ?? "imessage"
   })
   const [guide, setGuide] = useState<GuideSource | null>(null)
-  const [previous, setPrevious] = useState<InstallStatus>()
   const [startError, setStartError] = useState<string | null>(null)
+  // Enrich (or Continue) was pressed here: the way back to its progress stays.
+  const [started, setStarted] = useState(false)
   // How Deep Context works opens the first time Accounts does.
   const [howItWorks, setHowItWorks] = useState(
     () => readStored("local", HOW_IT_WORKS_KEY, (raw) => (raw === true ? true : null)) === null,
@@ -78,9 +78,12 @@ export function AccountsPanel({
   }, [syncing, synced])
   const progress = params.get("view") === "sync"
   const client = useQueryClient()
-  const run = useRun(() => true, previous)
+  // The pane shows Enrich's run (bin/onboard, also the daily refresh's), never onboarding's
+  // LinkedIn setup, and after a click only what that click's run wrote.
+  const run = useRun((data) => !linkedinSetup(data))
   const starting = run.starting
-  const active = !run.ready && run.data !== undefined && live(run.data)
+  // Any run going, this pane's or not, holds Enrich.
+  const active = run.latest !== undefined && live(run.latest)
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
   const connection = useQuery({
     queryKey: ["install", "connect"],
@@ -96,12 +99,13 @@ export function AccountsPanel({
     if (run.ready) void client.invalidateQueries({ queryKey: ["accounts"] })
   }, [run.data, run.ready, client])
   const start = (answer: SetupAnswer) => {
-    setPrevious(run.data)
     setStartError(null)
-    setParams({ view: "sync" }, { replace: true })
+    setStarted(true)
+    setParams({ view: "sync" }, { replace: true, state: { startedAt: Date.now() } })
     return continueSetup(answer).catch((caught: unknown) => {
       setStartError(errorText(caught))
-      setPrevious(undefined)
+      setStarted(false)
+      setParams({ view: "sync" }, { replace: true })
     })
   }
   const choose = (key: ConnectRow) => {
@@ -207,7 +211,7 @@ export function AccountsPanel({
                 <PopoverAnchor asChild>
                   <Button
                     variant="primary"
-                    disabled={!isDesktop() || !run.data || !canSync || connecting || active || starting}
+                    disabled={!isDesktop() || !run.latest || !canSync || connecting || active || starting}
                     onClick={() => {
                       setNudge(false)
                       void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
@@ -231,7 +235,7 @@ export function AccountsPanel({
               <p className="m-0 text-center text-[11px] text-muted-foreground">
                 Syncs your sources, then builds dossiers and updates search.
               </p>
-              {active || starting || previous !== undefined ? (
+              {active || starting || started ? (
                 <button
                   type="button"
                   className="border-0 bg-transparent text-xs text-primary"
@@ -322,8 +326,8 @@ export function AccountsPanel({
                 ) : null}
                 {!connected && selected === "linkedin" ? (
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Sign in to LinkedIn in the window that opens. Then Resync all imports your connections
-                    alongside your other sources.
+                    Sign in to LinkedIn in the window that opens. Then Enrich imported data reads your
+                    connections alongside your other sources.
                   </p>
                 ) : null}
               </>

@@ -26,9 +26,12 @@ function planned(data: InstallStatus, row: Row): string[] {
 }
 
 /** Where a row stands: done once every planned step is completed or skipped, current while the
- *  run is on one of its steps (stopped if that step failed), next otherwise. */
-function standingOf(data: InstallStatus, row: Row): Standing {
-  if (planned(data, row).every((step) => DONE.has(data.steps[step]?.status ?? ""))) return "done"
+ *  run is on one of its steps (stopped if that step failed), next otherwise. A row after the
+ *  current one is not done yet whatever an earlier run left in the record (its steps only clear
+ *  once this run selects its sources), unless this run skips it. */
+function standingOf(data: InstallStatus, row: Row, ahead: boolean): Standing {
+  const finished = ahead ? new Set(["skipped"]) : DONE
+  if (planned(data, row).every((step) => finished.has(data.steps[step]?.status ?? ""))) return "done"
   if (row.steps.includes(data.step)) return data.status === "failed" ? "stopped" : "current"
   return "next"
 }
@@ -79,8 +82,8 @@ export function Checklist({ run, controls = true }: { run: Run; controls?: boole
       {run.error ? <Note bad>{errorText(run.error)}</Note> : null}
       {data && rows.length > 0 ? (
         <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label="Setup stages">
-          {rows.map((row) => {
-            const standing = standingOf(data, row)
+          {rows.map((row, index) => {
+            const standing = standingOf(data, row, current !== undefined && index > rows.indexOf(current))
             const live = standing === "current" || standing === "stopped"
             return (
               <li key={row.label} className="flex flex-col gap-2" data-stage={standing}>

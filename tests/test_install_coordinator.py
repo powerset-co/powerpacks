@@ -48,7 +48,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.processing_class.return_value.run.side_effect = self.run_processing
         self.addCleanup(patch.stopall)
 
-    def build_account(self, root, *, pid, retry_command):
+    def build_account(self, root, *, pid, retry_command, plan=None):
         def run():
             self.events.append("account")
             event = {0: "network.ready", 1: "account.error", 10: "network.empty"}[self.account_code]
