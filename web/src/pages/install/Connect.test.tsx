@@ -34,6 +34,7 @@ let state: {
   // Holds back the sign-in answer, and Powerset's browser sign-in, until a test lets them through.
   signedGate: Promise<void> | null
   signedAsks: number
+  messagesAsks: number
   finishGate: Promise<void> | null
   posts: { url: string; body: unknown }[]
 }
@@ -52,6 +53,7 @@ beforeEach(() => {
     signed: NONE,
     signedGate: null,
     signedAsks: 0,
+    messagesAsks: 0,
     finishGate: null,
     posts: [],
   }
@@ -67,6 +69,10 @@ beforeEach(() => {
       }
       if (url === "/api/account") return reply(state.account)
       if (url === "/api/install/connect") return reply(state.connect)
+      if (url === "/accounts/api/signed-in?sources=imessage") {
+        state.messagesAsks += 1
+        return reply({ ...NONE, imessage: state.signed.imessage })
+      }
       if (url === "/accounts/api/signed-in") {
         state.signedAsks += 1
         return (state.signedGate ?? Promise.resolve()).then(() => reply(state.signed))
@@ -157,9 +163,13 @@ it("polls for Full Disk Access without a focus event and closes the helper when 
   mount()
   fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_begin", undefined))
+  const asked = state.signedAsks
   state.signed = { ...NONE, imessage: true }
   expect(await within(row("Messages")).findByText("Connected", {}, { timeout: 4000 })).toBeTruthy()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end", undefined))
+  // The poll asks for iMessage alone; the full check runs once, after the grant lands.
+  expect(state.messagesAsks).toBeGreaterThan(0)
+  await waitFor(() => expect(state.signedAsks).toBe(asked + 1))
 })
 
 it("does not reopen the helper after a relaunch with Full Disk Access granted", async () => {
