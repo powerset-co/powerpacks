@@ -250,7 +250,9 @@ export function AccountsPanel({
                   </div>
                 )}
                 <div className="flex flex-col gap-3 text-xs text-muted-foreground">
-                  {item.why}
+                  {/* A source's one-line why repeats its guide or its subtitle; Gmail's is its address
+                      and Add a mailbox, and the account profiles keep theirs. */}
+                  {!SOURCES.includes(selected) || selected === "gmail" ? item.why : null}
                   {item.children}
                 </div>
                 {gmailWorking && selected === "gmail" ? (

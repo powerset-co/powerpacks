@@ -3,25 +3,17 @@ import { type ReactNode } from "react"
 import { Link } from "react-router-dom"
 
 import { EmptyState, CHANNEL_ICON, Spinner } from "@/components/shared"
-import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchAccounts } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { CHANNELS } from "@/lib/channels"
 import { ago, stamp } from "@/lib/copy"
 import { isDesktop } from "@/lib/desktop"
-import type { Account, AccountSource, AccountHealth, Job, JobsPayload } from "@/types/accounts"
+import type { Account, AccountSource, Job, JobsPayload } from "@/types/accounts"
 
 import { AccountsPanel } from "./AccountsPanel"
 import { Connect } from "@/pages/install/Connect"
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
-
-const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
-  ok: { label: "Healthy", variant: "ok" },
-  warning: { label: "Needs a look", variant: "warn" },
-  error: { label: "Action needed", variant: "bad" },
-  off: { label: "Not connected", variant: "muted" },
-}
 
 // While a sync or sign-in runs, re-read the accounts (and their jobs) this often.
 const JOB_POLL_MS = 2_000
@@ -137,17 +129,14 @@ interface AccountDetailsProps {
 }
 
 function AccountDetails({ account, job }: AccountDetailsProps) {
-  const health = HEALTH[account.health]
   const running = busy(job)
   const note = job && (running || job.state === "failed") ? job.step : account.note
   const tone = job?.state === "failed" ? "error" : running ? "ok" : account.health
   return (
     <div data-account={account.source}>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[13px] font-semibold">{account.name}</span>
-        <Badge variant={health.variant}>{health.label}</Badge>
-      </div>
-      <div className="mt-2 flex min-h-7 items-center justify-between gap-3">
+      {/* Gmail can keep several mailboxes, so each card names its own; the other sources have one. */}
+      {account.source === "gmail" ? <span className="text-[13px] font-semibold">{account.name}</span> : null}
+      <div className="mt-1 flex min-h-7 items-center justify-between gap-3">
         <span
           data-tone={tone}
           aria-live="polite"
