@@ -85,16 +85,17 @@ def linked_device_blocked(text: str) -> bool:
 # accounts from wacli 0.17.1, openclaw/wacli#355), and what the page says about each instead.
 PASSKEY_LINE = ("WhatsApp asked this account for passkey verification, which linking by QR can't do yet. "
                 "Link with your phone number instead.")
+_WRONG_SCREEN = ("That scan didn't link. Link with your phone number, or scan from Settings → Linked devices → "
+                 "Link a device.")
+_REFUSED = "WhatsApp didn't accept the QR scan. Link with your phone number instead."
+# wacli's own wording (powerset-co/wacli, from upstream #356); in --events mode these arrive as
+# {"event":"error","data":{"message":...}}.
 _QR_FAILURES = (
     ("passkey", PASSKEY_LINE),
-    ("scanned without multidevice", "That scan came from the wrong place. Link with your phone number, or scan "
-                                    "from Settings → Linked devices → Link a device."),
-    ("scanned-without-multidevice", "That scan came from the wrong place. Link with your phone number, or scan "
-                                    "from Settings → Linked devices → Link a device."),
-    ("unsupported qr pairing state", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
-    ("err-unexpected-state", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
-    ("pair error", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
-    ("pairing failed", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
+    ("multi-device is not enabled", _WRONG_SCREEN),
+    ("unsupported qr pairing state", _REFUSED),
+    ("unexpected qr pairing state", _REFUSED),
+    ("qr pairing failed", _REFUSED),
 )
 
 

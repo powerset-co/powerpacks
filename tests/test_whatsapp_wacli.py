@@ -498,6 +498,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertTrue(procs[0].terminated)
             self.assertFalse(files["stop"].exists())
 
+    def test_wacli_refusal_wording_maps_to_the_phone_fallback(self) -> None:
+        from packs.ingestion.primitives.discover.messages.wacli.util import qr_link_failure
+        for line in ('{"event":"error","data":{"message":"WhatsApp requires passkey confirmation, which wacli '
+                     'cannot safely complete yet; preserve any existing authenticated store"}}',
+                     'unsupported QR pairing state "err-new"; update wacli and try again',
+                     "unexpected QR pairing state; run `wacli auth` again",
+                     "QR scanned, but multi-device is not enabled on the phone",
+                     "QR pairing failed: context canceled"):
+            self.assertIn("phone number", qr_link_failure(line) or "", line)
+        self.assertIsNone(qr_link_failure("websocket closed"))
+
     def test_a_scan_that_ends_without_a_known_refusal_still_asks_for_the_qr(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             blocked, procs, _ = self.fake_link(td, [["2@qr-payload", "Error: websocket closed"]], exits=[1])
