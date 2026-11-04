@@ -686,7 +686,15 @@ def seniority_intent(payload: dict[str, Any]) -> str | None:
     return None
 
 
+ADJACENCY_FAMILIES = {"founder", "engineer", "data_ml", "product", "marketing", "sales", "leader"}
+
+
 def adjacency_family_for_payload(payload: dict[str, Any]) -> str | None:
+    # Cloud keys union-mode adjacency on role_function; expand only emits
+    # role_ids for the founder/C-suite shortcuts.
+    role_function = str(payload.get("role_function") or "").strip().lower()
+    if role_function in ADJACENCY_FAMILIES:
+        return role_function
     role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
     if role_ids & {"founder", "cofounder", "co-founder"}:
         return "founder"
