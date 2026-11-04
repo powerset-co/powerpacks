@@ -10,8 +10,8 @@ const WIDTH = 640
 const HEIGHT = 510
 
 /** One source's guide in the right column: what the person is about to see, moving (the stage
- *  loops through its three steps), the steps under it, and the step under way's caption. A step
- *  is a click to its point in the loop. */
+ *  loops through its three steps), the steps under it, and the step under way's caption (when the
+ *  flow has captions). A step is a click to its point in the loop. */
 export function Guide({ source, person }: { source: GuideSource; person: Person }) {
   const flow = flows[source]
   const frame = useRef<HTMLDivElement>(null)
@@ -67,9 +67,11 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
           style={{ transform: `scale(${scale})` }}
         />
       </div>
-      <p className="m-0 min-h-9 text-center text-xs text-muted-foreground" aria-live="off">
-        {flow.captions[step]}
-      </p>
+      {flow.captions.length ? (
+        <p className="m-0 min-h-9 text-center text-xs text-muted-foreground" aria-live="off">
+          {flow.captions[step]}
+        </p>
+      ) : null}
       <ol className="m-0 flex list-none flex-col gap-1 p-0 text-[13px]">
         {flow.steps.map((line, at) => (
           <li key={line}>
@@ -97,7 +99,7 @@ export function Guide({ source, person }: { source: GuideSource; person: Person 
           </li>
         ))}
       </ol>
-      <p className="m-0 text-xs text-muted-foreground">{flow.note}</p>
+      {flow.note ? <p className="m-0 text-xs text-muted-foreground">{flow.note}</p> : null}
     </div>
   )
 }

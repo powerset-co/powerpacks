@@ -13,7 +13,7 @@ import { Tip } from "./Tip"
 const DISMISSED_KEY = "refresh-pane-dismissed"
 
 /** What the last daily refresh needs from the person: its first problem, worded as what to do,
- *  with a button that goes where it is done, and how many more wait on the Refresh page. */
+ *  with a button that goes where it is done, and how many more wait on Scheduled tasks. */
 export function RefreshPane({ rail }: { rail: boolean }) {
   const navigate = useNavigate()
   const refresh = useRefresh()

@@ -1,4 +1,4 @@
-"""The Refresh page's JSON routes (the native daily refresh, daily.py).
+"""Scheduled tasks' JSON routes (the native daily refresh, daily.py).
 
 GET  /tasks/api/refresh            settings, next run, the running run and past runs
 POST /tasks/api/refresh/settings   enabled=true|false, time=HH:MM

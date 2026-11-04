@@ -6,7 +6,7 @@ import { fetchRefresh, REFRESH_KEY } from "@/lib/api/refresh"
 const RUNNING_POLL_MS = 3_000
 const IDLE_POLL_MS = 60_000
 
-/** The daily refresh's state, shared by the Refresh page and the sidebar's pane. */
+/** The daily refresh's state, shared by Scheduled tasks and the sidebar's pane. */
 export function useRefresh() {
   return useQuery({
     queryKey: REFRESH_KEY,

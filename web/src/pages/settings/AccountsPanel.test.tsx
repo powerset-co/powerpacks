@@ -140,28 +140,28 @@ it("keeps connected details and the disconnected helper in one Accounts screen",
   await screen.findByRole("heading", { name: "Bring your conversations along." })
   fireEvent.click(screen.getByRole("button", { name: /Gmail/ }))
   expect(await screen.findByText("120")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "Add another" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Add a mailbox" })).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: /WhatsApp/ }))
   expect(await screen.findByRole("heading", { name: "Link your WhatsApp." })).toBeTruthy()
   expect(screen.getByTestId("path").textContent).toBe("/accounts")
-  expect(screen.queryByRole("button", { name: "View sync progress" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "View progress" })).toBeNull()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
-it("refreshes all sources then shows Deep Context progress without leaving Accounts", async () => {
-  const client = mount()
-  const start = await screen.findByRole<HTMLButtonElement>("button", { name: "Enrich imported data" })
-  await waitFor(() => expect(start.disabled).toBe(false))
-  fireEvent.click(start)
-  await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("onboard_continue", {
-      answer: { sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true },
-    }),
-  )
-  expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
-  expect(screen.queryByText("Search is ready")).toBeNull()
+it("connects only: no Enrich or Sync, and the sync line points to Scheduled tasks", async () => {
+  mount()
+  const tasks = await screen.findByRole("link", { name: "Scheduled tasks" })
+  expect(tasks.getAttribute("href")).toBe("/tasks")
+  expect(
+    await screen.findByText(
+      (_, element) => element?.tagName === "P" && element.textContent.startsWith("Syncs daily at 6:00 AM"),
+    ),
+  ).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Enrich imported data" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Sync" })).toBeNull()
+})
+it("while a run goes, says so and opens its progress on Accounts", async () => {
   record = {
     ...idle,
-    // The new run's first line, written after the click.
     updated_at: new Date().toISOString(),
     status: "running",
     event: "deep_context.learning",
@@ -172,16 +172,16 @@ it("refreshes all sources then shows Deep Context progress without leaving Accou
     message: "Learning about your contacts: 40 of 298",
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
-  await client.invalidateQueries({ queryKey: ["onboarding", "install"] })
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "View progress" }))
+  expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
   expect(await screen.findByText(record.message)).toBeTruthy()
-  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enriching…" }).disabled).toBe(true)
   expect(within(screen.getByRole("list", { name: "Setup stages" })).getByText("Gmail imported")).toBeTruthy()
 })
-it("never shows onboarding's LinkedIn setup as Enrich's progress", async () => {
+it("never shows onboarding's LinkedIn setup as the run's progress", async () => {
   record = { ...idle, retry_command: "/app/bin/linkedin-setup" }
   mount("/accounts?view=sync")
-  const start = await screen.findByRole<HTMLButtonElement>("button", { name: "Enrich imported data" })
-  await waitFor(() => expect(start.disabled).toBe(false))
+  await screen.findByRole("link", { name: "Scheduled tasks" })
   expect(screen.queryByText("Search is ready")).toBeNull()
   expect(screen.queryByRole("list", { name: "Setup stages" })).toBeNull()
 })
@@ -207,26 +207,6 @@ it("lists no row after the running one as done from the last run", async () => {
   expect(within(stages).queryByText("Learned about 298 people")).toBeNull()
   expect(stages.querySelectorAll('[data-stage="done"]').length).toBe(0)
 })
-it("asks to enrich imported data once a source finishes syncing", async () => {
-  jobs = { "jordan@example.com": { state: "running", step: "sync" } }
-  const client = mount()
-  await waitFor(() =>
-    expect(client.getQueryData(["accounts"])).toMatchObject({
-      jobs: { "jordan@example.com": { state: "running" } },
-    }),
-  )
-  await screen.findByRole("button", { name: "Enrich imported data" })
-  expect(screen.queryByText("Your sources are synced")).toBeNull()
-  jobs = { "jordan@example.com": { state: "done", step: "sync" } }
-  await client.invalidateQueries({ queryKey: ["accounts"] })
-  expect(await screen.findByText("Your sources are synced")).toBeTruthy()
-})
-it("disables enriching when no sources are connected", async () => {
-  connected = false
-  mount()
-  await screen.findByRole("heading", { name: "Bring your conversations along." })
-  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enrich imported data" }).disabled).toBe(true)
-})
 it("keeps owner input and stopped-run recovery on Accounts", async () => {
   record = {
     ...idle,
@@ -249,5 +229,4 @@ it("keeps owner input and stopped-run recovery on Accounts", async () => {
   )
   expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
   expect(screen.queryByRole("button", { name: "Continue" })).toBeNull()
-  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enriching…" }).disabled).toBe(true)
 })

@@ -50,18 +50,10 @@ export const flows: Record<GuideSource, Flow> = {
   gmail: {
     title: "Connect your Gmail.",
     eyebrow: "GMAIL · GOOGLE SIGN-IN",
-    intro: "Sign in to the Google account you want to connect. Powerpacks takes care of the setup.",
-    steps: [
-      "Choose your Google account.",
-      "Complete sign-in and any verification.",
-      "Allow the Gmail access (Select all, then Continue).",
-    ],
-    captions: [
-      "Choose the mailbox you want to connect.",
-      "Complete any verification Google asks for.",
-      "Tick Select all, then Continue.",
-    ],
-    note: "In the Google window, tick Select all, then Continue. Powerpacks waits for you to finish.",
+    intro: "Sign in to Google in the window that opens.",
+    steps: ["Choose your Google account.", "Finish any verification.", "Tick Select all, then Continue."],
+    captions: [],
+    note: "",
     duration: 15,
   },
   whatsapp: {

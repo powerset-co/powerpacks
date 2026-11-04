@@ -52,10 +52,10 @@ function Line({ children, bad = false }: { children: ReactNode; bad?: boolean })
   return <span className={cn("text-xs leading-snug", bad ? "text-bad" : "text-foreground")}>{children}</span>
 }
 
-// What to do while each sign-in runs. A row shows this, never the run's own status lines.
-const TODO: Record<ConnectSource, string> = {
+// What to do while each sign-in runs. A row shows this, never the run's own status lines. Gmail has
+// none: its guide and the sign-in's own line already say it.
+const TODO: Partial<Record<ConnectSource, string>> = {
   linkedin: "Sign in to LinkedIn in the window that opens.",
-  gmail: "Sign in to Google in the window that opens.",
   whatsapp: "In WhatsApp on your phone, go to Linked devices and scan the code.",
 }
 
@@ -255,9 +255,9 @@ function ProfileLink({ url, onChange }: { url: string | null; onChange: (url: st
   )
 }
 
-/** Gmail's mailboxes: the ones its app already takes, each shown with Add another; before there
- *  is an app, the address the first connect uses (the Powerset one until changed). The first
- *  mailbox owns the app, so it stays first. */
+/** Gmail's one action. Before any mailbox: the address the first connect signs in (the Powerset
+ *  one until changed). After: Add a mailbox, which asks for the address and signs it in. Each
+ *  mailbox, and a reconnect for an expired one, is on its own card (Accounts' details). */
 function Mailboxes({
   known,
   email,
@@ -288,25 +288,17 @@ function Mailboxes({
     )
   if (known.length)
     return (
-      <span className="flex flex-wrap items-center gap-1.5">
-        {known.map((mailbox) => (
-          <span key={mailbox} className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-foreground">
-            {mailbox}
-          </span>
-        ))}
-        <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
-          Add another
-        </button>
-      </span>
+      <Button size="sm" className="self-start" disabled={disabled} onClick={() => setTyping(true)}>
+        Add a mailbox
+      </Button>
     )
   return (
-    <>
-      Your mail, from {email || "your Google account"}
-      {" · "}
+    <span>
+      Connects {email || "your Google account"} ·{" "}
       <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
         Change
       </button>
-    </>
+    </span>
   )
 }
 
@@ -478,7 +470,13 @@ export function Connect({
     // A line of the row's own, while it is not working.
     extra?: ReactNode,
   ) => {
-    const run = standing(record, ready, name)
+    // Gmail is connected once it keeps any mailbox: an expired one shows on its card, and
+    // setup syncs the others (healthy_mailboxes).
+    const run = standing(
+      record,
+      name === "gmail" && ready ? { ...ready, gmail: known.length > 0 } : ready,
+      name,
+    )
     const at = queued?.source === name && run.state !== "working" ? { state: "working" as const } : run
     const command = "command" in at ? at.command : undefined
     const guide = name === "linkedin" || !onGuide ? undefined : () => onGuide(name)
@@ -500,7 +498,7 @@ export function Connect({
       },
       children: (
         <>
-          {at.state === "working" ? <Line>{TODO[name]}</Line> : null}
+          {at.state === "working" && TODO[name] ? <Line>{TODO[name]}</Line> : null}
           {at.state === "working" && name === "whatsapp" ? (
             <CodeBox
               url={"qr" in at ? at.qr : undefined}

@@ -73,7 +73,7 @@ export function RefreshPage() {
   const selected = runs.find((run) => run.id === selectedId) ?? runs[0]
 
   return (
-    <Page title="Refresh">
+    <Page title="Scheduled tasks">
       {refresh.error && !data && <EmptyState>{errorText(refresh.error)}</EmptyState>}
       {refresh.isPending && <EmptyState>Loading the refresh…</EmptyState>}
       {data && (
@@ -85,9 +85,8 @@ export function RefreshPage() {
             <div className="min-w-[260px] flex-1">
               <h2 className="m-0 text-sm font-semibold">Keep your network up to date</h2>
               <p className="mb-0 mt-1 max-w-[540px] text-xs leading-relaxed text-muted-foreground">
-                Syncs LinkedIn, Gmail, Messages and WhatsApp, runs Deep Context on what&apos;s new, and
-                rebuilds search when there are new people. Runs while the app is open; a missed day folds into
-                the next run.
+                Syncs your sources, runs Deep Context on what&apos;s new and updates search. Runs while the
+                app is open.
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-2.5 text-xs">
                 <button
@@ -159,6 +158,7 @@ export function RefreshPage() {
               )}
             </div>
           </section>
+          <GmailReconnect />
           <History runs={runs} selected={selected} onSelect={setSelectedId} />
         </>
       )}
@@ -295,8 +295,7 @@ function RunDetail({ run }: { run: RefreshRun }) {
           run.problems.map((problem) => (
             <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5 text-xs">
               <b className="block">{problem.title}</b>
-              {problem.detail}{" "}
-              {problem.source === "gmail" ? <GmailReconnect /> : <ProblemLink problem={problem} />}
+              {problem.detail} {problem.source === "gmail" ? null : <ProblemLink problem={problem} />}
             </div>
           ))
         )}
@@ -319,8 +318,9 @@ function ProblemLink({ problem }: { problem: Problem }) {
 // While a sign-in runs, re-read the mailboxes (and their jobs) this often.
 const JOB_POLL_MS = 2_000
 
-/** Reconnect, right here, each Gmail mailbox whose sign-in is expired now (read live, so one
- *  signed in since drops off). One sign-in at a time: the others wait while one runs. */
+/** Gmail's one place to sign back in: each mailbox whose sign-in is expired now, read live (not from
+ *  a run), with its own Reconnect. Shown only while one needs it, or one reconnected here has an
+ *  answer to show. One sign-in at a time: the others wait while one runs. */
 function GmailReconnect() {
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -333,13 +333,13 @@ function GmailReconnect() {
         : false,
     refetchIntervalInBackground: true,
   })
-  if (!accounts.data) return accounts.isPending ? <Spinner className="inline-block size-3" /> : null
+  if (!accounts.data) return null
   const { jobs } = accounts.data
   const running = Object.values(jobs).some((job) => job.state === "running")
   const expired = accounts.data.accounts.filter(
     (account) => account.source === "gmail" && (account.health === "error" || jobs[account.name]),
   )
-  if (!expired.length) return <span className="text-muted-foreground">Every mailbox is signed in now.</span>
+  if (!expired.length) return null
   const reconnect = (email: string) => {
     setError(null)
     reconnectGmail(email)
@@ -347,7 +347,11 @@ function GmailReconnect() {
       .finally(() => void client.invalidateQueries({ queryKey: ["accounts"] }))
   }
   return (
-    <span className="mt-1.5 flex flex-col gap-1.5">
+    <section
+      aria-label="Gmail sign-in"
+      className="flex flex-col gap-2 rounded-[var(--radius-m)] border border-line border-l-2 border-l-warn bg-card p-4 text-xs"
+    >
+      <h2 className="m-0 text-sm font-semibold">Gmail sign-in expired</h2>
       {expired.map((account) => {
         const job = jobs[account.name]
         const signingIn = job?.state === "running"
@@ -386,6 +390,6 @@ function GmailReconnect() {
           {error}
         </span>
       )}
-    </span>
+    </section>
   )
 }

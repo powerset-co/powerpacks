@@ -18,6 +18,7 @@ sign-in writes it (msgvault's tokens, macOS's Full Disk Access, wacli's link, th
 sign-in browser's LinkedIn session).
 
 Changelog:
+  2026-11-04: shorter Gmail notes; Accounts' card points to Scheduled tasks for a reconnect.
   2026-11-04: `signed_in` also names the mailboxes signed in now (`healthy_mailboxes`), so a refresh
               syncs those while an expired one waits for its reconnect instead of stopping all of Gmail.
   2026-11-04: `gmail_tokens`, so the server reuses a Gmail check until a sign-in writes a token;
@@ -249,17 +250,17 @@ def _gmail_account(row: _GmailRow, signin: SignIn, contacts: int) -> Account:
 
 def _gmail_health(row: _GmailRow, signin: SignIn) -> tuple[Health, str]:
     if signin == "reauthorization_required":
-        return "error", "Sign-in expired. Reconnect to keep syncing."
+        return "error", "Sign-in expired."
     if signin == "missing_token":
-        return "error", "Not signed in. Reconnect to sync."
+        return "error", "Not signed in."
     if row.last_run_status == "failed":
         # Signed in, so it's the sync to retry, not the sign-in.
         return "warning", f"Last sync failed: {row.last_run_error or 'unknown error'}"
     if _days_since(row.last_sync_at) > STALE_SYNC_DAYS:
-        return "warning", "Signed in, but no sync in the last 2 days."
+        return "warning", "No sync in the last 2 days."
     if signin == "transient_error":
         return "warning", "Couldn't reach Google to check the sign-in."
-    return "ok", "Signed in and up to date."
+    return "ok", "Up to date."
 
 
 # ---------------------------------------------------------------- iMessage

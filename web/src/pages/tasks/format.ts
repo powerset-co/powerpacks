@@ -1,4 +1,4 @@
-// The Refresh page's words for times, counts and runs.
+// Scheduled tasks' words for times, counts and runs.
 
 import type { RefreshRun, RefreshSource } from "@/types/refresh"
 

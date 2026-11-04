@@ -1,13 +1,11 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useState, type ReactNode } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { type ReactNode } from "react"
 import { Link } from "react-router-dom"
 
 import { EmptyState, CHANNEL_ICON, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { fetchAccounts, reconnectGmail, syncAccount } from "@/lib/api/accounts"
-import { fetchConnection } from "@/lib/api/install"
+import { fetchAccounts } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { CHANNELS } from "@/lib/channels"
 import { ago, stamp } from "@/lib/copy"
@@ -17,7 +15,6 @@ import type { Account, AccountSource, AccountHealth, Job, JobsPayload } from "@/
 import { AccountsPanel } from "./AccountsPanel"
 import { Connect } from "@/pages/install/Connect"
 import { ConnectionRow } from "@/components/shared/ConnectionRow"
-import { live, POLL_MS } from "@/pages/install/sources"
 
 const HEALTH: Readonly<Record<AccountHealth, { label: string; variant: "ok" | "warn" | "bad" | "muted" }>> = {
   ok: { label: "Healthy", variant: "ok" },
@@ -41,7 +38,6 @@ function jobFor(account: Account, jobs: JobsPayload): Job | undefined {
 
 /** The connected message accounts, read live from each source's store on every load. */
 export function AccountsSettings({ panel = false }: { panel?: boolean }) {
-  const client = useQueryClient()
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: ({ signal }) => fetchAccounts(signal),
@@ -51,23 +47,6 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
     refetchIntervalInBackground: true,
   })
 
-  // A sign-in under way (the Connect screen's record) holds every card's Sync and Reconnect too.
-  const connection = useQuery({
-    queryKey: ["install", "connect"],
-    queryFn: ({ signal }) => fetchConnection(signal),
-    refetchInterval: POLL_MS,
-  })
-  const locked =
-    (connection.data !== undefined && live(connection.data)) ||
-    Object.values(accounts.data?.jobs ?? {}).some(busy)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const start = (action: Promise<void>) => {
-    setActionError(null)
-    action
-      .catch((error: unknown) => setActionError(errorText(error)))
-      .finally(() => void client.invalidateQueries({ queryKey: ["accounts"] }))
-  }
-
   const detail = (source: AccountSource): ReactNode => {
     if (accounts.isPending) return <Skeleton aria-label="Loading account details" className="h-16 w-full" />
     const data = accounts.data
@@ -76,14 +55,7 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
     return matching.length ? (
       <div className="flex flex-col gap-4">
         {matching.map((account) => (
-          <AccountDetails
-            key={account.name}
-            account={account}
-            job={jobFor(account, data.jobs)}
-            locked={locked}
-            onReconnect={() => start(reconnectGmail(account.name))}
-            onSync={() => start(syncAccount(account))}
-          />
+          <AccountDetails key={account.name} account={account} job={jobFor(account, data.jobs)} />
         ))}
       </div>
     ) : (
@@ -101,17 +73,12 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
       <AccountsPanel
         details={details}
         accounts={accounts.data}
-        error={actionError ?? (accounts.error ? errorText(accounts.error) : null)}
+        error={accounts.error ? errorText(accounts.error) : null}
       />
     )
   return (
     <section className="flex flex-col gap-3" aria-label="Accounts">
       {accounts.error && <EmptyState>{errorText(accounts.error)}</EmptyState>}
-      {actionError && (
-        <p role="alert" className="m-0 text-xs text-bad">
-          {actionError}
-        </p>
-      )}
       {isDesktop() ? (
         <Connect details={details} />
       ) : (
@@ -151,10 +118,10 @@ function ScheduleLine({ scheduled }: { scheduled: string | null }) {
   return (
     <p className="m-0 text-xs text-muted-foreground">
       {scheduled ? (
-        `Refreshes daily at ${scheduled}.`
+        `Syncs daily at ${scheduled}.`
       ) : (
         <>
-          Daily refresh is off.{" "}
+          Daily sync is off.{" "}
           <Link to="/tasks" className="font-semibold text-info no-underline hover:underline">
             Set it up
           </Link>
@@ -167,13 +134,9 @@ function ScheduleLine({ scheduled }: { scheduled: string | null }) {
 interface AccountDetailsProps {
   account: Account
   job: Job | undefined
-  /** Another sign-in or sync is under way: this card's action waits. */
-  locked: boolean
-  onReconnect: () => void
-  onSync: () => void
 }
 
-function AccountDetails({ account, job, locked, onReconnect, onSync }: AccountDetailsProps) {
+function AccountDetails({ account, job }: AccountDetailsProps) {
   const health = HEALTH[account.health]
   const running = busy(job)
   const note = job && (running || job.state === "failed") ? job.step : account.note
@@ -193,9 +156,7 @@ function AccountDetails({ account, job, locked, onReconnect, onSync }: AccountDe
           {running && <Spinner />}
           {note}
         </span>
-        {!running && (
-          <CardAction account={account} locked={locked} onReconnect={onReconnect} onSync={onSync} />
-        )}
+        {!running && <CardAction account={account} />}
       </div>
       <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
         {account.source === "linkedin" ? (
@@ -216,32 +177,26 @@ function AccountDetails({ account, job, locked, onReconnect, onSync }: AccountDe
   )
 }
 
-/** Reconnect for an expired Gmail sign-in; Sync for a signed-in source that has gone stale. */
-function CardAction({ account, locked, onReconnect, onSync }: Omit<AccountDetailsProps, "job">) {
-  if (account.source === "gmail" && account.health === "error") {
+/** What a card asks of the person: an expired Gmail sign-in points to Scheduled tasks, which
+ *  reconnects it; a stale LinkedIn export to LinkedIn's download. Syncing is Scheduled tasks'
+ *  (Refresh now and the daily run), so no card syncs on its own. */
+function CardAction({ account }: { account: Account }) {
+  if (account.source === "gmail" && account.health === "error")
     return (
-      <Button size="sm" variant="bad" disabled={locked} onClick={onReconnect}>
-        Reconnect
-      </Button>
+      <Link to="/tasks" className="text-xs font-semibold text-info no-underline hover:underline">
+        Reconnect in Scheduled tasks
+      </Link>
     )
-  }
-  if (account.health !== "warning") return null
-  if (account.source === "linkedin") {
-    return (
-      <a
-        href={LINKEDIN_EXPORT_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="text-xs font-semibold text-info no-underline hover:underline"
-      >
-        Download from LinkedIn
-      </a>
-    )
-  }
+  if (account.source !== "linkedin" || account.health !== "warning") return null
   return (
-    <Button size="sm" disabled={locked} onClick={onSync}>
-      Sync
-    </Button>
+    <a
+      href={LINKEDIN_EXPORT_URL}
+      target="_blank"
+      rel="noreferrer"
+      className="text-xs font-semibold text-info no-underline hover:underline"
+    >
+      Download from LinkedIn
+    </a>
   )
 }
 

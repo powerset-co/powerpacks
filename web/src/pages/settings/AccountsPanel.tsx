@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
-import { ChevronRight, Sparkles } from "lucide-react"
+import { Link, useSearchParams } from "react-router-dom"
+import { ChevronRight } from "lucide-react"
 import { CheckIcon, Spinner } from "@/components/shared"
 import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { fetchAccount } from "@/lib/api/account"
 import { continueSetup, fetchConnection, type SetupAnswer } from "@/lib/api/install"
 import { errorText } from "@/lib/api/http"
@@ -56,8 +55,6 @@ export function AccountsPanel({
   })
   const [guide, setGuide] = useState<GuideSource | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
-  // Enrich (or Continue) was pressed here: the way back to its progress stays.
-  const [started, setStarted] = useState(false)
   // How Deep Context works opens the first time Accounts does.
   const [howItWorks, setHowItWorks] = useState(
     () => readStored("local", HOW_IT_WORKS_KEY, (raw) => (raw === true ? true : null)) === null,
@@ -66,16 +63,8 @@ export function AccountsPanel({
     setHowItWorks(open)
     if (!open) writeStored("local", HOW_IT_WORKS_KEY, true)
   }
-  // When a source's sync finishes, the enrich button asks to be pressed.
   const jobs = Object.values(accounts?.jobs ?? {})
   const syncing = jobs.some((job) => job.state === "running")
-  const synced = !syncing && jobs.some((job) => job.state === "done")
-  const wasSyncing = useRef(false)
-  const [nudge, setNudge] = useState(false)
-  useEffect(() => {
-    if (wasSyncing.current && synced) setNudge(true)
-    wasSyncing.current = syncing
-  }, [syncing, synced])
   const progress = params.get("view") === "sync"
   const client = useQueryClient()
   // The pane shows Enrich's run (bin/onboard, also the daily refresh's), never onboarding's
@@ -100,11 +89,9 @@ export function AccountsPanel({
   }, [run.data, run.ready, client])
   const start = (answer: SetupAnswer) => {
     setStartError(null)
-    setStarted(true)
     setParams({ view: "sync" }, { replace: true, state: { startedAt: Date.now() } })
     return continueSetup(answer).catch((caught: unknown) => {
       setStartError(errorText(caught))
-      setStarted(false)
       setParams({ view: "sync" }, { replace: true })
     })
   }
@@ -122,11 +109,13 @@ export function AccountsPanel({
     const connecting = Object.values(items).some((entry) => entry.state === "working")
     // A sign-in, a sync or Enrich under way holds every other account's Connect.
     const held = item.state === "needed" && (connecting || syncing || active || starting)
-    const canSync = SOURCES.some((key) => items[key].state === "ready")
+    // A Gmail mailbox whose sign-in is gone: the row says so; Scheduled tasks reconnects it.
+    const expired = accounts?.accounts.some((entry) => entry.source === "gmail" && entry.health === "error")
     const list = (keys: readonly ConnectRow[]) => (
       <div className="flex flex-col gap-1">
         {keys.map((key) => {
           const row = items[key]
+          const warn = key === "gmail" && row.state === "ready" && expired
           return (
             <button
               key={key}
@@ -148,21 +137,23 @@ export function AccountsPanel({
               <span
                 className={cn(
                   "flex shrink-0 items-center gap-1 text-[11px]",
-                  row.state === "ready" ? "text-ok" : "text-muted-foreground",
+                  warn ? "text-warn" : row.state === "ready" ? "text-ok" : "text-muted-foreground",
                 )}
               >
-                {row.state === "ready" ? (
+                {warn ? null : row.state === "ready" ? (
                   <CheckIcon className="size-3" />
                 ) : row.state === "working" || row.state === "checking" ? (
                   <Spinner className="size-3" />
                 ) : null}
-                {row.state === "ready"
-                  ? "Connected"
-                  : row.state === "working"
-                    ? "Working"
-                    : row.state === "checking"
-                      ? "Checking"
-                      : "Not connected"}
+                {warn
+                  ? "Needs sign-in"
+                  : row.state === "ready"
+                    ? "Connected"
+                    : row.state === "working"
+                      ? "Working"
+                      : row.state === "checking"
+                        ? "Checking"
+                        : "Not connected"}
               </span>
               <ChevronRight className="size-3 text-faint" />
             </button>
@@ -201,55 +192,31 @@ export function AccountsPanel({
               </h2>
               {list(SERVICES)}
             </div>
-            <div className="mt-3 flex flex-col gap-3 px-3">
-              <p className="m-0 text-xs text-muted-foreground">
-                {active || starting
-                  ? "Updating in the background."
-                  : accounts?.scheduled
-                    ? `Refreshes daily at ${accounts.scheduled}.`
-                    : "Enrich when you're ready."}
+            <div className="mt-3 flex flex-col gap-2 px-3 text-xs text-muted-foreground">
+              {/* Accounts connects; syncing lives on Scheduled tasks (Refresh now and the daily run). */}
+              <p className="m-0">
+                {active || starting ? (
+                  <>
+                    Syncing now ·{" "}
+                    <button
+                      type="button"
+                      className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline"
+                      onClick={() => setParams({ view: "sync" }, { replace: true })}
+                    >
+                      View progress
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {accounts?.scheduled ? `Syncs daily at ${accounts.scheduled}` : "Daily sync is off"} ·{" "}
+                    <Link to="/tasks" className="text-primary no-underline hover:underline">
+                      Scheduled tasks
+                    </Link>
+                  </>
+                )}
               </p>
-              <Popover open={nudge && canSync && !connecting && !active && !starting} onOpenChange={setNudge}>
-                <PopoverAnchor asChild>
-                  <Button
-                    variant="primary"
-                    disabled={
-                      !isDesktop() || !run.latest || !canSync || connecting || syncing || active || starting
-                    }
-                    onClick={() => {
-                      setNudge(false)
-                      void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
-                    }}
-                  >
-                    {active || starting ? <Spinner /> : <Sparkles className="size-3.5" />}
-                    {active || starting ? "Enriching…" : "Enrich imported data"}
-                  </Button>
-                </PopoverAnchor>
-                <PopoverContent
-                  side="top"
-                  onOpenAutoFocus={(event) => event.preventDefault()}
-                  className="w-64 p-3"
-                >
-                  <p className="m-0 text-sm font-semibold">Your sources are synced</p>
-                  <p className="mb-0 mt-1 text-xs text-muted-foreground">
-                    Enrich imported data to build dossiers and update search.
-                  </p>
-                </PopoverContent>
-              </Popover>
-              <p className="m-0 text-center text-[11px] text-muted-foreground">
-                Syncs your sources, then builds dossiers and updates search.
-              </p>
-              {active || starting || started ? (
-                <button
-                  type="button"
-                  className="border-0 bg-transparent text-xs text-primary"
-                  onClick={() => setParams({ view: "sync" }, { replace: true })}
-                >
-                  View sync progress
-                </button>
-              ) : null}
               {error || startError ? (
-                <p role="alert" className="m-0 text-xs text-bad">
+                <p role="alert" className="m-0 text-bad">
                   {error ?? startError}
                 </p>
               ) : null}
@@ -326,7 +293,7 @@ export function AccountsPanel({
                   </p>
                 ) : null}
                 {connected && !showGuide ? item.details : null}
-                {connected && sourceGuide ? (
+                {connected && sourceGuide && selected !== "gmail" ? (
                   <button
                     type="button"
                     className="self-start border-0 bg-transparent p-0 text-xs text-primary"

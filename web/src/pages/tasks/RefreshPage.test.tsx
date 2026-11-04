@@ -176,13 +176,27 @@ it("reconnects an expired Gmail mailbox on the page and lists only the expired o
   })
 })
 
-it("says when every mailbox is signed in again", async () => {
+it("shows Gmail's sign-in block only while a mailbox is expired, from the live accounts", async () => {
+  serve(() => ({ ...state, runs: [] }))
+  mount(<RefreshPage />)
+  // No run has flagged it: the expired mailbox still has its Reconnect, at the top of the page.
+  expect(await screen.findByRole("region", { name: "Gmail sign-in" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy()
+  cleanup()
   const saved = accounts
   accounts = { ...accounts, accounts: accounts.accounts.map((account) => ({ ...account, health: "ok" })) }
   serve(() => state)
   mount(<RefreshPage />)
-  expect(await screen.findByText("Every mailbox is signed in now.")).toBeTruthy()
+  expect(await screen.findByText("Gmail sign-in expired for casey@example.com")).toBeTruthy()
+  expect(screen.queryByRole("region", { name: "Gmail sign-in" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull()
   accounts = saved
+})
+
+it("is named Scheduled tasks", async () => {
+  serve(() => state)
+  mount(<RefreshPage />)
+  expect(await screen.findByRole("heading", { name: "Scheduled tasks" })).toBeTruthy()
 })
 
 it("the sidebar pane says what to do and stays dismissed for that run", async () => {
