@@ -13,7 +13,7 @@ Changelog:
   2026-10-02: the shell answers /install before project dependencies are ready.
   2026-09-26: created; replaces share/web's People page and /people/assets.
   2026-09-26: the shell also answers /searches and /searches/run (the Searches page).
-  2026-09-28: the shell also answers /accounts and /tasks (Accounts, Scheduled tasks).
+  2026-09-28: the shell also answers /accounts and /tasks (Accounts, Scheduled tasks; Refresh since 2026-11-03).
   2026-09-30: the shell also answers /review (the Review page).
   2026-10-01: the Review page is `/`; /review is gone with the Jinja page it stood beside.
 """

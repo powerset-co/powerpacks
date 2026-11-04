@@ -2,7 +2,7 @@
 
 GET  /accounts/api/accounts   every connected account (accounts.read_accounts), the
                               Sync/Reconnect jobs this server started (by card key),
-                              and whether a daily refresh task is installed.
+                              and the daily refresh's time when it is on.
 GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in): what
                               setup will take, as its Connect screen shows it
                               Jobs and health arrive together, so a finished job never
@@ -23,6 +23,7 @@ browser sign-in before that, so an abandoned sign-in never blocks other syncs. A
 Gmail sign-in checks until a job ends, the stored mailbox list changes, or signed-in refreshes them.
 
 Changelog:
+  2026-11-03: `scheduled` is the native daily refresh's time, or null while it is off.
   2026-10-30: Chrome profiles to pick from.
   2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
   2026-09-28: created for the local Accounts page.
@@ -36,6 +37,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Callable, Literal
 
 from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME, SignIn, gmail_signins, read_accounts, signed_in
@@ -45,7 +47,7 @@ from packs.ingestion.primitives.refresh.refresh_sources import (
     sync_imessage,
     sync_whatsapp,
 )
-from packs.ingestion.primitives.refresh.tasks import installed_runners
+from packs.ingestion.primitives.refresh.daily import read_settings
 from packs.ingestion.primitives.setup.automations.accounts import add_account
 from packs.ingestion.primitives.setup.automations.chrome_profiles import chrome_profiles, copied_from, use_chrome_profile
 
@@ -89,9 +91,15 @@ class AccountsApi:
         _send_json(handler, {
             "accounts": [asdict(account) for account in read_accounts(self._signins)],
             "jobs": {key: asdict(job) for key, job in self.jobs.items()},
-            "scheduled": bool(installed_runners()),
+            "scheduled": self._schedule(),
         })
         return True
+
+    @staticmethod
+    def _schedule() -> str | None:
+        """The daily refresh's time ("6:00 AM"), or None while it is off."""
+        settings = read_settings(Path.cwd())
+        return settings.label() if settings.enabled else None
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path not in (SYNC_PATH, RECONNECT_PATH, CHROME_PROFILE_PATH):

@@ -56,6 +56,7 @@ POSTGRES_TABLES = {
             "founded_year",
             "location",
             "li_company_id",
+            "logo_url",
         ],
     },
     "person_source_summary": {

@@ -172,6 +172,22 @@ def search_set_picker(app: App) -> None:
     app.wait_for({"text": pick.split("·")[0].strip()}, CLICK, f"the picker shows {pick!r}")
 
 
+def refresh_toggle(app: App) -> None:
+    """The Refresh page's daily switch flips on the click and the flip is saved (it survives a
+    reload); it is put back as it was."""
+    switch = {"css": "[role=switch][aria-label='Refresh every day']"}
+    checked = "document.querySelector('[role=switch]')?.getAttribute('aria-checked')"
+    app.go("/tasks", switch, PAGE)
+    before = app.js(checked)
+    for state in ("false" if before == "true" else "true", before):
+        app.click(switch)
+        app.wait_for(f"{checked} === {state!r}", CLICK, f"the switch shows {state}")
+        time.sleep(WRITE / 1000)
+        app.go("/tasks", switch, PAGE)
+        if app.js(checked) != state:
+            raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
+
+
 SCENARIOS = {
     "people-open": people_open,
     "people-menus": people_menus,
@@ -184,4 +200,5 @@ SCENARIOS = {
     "people-tab": people_tab,
     "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
+    "refresh-toggle": refresh_toggle,
 }

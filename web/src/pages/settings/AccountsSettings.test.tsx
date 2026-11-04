@@ -27,7 +27,7 @@ const PAYLOAD: AccountsPayload = {
     },
   ],
   jobs: {},
-  scheduled: true,
+  scheduled: "6:00 AM",
 }
 function mount() {
   return render(

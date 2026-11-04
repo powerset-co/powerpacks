@@ -277,6 +277,8 @@ def apply_rapidapi_context(record: dict[str, Any], context: dict[str, Any]) -> d
         domain = normalize_website_domain(context["website"])
         if domain:
             record["website_domain"] = domain
+    if not clean(record.get("logo_url")) and context.get("logo_url"):
+        record["logo_url"] = context["logo_url"]
     return record
 
 

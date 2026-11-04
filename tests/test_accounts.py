@@ -94,7 +94,7 @@ class AccountsJobsTest(unittest.TestCase):
                  patch.object(accounts, "stored_mailboxes", return_value=("casey@example.com",)) as held, \
                  patch.object(accounts, "check_account", return_value=SimpleNamespace(status="reauthorization_required")) as probe, \
                  patch("packs.ingestion.primitives.accounts.api.read_accounts", return_value=[]), \
-                 patch("packs.ingestion.primitives.accounts.api.installed_runners", return_value=[]), \
+                 patch("packs.ingestion.primitives.accounts.api.read_settings", return_value=SimpleNamespace(enabled=False)), \
                  patch.object(accounts, "_linkedin_session", return_value=False), \
                  patch.object(accounts, "_messages_readable", return_value=False), \
                  patch.object(accounts, "_whatsapp_linked", return_value=False):
