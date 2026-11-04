@@ -26,6 +26,8 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-03: Gmail renewal also signs back in a mailbox whose token is gone; the problem says the
+    automatic sign-in was tried.
   2026-11-03: created; replaces the app's Codex/Claude scheduled task with a native daily run.
 """
 from __future__ import annotations
@@ -390,8 +392,9 @@ def connected_sources(root: Path) -> list[SourceName]:
 
 
 def renew_gmail() -> None:
-    """One renewal of each expired Gmail sign-in with the saved Google session, as the Codex task
-    did; a sign-in that needs the person stays expired and is reported."""
+    """Sign each Gmail mailbox that needs it (expired, or its token gone) back in once with the saved
+    Google session, approving the consent automatically; one Google still wants the person for
+    stays signed out and is reported."""
     from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME
     from packs.ingestion.primitives.setup.automations import accounts
     from packs.ingestion.primitives.setup.automations.accounts import stored_mailboxes
@@ -400,8 +403,8 @@ def renew_gmail() -> None:
     if not emails:
         return
     check = accounts.check_accounts_payload(MSGVAULT_HOME, emails)
-    for email in check["expired_accounts"]:
-        accounts.add_account(MSGVAULT_HOME, email, "", headless=False, force=True)
+    for email in check["accounts_to_authorize"]:
+        accounts.add_account(MSGVAULT_HOME, email, "", headless=False, force=email in check["expired_accounts"])
 
 
 def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[str, str],
@@ -411,7 +414,8 @@ def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[s
     expired = sorted(email for email, state in gmail.items() if state in ("missing_token", "reauthorization_required"))
     if "gmail" in connected and expired:
         who = ", ".join(expired)
-        found.append(Problem("gmail", f"Gmail sign-in expired for {who}",
+        found.append(Problem("gmail", f"Gmail needs you to sign in again for {who}",
+                             "The refresh tried your saved Google session, but Google wants you to confirm. "
                              "Reconnect it on Accounts; the next refresh picks up all the mail since.",
                              "Reconnect Gmail", ACCOUNTS_HREF + "gmail"))
     if "imessage" in connected and not imessage:
