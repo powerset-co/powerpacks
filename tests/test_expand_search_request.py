@@ -49,13 +49,18 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
         self.assertNotIn("role_ids", plain)
         self.assertIn("product manager", plain["bm25_queries"])
+        # Kept outside the filter for title clustering; role_function drives adjacency.
+        self.assertEqual(plain["role_agent_ids"], ["product_manager"])
+        self.assertEqual(plain["role_function"], "product")
 
         cto = mod._merge(
-            {"role_ids": ["chief_technology_officer", "engineering_manager"], "bm25_queries": ["CTO"]},
+            {"role_ids": ["chief_technology_officer", "engineering_manager"], "bm25_queries": ["CTO", "engineering leader"]},
             {}, {}, {}, {}, {}, {}, "CTOs at fintech startups",
         )
         self.assertEqual(cto["role_ids"], ["chief_technology_officer"])
         self.assertEqual(cto["csuite_shortcut_role_id"], "chief_technology_officer")
+        self.assertEqual(cto["seniority_bands"], ["c-suite"])
+        self.assertNotIn("engineering leader", cto["bm25_queries"])
 
         founder = mod._merge(
             {"role_ids": ["founder", "software_engineer"], "bm25_queries": ["founder"]},
@@ -242,7 +247,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("role_core_patterns", filters)
         self.assertIn("founder", filters["role_core_patterns"][0]["examples"])
 
-    def test_founder_csuite_query_keeps_founder_role_id_filter_precise(self):
+    def test_founder_csuite_query_emits_founder_and_named_csuite_ids(self):
         mod = load_module()
         filters = mod._merge(
             {
@@ -259,7 +264,8 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "founder CEOs at devtools companies",
         )
 
-        self.assertEqual(filters["role_ids"], ["founder"])
+        # Cloud entity_mapper_v2: ["founder"] + the C-suite ids named.
+        self.assertEqual(filters["role_ids"], ["founder", "chief_executive_officer"])
         self.assertIn("CEO", filters["bm25_queries"])
         self.assertIn("Chief Executive Officer", filters["bm25_queries"])
         self.assertEqual(filters["role_function"], "founder")
