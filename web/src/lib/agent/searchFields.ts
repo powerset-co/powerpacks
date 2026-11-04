@@ -221,3 +221,81 @@ export function names(value: FilterValue | null | undefined): string[] {
 export function scalar(value: FilterValue | null | undefined): string {
   return value === null || value === undefined || Array.isArray(value) ? "" : String(value)
 }
+
+// What the search preview shows, as the cloud app's filter preview (network-search-app
+// PowerSearchV2) shows it: the chat's search card and a saved run's panel both read these.
+
+/** The three rows the cloud app shows first, in its order, by the key each edits. */
+export const ROLE_QUERY = "semantic_query"
+export const SENIORITY = "seniority_bands"
+export const KEYWORDS = "bm25_queries"
+export const LEAD_KEYS = [ROLE_QUERY, SENIORITY, KEYWORDS]
+
+/**
+ * Kept in the search but not shown, as the cloud app's filter preview hides them (its
+ * `HIDDEN_FILTER_KEYS`, under our key names): the role ids (the role reads from Role Query and Role
+ * Keywords), the role tracks, the company queries, customer types, tech skills, graduation years,
+ * the current-only flags and the role/company passthroughs. They still go with the search, and Edit
+ * Filters edits them.
+ */
+export const HIDDEN_KEYS = new Set([
+  "role_ids",
+  "role_agent_ids",
+  "role_departments",
+  "role_tracks",
+  "is_current",
+  "is_current_role",
+  "is_current_company",
+  "include_investors",
+  "include_advisors",
+  "include_board",
+  "role_adjacent_patterns",
+  "role_core_patterns",
+  "company_semantic_queries",
+  "company_semantic_query",
+  "company_adjacency_queries",
+  "customer_types",
+  "role_query_type",
+  "role_function",
+  "seniority_intent",
+  "csuite_shortcut_role_id",
+  "tech_skills",
+  "graduation_year_min",
+  "graduation_year_max",
+  "education_op",
+])
+
+/** True when the preview shows the field: none of its keys is hidden. */
+export function previewShows(field: Field): boolean {
+  return !fieldKeys(field).some((key) => HIDDEN_KEYS.has(key))
+}
+
+/** A field's row title in the preview: its label in title case; the keywords are the role's. */
+export function previewTitle(field: Field): string {
+  if (field.control.kind === "chips" && field.control.key === KEYWORDS) return "Role Keywords"
+  if (field.control.kind === "pair" && field.control.keys[0] === "years_experience_min") return "Experience"
+  return field.label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
+}
+
+/** The rows the preview shows for a saved search: the lead three first, then the rest in order. */
+export function previewFields(values: Values): Field[] {
+  const isLead = (field: Field) => "key" in field.control && LEAD_KEYS.includes(field.control.key)
+  const filled = filledFields(values, values).filter(previewShows)
+  const lead = LEAD_KEYS.flatMap((key) =>
+    filled.filter((field) => "key" in field.control && field.control.key === key),
+  )
+  return [...lead, ...filled.filter((field) => !isLead(field))]
+}
+
+/** A min and a max as one line; an unset bound reads "any". */
+export function range(low: string, high: string): string {
+  return `${low === "" ? "any" : low} – ${high === "" ? "any" : high}`
+}
+
+/** A pair as the cloud app's pills read: years of experience and age in its words, else "low – high". */
+export function pairText(key: string, low: string, high: string): string {
+  if (key === "years_experience_min")
+    return low && high ? `${low}–${high} years` : low ? `${low}+ years` : `≤ ${high} years`
+  if (key === "age_min") return low && high ? `${low}–${high} years old` : low ? `${low}+` : `≤ ${high}`
+  return range(low, high)
+}

@@ -31,14 +31,20 @@ import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expa
 import { ENTITY_TYPES, SECTOR_TYPES, SENIORITY_BANDS as BAND_ITEMS } from "@/lib/agent/companyFilters"
 import {
   FIELDS,
+  KEYWORDS,
+  LEAD_KEYS,
+  ROLE_QUERY,
   TEMPORALS,
   type Control,
   type Field,
   type Values,
   fieldHasValue,
-  fieldKeys,
   filledFields,
   names,
+  pairText,
+  range,
+  previewShows,
+  previewTitle,
   scalar,
 } from "@/lib/agent/searchFields"
 import { send, useAgent } from "@/lib/agent/store"
@@ -80,51 +86,8 @@ const LOCATION_LABELS: Record<string, string> = {
 /** The cloud app's order for the location rows. */
 const LOCATION_ORDER = Object.keys(LOCATION_LABELS)
 
-/** The three rows the cloud app shows first, in its order, by the key each edits. */
-const ROLE_QUERY = "semantic_query"
-const SENIORITY = "seniority_bands"
-const KEYWORDS = "bm25_queries"
-const LEAD_KEYS = [ROLE_QUERY, SENIORITY, KEYWORDS]
-/**
- * Kept in the search but not shown on the card, as the cloud app's filter preview hides them
- * (network-search-app PowerSearchV2 `HIDDEN_FILTER_KEYS`, under our key names): the role ids (the
- * cloud's expand never fills them; the role reads from Role Query and Role Keywords), the role
- * tracks, the company queries, customer types, tech skills, graduation years, the current-only
- * flags and the role/company passthroughs. They still go with the search, and Edit Filters edits them.
- */
-const HIDDEN_KEYS = new Set([
-  "role_ids",
-  "role_tracks",
-  "is_current",
-  "is_current_role",
-  "is_current_company",
-  "include_investors",
-  "include_advisors",
-  "include_board",
-  "role_adjacent_patterns",
-  "role_core_patterns",
-  "company_semantic_queries",
-  "company_semantic_query",
-  "company_adjacency_queries",
-  "customer_types",
-  "role_query_type",
-  "role_function",
-  "seniority_intent",
-  "tech_skills",
-  "graduation_year_min",
-  "graduation_year_max",
-  "education_op",
-])
-
 /** A list row shows its first ten names, then "+ N hidden", as the cloud app's does. */
 const SHOWN_NAMES = 10
-
-/** A field's row title: its label in title case; the keywords are the role's. */
-function title(field: Field): string {
-  if (field.control.kind === "chips" && field.control.key === KEYWORDS) return "Role Keywords"
-  if (field.control.kind === "pair" && field.control.keys[0] === "years_experience_min") return "Experience"
-  return field.label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
-}
 
 interface SearchCardProps {
   search: PreparedSearch
@@ -500,19 +463,6 @@ function Chips({
   )
 }
 
-/** A min and a max as one line; an unset bound reads "any". */
-function range(low: string, high: string): string {
-  return `${low === "" ? "any" : low} – ${high === "" ? "any" : high}`
-}
-
-/** A pair as the cloud app's pills read: years of experience and age in its words, else "low – high". */
-function pairText(key: string, low: string, high: string): string {
-  if (key === "years_experience_min")
-    return low && high ? `${low}–${high} years` : low ? `${low}+ years` : `≤ ${high} years`
-  if (key === "age_min") return low && high ? `${low}–${high} years old` : low ? `${low}+` : `≤ ${high}`
-  return range(low, high)
-}
-
 /** "+ N hidden" past the first ten names of a row, and "Hide" once they show. */
 function useFoldedNames<T>(items: T[]): [T[], ReactNode] {
   const [all, setAll] = useState(false)
@@ -551,7 +501,7 @@ function FieldRow({
 }) {
   const control: Control = field.control
   const lead = "key" in control && LEAD_KEYS.includes(control.key)
-  const label = title(field)
+  const label = previewTitle(field)
   switch (control.kind) {
     case "chips":
       return (
@@ -1103,7 +1053,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     )
   const rest = filledFields(shownValues, prepared)
     .filter((field) => !("key" in field.control && LEAD_KEYS.includes(field.control.key)))
-    .filter((field) => !fieldKeys(field).some((key) => HIDDEN_KEYS.has(key)))
+    .filter(previewShows)
     .filter(offered)
     .filter((field) => actions || fieldHasValue(field, shownValues))
   const applied = [...shownValues.values()].filter(filled).length
