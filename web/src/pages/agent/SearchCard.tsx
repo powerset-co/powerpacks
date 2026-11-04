@@ -36,6 +36,7 @@ import {
   type Field,
   type Values,
   fieldHasValue,
+  fieldKeys,
   filledFields,
   names,
   scalar,
@@ -84,11 +85,44 @@ const ROLE_QUERY = "semantic_query"
 const SENIORITY = "seniority_bands"
 const KEYWORDS = "bm25_queries"
 const LEAD_KEYS = [ROLE_QUERY, SENIORITY, KEYWORDS]
+/**
+ * Kept in the search but not shown on the card, as the cloud app's filter preview hides them
+ * (network-search-app PowerSearchV2 `HIDDEN_FILTER_KEYS`, under our key names): the role ids (the
+ * cloud's expand never fills them; the role reads from Role Query and Role Keywords), the role
+ * tracks, the company queries, customer types, tech skills, graduation years, the current-only
+ * flags and the role/company passthroughs. They still go with the search, and Edit Filters edits them.
+ */
+const HIDDEN_KEYS = new Set([
+  "role_ids",
+  "role_tracks",
+  "is_current",
+  "is_current_role",
+  "is_current_company",
+  "include_investors",
+  "include_advisors",
+  "include_board",
+  "role_adjacent_patterns",
+  "role_core_patterns",
+  "company_semantic_queries",
+  "company_semantic_query",
+  "company_adjacency_queries",
+  "customer_types",
+  "role_query_type",
+  "role_function",
+  "seniority_intent",
+  "tech_skills",
+  "graduation_year_min",
+  "graduation_year_max",
+  "education_op",
+])
+
+/** A list row shows its first ten names, then "+ N hidden", as the cloud app's does. */
+const SHOWN_NAMES = 10
 
 /** A field's row title: its label in title case; the keywords are the role's. */
 function title(field: Field): string {
   if (field.control.kind === "chips" && field.control.key === KEYWORDS) return "Role Keywords"
-  if (field.control.kind === "chips" && field.control.key === "role_ids") return "Roles"
+  if (field.control.kind === "pair" && field.control.keys[0] === "years_experience_min") return "Experience"
   return field.label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
 }
 
@@ -408,12 +442,15 @@ function Chips({
   onDraft: (draft: Draft) => void
 }) {
   const items = names(values.get(control.key))
+  // Role Keywords show every name, as the cloud app's do; other rows fold past ten.
+  const [folded, fold] = useFoldedNames(items)
+  const shown = control.key === KEYWORDS ? items : folded
   const set = (next: string[]) => onChange(withNames(values, control.key, next))
   // Typed names edit in place; the role keywords read in title case, as the cloud app shows them.
   const typed = editable && !control.readonly && !control.options && control.key !== KEYWORDS
   return (
     <>
-      {items.map((name, index) =>
+      {shown.map((name, index) =>
         typed ? (
           // Index keys: a name changes as it is typed.
           <span key={index} className={cn(BADGE, "pr-1.5 focus-within:border-primary")}>
@@ -441,16 +478,9 @@ function Chips({
           </Badge>
         ),
       )}
+      {control.key === KEYWORDS ? null : fold}
       {editable &&
-        (control.key === "role_ids" ? (
-          <LookupAdd
-            label={field.label}
-            lookup="roles"
-            onPick={(item) => {
-              if (!items.includes(item.id)) set([...items, item.id])
-            }}
-          />
-        ) : control.options ? (
+        (control.options ? (
           <OptionsEdit
             label={field.label}
             options={control.options}
@@ -473,6 +503,31 @@ function Chips({
 /** A min and a max as one line; an unset bound reads "any". */
 function range(low: string, high: string): string {
   return `${low === "" ? "any" : low} – ${high === "" ? "any" : high}`
+}
+
+/** A pair as the cloud app's pills read: years of experience and age in its words, else "low – high". */
+function pairText(key: string, low: string, high: string): string {
+  if (key === "years_experience_min")
+    return low && high ? `${low}–${high} years` : low ? `${low}+ years` : `≤ ${high} years`
+  if (key === "age_min") return low && high ? `${low}–${high} years old` : low ? `${low}+` : `≤ ${high}`
+  return range(low, high)
+}
+
+/** "+ N hidden" past the first ten names of a row, and "Hide" once they show. */
+function useFoldedNames<T>(items: T[]): [T[], ReactNode] {
+  const [all, setAll] = useState(false)
+  if (items.length <= SHOWN_NAMES) return [items, null]
+  return [
+    all ? items : items.slice(0, SHOWN_NAMES),
+    <button
+      key="fold"
+      type="button"
+      onClick={() => setAll(!all)}
+      className={cn(BADGE_ACTION, "text-muted-foreground")}
+    >
+      {all ? "Hide" : `+ ${items.length - SHOWN_NAMES} hidden`}
+    </button>,
+  ]
 }
 
 /** One field's row (or, for locations, one row per kind), edited in place while the card asks. */
@@ -661,7 +716,7 @@ function FieldRow({
               </span>
             ))
           ) : (
-            <Badge label={field.label}>{range(low, high)}</Badge>
+            <Badge label={field.label}>{pairText(control.keys[0], low, high)}</Badge>
           )}
         </FilterRow>
       )
@@ -1015,16 +1070,10 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     setNewTrait("")
   }
 
-  // Every field but an id list with nothing in it (ids come from the expand step, never typed) and
-  // the current-only toggles when traits carry that already.
+  // Every field but an id list with nothing in it (ids come from the expand step, never typed).
   function offered(field: Field): boolean {
     const control = field.control
     if (control.kind === "chips" && control.readonly) return fieldHasValue(field, shownValues)
-    if (
-      control.kind === "toggle" &&
-      (control.key === "is_current_role" || control.key === "is_current_company")
-    )
-      return search.traits.length === 0 && traits.length === 0
     return true
   }
 
@@ -1054,6 +1103,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     )
   const rest = filledFields(shownValues, prepared)
     .filter((field) => !("key" in field.control && LEAD_KEYS.includes(field.control.key)))
+    .filter((field) => !fieldKeys(field).some((key) => HIDDEN_KEYS.has(key)))
     .filter(offered)
     .filter((field) => actions || fieldHasValue(field, shownValues))
   const applied = [...shownValues.values()].filter(filled).length
