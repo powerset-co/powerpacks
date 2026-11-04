@@ -32,10 +32,36 @@ class ExpandSearchRequestTests(unittest.TestCase):
                      "seniority": ["mid", "senior"]},
                     {}, {}, {}, {}, {}, {}, query,
                 )
-                self.assertEqual(filters["role_ids"], ["software_engineer"])
+                # Cloud V2 keeps non-shortcut role ids internal.
+                self.assertNotIn("role_ids", filters)
                 self.assertEqual(filters["bm25_queries"], ["software engineer"])
                 self.assertEqual(filters["seniority_bands"], ["mid", "senior"])
                 self.assertNotIn("csuite_shortcut_role_id", filters)
+
+    def test_role_ids_are_emitted_only_for_cloud_shortcuts(self):
+        # Cloud's V2 extractor emits role_ids only for founder and C-suite shortcuts;
+        # the role agent's other ids still inject titles but never become a filter.
+        mod = load_module()
+        plain = mod._merge(
+            {"role_ids": ["product_manager"], "bm25_queries": ["product manager"],
+             "semantic_query": "Product managers building consumer apps."},
+            {}, {}, {}, {}, {}, {}, "product managers in NYC",
+        )
+        self.assertNotIn("role_ids", plain)
+        self.assertIn("product manager", plain["bm25_queries"])
+
+        cto = mod._merge(
+            {"role_ids": ["chief_technology_officer", "engineering_manager"], "bm25_queries": ["CTO"]},
+            {}, {}, {}, {}, {}, {}, "CTOs at fintech startups",
+        )
+        self.assertEqual(cto["role_ids"], ["chief_technology_officer"])
+        self.assertEqual(cto["csuite_shortcut_role_id"], "chief_technology_officer")
+
+        founder = mod._merge(
+            {"role_ids": ["founder", "software_engineer"], "bm25_queries": ["founder"]},
+            {}, {}, {}, {}, {}, {}, "technical founders",
+        )
+        self.assertEqual(founder["role_ids"], ["founder"])
 
     def test_positive_cto_role_survives_other_executive_exclusions(self):
         mod = load_module()
@@ -296,7 +322,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "Executive Assistant to the CEO in Stockholm",
         )
 
-        self.assertEqual(filters["role_ids"], ["admin_assistant"])
+        self.assertNotIn("role_ids", filters)
         self.assertIn("executive assistant", filters["bm25_queries"])
         self.assertIn("assistant to the CEO", filters["bm25_queries"])
         self.assertNotIn("CEO", filters["bm25_queries"])
@@ -393,7 +419,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
                     {"seniority_bands": []}, {}, query,
                 )
                 self.assertNotIn("seniority_bands", filters)
-                self.assertEqual(filters["role_ids"], ["general_partner"])
+                self.assertNotIn("role_ids", filters)
                 self.assertEqual(filters["entity_types"], ["vc_firm"])
                 self.assertEqual(
                     {key: value for key, value in filters.items() if key.startswith("funding_")}, funding,
