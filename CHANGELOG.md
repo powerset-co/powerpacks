@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.52.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.0...powerpacks-v3.52.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **accounts:** Gmail sign-in check asks Google about the token, not msgvault; reused across polls ([#1072](https://github.com/powerset-co/powerpacks/issues/1072)) ([96ca1ae](https://github.com/powerset-co/powerpacks/commit/96ca1ae4c46228e81d2eb561c0e0d5c3dc0814eb))
+* **accounts:** WhatsApp switches to phone linking when the QR fails, frees the lock in 10 min, and holds other sign-ins ([#1081](https://github.com/powerset-co/powerpacks/issues/1081)) ([6c39b6b](https://github.com/powerset-co/powerpacks/commit/6c39b6be4f79fe1f5edc945ff4a8e0b0760ea1d3))
+* **connect:** the Full Disk Access poll asks for iMessage alone ([#1080](https://github.com/powerset-co/powerpacks/issues/1080)) ([8e423e0](https://github.com/powerset-co/powerpacks/commit/8e423e08bb71b3995283160192884869cb2e35ed))
+* **whatsapp:** pin wacli v0.15.2-fullsync for QR linking ([#1082](https://github.com/powerset-co/powerpacks/issues/1082)) ([9e08e23](https://github.com/powerset-co/powerpacks/commit/9e08e23966f6d5f2bda1c3df5119509d6ee4521c))
+
 ## [3.52.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.51.0...powerpacks-v3.52.0) (2026-11-04)
 
 
