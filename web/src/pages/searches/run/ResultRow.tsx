@@ -74,27 +74,13 @@ export const ResultRow = memo(function ResultRow({
             </span>
           ) : null}
           <div className="result-person">
-            <ProxiedLinkedinAvatar
-              name={row.name}
-              size={40}
-              src={row.avatar_url || undefined}
-              badge={
-                role.company ? (
-                  <CompanyLogo
-                    company={role.company}
-                    src={role.logo || undefined}
-                    size={14}
-                    className="avatar-logo"
-                  />
-                ) : null
-              }
-            />
+            <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
               <span className="flex items-center gap-1.5">
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
               </span>
-              <RoleLine title={role.title} company={role.company} />
+              <RoleLine title={role.title} company={role.company} logo={role.logo} />
               {headline ? <span className="result-headline">{headline}</span> : null}
               {row.location ? <small className="result-location">{row.location}</small> : null}
               <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
@@ -118,14 +104,20 @@ export const ResultRow = memo(function ResultRow({
   )
 })
 
-// Current role and company, the company quieter; whichever is known, else a plain note.
-export function RoleLine({ title, company }: { title: string; company: string }) {
+// Current role · company, with the company's logo (or its letter) just before its name;
+// whichever is known, else a plain note.
+export function RoleLine({ title, company, logo }: { title: string; company: string; logo: string }) {
   if (!title && !company) return <span className="result-title result-unknown">Current role unknown</span>
   return (
     <span className="result-title">
       {title ? <span className="result-role">{title}</span> : null}
-      {title && company ? <span className="result-at"> · </span> : null}
-      {company ? <span className="result-company">{company}</span> : null}
+      {title && company ? <span className="result-at">·</span> : null}
+      {company ? (
+        <span className="result-company">
+          <CompanyLogo company={company} src={logo || undefined} size={14} />
+          <span>{company}</span>
+        </span>
+      ) : null}
     </span>
   )
 }
