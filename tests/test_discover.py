@@ -456,6 +456,33 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["contacts"], 0)
             self.assertTrue(paths[("gmail", "linkedin_resolution_queue_csv")].exists())
 
+    def test_gmail_unsynced_mailbox_is_extracted_but_not_synced(self) -> None:
+        # An expired mailbox: the others sync, it is read from the archive only, so it stays a child.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            paths = {
+                ("gmail", "linkedin_resolution_queue_csv"): tmp / "discover/gmail/linkedin_resolution_queue.csv",
+                ("gmail", "manifest_json"): tmp / "discover/gmail/manifest.json",
+            }
+            extracted = []
+
+            def run_msgvault(engine, *, db, account_email, output_dir):
+                extracted.append(account_email)
+                return {"status": "completed", "artifacts": {}}
+
+            with mock.patch.object(discover_gmail, "output_path", side_effect=lambda source, key: paths[(source, key)]):
+                with mock.patch.object(discover_gmail, "sync_msgvault_account",
+                                       return_value={"status": "completed", "account_email": "work@example.com"}) as sync:
+                    with mock.patch.object(discover_gmail.GmailExtractor, "run_msgvault", run_msgvault):
+                        payload = discover_gmail.GmailDiscovery(
+                            account_emails=["work@example.com", "Old@example.com"],
+                            unsynced_emails=("old@example.com",)).run().to_payload()
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual([call.args[0] for call in sync.call_args_list], ["work@example.com"])
+            self.assertEqual(extracted, ["work@example.com", "Old@example.com"])
+            self.assertEqual([child["sync"]["status"] for child in payload["children"]], ["completed", "skipped"])
+
     def test_gmail_account_channel_records_contribution_from_child_queue(self) -> None:
         # Exercise GmailAccountChannel directly (the #320 channel/store split):
         # it syncs, spawns the engine child, and reads this account's rows back

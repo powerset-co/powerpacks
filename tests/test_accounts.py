@@ -115,7 +115,7 @@ class AccountsJobsTest(unittest.TestCase):
                 # The Full Disk Access poll asks for iMessage alone: msgvault is never run.
                 self.assertEqual(get("/accounts/api/signed-in?sources=imessage"),
                                  {"linkedin": False, "gmail": False, "imessage": False, "whatsapp": False,
-                                  "mailboxes": []})
+                                  "mailboxes": [], "healthy_mailboxes": []})
                 self.assertEqual((held.call_count, probe.call_count, messages.call_count), (1, 1, 2))
                 # A sign-in writes the mailbox's token.
                 probe.return_value = SimpleNamespace(status="healthy")
@@ -215,7 +215,11 @@ class SignedInTest(unittest.TestCase):
         self.assertEqual(ready.mailboxes, ("owner@example.com", "work@example.com"))
         with patch.object(accounts, "gmail_signins",
                           return_value={"owner@example.com": "healthy", "work@example.com": "reauthorization_required"}):
-            self.assertFalse(accounts.signed_in().gmail)
+            ready = accounts.signed_in()
+        # Connect still asks for the expired one; setup syncs the one signed in now.
+        self.assertFalse(ready.gmail)
+        self.assertEqual(ready.mailboxes, ("owner@example.com", "work@example.com"))
+        self.assertEqual(ready.healthy_mailboxes, ("owner@example.com",))
 
     def test_messages_and_whatsapp_read_macos_and_wacli(self):
         with patch.object(accounts, "_messages_readable", return_value=True), \

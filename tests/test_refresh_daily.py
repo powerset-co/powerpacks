@@ -107,7 +107,8 @@ class RunTests(unittest.TestCase):
     def test_records_people_index_and_sources(self):
         manifest = {"status": "completed", "message": "Search is ready.",
                     "steps": {"gmail_import": {"status": "completed"}, "whatsapp_import": {"status": "completed"}}}
-        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",))
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
         run = self.run_with(manifest, {"a@x.com": "healthy"}, signed)
         self.assertEqual(run.status, "ok")
         self.assertEqual((run.people_before, run.people_after), (2, 3))
@@ -119,16 +120,30 @@ class RunTests(unittest.TestCase):
     def test_expired_gmail_and_unlinked_whatsapp_need_the_person(self):
         manifest = {"status": "completed", "message": "Search is ready.",
                     "steps": {"gmail_import": {"status": "skipped"}, "whatsapp_import": {"status": "skipped"}}}
-        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=False, gmail=False, mailboxes=())
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=False, gmail=False, mailboxes=(), healthy_mailboxes=())
         run = self.run_with(manifest, {"a@x.com": "reauthorization_required"}, signed)
         self.assertEqual(run.status, "needs_you")
         self.assertEqual([p.source for p in run.problems], ["gmail", "whatsapp"])
         self.assertIn("a@x.com", run.problems[0].title)
         self.assertEqual(run.problems[0].href, "/accounts?source=gmail")
 
+    def test_an_expired_mailbox_is_reported_while_the_healthy_one_syncs(self):
+        manifest = {"status": "completed", "message": "Search is ready.",
+                    "steps": {"gmail_import": {"status": "completed"}, "whatsapp_import": {"status": "completed"}}}
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=False,
+                                 mailboxes=("old@x.com", "work@x.com"), healthy_mailboxes=("work@x.com",))
+        run = self.run_with(manifest, {"old@x.com": "reauthorization_required", "work@x.com": "healthy"}, signed)
+        self.assertEqual(run.status, "needs_you")
+        self.assertEqual([(s.source, s.status, s.accounts) for s in run.sources],
+                         [("gmail", "synced", ["work@x.com"]), ("whatsapp", "synced", [])])
+        self.assertEqual([p.source for p in run.problems], ["gmail"])
+        self.assertIn("old@x.com", run.problems[0].title)
+        self.assertNotIn("work@x.com", run.problems[0].title)
+
     def test_a_stopped_run_fails_with_its_message(self):
         manifest = {"status": "failed", "message": "Deep Context stopped: no operator id.", "steps": {}}
-        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",))
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
         run = self.run_with(manifest, {"a@x.com": "healthy"}, signed)
         self.assertEqual(run.status, "failed")
         self.assertEqual(run.problems[-1].detail, "Deep Context stopped: no operator id.")

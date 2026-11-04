@@ -26,6 +26,8 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-04: a mailbox Google still wants the person for no longer stops the others: the run
+    syncs the signed-in ones (its Gmail accounts) and reports the rest.
   2026-11-03: Gmail renewal also signs back in a mailbox whose token is gone; the problem says the
     automatic sign-in was tried.
   2026-11-03: created; replaces the app's Codex/Claude scheduled task with a native daily run.
@@ -507,7 +509,7 @@ def run_once(root: Path, run_id: int) -> Run:
     after = signed_in(signins, sources=tuple(connected))
     problems = problems_after(connected, manifest, gmail=signins if "gmail" in connected else {},
                               linkedin=after.linkedin, imessage=after.imessage, whatsapp=after.whatsapp)
-    sources = sources_after(connected, manifest, ready.mailboxes if ready else ())
+    sources = sources_after(connected, manifest, ready.healthy_mailboxes if ready else ())
     failed = manifest.get("status") == "failed" or bool(error)
     status: Status = "failed" if failed else "needs_you" if problems else "ok"
     _update(root, run_id, status=status, finished_at=_iso(now()), sources=sources, problems=problems,

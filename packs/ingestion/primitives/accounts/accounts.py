@@ -18,6 +18,8 @@ sign-in writes it (msgvault's tokens, macOS's Full Disk Access, wacli's link, th
 sign-in browser's LinkedIn session).
 
 Changelog:
+  2026-11-04: `signed_in` also names the mailboxes signed in now (`healthy_mailboxes`), so a refresh
+              syncs those while an expired one waits for its reconnect instead of stopping all of Gmail.
   2026-11-04: `gmail_tokens`, so the server reuses a Gmail check until a sign-in writes a token;
               Accounts lists the mailboxes its sign-in check found instead of asking msgvault again.
   2026-10-13: `signed_in`, shared by setup and its Connect screen.
@@ -93,12 +95,14 @@ class Account:
 @dataclass(frozen=True)
 class SignedIn:
     """Which sources need no sign-in, and Gmail's mailboxes (the Google app's owner first: it is
-    the one that lets the others in)."""
+    the one that lets the others in). `gmail` is every mailbox signed in (the Connect screen's
+    row); `healthy_mailboxes` are the ones signed in now, which setup syncs."""
     linkedin: bool
     gmail: bool
     imessage: bool
     whatsapp: bool
     mailboxes: tuple[str, ...]
+    healthy_mailboxes: tuple[str, ...] = ()
 
 
 ALL_SOURCES = ("linkedin", "gmail", "imessage", "whatsapp")
@@ -107,18 +111,21 @@ ALL_SOURCES = ("linkedin", "gmail", "imessage", "whatsapp")
 def signed_in(signins: dict[str, SignIn] | None = None, sources: tuple[str, ...] = ALL_SOURCES) -> SignedIn:
     """Each source's sign-in, read where it lives; only `sources` are read, the rest answer no
     (a LinkedIn-only setup run never touches msgvault or Messages). Gmail counts once every
-    stored mailbox's sign-in is healthy now: an expired one would open Google's consent mid-setup."""
+    stored mailbox's sign-in is healthy now; setup syncs only `healthy_mailboxes`, since an
+    expired one would open Google's consent mid-setup."""
     if "gmail" not in sources:
         signins = {}
     elif signins is None:
         signins = gmail_signins()
     owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower() if signins else ""
+    mailboxes = tuple(sorted(signins, key=lambda email: email != owner))
     return SignedIn(
         linkedin="linkedin" in sources and _linkedin_session(),
         gmail=bool(signins) and all(state == "healthy" for state in signins.values()),
         imessage="imessage" in sources and _messages_readable(),
         whatsapp="whatsapp" in sources and _whatsapp_linked(),
-        mailboxes=tuple(sorted(signins, key=lambda email: email != owner)),
+        mailboxes=mailboxes,
+        healthy_mailboxes=tuple(email for email in mailboxes if signins[email] == "healthy"),
     )
 
 
