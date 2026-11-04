@@ -28,14 +28,18 @@ function valueOf(scope: ChatScope | null): string {
   return "set_id" in scope ? scope.set_id : LOCAL
 }
 
-/** Where this chat searches: one of your Powerset sets, or this Mac's local index when it has one.
+/** Where this chat searches: one of your Powerset sets, or this Mac's local index when it has one
+ *  (which then stands in for your cloud personal network).
  *  Picked before the first message and pinned from then on; a different scope is a new chat. A new
  *  chat starts where the last one searched, else on the local index, else on the largest set. */
 export function SearchScope() {
   const agent = useAgent()
   const scope = useSearchScope()
-  const sets = scope.data?.sets ?? []
+  const all = scope.data?.sets ?? []
   const local_db = scope.data?.local_db ?? null
+  // The local index already holds your own network, so with one on this Mac the cloud copy of it
+  // is not offered. A chat already pinned to it still shows its name.
+  const sets = local_db ? all.filter((set) => !(set.is_personal && set.owned)) : all
   // Pinned from the first message on: once sent, the pick is the chat's.
   const pinned = agent.threadId !== null || agent.running
   // A pick still on offer, else the local index, else the largest set.
@@ -50,7 +54,7 @@ export function SearchScope() {
   }, [pinned, current, agent.scope])
   if (!scope.data || (sets.length === 0 && !local_db)) return null
   const selected = valueOf(current)
-  const picked = sets.find(({ set_id }) => set_id === selected)
+  const picked = all.find(({ set_id }) => set_id === selected)
   const shown =
     selected === LOCAL ? "Local index" : picked ? name(picked) : pinned ? "Earlier chat" : "Pick a set"
   const choose = (value: string) => {
