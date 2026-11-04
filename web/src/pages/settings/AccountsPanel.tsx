@@ -15,7 +15,6 @@ import { Connect, type ConnectRow } from "@/pages/install/Connect"
 import { DesktopSetup } from "@/pages/install/DesktopSetup"
 import { live, POLL_MS, STEPS } from "@/pages/install/sources"
 import { Guide } from "@/pages/onboarding/guide/Guide"
-import type { GuideSource } from "@/pages/onboarding/guide/demos"
 import { Checklist } from "@/pages/onboarding/Checklist"
 import { PageShot } from "@/pages/onboarding/PageShot"
 import { linkedinSetup, useRun } from "@/pages/onboarding/run"
@@ -53,7 +52,6 @@ export function AccountsPanel({
     const source = params.get("source")
     return SOURCES.find((key) => key === source) ?? "imessage"
   })
-  const [guide, setGuide] = useState<GuideSource | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
   // How Deep Context works opens the first time Accounts does.
   const [howItWorks, setHowItWorks] = useState(
@@ -97,7 +95,6 @@ export function AccountsPanel({
   }
   const choose = (key: ConnectRow) => {
     setSelected(key)
-    setGuide(null)
     setParams({}, { replace: true })
   }
   const layout = (items: Readonly<Record<ConnectRow, ConnectionRowProps>>) => {
@@ -105,7 +102,8 @@ export function AccountsPanel({
     const connected = item.state === "ready"
     const sourceGuide =
       selected === "imessage" || selected === "gmail" || selected === "whatsapp" ? selected : null
-    const showGuide = sourceGuide && (!connected || guide === sourceGuide)
+    // A source shows its guide until it is connected, never after.
+    const showGuide = sourceGuide && !connected
     const connecting = Object.values(items).some((entry) => entry.state === "working")
     // A sign-in, a sync or Enrich under way holds every other account's Connect.
     const held = item.state === "needed" && (connecting || syncing || active || starting)
@@ -292,20 +290,10 @@ export function AccountsPanel({
                       : "Wait for the sync to finish to connect this one."}
                   </p>
                 ) : null}
-                {connected && !showGuide ? item.details : null}
-                {connected && sourceGuide && selected !== "gmail" ? (
-                  <button
-                    type="button"
-                    className="self-start border-0 bg-transparent p-0 text-xs text-primary"
-                    onClick={() => setGuide(showGuide ? null : sourceGuide)}
-                  >
-                    {showGuide ? "Back to account" : "View connection guide"}
-                  </button>
-                ) : null}
+                {connected ? item.details : null}
                 {!connected && selected === "linkedin" ? (
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Sign in to LinkedIn in the window that opens. Then Enrich imported data reads your
-                    connections alongside your other sources.
+                    Sign in to LinkedIn in the window that opens. The next sync reads your connections.
                   </p>
                 ) : null}
               </>
@@ -317,12 +305,7 @@ export function AccountsPanel({
   }
   return (
     <>
-      <Connect
-        disabled={active || starting || syncing}
-        details={details}
-        onGuide={setGuide}
-        layout={layout}
-      />
+      <Connect disabled={active || starting || syncing} details={details} layout={layout} />
       <HowItWorks open={howItWorks} onOpenChange={openHowItWorks} />
     </>
   )

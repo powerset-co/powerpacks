@@ -141,6 +141,9 @@ it("keeps connected details and the disconnected helper in one Accounts screen",
   fireEvent.click(screen.getByRole("button", { name: /Gmail/ }))
   expect(await screen.findByText("120")).toBeTruthy()
   expect(screen.getByRole("button", { name: "Add a mailbox" })).toBeTruthy()
+  // Connected: its details, never its connect guide.
+  expect(screen.queryByRole("heading", { name: "Connect your Gmail." })).toBeNull()
+  expect(screen.queryByRole("button", { name: "View connection guide" })).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: /WhatsApp/ }))
   expect(await screen.findByRole("heading", { name: "Link your WhatsApp." })).toBeTruthy()
   expect(screen.getByTestId("path").textContent).toBe("/accounts")
