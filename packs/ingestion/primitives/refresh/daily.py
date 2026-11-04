@@ -18,10 +18,10 @@ errors and timing. Settings (on/off, how often, the day and the time) are
 `.powerpacks/refresh/settings.json`.
 
 Schedule: daily, weekly (a day of the week) or monthly (a day of the month; the 29th to 31st fall
-on a shorter month's last day), at the chosen time. Daily: a run is due once today's time has
-passed and no run has started since then (nor since the refresh was turned on), so days the app was
-closed fold into the next run instead of piling up. Weekly and monthly: a slot the app was closed
-for runs as soon as the app is open again, so a closed Monday doesn't cost a whole week. The server's scheduler thread (`scheduler`) checks every
+on a shorter month's last day), at the chosen time. A run the Mac was off or asleep for runs once
+as soon as the app is open again, unless the next one is due within 6 hours (then it waits for
+that one). However many were missed, they fold into that one run; none started before the refresh
+was turned on or moved to another day count as missed. The server's scheduler thread (`scheduler`) checks every
 minute; the run itself is a detached child (`run`), so it survives a server restart, and a
 row whose process is gone is closed as stopped.
 
@@ -29,7 +29,8 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
-  2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily.
+  2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily; a missed
+    run catches up when the app opens unless the next one is within 6 hours.
   2026-11-04: Gmail's problem is one short line; the page is named Scheduled tasks again.
   2026-11-04: Gmail's problem points at the Refresh page, which reconnects each expired mailbox there.
   2026-11-04: a mailbox Google still wants the person for no longer stops the others: the run
@@ -81,6 +82,8 @@ CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections
 IMESSAGE_CONTACTS = Path(".powerpacks/messages/imessage.contacts.csv")
 MAX_RUNS = 60
 TICK_SECONDS = 60
+# A missed run waits for the next one instead when that is this close.
+CATCH_UP_WINDOW = timedelta(hours=6)
 SOURCES: tuple[SourceName, ...] = ("linkedin", "gmail", "imessage", "whatsapp")
 # The install step that holds each source's import.
 IMPORT_STEP: dict[SourceName, str] = {"linkedin": "linkedin", "gmail": "gmail_import",
@@ -288,12 +291,16 @@ def _slot_on(date: datetime, settings: Settings) -> datetime | None:
     return date.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
+def _next_slot(moment: datetime, settings: Settings) -> datetime | None:
+    for ahead in range(63):
+        slot = _slot_on(moment + timedelta(days=ahead), settings)
+        if slot is not None and slot > moment:
+            return slot
+    return None
+
+
 def latest_slot(moment: datetime, settings: Settings) -> datetime | None:
-    """The slot a run is owed for at `moment`. Daily: today's, once its time passed (an earlier
-    day folds into it). Weekly and monthly: the last one at or before `moment`."""
-    if settings.frequency == "daily":
-        slot = _slot_on(moment, settings)
-        return slot if slot is not None and slot <= moment else None
+    """The last slot at or before `moment`."""
     for back in range(32):
         slot = _slot_on(moment - timedelta(days=back), settings)
         if slot is not None and slot <= moment:
@@ -302,15 +309,19 @@ def latest_slot(moment: datetime, settings: Settings) -> datetime | None:
 
 
 def due(moment: datetime, settings: Settings, last_started: datetime | None) -> bool:
-    """Whether a scheduled run should start at `moment`: its slot has passed and nothing started
-    since (nor since the refresh was turned on or moved)."""
+    """Whether a scheduled run should start at `moment`: the last slot passed with nothing started
+    since (nor since the refresh was turned on or moved), and the next slot is not so close that
+    it should simply wait for that one."""
     if not settings.enabled:
         return False
     slot = latest_slot(moment, settings)
     if slot is None:
         return False
     since = [stamp for stamp in (last_started, _parse(settings.enabled_at)) if stamp is not None]
-    return not since or max(since) < slot
+    if since and max(since) >= slot:
+        return False
+    upcoming = _next_slot(moment, settings)
+    return upcoming is None or upcoming - moment >= CATCH_UP_WINDOW
 
 
 def next_run_at(moment: datetime, settings: Settings, last_started: datetime | None) -> datetime | None:
@@ -318,11 +329,7 @@ def next_run_at(moment: datetime, settings: Settings, last_started: datetime | N
         return None
     if due(moment, settings, last_started):
         return moment
-    for ahead in range(63):
-        slot = _slot_on(moment + timedelta(days=ahead), settings)
-        if slot is not None and slot > moment:
-            return slot
-    return None
+    return _next_slot(moment, settings)
 
 
 def missed_days(moment: datetime, last_started: datetime | None) -> int:

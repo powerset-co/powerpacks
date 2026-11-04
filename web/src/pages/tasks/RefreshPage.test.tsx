@@ -198,9 +198,9 @@ it("lists runs with people added and what to do", async () => {
   expect(screen.getByText("· Scheduled · caught up 2 days")).toBeTruthy()
   // The latest run needs you, so its details are open.
   expect(screen.getByText("Rebuilt")).toBeTruthy()
-  // A skipped source is a yellow warning badge, a synced one a green check, never struck through.
-  expect(screen.getByTitle("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
-  expect(screen.getByTitle("WhatsApp: Synced").dataset.sourceStatus).toBe("synced")
+  // A skipped source is a yellow warning badge, a synced one a green check; no slow native tooltip.
+  expect(screen.getByLabelText("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
+  expect(screen.getByLabelText("WhatsApp: Synced").dataset.sourceStatus).toBe("synced")
   expect(screen.getByRole("link", { name: "Link WhatsApp" }).getAttribute("href")).toBe(
     "/accounts?source=whatsapp",
   )

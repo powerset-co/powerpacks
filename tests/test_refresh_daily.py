@@ -34,8 +34,14 @@ class ScheduleTests(unittest.TestCase):
         opened = at("2026-11-03T08:15:00")
         self.assertTrue(daily.due(opened, self.on, last))
         self.assertEqual(daily.missed_days(opened, last), 3)
-        # The app opened before today's time: it waits for today's run instead of catching up twice.
+        # The app opened just before today's time: it waits for today's run instead of catching up twice.
         self.assertFalse(daily.due(at("2026-11-03T05:00:00"), self.on, last))
+
+    def test_a_missed_day_catches_up_when_the_next_run_is_far(self):
+        # 6:00 AM was missed (the Mac was off); opened at 1 AM the next night, 5 h before the next.
+        last = at("2026-11-02T06:00:00")
+        self.assertTrue(daily.due(at("2026-11-03T23:00:00"), self.on, last))
+        self.assertFalse(daily.due(at("2026-11-04T01:00:00"), self.on, last))
 
     def test_turning_it_on_does_not_count_the_past_slot_as_missed(self):
         settings = daily.Settings(True, "06:00", "2026-11-03T10:00:00")

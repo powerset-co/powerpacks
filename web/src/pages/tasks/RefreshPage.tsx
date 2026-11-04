@@ -142,7 +142,6 @@ export function RefreshPage() {
               <h2 className="m-0 text-sm font-semibold">Refresh automatically</h2>
               <Button
                 variant="primary"
-                shape="pill"
                 className="ml-auto"
                 disabled={data.running !== null || start.isPending}
                 onClick={() => start.mutate()}
@@ -184,12 +183,14 @@ export function RefreshPage() {
                   <span>on the</span>
                   <Select
                     aria-label="Day of the month"
-                    title={data.settings.day > 28 ? "A shorter month runs on its last day." : undefined}
                     value={String(data.settings.day)}
                     onChange={(day) => change({ day: Number(day) })}
                     options={DAY_OPTIONS}
                     className={cn(PICKER, "min-w-[68px]")}
                   />
+                  {data.settings.day > 28 && (
+                    <span className="text-faint">(or the month&apos;s last day)</span>
+                  )}
                 </>
               )}
               <span>at</span>
@@ -237,7 +238,8 @@ interface HistoryProps {
   onToggle: (id: number) => void
 }
 
-const CELL = "border-b border-line px-2.5 py-2.5"
+// Rows divide with a line; the card's own border closes the last one.
+const CELL = "border-t border-line px-3 py-2.5"
 
 function History({ runs, open, onToggle }: HistoryProps) {
   return (
@@ -248,12 +250,12 @@ function History({ runs, open, onToggle }: HistoryProps) {
       {runs.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">No runs yet.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto rounded-[var(--radius-l)] border border-line bg-card">
           <table className="w-full border-collapse text-xs" aria-label="Runs">
             <thead>
               <tr className="text-left text-[11px] text-faint">
                 {["When", "Status", "Sources", "New people"].map((name) => (
-                  <th key={name} className="border-b border-line px-2.5 pb-2 font-semibold whitespace-nowrap">
+                  <th key={name} className="border-b border-line px-3 py-2 font-semibold whitespace-nowrap">
                     {name}
                   </th>
                 ))}
@@ -277,7 +279,7 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
       <tr
         aria-selected={open}
         onClick={onToggle}
-        className="cursor-pointer whitespace-nowrap hover:bg-card aria-selected:bg-surface-2"
+        className="cursor-pointer whitespace-nowrap hover:bg-surface-2 aria-selected:bg-surface-2"
       >
         <td className={CELL}>
           <button
@@ -305,35 +307,24 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
         </td>
         <td className={CELL}>
           <span className="flex items-center gap-1.5">
-            {run.sources.map((source) =>
-              source.status === "synced" ? (
-                <span
-                  key={source.source}
-                  title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS.synced.label}`}
-                  data-source-status="synced"
-                  className="text-muted-foreground"
-                >
-                  {SOURCE_TITLE[source.source]}
-                </span>
-              ) : (
-                <Badge
-                  key={source.source}
-                  variant={SOURCE_STATUS[source.status].variant}
-                  title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
-                  data-source-status={source.status}
-                >
-                  <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
-                  {SOURCE_TITLE[source.source]}
-                </Badge>
-              ),
-            )}
+            {run.sources.map((source) => (
+              <Badge
+                key={source.source}
+                variant={SOURCE_STATUS[source.status].variant}
+                aria-label={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
+                data-source-status={source.status}
+              >
+                <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
+                {SOURCE_TITLE[source.source]}
+              </Badge>
+            ))}
           </span>
         </td>
         <td className={cn(CELL, "tabular-nums")}>{added(run)}</td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={4} className="border-b border-line bg-card p-0">
+          <td colSpan={4} className="border-t border-line bg-surface-2 p-0">
             <RunDetail run={run} />
           </td>
         </tr>
