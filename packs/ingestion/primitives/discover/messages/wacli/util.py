@@ -81,6 +81,29 @@ def linked_device_blocked(text: str) -> bool:
     )
 
 
+# What wacli prints when WhatsApp refuses a QR scan (whatsmeow's QR channel errors; passkey-gated
+# accounts from wacli 0.17.1, openclaw/wacli#355), and what the page says about each instead.
+PASSKEY_LINE = ("WhatsApp asked this account for passkey verification, which linking by QR can't do yet. "
+                "Link with your phone number instead.")
+_QR_FAILURES = (
+    ("passkey", PASSKEY_LINE),
+    ("scanned without multidevice", "That scan came from the wrong place. Link with your phone number, or scan "
+                                    "from Settings → Linked devices → Link a device."),
+    ("scanned-without-multidevice", "That scan came from the wrong place. Link with your phone number, or scan "
+                                    "from Settings → Linked devices → Link a device."),
+    ("unsupported qr pairing state", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
+    ("err-unexpected-state", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
+    ("pair error", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
+    ("pairing failed", "WhatsApp didn't accept the QR scan. Link with your phone number instead."),
+)
+
+
+def qr_link_failure(text: str) -> str | None:
+    """What to tell the person when wacli's output says WhatsApp refused the scan, else None."""
+    lowered = text.lower()
+    return next((line for marker, line in _QR_FAILURES if marker in lowered), None)
+
+
 def result_int(row: dict[str, Any], key: str) -> int:
     try:
         return int(row.get(key) or 0)

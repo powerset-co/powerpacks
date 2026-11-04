@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-11-04: `POST /api/install/whatsapp-stop` ends a waiting WhatsApp link (Stop linking), so
+      LinkedIn or Gmail can sign in; the Connect record carries `qr_failed` once WhatsApp refused
+      a scan and the link waits for a phone number instead.
   2026-11-02: `POST /api/install/whatsapp-phone` links WhatsApp by phone number when the QR won't
       scan (wacli/auth.py reruns with --phone); the Connect record carries the pairing code.
   2026-10-24: `POST /api/install/linkedin-forget` moves the LinkedIn sign-in profile, the
@@ -52,6 +55,8 @@ CONNECTABLE = ("linkedin", "gmail", "whatsapp")
 # Linking WhatsApp by phone number (wacli/paths.py): the number asked with, and the code it got.
 PHONE_REQUEST = ".powerpacks/messages/wacli-phone.txt"
 PAIR_CODE = ".powerpacks/messages/wacli-pair-code.txt"
+STOP_REQUEST = ".powerpacks/messages/wacli-stop.txt"
+QR_FAILED = ".powerpacks/messages/wacli-qr-failed.txt"
 
 
 
@@ -115,9 +120,13 @@ class InstallController:
         qr = self.qr(record)
         if qr:
             record["action"]["qr_url"] = f"/api/install/qr?connect=1&t={qr.stat().st_mtime_ns}"
+        waiting = record["status"] == "waiting" and (record.get("action") or {}).get("kind") == "qr"
         code = self.root / PAIR_CODE
-        if record["status"] == "waiting" and (record.get("action") or {}).get("kind") == "qr" and code.is_file():
+        if waiting and code.is_file():
             record["action"]["pair_code"] = code.read_text(encoding="utf-8").strip()
+        failed = self.root / QR_FAILED
+        if waiting and failed.is_file():
+            record["action"]["qr_failed"] = failed.read_text(encoding="utf-8").strip()
         return record
 
     def first_look(self, limit: int = 3) -> dict:
@@ -200,6 +209,13 @@ class InstallController:
         request.write_text(digits, encoding="utf-8")
         return {"status": "started"}
 
+    def stop_whatsapp(self) -> dict:
+        """Ask the waiting WhatsApp link to end (wacli/auth.py reads the request within a moment)."""
+        request = self.root / STOP_REQUEST
+        request.parent.mkdir(parents=True, exist_ok=True)
+        request.write_text("stop", encoding="utf-8")
+        return {"status": "stopping"}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -254,6 +270,8 @@ class InstallController:
                 response = self.forget_linkedin()
             elif path == "/api/install/whatsapp-phone":
                 response = self.link_by_phone(self._body(handler).get("phone"))
+            elif path == "/api/install/whatsapp-stop":
+                response = self.stop_whatsapp()
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))

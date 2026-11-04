@@ -485,6 +485,12 @@
       "line": "WhatsApp is linked. Your message history is downloading in the background.",
       "note": "FYI you will see lots of notifications on your phone for WhatsApp syncing. This is expected."
     },
+    "whatsapp.stopped": {
+      "step": "whatsapp_login",
+      "state": "waiting",
+      "line": "WhatsApp linking stopped.",
+      "action": "stopped"
+    },
     "whatsapp.blocked": {
       "step": "whatsapp_login",
       "state": "waiting",

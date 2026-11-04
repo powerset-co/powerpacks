@@ -9,6 +9,10 @@ retain typed fields until report serialization; the pairing state is the typed
 `PairingStatus`.
 
 Changelog:
+  2026-11-04: a QR scan WhatsApp refuses (`util.qr_link_failure`: passkey-gated accounts,
+      openclaw/wacli#355, or a scan from the wrong screen) no longer ends the link: it waits for a
+      phone number instead, with the reason in DEFAULT_QR_FAILED for the page. DEFAULT_STOP_REQUEST
+      (the page's Stop linking) ends the waiting link, so another sign-in can start.
   2026-11-02: link by phone number when the QR won't scan: a number written to
       DEFAULT_PHONE_REQUEST (the Connect page's "use your phone number") stops the QR
       wait and reruns wacli with --phone; its pair_code event goes to DEFAULT_PAIR_CODE.
@@ -51,11 +55,13 @@ from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: 
     DEFAULT_PAIR_CODE,
     DEFAULT_PHONE_REQUEST,
     DEFAULT_QR_HTML,
+    DEFAULT_QR_FAILED,
     DEFAULT_QR_PNG,
+    DEFAULT_STOP_REQUEST,
 )
 from packs.ingestion.primitives.discover.messages.wacli.payloads import AuthStatus  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
-from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked, qr_link_failure  # noqa: E402
 
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
 HISTORY_COUNT_SECONDS = 10
@@ -122,10 +128,37 @@ def stop_unlinked_holder(store: Path) -> None:
                 time.sleep(0.1)
 
 
+def stopped(cmd: list[str]) -> PrimitiveBlocked:
+    """The page's Stop linking, as the link's result: nothing is left running in the store."""
+    DEFAULT_STOP_REQUEST.unlink(missing_ok=True)
+    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PAIR_CODE, DEFAULT_QR_FAILED, DEFAULT_PHONE_REQUEST)
+    runtime.emit_status("WhatsApp linking stopped.")
+    return PrimitiveBlocked({
+        "status": "blocked_user_action",
+        "stopped": True,
+        "message": "You stopped linking WhatsApp.",
+        "command": runtime.command_text(cmd),
+    })
+
+
+def wait_for_phone(cmd: list[str], deadline: float) -> str:
+    """After a refused scan, with no wacli running: the number the page sends, or "" at the deadline."""
+    while time.time() <= deadline:
+        if DEFAULT_STOP_REQUEST.is_file():
+            raise stopped(cmd)
+        if DEFAULT_PHONE_REQUEST.is_file():
+            asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
+            DEFAULT_PHONE_REQUEST.unlink()
+            return asked
+        time.sleep(0.2)
+    return ""
+
+
 def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_page: bool) -> AuthRunResult:
     runtime.emit_status("WhatsApp needs a QR scan.")
     stop_unlinked_holder(store)
-    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PHONE_REQUEST, DEFAULT_PAIR_CODE)
+    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PHONE_REQUEST, DEFAULT_PAIR_CODE,
+                          DEFAULT_STOP_REQUEST, DEFAULT_QR_FAILED)
     output: list[str] = []
     opened = False
     connected = False
@@ -173,6 +206,8 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, text=True,
                                     env=pairing.wacli_device_env(), start_new_session=True)
         asked = ""
+        start = len(output)
+        timed_out = False
         with DEFAULT_AUTH_LOG.open(encoding="utf-8") as log:
             pending = ""
             while not connected:
@@ -184,6 +219,10 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                             handle_line(pending.strip())
                         pending = ""
                     continue
+                if DEFAULT_STOP_REQUEST.is_file():
+                    proc.terminate()
+                    proc.wait()
+                    raise stopped(cmd)
                 if not phone and DEFAULT_PHONE_REQUEST.is_file():
                     asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
                     DEFAULT_PHONE_REQUEST.unlink()
@@ -200,10 +239,28 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                     proc.kill()
                     proc.wait()
                     output.append(f"command timed out after {timeout}s")
+                    timed_out = True
                     break
                 time.sleep(0.2)
+        # WhatsApp refused the scan: rather than end, wait for the phone number the page now offers.
+        refused = None if connected or asked or phone or timed_out else qr_link_failure("\n".join(output[start:]))
+        if refused:
+            qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
+            DEFAULT_QR_FAILED.parent.mkdir(parents=True, exist_ok=True)
+            DEFAULT_QR_FAILED.write_text(refused, encoding="utf-8")
+            runtime.emit_status(refused)
+            asked = wait_for_phone(cmd, deadline)
+            if not asked:
+                DEFAULT_QR_FAILED.unlink(missing_ok=True)
+                raise PrimitiveBlocked({
+                    "status": "blocked_user_action",
+                    "message": refused,
+                    "command": runtime.command_text(cmd),
+                    "detail": qr.redact_qr_payloads("\n".join(output))[-2000:],
+                })
         if not asked:
             break
+        DEFAULT_QR_FAILED.unlink(missing_ok=True)
         phone = asked
         runtime.emit_status("Linking WhatsApp by phone number.")
     joined = qr.redact_qr_payloads("\n".join(output))
@@ -214,9 +271,14 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             "command": runtime.command_text(cmd),
         })
     if not connected:
+        refused = qr_link_failure(joined)
+        if refused and phone:
+            refused = ("WhatsApp asked this account for passkey verification, which Powerpacks can't do yet, "
+                       "by QR or by phone number." if "passkey" in joined.lower()
+                       else "WhatsApp didn't link by phone number. Try again.")
         raise PrimitiveBlocked({
             "status": "blocked_user_action",
-            "message": "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
+            "message": refused or "WhatsApp needs a QR scan. Scan it, then rerun $import-messages.",
             "command": runtime.command_text(cmd),
             "qr_page": str(DEFAULT_QR_HTML),
             "qr_png": str(DEFAULT_QR_PNG),

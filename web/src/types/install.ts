@@ -22,6 +22,8 @@ export interface InstallAction {
   qr_url?: string
   // qr, after the person asked to link by phone number: the code WhatsApp sent for it.
   pair_code?: string
+  // qr, once WhatsApp refused a scan: why, while the link waits for a phone number instead.
+  qr_failed?: string
   details?: unknown
 }
 /** The page's fixed words and rows, from packs/powerset/primitives/install/status.json. */

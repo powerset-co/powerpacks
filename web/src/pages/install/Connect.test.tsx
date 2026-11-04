@@ -351,7 +351,7 @@ it("links WhatsApp by phone number when the QR won't scan, and shows the code Wh
   state.connect = waiting
   mount()
   await screen.findByAltText("WhatsApp code to scan")
-  fireEvent.click(screen.getByRole("button", { name: "QR not working? Use your phone number" }))
+  fireEvent.click(screen.getByRole("button", { name: "Use your phone number instead" }))
   expect(screen.getByRole("dialog", { name: "Link with your phone number" })).toBeTruthy()
   const number = screen.getByLabelText<HTMLInputElement>("WhatsApp phone number")
   fireEvent.change(number, { target: { value: "4155550100" } })
@@ -368,6 +368,59 @@ it("links WhatsApp by phone number when the QR won't scan, and shows the code Wh
   const code = await screen.findByRole("group", { name: "Pairing code ABCD-EFGH" }, { timeout: 4_000 })
   expect(code.textContent).toBe("ABCD–EFGH")
   expect(screen.getByRole("dialog", { name: "Enter this code on your phone" })).toBeTruthy()
+})
+
+it("asks for the phone number by itself once WhatsApp refused the scan, saying why", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: {
+      kind: "qr",
+      qr_failed: "WhatsApp didn't accept the QR scan. Link with your phone number instead.",
+    },
+  }
+  mount()
+  const dialog = await screen.findByRole("dialog", { name: "Link with your phone number" })
+  expect(within(dialog).getByText(/WhatsApp didn't accept the QR scan/)).toBeTruthy()
+  expect(within(dialog).getByLabelText("WhatsApp phone number")).toBeTruthy()
+})
+
+it("stops a waiting WhatsApp link from the page, and holds every other Connect while it waits", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: { kind: "qr", qr_url: "/api/install/qr?connect=1&t=1" },
+  }
+  mount()
+  await screen.findByAltText("WhatsApp code to scan")
+  for (const name of ["Messages", "LinkedIn", "Gmail"])
+    expect(
+      within(row(name))
+        .getByRole("button", { name: `${name}: Connect`, hidden: true })
+        .hasAttribute("disabled"),
+    ).toBe(true)
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Stop linking" }))
+  await waitFor(() => expect(state.posts).toContainEqual({ url: "/api/install/whatsapp-stop", body: {} }))
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    message: "WhatsApp linking stopped.",
+    action: { kind: "stopped", details: { message: "You stopped linking WhatsApp." } },
+  }
+  const whatsapp = row("WhatsApp")
+  expect(await within(whatsapp).findByText("WhatsApp linking stopped.", {}, { timeout: 4_000 })).toBeTruthy()
+  await waitFor(() =>
+    expect(
+      within(row("LinkedIn")).getByRole("button", { name: "LinkedIn: Connect" }).hasAttribute("disabled"),
+    ).toBe(false),
+  )
 })
 
 it("shows Powerset Working while you sign in in the browser, then Connected", async () => {

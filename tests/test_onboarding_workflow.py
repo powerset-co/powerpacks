@@ -870,6 +870,18 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['action']['details']['message'], 'Allow linked devices on your phone')
         self.assert_preserved()
 
+    def test_whatsapp_link_stopped_from_the_page_hands_back_without_retrying(self):
+        stopped = PrimitiveBlocked({'status': 'blocked_user_action', 'stopped': True,
+                                    'message': 'You stopped linking WhatsApp.'})
+        with patch.object(auth, 'auth_report', side_effect=stopped) as link, \
+             patch.object(MessagesDiscovery, 'run') as sync:
+            result = SourceOnboarding(self.root, sources=('whatsapp',)).run()
+        link.assert_called_once()
+        sync.assert_not_called()
+        self.assertEqual(result['event'], 'whatsapp.stopped')
+        self.assertEqual(result['installer_pid'], 0)
+        self.assertEqual(result['action']['kind'], 'stopped')
+
     def test_changed_whatsapp_store_never_reuses_other_accounts_contacts(self):
         current = import_common.ImportManifest.from_payload('messages', {'status': 'completed'})
         contacts = self.root / '.powerpacks/messages/whatsapp.contacts.csv'

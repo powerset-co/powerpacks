@@ -40,6 +40,11 @@ export function linkWhatsappByPhone(phone: string): Promise<void> {
   return installAction("whatsapp-phone", { phone })
 }
 
+/** Stop the waiting WhatsApp link, so another sign-in can start; fetchConnection shows it end. */
+export function stopWhatsappLink(): Promise<void> {
+  return installAction("whatsapp-stop")
+}
+
 /** One person of the first look: from the index's people file (controller.first_look). */
 export interface FirstLookPerson {
   public_identifier: string

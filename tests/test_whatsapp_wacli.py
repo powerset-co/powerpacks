@@ -425,6 +425,86 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
         self.assertIn("WhatsApp needs a QR scan", ctx.exception.payload["message"])
 
+    def fake_link(self, td: str, outputs: list[list[str]], *, exits: list[int | None], on_start=None):
+        """run_auth over fake wacli runs: run i prints outputs[i] and exits with exits[i] (None: waits)."""
+        files = {name: Path(td) / f"{name}.txt" for name in ("phone", "code", "stop", "failed")}
+
+        class FakeProc:
+            def __init__(self, cmd, *, stdout, **kwargs) -> None:
+                self.cmd, self.terminated = cmd, False
+                self.returncode = exits[len(procs)]
+                stdout.write("".join(f"{line}\n" for line in outputs[len(procs)]))
+                stdout.flush()
+                if on_start:
+                    on_start(len(procs), files)
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self) -> None:
+                self.terminated, self.returncode = True, -15
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                return self.returncode
+
+        procs: list[FakeProc] = []
+        with mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
+                mock.patch.object(auth, "DEFAULT_PHONE_REQUEST", files["phone"]), \
+                mock.patch.object(auth, "DEFAULT_PAIR_CODE", files["code"]), \
+                mock.patch.object(auth, "DEFAULT_STOP_REQUEST", files["stop"]), \
+                mock.patch.object(auth, "DEFAULT_QR_FAILED", files["failed"]), \
+                mock.patch.object(auth, "DEFAULT_QR_PNG", Path(td) / "qr.png"), \
+                mock.patch.object(auth, "DEFAULT_QR_HTML", Path(td) / "qr.html"), \
+                mock.patch.object(auth.subprocess, "Popen",
+                                  side_effect=lambda cmd, **kw: procs.append(FakeProc(cmd, **kw)) or procs[-1]), \
+                mock.patch.object(qr, "update_qr_page"):
+            try:
+                return auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False), procs, files
+            except runtime.PrimitiveBlocked as blocked:
+                return blocked, procs, files
+
+    def test_a_refused_scan_waits_for_a_phone_number_instead_of_ending(self) -> None:
+        notes: list[str] = []
+
+        def on_start(index: int, files: dict[str, Path]) -> None:
+            if index == 0:
+                # The page reads the reason, then sends a number while the link waits.
+                threading.Timer(0.3, lambda: (notes.append(files["failed"].read_text()),
+                                              files["phone"].write_text("14155550100"))).start()
+
+        with tempfile.TemporaryDirectory() as td:
+            result, procs, files = self.fake_link(
+                td, [["2@qr-payload", "Error: WhatsApp requires passkey verification, which wacli cannot safely complete yet"],
+                     ['{"event":"connected","ts":2}']], exits=[1, None], on_start=on_start)
+
+            self.assertTrue(result.connected_event)
+            self.assertIn("passkey verification", notes[0])
+            self.assertIn("phone number", notes[0])
+            self.assertEqual(procs[1].cmd[procs[1].cmd.index("--phone") + 1], "14155550100")
+            self.assertFalse(files["failed"].exists())
+
+    def test_stop_linking_ends_the_waiting_link_and_its_wacli(self) -> None:
+        def on_start(index: int, files: dict[str, Path]) -> None:
+            threading.Timer(0.3, lambda: files["stop"].write_text("stop")).start()
+
+        with tempfile.TemporaryDirectory() as td:
+            blocked, procs, files = self.fake_link(td, [["2@qr-payload"]], exits=[None], on_start=on_start)
+
+            self.assertIsInstance(blocked, runtime.PrimitiveBlocked)
+            self.assertTrue(blocked.payload["stopped"])
+            self.assertTrue(procs[0].terminated)
+            self.assertFalse(files["stop"].exists())
+
+    def test_a_scan_that_ends_without_a_known_refusal_still_asks_for_the_qr(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            blocked, procs, _ = self.fake_link(td, [["2@qr-payload", "Error: websocket closed"]], exits=[1])
+        self.assertIsInstance(blocked, runtime.PrimitiveBlocked)
+        self.assertEqual(len(procs), 1)
+        self.assertIn("WhatsApp needs a QR scan", blocked.payload["message"])
+
     def test_waiting_for_history_holds_until_wacli_releases_the_store(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             store = Path(td)

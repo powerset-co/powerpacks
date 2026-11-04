@@ -5,6 +5,8 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-11-04: a WhatsApp link stopped from the page (wacli/auth.py `stopped`) ends the connect run
+      as `whatsapp.stopped`, handed back, so the next sign-in can take setup's lock.
   2026-10-27: the Gmail and LinkedIn tools step says when it downloads Powerpacks' own browser.
   2026-10-24: the LinkedIn count's read/total go in the event's details too, so the
       onboarding page can estimate the time left from them.
@@ -324,6 +326,10 @@ class SourceOnboarding:
                 result = auth.auth_report(self.wacli_store, open_qr_page=False)
                 break
             except PrimitiveBlocked as blocked:
+                if blocked.payload.get("stopped"):
+                    # Stopped from the page: nothing waits on it, so the next sign-in can start.
+                    self._write("whatsapp.stopped", details=blocked.payload, handed_back=True)
+                    return False
                 if "command timed out after" not in blocked.payload.get("detail", ""):
                     raise
                 self._write("whatsapp.qr.refreshed")

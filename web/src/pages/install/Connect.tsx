@@ -30,6 +30,7 @@ import {
   fetchConnection,
   installAction,
   linkWhatsappByPhone,
+  stopWhatsappLink,
   type ConnectSource,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
@@ -59,16 +60,44 @@ const TODO: Record<ConnectSource, string> = {
   whatsapp: "In WhatsApp on your phone, go to Linked devices and scan the code.",
 }
 
+// After this long on the QR without a link, the box says why a scan may not take and points to the
+// phone number.
+const SLOW_SCAN_MS = 60_000
+
 /** The WhatsApp code, in one place: a large card that opens by itself as soon as WhatsApp waits on a
  *  scan, so a phone reads it before it changes (every 20 seconds). Closed, "Show code" reopens it.
  *  When the scan won't work, the person links by phone number instead (US unless it starts with +):
- *  WhatsApp sends a code to type on the phone, shown here the way the phone asks for it. */
-function CodeBox({ url, pairCode }: { url?: string; pairCode?: string }) {
+ *  WhatsApp sends a code to type on the phone, shown here the way the phone asks for it. Once
+ *  WhatsApp refused a scan (`failed`, why) the box asks for the number by itself. Stop linking ends
+ *  the link, so another sign-in can start. */
+function CodeBox({ url, pairCode, failed }: { url?: string; pairCode?: string; failed?: string }) {
   const [open, setOpen] = useState(true)
-  const [byPhone, setByPhone] = useState(false)
+  const [chosePhone, setByPhone] = useState(false)
+  const byPhone = chosePhone || failed !== undefined
+  const [slow, setSlow] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [phone, setPhone] = useState<string | undefined>()
   const [asked, setAsked] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), SLOW_SCAN_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  // A refused scan opens the box again, unless it was closed since that refusal came.
+  const [dismissed, setDismissed] = useState<string | undefined>()
+  const shown = open || (failed !== undefined && dismissed !== failed)
+  const show = (next: boolean) => {
+    setOpen(next)
+    if (!next) setDismissed(failed)
+  }
+  const stop = () => {
+    setStopping(true)
+    show(false)
+    stopWhatsappLink().catch((caught: unknown) => {
+      setStopping(false)
+      setError(errorText(caught))
+    })
+  }
   const ask = (event: FormEvent) => {
     event.preventDefault()
     if (!phone) return
@@ -82,17 +111,33 @@ function CodeBox({ url, pairCode }: { url?: string; pairCode?: string }) {
   const [title, line] = !byPhone
     ? [
         "Scan with WhatsApp",
-        "On your phone: Settings → Linked devices → Link a device. The code changes every 20 seconds; this one updates by itself.",
+        "On your phone: Settings → Linked devices → Link a device, not the QR icon by your name (that one shares your contact). The code changes every 20 seconds; this one updates by itself.",
       ]
     : pairCode
       ? [
           "Enter this code on your phone",
           "In WhatsApp: Settings → Linked devices → Link a device → Link with phone number instead.",
         ]
-      : ["Link with your phone number", "WhatsApp sends a code for this number; you type it on your phone."]
+      : [
+          "Link with your phone number",
+          failed
+            ? `${failed} WhatsApp sends a code for this number; you type it on your phone.`
+            : "WhatsApp sends a code for this number; you type it on your phone.",
+        ]
+  const stopButton = (
+    <button type="button" className={LINK} disabled={stopping} onClick={stop}>
+      {stopping ? "Stopping…" : "Stop linking"}
+    </button>
+  )
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger className={LINK}>Show code</DialogTrigger>
+    <Dialog open={shown} onOpenChange={show}>
+      <span className="flex items-center gap-3">
+        <DialogTrigger className={LINK} disabled={stopping}>
+          Show code
+        </DialogTrigger>
+        {stopButton}
+      </span>
+      {error && !shown ? <span className="text-xs text-bad">{error}</span> : null}
       <DialogContent className="w-[min(420px,100%)] items-center border-0 bg-[#f2f2f2] p-6 text-[#111]">
         <DialogHeader className="w-full">
           <DialogTitle>{title}</DialogTitle>
@@ -111,9 +156,12 @@ function CodeBox({ url, pairCode }: { url?: string; pairCode?: string }) {
                 <Spinner />
               )}
             </span>
-            <button type="button" className={LINK} onClick={() => setByPhone(true)}>
-              QR not working? Use your phone number
-            </button>
+            {slow ? (
+              <span className="text-center text-xs text-[#555]">
+                Not linking? Scan from Linked devices, or use your phone number instead.
+              </span>
+            ) : null}
+            <Button onClick={() => setByPhone(true)}>Use your phone number instead</Button>
           </>
         ) : pairCode ? (
           <PairCode code={pairCode} />
@@ -139,6 +187,7 @@ function CodeBox({ url, pairCode }: { url?: string; pairCode?: string }) {
             </Button>
           </form>
         )}
+        {stopButton}
       </DialogContent>
     </Dialog>
   )
@@ -277,7 +326,7 @@ function Mailboxes({
     <>
       Your mail, from {email || "your Google account"}
       {" · "}
-      <button type="button" className={LINK} onClick={() => setTyping(true)}>
+      <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
         Change
       </button>
     </>
@@ -391,6 +440,9 @@ export function Connect({
   const running = record !== undefined && live(record)
   // One sign-in at a time: setup's own lock holds the others off.
   const busy = disabled || queued !== null || running
+  // While a sign-in, a sync or the Full Disk Access ask is under way, every other way to connect
+  // waits: nothing on this screen starts a second one.
+  const locked = busy || asking
   // Once a run is over (the one a click launched, or one under way when the screen opened), ask what
   // is signed in, then let its row show the answer.
   const wasRunning = useRef(false)
@@ -459,7 +511,7 @@ export function Connect({
           if (name === "gmail") connectGmail(asked ?? (known.length ? [...known] : [email]))
           else void connect(name)
         },
-        disabled: busy || (name === "gmail" && !email.includes("@")),
+        disabled: locked || (name === "gmail" && !email.includes("@")),
       },
       children: (
         <>
@@ -468,6 +520,7 @@ export function Connect({
             <CodeBox
               url={"qr" in at ? at.qr : undefined}
               pairCode={"pairCode" in at ? at.pairCode : undefined}
+              failed={"qrFailed" in at ? at.qrFailed : undefined}
             />
           ) : null}
           {command ? (
@@ -476,6 +529,12 @@ export function Connect({
               <code className="select-all break-all rounded-[var(--radius-s)] bg-surface-2 px-2 py-1 text-[11px]">
                 {command}
               </code>
+            </>
+          ) : name === "whatsapp" && "stopped" in at ? (
+            // WhatsApp's stop and its reason (a refused scan, Stop linking), with no command to run.
+            <>
+              <Line bad>{at.line}</Line>
+              {at.detail ? <Line>{at.detail}</Line> : null}
             </>
           ) : null}
           {at.state === "working" ? null : extra}
@@ -491,6 +550,7 @@ export function Connect({
       state: powerset,
       action: {
         label: "Connect",
+        disabled: locked,
         onClick: () => {
           setError(null)
           setSigningIn(true)
@@ -515,7 +575,7 @@ export function Connect({
           : codex.login
             ? "working"
             : "needed",
-      action: { label: "Connect", onClick: codex.connect, disabled: !codex.status?.installed },
+      action: { label: "Connect", onClick: codex.connect, disabled: !codex.status?.installed || locked },
       children: codex.login ? <Line>Finish signing in to ChatGPT in your browser.</Line> : null,
     },
     browser: {
@@ -534,6 +594,7 @@ export function Connect({
       onIcon: onGuide ? () => onGuide("imessage") : undefined,
       action: {
         label: "Connect",
+        disabled: locked,
         onClick: () => {
           onGuide?.("imessage")
           setAsking(true)
@@ -566,7 +627,7 @@ export function Connect({
       <Mailboxes
         known={known}
         email={email}
-        disabled={busy}
+        disabled={locked}
         onChange={setMailbox}
         onAdd={(added) => {
           onGuide?.("gmail")
