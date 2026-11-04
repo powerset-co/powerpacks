@@ -43,6 +43,30 @@ class ScheduleTests(unittest.TestCase):
         self.assertTrue(daily.due(at("2026-11-04T06:00:00"), settings, None))
         self.assertEqual(daily.next_run_at(at("2026-11-03T11:00:00"), settings, None), at("2026-11-04T06:00:00"))
 
+    def test_weekly_runs_on_its_day_and_catches_up_a_closed_one(self):
+        # 2026-11-09 is a Monday.
+        monday = daily.Settings(True, "06:00", "2026-11-01T00:00:00", "weekly", 0)
+        self.assertFalse(daily.due(at("2026-11-09T05:00:00"), monday, at("2026-11-02T06:00:00")))
+        self.assertTrue(daily.due(at("2026-11-09T06:00:00"), monday, at("2026-11-02T06:00:00")))
+        # The app was closed all Monday: Wednesday's first tick runs it.
+        self.assertTrue(daily.due(at("2026-11-11T09:00:00"), monday, at("2026-11-02T06:00:00")))
+        self.assertFalse(daily.due(at("2026-11-11T09:00:00"), monday, at("2026-11-09T06:01:00")))
+        self.assertEqual(daily.next_run_at(at("2026-11-09T07:00:00"), monday, at("2026-11-09T06:01:00")),
+                         at("2026-11-16T06:00:00"))
+        self.assertEqual(monday.summary(), "weekly on Monday at 6:00 AM")
+
+    def test_monthly_runs_on_its_day_and_a_short_month_uses_its_last_day(self):
+        first = daily.Settings(True, "06:00", "2026-10-01T00:00:00", "monthly", day=1)
+        self.assertTrue(daily.due(at("2026-11-04T09:00:00"), first, at("2026-10-01T06:00:00")))
+        self.assertFalse(daily.due(at("2026-11-04T09:00:00"), first, at("2026-11-01T06:00:00")))
+        self.assertEqual(daily.next_run_at(at("2026-11-04T09:00:00"), first, at("2026-11-01T06:00:00")),
+                         at("2026-12-01T06:00:00"))
+        last = daily.Settings(True, "06:00", "2026-10-01T00:00:00", "monthly", day=31)
+        self.assertEqual(daily.next_run_at(at("2027-02-10T09:00:00"), last, at("2027-01-31T06:00:00")),
+                         at("2027-02-28T06:00:00"))
+        self.assertEqual(daily.Settings(True, "18:30", frequency="monthly", day=22).summary(),
+                         "monthly on the 22nd at 6:30 PM")
+
     def test_time_is_validated(self):
         with self.assertRaises(ValueError):
             daily.Settings(True, "25:00")
@@ -60,6 +84,17 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(daily.read_settings(self.root), saved)
         # Changing the time while on keeps when it was turned on.
         self.assertEqual(daily.write_settings(self.root, True, "08:00").enabled_at, saved.enabled_at)
+
+    def test_moving_to_another_day_does_not_count_its_past_slot_as_missed(self):
+        daily.write_settings(self.root, True, "06:00")
+        with patch.object(daily, "now", return_value=at("2026-11-04T09:00:00")):
+            moved = daily.write_settings(self.root, True, "06:00", "monthly", day=1)
+        self.assertEqual((moved.frequency, moved.day), ("monthly", 1))
+        self.assertEqual(daily.read_settings(self.root), moved)
+        self.assertFalse(daily.due(at("2026-11-04T09:01:00"), moved, None))
+        self.assertTrue(daily.due(at("2026-12-01T06:00:00"), moved, None))
+        # A field left out keeps its saved value.
+        self.assertEqual(daily.write_settings(self.root, True, "07:00").frequency, "monthly")
 
     def test_a_run_whose_process_is_gone_is_closed(self):
         run_id = daily._insert(self.root, "daily", 0)
@@ -198,7 +233,12 @@ class ApiTests(unittest.TestCase):
     def test_settings_turn_it_on_and_show_the_next_run(self):
         code, payload = self.call("post", api.SETTINGS_PATH, {"enabled": "true", "time": "07:30"})
         self.assertEqual(code, 200)
-        self.assertEqual(payload["settings"], {"enabled": True, "time": "07:30", "label": "7:30 AM"})
+        self.assertEqual(payload["settings"], {"enabled": True, "time": "07:30", "label": "7:30 AM",
+                                               "frequency": "daily", "weekday": 0, "day": 1,
+                                               "summary": "daily at 7:30 AM"})
+        code, payload = self.call("post", api.SETTINGS_PATH, {"frequency": "weekly", "weekday": "4"})
+        self.assertEqual(code, 200)
+        self.assertEqual(payload["settings"]["summary"], "weekly on Friday at 7:30 AM")
         self.assertIsNotNone(payload["next_run_at"])
         self.assertEqual(self.call("get", api.REFRESH_PATH)[1]["runs"], [])
 

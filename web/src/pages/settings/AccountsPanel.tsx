@@ -208,7 +208,7 @@ export function AccountsPanel({
                   </>
                 ) : (
                   <>
-                    {accounts?.scheduled ? `Syncs daily at ${accounts.scheduled}` : "Daily sync is off"} ·{" "}
+                    {accounts?.scheduled ? `Syncs ${accounts.scheduled}` : "Automatic sync is off"} ·{" "}
                     <Link to="/tasks" className="text-primary no-underline hover:underline">
                       Scheduled tasks
                     </Link>

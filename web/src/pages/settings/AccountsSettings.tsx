@@ -118,10 +118,10 @@ function ScheduleLine({ scheduled }: { scheduled: string | null }) {
   return (
     <p className="m-0 text-xs text-muted-foreground">
       {scheduled ? (
-        `Syncs daily at ${scheduled}.`
+        `Syncs ${scheduled}.`
       ) : (
         <>
-          Daily sync is off.{" "}
+          Automatic sync is off.{" "}
           <Link to="/tasks" className="font-semibold text-info no-underline hover:underline">
             Set it up
           </Link>

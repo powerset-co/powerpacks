@@ -49,7 +49,15 @@ const run: RefreshRun = {
 }
 
 const state: RefreshState = {
-  settings: { enabled: false, time: "06:00", label: "6:00 AM" },
+  settings: {
+    enabled: false,
+    time: "06:00",
+    label: "6:00 AM",
+    frequency: "daily",
+    weekday: 0,
+    day: 1,
+    summary: "daily at 6:00 AM",
+  },
   next_run_at: null,
   running: null,
   runs: [run],
@@ -89,6 +97,16 @@ function serve(answer: (url: string, options?: RequestInit) => RefreshState) {
   return fetch
 }
 
+/** Whether the page posted exactly this settings form. */
+function sent(fetch: { mock: { calls: [string, RequestInit?][] } }, form: string): boolean {
+  return fetch.mock.calls.some(
+    ([url, options]) =>
+      url === "/tasks/api/refresh/settings" &&
+      options?.body instanceof URLSearchParams &&
+      options.body.toString() === form,
+  )
+}
+
 /** The settings form the page posted. */
 function posted(fetch: { mock: { calls: [string, RequestInit?][] } }): string {
   const sent = fetch.mock.calls.find(([url]) => url === "/tasks/api/refresh/settings")?.[1]?.body
@@ -101,7 +119,7 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-it("turns the daily refresh on before the server answers, then saves it", async () => {
+it("turns the scheduled refresh on before the server answers, then saves it", async () => {
   let answer: (response: Response) => void = () => undefined
   const fetch = vi.fn((url: string, options?: RequestInit) =>
     options?.method === "POST"
@@ -110,7 +128,7 @@ it("turns the daily refresh on before the server answers, then saves it", async 
   )
   vi.stubGlobal("fetch", fetch)
   mount(<RefreshPage />)
-  const toggle = await screen.findByRole("switch", { name: "Refresh every day" })
+  const toggle = await screen.findByRole("switch", { name: "Refresh automatically" })
   expect(toggle.getAttribute("aria-checked")).toBe("false")
   fireEvent.click(toggle)
   await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"))
@@ -131,7 +149,7 @@ it("turns the daily refresh on before the server answers, then saves it", async 
 it("changes the time from the picker", async () => {
   const fetch = serve((_url, options) =>
     options?.method === "POST"
-      ? { ...state, settings: { enabled: false, time: "07:00", label: "7:00 AM" } }
+      ? { ...state, settings: { ...state.settings, time: "07:00", label: "7:00 AM" } }
       : state,
   )
   mount(<RefreshPage />)
@@ -140,6 +158,28 @@ it("changes the time from the picker", async () => {
   await waitFor(() => {
     expect(posted(fetch)).toBe("time=07%3A00")
   })
+})
+
+it("picks weekly on a day, then monthly on a date", async () => {
+  let saved = state.settings
+  const fetch = serve((_url, options) => {
+    if (options?.method === "POST" && options.body instanceof URLSearchParams)
+      for (const [name, value] of options.body)
+        saved = { ...saved, [name]: name === "frequency" ? value : Number(value) }
+    return { ...state, settings: saved }
+  })
+  mount(<RefreshPage />)
+  await screen.findByRole("combobox", { name: "Repeat" })
+  expect(screen.queryByRole("combobox", { name: "Day of the week" })).toBeNull()
+  pick("Repeat", "Weekly")
+  await waitFor(() => expect(posted(fetch)).toBe("frequency=weekly"))
+  pick("Day of the week", "Friday")
+  await waitFor(() => expect(sent(fetch, "weekday=4")).toBe(true))
+  pick("Repeat", "Monthly")
+  expect(await screen.findByRole("combobox", { name: "Day of the month" })).toBeTruthy()
+  expect(screen.queryByRole("combobox", { name: "Day of the week" })).toBeNull()
+  pick("Day of the month", "15th")
+  await waitFor(() => expect(sent(fetch, "day=15")).toBe(true))
 })
 
 it("starts a refresh now and shows it running", async () => {
@@ -155,7 +195,8 @@ it("lists runs with people added and what to do", async () => {
   serve(() => state)
   mount(<RefreshPage />)
   expect(await screen.findByText("+14")).toBeTruthy()
-  expect(screen.getByText("Daily · caught up 2 days")).toBeTruthy()
+  expect(screen.getByText("· Scheduled · caught up 2 days")).toBeTruthy()
+  // The latest run needs you, so its details are open.
   expect(screen.getByText("Rebuilt")).toBeTruthy()
   // A skipped source is a yellow warning badge, a synced one a green check, never struck through.
   expect(screen.getByTitle("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
@@ -163,6 +204,9 @@ it("lists runs with people added and what to do", async () => {
   expect(screen.getByRole("link", { name: "Link WhatsApp" }).getAttribute("href")).toBe(
     "/accounts?source=whatsapp",
   )
+  // A click folds them away.
+  fireEvent.click(screen.getByRole("button", { expanded: true }))
+  expect(screen.queryByRole("article", { name: "Run details" })).toBeNull()
 })
 
 it("reconnects an expired Gmail mailbox on the page and lists only the expired ones", async () => {

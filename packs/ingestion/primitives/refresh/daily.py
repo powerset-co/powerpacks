@@ -14,11 +14,14 @@ One run is what Accounts' "Enrich imported data" does, unattended:
 
 Each run is one row of `.powerpacks/refresh/runs.sqlite` (`refresh_runs`): its trigger, status,
 sources and accounts synced, people before and after, whether search was rebuilt, problems,
-errors and timing. Settings (on/off and the hour) are `.powerpacks/refresh/settings.json`.
+errors and timing. Settings (on/off, how often, the day and the time) are
+`.powerpacks/refresh/settings.json`.
 
-Schedule: once a day at the chosen time. A run is due once today's time has passed and no run
-has started since then (nor since the refresh was turned on), so days the app was closed fold
-into the next run instead of piling up. The server's scheduler thread (`scheduler`) checks every
+Schedule: daily, weekly (a day of the week) or monthly (a day of the month; the 29th to 31st fall
+on a shorter month's last day), at the chosen time. Daily: a run is due once today's time has
+passed and no run has started since then (nor since the refresh was turned on), so days the app was
+closed fold into the next run instead of piling up. Weekly and monthly: a slot the app was closed
+for runs as soon as the app is open again, so a closed Monday doesn't cost a whole week. The server's scheduler thread (`scheduler`) checks every
 minute; the run itself is a detached child (`run`), so it survives a server restart, and a
 row whose process is gone is closed as stopped.
 
@@ -26,6 +29,7 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily.
   2026-11-04: Gmail's problem is one short line; the page is named Scheduled tasks again.
   2026-11-04: Gmail's problem points at the Refresh page, which reconnects each expired mailbox there.
   2026-11-04: a mailbox Google still wants the person for no longer stops the others: the run
@@ -37,6 +41,7 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import json
 import os
@@ -57,7 +62,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# "daily" is every scheduled run, whatever the frequency (rows written before weekly existed).
 Trigger = Literal["daily", "manual"]
+Frequency = Literal["daily", "weekly", "monthly"]
+FREQUENCIES: tuple[Frequency, ...] = ("daily", "weekly", "monthly")
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 Status = Literal["running", "ok", "needs_you", "failed"]
 SourceName = Literal["linkedin", "gmail", "imessage", "whatsapp"]
 
@@ -109,16 +118,40 @@ CREATE TABLE IF NOT EXISTS refresh_runs (
 class Settings:
     enabled: bool = False
     time: str = "06:00"
-    # When it was last turned on: a slot before this is not a missed run.
+    # When it was last turned on or moved to another day: a slot before this is not a missed run.
     enabled_at: str = ""
+    frequency: Frequency = "daily"
+    # Weekly: 0 is Monday. Monthly: 1 to 31.
+    weekday: int = 0
+    day: int = 1
 
     def __post_init__(self) -> None:
         if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", self.time) is None:
             raise ValueError("Time must be HH:MM in 24-hour time.")
+        if self.frequency not in FREQUENCIES:
+            raise ValueError("Repeat must be daily, weekly or monthly.")
+        if not 0 <= self.weekday <= 6:
+            raise ValueError("Day of the week must be 0 (Monday) to 6 (Sunday).")
+        if not 1 <= self.day <= 31:
+            raise ValueError("Day of the month must be 1 to 31.")
 
     def label(self) -> str:
+        """The time alone: "6:00 AM"."""
         hour, minute = (int(part) for part in self.time.split(":"))
         return f"{hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}"
+
+    def summary(self) -> str:
+        """"daily at 6:00 AM", "weekly on Monday at 6:00 AM", "monthly on the 1st at 6:00 AM"."""
+        if self.frequency == "weekly":
+            return f"weekly on {WEEKDAYS[self.weekday]} at {self.label()}"
+        if self.frequency == "monthly":
+            return f"monthly on the {ordinal(self.day)} at {self.label()}"
+        return f"daily at {self.label()}"
+
+
+def ordinal(day: int) -> str:
+    suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -170,15 +203,25 @@ def read_settings(root: Path) -> Settings:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return Settings(bool(payload.get("enabled")), str(payload.get("time") or "06:00"),
-                        str(payload.get("enabled_at") or ""))
-    except (OSError, ValueError, AttributeError):
+                        str(payload.get("enabled_at") or ""), payload.get("frequency") or "daily",
+                        int(payload.get("weekday") or 0), int(payload.get("day") or 1))
+    except (OSError, ValueError, AttributeError, TypeError):
         return Settings()
 
 
-def write_settings(root: Path, enabled: bool, time_of_day: str) -> Settings:
+def write_settings(root: Path, enabled: bool, time_of_day: str, frequency: Frequency | None = None,
+                   weekday: int | None = None, day: int | None = None) -> Settings:
+    """Save the schedule; a field left out keeps its saved value."""
     previous = read_settings(root)
-    enabled_at = previous.enabled_at if previous.enabled and enabled else _iso(now()) if enabled else ""
-    settings = Settings(enabled, time_of_day, enabled_at)
+    frequency = frequency or previous.frequency
+    weekday = previous.weekday if weekday is None else weekday
+    day = previous.day if day is None else day
+    # Moving the schedule to another day starts it afresh: the new day's last slot (say the 1st,
+    # when it's the 4th) is not a run that was missed.
+    moved = (frequency, weekday, day) != (previous.frequency, previous.weekday, previous.day)
+    keep = previous.enabled and enabled and previous.enabled_at and not moved
+    enabled_at = previous.enabled_at if keep else _iso(now()) if enabled else ""
+    settings = Settings(enabled, time_of_day, enabled_at, frequency, weekday, day)
     path = root / SETTINGS
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -233,14 +276,38 @@ def _update(root: Path, run_id: int, **values: Any) -> None:
 # ---------------------------------------------------------------- schedule
 
 
+def _slot_on(date: datetime, settings: Settings) -> datetime | None:
+    """The scheduled moment on `date`'s day, or None when the schedule skips that day."""
+    if settings.frequency == "weekly" and date.weekday() != settings.weekday:
+        return None
+    if settings.frequency == "monthly":
+        last_day = calendar.monthrange(date.year, date.month)[1]
+        if date.day != min(settings.day, last_day):
+            return None
+    hour, minute = (int(part) for part in settings.time.split(":"))
+    return date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def latest_slot(moment: datetime, settings: Settings) -> datetime | None:
+    """The slot a run is owed for at `moment`. Daily: today's, once its time passed (an earlier
+    day folds into it). Weekly and monthly: the last one at or before `moment`."""
+    if settings.frequency == "daily":
+        slot = _slot_on(moment, settings)
+        return slot if slot is not None and slot <= moment else None
+    for back in range(32):
+        slot = _slot_on(moment - timedelta(days=back), settings)
+        if slot is not None and slot <= moment:
+            return slot
+    return None
+
+
 def due(moment: datetime, settings: Settings, last_started: datetime | None) -> bool:
-    """Whether a daily run should start at `moment`: today's time has passed and nothing started
-    since (nor since the refresh was turned on). Missed days fold into this one run."""
+    """Whether a scheduled run should start at `moment`: its slot has passed and nothing started
+    since (nor since the refresh was turned on or moved)."""
     if not settings.enabled:
         return False
-    hour, minute = (int(part) for part in settings.time.split(":"))
-    slot = moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if moment < slot:
+    slot = latest_slot(moment, settings)
+    if slot is None:
         return False
     since = [stamp for stamp in (last_started, _parse(settings.enabled_at)) if stamp is not None]
     return not since or max(since) < slot
@@ -251,9 +318,11 @@ def next_run_at(moment: datetime, settings: Settings, last_started: datetime | N
         return None
     if due(moment, settings, last_started):
         return moment
-    hour, minute = (int(part) for part in settings.time.split(":"))
-    slot = moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return slot if moment < slot else slot + timedelta(days=1)
+    for ahead in range(63):
+        slot = _slot_on(moment + timedelta(days=ahead), settings)
+        if slot is not None and slot > moment:
+            return slot
+    return None
 
 
 def missed_days(moment: datetime, last_started: datetime | None) -> int:
@@ -337,7 +406,8 @@ def start(root: Path, trigger: Trigger) -> Run:
     if setup_busy(root):
         raise RuntimeError("An import is already running. The refresh starts once it finishes.")
     moment = now()
-    run_id = _insert(root, trigger, missed_days(moment, last_started(root)) if trigger == "daily" else 0)
+    daily_schedule = trigger == "daily" and read_settings(root).frequency == "daily"
+    run_id = _insert(root, trigger, missed_days(moment, last_started(root)) if daily_schedule else 0)
     log = root / DIRECTORY / f"run-{run_id}.log"
     with log.open("ab") as out:
         child = subprocess.Popen([project_python(root), "-m", "packs.ingestion.primitives.refresh.daily", "run",

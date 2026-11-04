@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Check, TriangleAlert, X } from "lucide-react"
+import { Check, ChevronRight, TriangleAlert, X } from "lucide-react"
 
 import { EmptyState, Page, Select, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -10,9 +10,28 @@ import { fetchAccounts, reconnectGmail } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { REFRESH_KEY, refreshNow, saveRefreshSettings } from "@/lib/api/refresh"
 import { cn } from "@/lib/utils"
-import type { Problem, RefreshRun, RefreshState, SourceRun } from "@/types/refresh"
+import type {
+  Problem,
+  RefreshFrequency,
+  RefreshRun,
+  RefreshSettingsChange,
+  RefreshState,
+  SourceRun,
+} from "@/types/refresh"
 
-import { added, clock, lower, people, SOURCE_TITLE, stamp, took, trigger, when, lastLine } from "./format"
+import {
+  added,
+  clock,
+  lower,
+  ordinal,
+  people,
+  SOURCE_TITLE,
+  stamp,
+  took,
+  trigger,
+  WEEKDAYS,
+  when,
+} from "./format"
 import { useRefresh } from "./useRefresh"
 
 const STATUS: Readonly<
@@ -43,19 +62,32 @@ function StatusIcon({ variant }: { variant: "ok" | "warn" | "bad" | "info" }) {
 
 // Every hour of the day, as the time picker offers them.
 const HOURS = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`)
+const FREQUENCIES: readonly { value: RefreshFrequency; label: string }[] = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+]
+const WEEKDAY_OPTIONS = WEEKDAYS.map((name, index) => ({ value: String(index), label: name }))
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => ({
+  value: String(index + 1),
+  label: ordinal(index + 1),
+}))
+const PICKER = "h-7 text-xs"
 
-/** The native daily refresh: on/off and its time, Refresh now, then every run it left behind. */
+/** The refresh's schedule: on/off, how often, the day and time, Refresh now, then every run. */
 export function RefreshPage() {
   const client = useQueryClient()
   const refresh = useRefresh()
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // The run whose details are open; undefined until one is clicked (the latest opens by itself
+  // when it needs you).
+  const [openId, setOpenId] = useState<number | null | undefined>(undefined)
   const settings = useMutation({
     mutationFn: saveRefreshSettings,
     onSuccess: (next) => client.setQueryData(REFRESH_KEY, next),
   })
-  // The switch and the time move on the click; the server's answer replaces the guess, and a
+  // The switch and the pickers move on the click; the server's answer replaces the guess, and a
   // refusal puts them back.
-  const change = (next: { enabled?: boolean; time?: string }) => {
+  const change = (next: RefreshSettingsChange) => {
     const previous = client.getQueryData<RefreshState>(REFRESH_KEY)
     if (previous)
       client.setQueryData<RefreshState>(REFRESH_KEY, {
@@ -70,7 +102,13 @@ export function RefreshPage() {
   })
   const data = refresh.data
   const runs = data?.runs ?? []
-  const selected = runs.find((run) => run.id === selectedId) ?? runs[0]
+  const latest = runs[0]
+  const open =
+    openId === undefined
+      ? latest && latest.status !== "ok" && latest.status !== "running"
+        ? latest.id
+        : null
+      : openId
 
   return (
     <Page title="Scheduled tasks">
@@ -79,87 +117,114 @@ export function RefreshPage() {
       {data && (
         <>
           <section
-            aria-label="Daily refresh"
-            className="flex flex-wrap items-start gap-5 rounded-[var(--radius-l)] border border-line bg-card p-5"
+            aria-label="Schedule"
+            className="flex flex-col gap-3 rounded-[var(--radius-l)] border border-line bg-card p-4"
           >
-            <div className="min-w-[260px] flex-1">
-              <h2 className="m-0 text-sm font-semibold">Keep your network up to date</h2>
-              <p className="mb-0 mt-1 max-w-[540px] text-xs leading-relaxed text-muted-foreground">
-                Syncs your sources, runs Deep Context on what&apos;s new and updates search. Runs while the
-                app is open.
-              </p>
-              <div className="mt-4 flex flex-wrap items-center gap-2.5 text-xs">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={data.settings.enabled}
-                  aria-label="Refresh every day"
-                  onClick={() => change({ enabled: !data.settings.enabled })}
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={data.settings.enabled}
+                aria-label="Refresh automatically"
+                onClick={() => change({ enabled: !data.settings.enabled })}
+                className={cn(
+                  "relative h-5 w-[34px] shrink-0 cursor-pointer rounded-full border-0 p-0 transition-colors duration-fast ease-out",
+                  data.settings.enabled ? "bg-ok" : "bg-line-strong",
+                )}
+              >
+                <span
                   className={cn(
-                    "relative h-5 w-[34px] shrink-0 cursor-pointer rounded-full border-0 p-0 transition-colors duration-fast ease-out",
-                    data.settings.enabled ? "bg-ok" : "bg-line-strong",
+                    "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform duration-fast ease-out",
+                    data.settings.enabled && "translate-x-[14px]",
                   )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform duration-fast ease-out",
-                      data.settings.enabled && "translate-x-[14px]",
-                    )}
-                  />
-                </button>
-                <span>Every day at</span>
-                <Select
-                  aria-label="Time of day"
-                  value={data.settings.time}
-                  onChange={(time) => change({ time })}
-                  options={(HOURS.includes(data.settings.time) ? HOURS : [data.settings.time, ...HOURS]).map(
-                    (time) => ({ value: time, label: clock(time) }),
-                  )}
-                  className="h-7 min-w-[96px] text-xs"
                 />
-                <span className="text-faint">
-                  {data.running
-                    ? "Refreshing now"
-                    : data.next_run_at
-                      ? `Next run ${lower(when(data.next_run_at))}`
-                      : "Off"}
-                </span>
-              </div>
-              {settings.error && (
-                <p role="alert" className="mb-0 mt-2 text-xs text-bad">
-                  {errorText(settings.error)}
-                </p>
-              )}
-            </div>
-            <div className="ml-auto flex flex-col items-end gap-1.5">
+              </button>
+              <h2 className="m-0 text-sm font-semibold">Refresh automatically</h2>
               <Button
                 variant="primary"
                 shape="pill"
+                className="ml-auto"
                 disabled={data.running !== null || start.isPending}
                 onClick={() => start.mutate()}
               >
                 {data.running || start.isPending ? <Spinner className="size-3.5" /> : null}
                 {data.running ? "Refreshing…" : "Refresh now"}
               </Button>
-              {data.running ? (
-                <Link
-                  to="/accounts?view=sync"
-                  className="text-[11px] font-semibold text-info no-underline hover:underline"
-                >
-                  See progress
-                </Link>
-              ) : runs[0] ? (
-                <span className="text-[11px] text-faint">{lastLine(runs[0])}</span>
-              ) : null}
-              {start.error && (
-                <p role="alert" className="m-0 max-w-[260px] text-right text-[11px] text-bad">
-                  {errorText(start.error)}
-                </p>
-              )}
             </div>
+            <div
+              className={cn(
+                "flex flex-wrap items-center gap-2 text-xs",
+                !data.settings.enabled && "text-muted-foreground",
+              )}
+            >
+              <Select
+                aria-label="Repeat"
+                value={data.settings.frequency}
+                onChange={(value) => {
+                  const frequency = FREQUENCIES.find((option) => option.value === value)?.value
+                  if (frequency) change({ frequency })
+                }}
+                options={FREQUENCIES}
+                className={cn(PICKER, "min-w-[92px]")}
+              />
+              {data.settings.frequency === "weekly" && (
+                <>
+                  <span>on</span>
+                  <Select
+                    aria-label="Day of the week"
+                    value={String(data.settings.weekday)}
+                    onChange={(weekday) => change({ weekday: Number(weekday) })}
+                    options={WEEKDAY_OPTIONS}
+                    className={cn(PICKER, "min-w-[108px]")}
+                  />
+                </>
+              )}
+              {data.settings.frequency === "monthly" && (
+                <>
+                  <span>on the</span>
+                  <Select
+                    aria-label="Day of the month"
+                    title={data.settings.day > 28 ? "A shorter month runs on its last day." : undefined}
+                    value={String(data.settings.day)}
+                    onChange={(day) => change({ day: Number(day) })}
+                    options={DAY_OPTIONS}
+                    className={cn(PICKER, "min-w-[68px]")}
+                  />
+                </>
+              )}
+              <span>at</span>
+              <Select
+                aria-label="Time of day"
+                value={data.settings.time}
+                onChange={(time) => change({ time })}
+                options={(HOURS.includes(data.settings.time) ? HOURS : [data.settings.time, ...HOURS]).map(
+                  (time) => ({ value: time, label: clock(time) }),
+                )}
+                className={cn(PICKER, "min-w-[96px]")}
+              />
+              <span className="ml-1 text-faint">
+                {data.running ? (
+                  <Link
+                    to="/accounts?view=sync"
+                    className="font-semibold text-info no-underline hover:underline"
+                  >
+                    See progress
+                  </Link>
+                ) : data.next_run_at ? (
+                  `Next run ${lower(when(data.next_run_at))} · while the app is open`
+                ) : (
+                  "Off"
+                )}
+              </span>
+            </div>
+            {(settings.error ?? start.error) && (
+              <p role="alert" className="m-0 text-xs text-bad">
+                {errorText(settings.error ?? start.error)}
+              </p>
+            )}
           </section>
           <GmailReconnect />
-          <History runs={runs} selected={selected} onSelect={setSelectedId} />
+          <History runs={runs} open={open} onToggle={(id) => setOpenId(id === open ? null : id)} />
         </>
       )}
     </Page>
@@ -168,99 +233,119 @@ export function RefreshPage() {
 
 interface HistoryProps {
   runs: RefreshRun[]
-  selected: RefreshRun | undefined
-  onSelect: (id: number) => void
+  open: number | null
+  onToggle: (id: number) => void
 }
 
-function History({ runs, selected, onSelect }: HistoryProps) {
+const CELL = "border-b border-line px-2.5 py-2.5"
+
+function History({ runs, open, onToggle }: HistoryProps) {
   return (
-    <section aria-labelledby="history" className="flex flex-col gap-3">
+    <section aria-labelledby="history" className="flex flex-col gap-2">
       <h2 id="history" className="m-0 text-[11px] font-semibold uppercase tracking-[.1em] text-faint">
-        Run history
+        Runs
       </h2>
       {runs.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">No runs yet.</p>
       ) : (
-        <>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-xs" aria-label="Runs">
-              <thead>
-                <tr className="text-left text-[11px] text-faint">
-                  {["When", "Trigger", "Status", "Sources", "People added", "Search", "Took"].map((name) => (
-                    <th
-                      key={name}
-                      className="border-b border-line px-2.5 pb-2 font-semibold whitespace-nowrap"
-                    >
-                      {name}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr
-                    key={run.id}
-                    aria-selected={run === selected}
-                    onClick={() => onSelect(run.id)}
-                    className="cursor-pointer whitespace-nowrap hover:bg-card aria-selected:bg-surface-2"
-                  >
-                    <td className="border-b border-line px-2.5 py-2.5">
-                      <button
-                        type="button"
-                        onClick={() => onSelect(run.id)}
-                        className="cursor-pointer border-0 bg-transparent p-0 text-left text-xs text-foreground"
-                      >
-                        {when(run.started_at)}
-                      </button>
-                    </td>
-                    <td className="border-b border-line px-2.5 py-2.5 text-muted-foreground">
-                      {trigger(run)}
-                    </td>
-                    <td className="border-b border-line px-2.5 py-2.5">
-                      <Badge variant={STATUS[run.status].variant}>
-                        <StatusIcon variant={STATUS[run.status].variant} />
-                        {STATUS[run.status].label}
-                      </Badge>
-                    </td>
-                    <td className="border-b border-line px-2.5 py-2.5">
-                      <span className="flex gap-1">
-                        {run.sources.map((source) => (
-                          <Badge
-                            key={source.source}
-                            variant={SOURCE_STATUS[source.status].variant}
-                            title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
-                            data-source-status={source.status}
-                          >
-                            <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
-                            {SOURCE_TITLE[source.source]}
-                            {source.accounts.length > 1 ? ` · ${source.accounts.length}` : ""}
-                          </Badge>
-                        ))}
-                      </span>
-                    </td>
-                    <td className="border-b border-line px-2.5 py-2.5 tabular-nums">{added(run)}</td>
-                    <td className="border-b border-line px-2.5 py-2.5 text-muted-foreground">
-                      {run.index_rebuilt ? "Rebuilt" : run.people_after === null ? "—" : "No change"}
-                    </td>
-                    <td className="border-b border-line px-2.5 py-2.5 tabular-nums text-muted-foreground">
-                      {took(run)}
-                    </td>
-                  </tr>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-xs" aria-label="Runs">
+            <thead>
+              <tr className="text-left text-[11px] text-faint">
+                {["When", "Status", "Sources", "People"].map((name) => (
+                  <th key={name} className="border-b border-line px-2.5 pb-2 font-semibold whitespace-nowrap">
+                    {name}
+                  </th>
                 ))}
-              </tbody>
-            </table>
-          </div>
-          {selected && <RunDetail run={selected} />}
-        </>
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((run) => (
+                <RunRow key={run.id} run={run} open={run.id === open} onToggle={() => onToggle(run.id)} />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
+  )
+}
+
+function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onToggle: () => void }) {
+  return (
+    <>
+      <tr
+        aria-selected={open}
+        onClick={onToggle}
+        className="cursor-pointer whitespace-nowrap hover:bg-card aria-selected:bg-surface-2"
+      >
+        <td className={CELL}>
+          <button
+            type="button"
+            aria-expanded={open}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggle()
+            }}
+            className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left text-xs text-foreground"
+          >
+            <ChevronRight
+              aria-hidden
+              className={cn("size-3 text-faint transition-transform duration-fast", open && "rotate-90")}
+            />
+            {when(run.started_at)}
+            <span className="text-faint">· {trigger(run)}</span>
+          </button>
+        </td>
+        <td className={CELL}>
+          <Badge variant={STATUS[run.status].variant}>
+            <StatusIcon variant={STATUS[run.status].variant} />
+            {STATUS[run.status].label}
+          </Badge>
+        </td>
+        <td className={CELL}>
+          <span className="flex items-center gap-1.5">
+            {run.sources.map((source) =>
+              source.status === "synced" ? (
+                <span
+                  key={source.source}
+                  title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS.synced.label}`}
+                  data-source-status="synced"
+                  className="text-muted-foreground"
+                >
+                  {SOURCE_TITLE[source.source]}
+                </span>
+              ) : (
+                <Badge
+                  key={source.source}
+                  variant={SOURCE_STATUS[source.status].variant}
+                  title={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
+                  data-source-status={source.status}
+                >
+                  <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
+                  {SOURCE_TITLE[source.source]}
+                </Badge>
+              ),
+            )}
+          </span>
+        </td>
+        <td className={cn(CELL, "tabular-nums")}>{added(run)}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={4} className="border-b border-line bg-card p-0">
+            <RunDetail run={run} />
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
 function RunDetail({ run }: { run: RefreshRun }) {
   const rows: [string, string][] = [
     ["Started", stamp(run.started_at)],
-    ["Finished", run.finished_at ? stamp(run.finished_at) : "Still running"],
+    ["Took", run.finished_at ? took(run) : "Still running"],
     ...run.sources.map((source): [string, string] => [
       SOURCE_TITLE[source.source],
       `${SOURCE_STATUS[source.status].label}${
@@ -268,16 +353,11 @@ function RunDetail({ run }: { run: RefreshRun }) {
       }`,
     ]),
     ["People", people(run)],
-    ["Search", run.index_rebuilt ? "Rebuilt with the new people" : "No change"],
+    ["Search", run.index_rebuilt ? "Rebuilt" : "No change"],
   ]
-  if (run.missed_days)
-    rows.push(["Caught up", `${run.missed_days} missed day${run.missed_days > 1 ? "s" : ""}`])
   if (run.message) rows.push(["Last step", run.message])
   return (
-    <article
-      aria-label="Run details"
-      className="grid grid-cols-2 gap-4 rounded-[var(--radius-m)] border border-line bg-card p-4 max-[820px]:grid-cols-1"
-    >
+    <article aria-label="Run details" className="grid grid-cols-2 gap-4 px-8 py-3 max-[820px]:grid-cols-1">
       <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 self-start text-xs">
         {rows.map(([name, value]) => (
           <div key={name} className="contents">

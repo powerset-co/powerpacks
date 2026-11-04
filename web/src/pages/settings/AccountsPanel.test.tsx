@@ -87,7 +87,7 @@ beforeEach(() => {
                           ]
                         : [],
                       jobs,
-                      scheduled: "6:00 AM",
+                      scheduled: "daily at 6:00 AM",
                     }
                   : {}
       return Promise.resolve(new Response(JSON.stringify(payload)))
