@@ -88,6 +88,9 @@ PASSKEY_LINE = ("WhatsApp asked this account for passkey verification, which lin
 _WRONG_SCREEN = ("That scan didn't link. Link with your phone number, or scan from Settings → Linked devices → "
                  "Link a device.")
 _REFUSED = "WhatsApp didn't accept the QR scan. Link with your phone number instead."
+# A QR run that ended unlinked with no reason wacli names (a stale code WhatsApp refused silently,
+# or wacli's own QR timeout).
+QR_ENDED_LINE = "The QR code didn't link. Link with your phone number instead."
 # wacli's own wording (powerset-co/wacli, from upstream #356); in --events mode these arrive as
 # {"event":"error","data":{"message":...}}.
 _QR_FAILURES = (
@@ -96,6 +99,7 @@ _QR_FAILURES = (
     ("unsupported qr pairing state", _REFUSED),
     ("unexpected qr pairing state", _REFUSED),
     ("qr pairing failed", _REFUSED),
+    ("qr code timed out", QR_ENDED_LINE),
 )
 
 

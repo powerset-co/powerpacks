@@ -8,6 +8,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -419,11 +420,12 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(code.read_text(), "ABCD-EFGH")
             self.assertFalse(request.exists())
 
-    def test_auth_that_ends_before_a_scan_asks_for_the_qr_again(self) -> None:
+    def test_auth_that_ends_before_a_scan_offers_the_phone_number(self) -> None:
         with self.assertRaises(runtime.PrimitiveBlocked) as ctx:
             self.run_fake_auth(["2@qr-payload"], exits=1)
 
-        self.assertIn("WhatsApp needs a QR scan", ctx.exception.payload["message"])
+        # Nothing said why and no number came before the deadline: the stop still points to the phone.
+        self.assertIn("phone number", ctx.exception.payload["message"])
 
     def fake_link(self, td: str, outputs: list[list[str]], *, exits: list[int | None], on_start=None):
         """run_auth over fake wacli runs: run i prints outputs[i] and exits with exits[i] (None: waits)."""
@@ -508,13 +510,29 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                      "QR pairing failed: context canceled"):
             self.assertIn("phone number", qr_link_failure(line) or "", line)
         self.assertIsNone(qr_link_failure("websocket closed"))
+        self.assertIn("phone number", qr_link_failure("QR code timed out; run `wacli auth` again") or "")
 
-    def test_a_scan_that_ends_without_a_known_refusal_still_asks_for_the_qr(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            blocked, procs, _ = self.fake_link(td, [["2@qr-payload", "Error: websocket closed"]], exits=[1])
+    def test_a_qr_run_that_ends_unlinked_offers_the_phone_number_until_the_deadline(self) -> None:
+        notes: list[str] = []
+        real_wait = auth.wait_for_phone
+
+        def on_start(index: int, files: dict[str, Path]) -> None:
+            # The reason the page reads, captured as the run starts waiting for a number.
+            auth_wait.side_effect = lambda *args: (notes.append(files["failed"].read_text()), real_wait(*args))[1]
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(auth, "time") as clock, \
+                mock.patch.object(auth, "wait_for_phone") as auth_wait:
+            clock.sleep = lambda seconds: time.sleep(0.001)
+            ticks = iter(range(10_000))
+            clock.time = lambda: next(ticks) * 0.05  # the 5 s deadline passes after ~100 polls
+            blocked, procs, _ = self.fake_link(
+                td, [["2@qr-payload", "QR code timed out; run `wacli auth` again to get a new code"]],
+                exits=[1], on_start=on_start)
         self.assertIsInstance(blocked, runtime.PrimitiveBlocked)
         self.assertEqual(len(procs), 1)
-        self.assertIn("WhatsApp needs a QR scan", blocked.payload["message"])
+        self.assertEqual(notes, ["The QR code didn't link. Link with your phone number instead."])
+        self.assertIn("phone number", blocked.payload["message"])
+        self.assertNotIn("command timed out", blocked.payload.get("detail", ""))
 
     def test_waiting_for_history_holds_until_wacli_releases_the_store(self) -> None:
         with tempfile.TemporaryDirectory() as td:

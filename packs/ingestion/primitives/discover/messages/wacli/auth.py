@@ -9,8 +9,8 @@ retain typed fields until report serialization; the pairing state is the typed
 `PairingStatus`.
 
 Changelog:
-  2026-11-04: a QR scan WhatsApp refuses (`util.qr_link_failure`: passkey-gated accounts,
-      openclaw/wacli#355, or a scan from the wrong screen) no longer ends the link: it waits for a
+  2026-11-04: a QR run that ends unlinked (`util.qr_link_failure` names why: passkey-gated
+      accounts, openclaw/wacli#355, a refused scan, wacli's own QR timeout) no longer ends the link: it waits for a
       phone number instead, with the reason in DEFAULT_QR_FAILED for the page. DEFAULT_STOP_REQUEST
       (the page's Stop linking) ends the waiting link, so another sign-in can start.
   2026-11-02: link by phone number when the QR won't scan: a number written to
@@ -61,7 +61,11 @@ from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: 
 )
 from packs.ingestion.primitives.discover.messages.wacli.payloads import AuthStatus  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
-from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked, qr_link_failure  # noqa: E402
+from packs.ingestion.primitives.discover.messages.wacli.util import (  # noqa: E402
+    QR_ENDED_LINE,
+    linked_device_blocked,
+    qr_link_failure,
+)
 
 DEFAULT_IDLE_EXIT = os.environ.get("POWERPACKS_WACLI_IDLE_EXIT", "30s")
 HISTORY_COUNT_SECONDS = 10
@@ -243,7 +247,11 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                     break
                 time.sleep(0.2)
         # WhatsApp refused the scan: rather than end, wait for the phone number the page now offers.
-        refused = None if connected or asked or phone or timed_out else qr_link_failure("\n".join(output[start:]))
+        # Any QR run that ends unlinked counts: WhatsApp may refuse a stale code with no error at all,
+        # and wacli then ends at its own QR timeout.
+        ended = "\n".join(output[start:])
+        refused = (None if connected or asked or phone or timed_out or linked_device_blocked(ended)
+                   else qr_link_failure(ended) or QR_ENDED_LINE)
         if refused:
             qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
             DEFAULT_QR_FAILED.parent.mkdir(parents=True, exist_ok=True)
