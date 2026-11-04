@@ -665,7 +665,7 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
     elif csuite_expansions:
         display_values = [spec["display"] for spec in csuite_expansions]
         filters["csuite_shortcut_role_id"] = csuite_expansions[0]["role_id"]
-        filters["role_ids"] = _dedupe_strings([*role_ids, *[spec["role_id"] for spec in csuite_expansions]])
+        filters["role_ids"] = _dedupe_strings([spec["role_id"] for spec in csuite_expansions])
         filters["bm25_queries"] = _dedupe_strings([
             *(filters.get("bm25_queries") or []),
             *[bm25 for spec in csuite_expansions for bm25 in spec["bm25"]],
@@ -679,7 +679,15 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
             )
         filters["role_function"] = "leader"
 
-    injected_titles = [title for role_id in filters.get("role_ids") or [] for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]
+    else:
+        # Cloud's V2 extractor emits role_ids only for the founder and C-suite
+        # shortcuts; any other ids the role agent picked stay internal (title
+        # injections below) and never reach the search as a filter, because
+        # they were too narrow. Drop them here so local search matches.
+        filters.pop("role_ids", None)
+
+    agent_and_shortcut_ids = _dedupe_strings([*role_ids, *(filters.get("role_ids") or [])])
+    injected_titles = [title for role_id in agent_and_shortcut_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]
     if injected_titles:
         filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *sorted(set(injected_titles))])
 
