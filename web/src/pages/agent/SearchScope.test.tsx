@@ -39,14 +39,14 @@ function setup(agent: Partial<AgentState> = {}) {
 
 const SEARCH_IN = "Search in"
 
-it("lists the Powerset sets with their people and this Mac's local index, and a pick is the next chat's", async () => {
+it("lists the Powerset sets with their people and this Mac's local index in place of the personal network, and a pick is the next chat's", async () => {
   vi.mocked(fetchSearchScope).mockResolvedValue(SCOPE)
   setup({ scope: { set_id: "t-1" } })
   await screen.findByRole("combobox", { name: SEARCH_IN })
   // The pill shows only the pick, so it is as wide as the pick rather than the longest set.
   expect(picked(SEARCH_IN)).toBe("Team · 40,795")
   open(SEARCH_IN)
-  expect(options()).toEqual(["Team · 40,795", "Personal network · 15", "Local index"])
+  expect(options()).toEqual(["Team · 40,795", "Local index"])
   expect(screen.getByText("Powerset")).toBeTruthy()
   expect(screen.getByText("This Mac")).toBeTruthy()
   fireEvent.click(screen.getByRole("option", { name: "Local index" }))
