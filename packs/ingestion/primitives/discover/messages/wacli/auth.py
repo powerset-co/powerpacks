@@ -11,8 +11,8 @@ retain typed fields until report serialization; the pairing state is the typed
 Changelog:
   2026-11-04: a QR run that ends unlinked (`util.qr_link_failure` names why: passkey-gated
       accounts, openclaw/wacli#355, a refused scan, wacli's own QR timeout) no longer ends the link: it waits for a
-      phone number instead, with the reason in DEFAULT_QR_FAILED for the page. DEFAULT_STOP_REQUEST
-      (the page's Stop linking) ends the waiting link, so another sign-in can start.
+      phone number instead, with the reason in DEFAULT_QR_FAILED for the page, until the same
+      deadline.
   2026-11-02: link by phone number when the QR won't scan: a number written to
       DEFAULT_PHONE_REQUEST (the Connect page's "use your phone number") stops the QR
       wait and reruns wacli with --phone; its pair_code event goes to DEFAULT_PAIR_CODE.
@@ -57,7 +57,6 @@ from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: 
     DEFAULT_QR_HTML,
     DEFAULT_QR_FAILED,
     DEFAULT_QR_PNG,
-    DEFAULT_STOP_REQUEST,
 )
 from packs.ingestion.primitives.discover.messages.wacli.payloads import AuthStatus  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.runtime import PrimitiveBlocked  # noqa: E402
@@ -132,24 +131,9 @@ def stop_unlinked_holder(store: Path) -> None:
                 time.sleep(0.1)
 
 
-def stopped(cmd: list[str]) -> PrimitiveBlocked:
-    """The page's Stop linking, as the link's result: nothing is left running in the store."""
-    DEFAULT_STOP_REQUEST.unlink(missing_ok=True)
-    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PAIR_CODE, DEFAULT_QR_FAILED, DEFAULT_PHONE_REQUEST)
-    runtime.emit_status("WhatsApp linking stopped.")
-    return PrimitiveBlocked({
-        "status": "blocked_user_action",
-        "stopped": True,
-        "message": "You stopped linking WhatsApp.",
-        "command": runtime.command_text(cmd),
-    })
-
-
-def wait_for_phone(cmd: list[str], deadline: float) -> str:
+def wait_for_phone(deadline: float) -> str:
     """After a refused scan, with no wacli running: the number the page sends, or "" at the deadline."""
     while time.time() <= deadline:
-        if DEFAULT_STOP_REQUEST.is_file():
-            raise stopped(cmd)
         if DEFAULT_PHONE_REQUEST.is_file():
             asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
             DEFAULT_PHONE_REQUEST.unlink()
@@ -162,7 +146,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
     runtime.emit_status("WhatsApp needs a QR scan.")
     stop_unlinked_holder(store)
     qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG, DEFAULT_PHONE_REQUEST, DEFAULT_PAIR_CODE,
-                          DEFAULT_STOP_REQUEST, DEFAULT_QR_FAILED)
+                          DEFAULT_QR_FAILED)
     output: list[str] = []
     opened = False
     connected = False
@@ -223,10 +207,6 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
                             handle_line(pending.strip())
                         pending = ""
                     continue
-                if DEFAULT_STOP_REQUEST.is_file():
-                    proc.terminate()
-                    proc.wait()
-                    raise stopped(cmd)
                 if not phone and DEFAULT_PHONE_REQUEST.is_file():
                     asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
                     DEFAULT_PHONE_REQUEST.unlink()
@@ -257,7 +237,7 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
             DEFAULT_QR_FAILED.parent.mkdir(parents=True, exist_ok=True)
             DEFAULT_QR_FAILED.write_text(refused, encoding="utf-8")
             runtime.emit_status(refused)
-            asked = wait_for_phone(cmd, deadline)
+            asked = wait_for_phone(deadline)
             if not asked:
                 DEFAULT_QR_FAILED.unlink(missing_ok=True)
                 raise PrimitiveBlocked({

@@ -429,7 +429,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
     def fake_link(self, td: str, outputs: list[list[str]], *, exits: list[int | None], on_start=None):
         """run_auth over fake wacli runs: run i prints outputs[i] and exits with exits[i] (None: waits)."""
-        files = {name: Path(td) / f"{name}.txt" for name in ("phone", "code", "stop", "failed")}
+        files = {name: Path(td) / f"{name}.txt" for name in ("phone", "code", "failed")}
 
         class FakeProc:
             def __init__(self, cmd, *, stdout, **kwargs) -> None:
@@ -456,7 +456,6 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         with mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
                 mock.patch.object(auth, "DEFAULT_PHONE_REQUEST", files["phone"]), \
                 mock.patch.object(auth, "DEFAULT_PAIR_CODE", files["code"]), \
-                mock.patch.object(auth, "DEFAULT_STOP_REQUEST", files["stop"]), \
                 mock.patch.object(auth, "DEFAULT_QR_FAILED", files["failed"]), \
                 mock.patch.object(auth, "DEFAULT_QR_PNG", Path(td) / "qr.png"), \
                 mock.patch.object(auth, "DEFAULT_QR_HTML", Path(td) / "qr.html"), \
@@ -487,18 +486,6 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertIn("phone number", notes[0])
             self.assertEqual(procs[1].cmd[procs[1].cmd.index("--phone") + 1], "14155550100")
             self.assertFalse(files["failed"].exists())
-
-    def test_stop_linking_ends_the_waiting_link_and_its_wacli(self) -> None:
-        def on_start(index: int, files: dict[str, Path]) -> None:
-            threading.Timer(0.3, lambda: files["stop"].write_text("stop")).start()
-
-        with tempfile.TemporaryDirectory() as td:
-            blocked, procs, files = self.fake_link(td, [["2@qr-payload"]], exits=[None], on_start=on_start)
-
-            self.assertIsInstance(blocked, runtime.PrimitiveBlocked)
-            self.assertTrue(blocked.payload["stopped"])
-            self.assertTrue(procs[0].terminated)
-            self.assertFalse(files["stop"].exists())
 
     def test_wacli_refusal_wording_maps_to_the_phone_fallback(self) -> None:
         from packs.ingestion.primitives.discover.messages.wacli.util import qr_link_failure

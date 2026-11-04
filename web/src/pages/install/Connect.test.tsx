@@ -388,7 +388,7 @@ it("asks for the phone number by itself once WhatsApp refused the scan, saying w
   expect(within(dialog).getByLabelText("WhatsApp phone number")).toBeTruthy()
 })
 
-it("stops a waiting WhatsApp link from the page, and holds every other Connect while it waits", async () => {
+it("holds every other Connect while WhatsApp waits, and frees them once the code expires", async () => {
   state.connect = {
     ...NOTHING,
     step: "whatsapp_login",
@@ -405,17 +405,21 @@ it("stops a waiting WhatsApp link from the page, and holds every other Connect w
         .getByRole("button", { name: `${name}: Connect`, hidden: true })
         .hasAttribute("disabled"),
     ).toBe(true)
-  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Stop linking" }))
-  await waitFor(() => expect(state.posts).toContainEqual({ url: "/api/install/whatsapp-stop", body: {} }))
   state.connect = {
     ...NOTHING,
     step: "whatsapp_login",
     status: "waiting",
-    message: "WhatsApp linking stopped.",
-    action: { kind: "stopped", details: { message: "You stopped linking WhatsApp." } },
+    message: "The WhatsApp code expired. Connect again for a new one.",
+    action: { kind: "expired" },
   }
   const whatsapp = row("WhatsApp")
-  expect(await within(whatsapp).findByText("WhatsApp linking stopped.", {}, { timeout: 4_000 })).toBeTruthy()
+  expect(
+    await within(whatsapp).findByText(
+      "The WhatsApp code expired. Connect again for a new one.",
+      {},
+      { timeout: 4_000 },
+    ),
+  ).toBeTruthy()
   await waitFor(() =>
     expect(
       within(row("LinkedIn")).getByRole("button", { name: "LinkedIn: Connect" }).hasAttribute("disabled"),

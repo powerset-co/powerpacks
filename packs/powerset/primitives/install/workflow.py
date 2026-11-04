@@ -5,8 +5,9 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
-  2026-11-04: a WhatsApp link stopped from the page (wacli/auth.py `stopped`) ends the connect run
-      as `whatsapp.stopped`, handed back, so the next sign-in can take setup's lock.
+  2026-11-04: the Connect screen's WhatsApp link waits CONNECT_LINK_SECONDS (10 min) for a scan or a
+      phone number, then ends as `whatsapp.expired`, handed back, instead of renewing the QR for up
+      to 3 h: setup's lock is free again for LinkedIn or Gmail.
   2026-10-27: the Gmail and LinkedIn tools step says when it downloads Powerpacks' own browser.
   2026-10-24: the LinkedIn count's read/total go in the event's details too, so the
       onboarding page can estimate the time left from them.
@@ -115,6 +116,8 @@ class GmailCount:
         return {"read": sum(read for read, _ in self.mailboxes.values()),
                 "total": sum(total for _, total in self.mailboxes.values())}
 _PERMISSION_POLL_SECONDS = 2
+# How long the Connect screen's WhatsApp link holds setup's lock waiting on a scan or a phone number.
+CONNECT_LINK_SECONDS = int(os.environ.get("POWERPACKS_WHATSAPP_CONNECT_SECONDS", "600"))
 DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
@@ -321,17 +324,19 @@ class SourceOnboarding:
             self._write("whatsapp.checking")
         else:
             self._write("whatsapp.qr", details={"store": str(self.wacli_store)})
+        connect = self.status.name == "connect"
+        timeout = {"auth_timeout": CONNECT_LINK_SECONDS} if connect else {}
         while True:
             try:
-                result = auth.auth_report(self.wacli_store, open_qr_page=False)
+                result = auth.auth_report(self.wacli_store, open_qr_page=False, **timeout)
                 break
             except PrimitiveBlocked as blocked:
-                if blocked.payload.get("stopped"):
-                    # Stopped from the page: nothing waits on it, so the next sign-in can start.
-                    self._write("whatsapp.stopped", details=blocked.payload, handed_back=True)
-                    return False
                 if "command timed out after" not in blocked.payload.get("detail", ""):
                     raise
+                if connect:
+                    # Nobody linked in time: end, so the next sign-in can take setup's lock.
+                    self._write("whatsapp.expired", details=blocked.payload, handed_back=True)
+                    return False
                 self._write("whatsapp.qr.refreshed")
         return self._result(result, "whatsapp.already_linked" if linked else "whatsapp.linked",
                             waiting="whatsapp.blocked", failed="whatsapp.failed")

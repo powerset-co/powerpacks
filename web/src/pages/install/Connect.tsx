@@ -30,7 +30,6 @@ import {
   fetchConnection,
   installAction,
   linkWhatsappByPhone,
-  stopWhatsappLink,
   type ConnectSource,
 } from "@/lib/api/install"
 import type { AccountSource } from "@/types/accounts"
@@ -68,14 +67,12 @@ const SLOW_SCAN_MS = 60_000
  *  scan, so a phone reads it before it changes (every 20 seconds). Closed, "Show code" reopens it.
  *  When the scan won't work, the person links by phone number instead (US unless it starts with +):
  *  WhatsApp sends a code to type on the phone, shown here the way the phone asks for it. Once
- *  WhatsApp refused a scan (`failed`, why) the box asks for the number by itself. Stop linking ends
- *  the link, so another sign-in can start. */
+ *  WhatsApp refused a scan (`failed`, why) the box asks for the number by itself. */
 function CodeBox({ url, pairCode, failed }: { url?: string; pairCode?: string; failed?: string }) {
   const [open, setOpen] = useState(true)
   const [chosePhone, setByPhone] = useState(false)
   const byPhone = chosePhone || failed !== undefined
   const [slow, setSlow] = useState(false)
-  const [stopping, setStopping] = useState(false)
   const [phone, setPhone] = useState<string | undefined>()
   const [asked, setAsked] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -89,14 +86,6 @@ function CodeBox({ url, pairCode, failed }: { url?: string; pairCode?: string; f
   const show = (next: boolean) => {
     setOpen(next)
     if (!next) setDismissed(failed)
-  }
-  const stop = () => {
-    setStopping(true)
-    show(false)
-    stopWhatsappLink().catch((caught: unknown) => {
-      setStopping(false)
-      setError(errorText(caught))
-    })
   }
   const ask = (event: FormEvent) => {
     event.preventDefault()
@@ -124,20 +113,9 @@ function CodeBox({ url, pairCode, failed }: { url?: string; pairCode?: string; f
             ? `${failed} WhatsApp sends a code for this number; you type it on your phone.`
             : "WhatsApp sends a code for this number; you type it on your phone.",
         ]
-  const stopButton = (
-    <button type="button" className={LINK} disabled={stopping} onClick={stop}>
-      {stopping ? "Stopping…" : "Stop linking"}
-    </button>
-  )
   return (
     <Dialog open={shown} onOpenChange={show}>
-      <span className="flex items-center gap-3">
-        <DialogTrigger className={LINK} disabled={stopping}>
-          Show code
-        </DialogTrigger>
-        {stopButton}
-      </span>
-      {error && !shown ? <span className="text-xs text-bad">{error}</span> : null}
+      <DialogTrigger className={LINK}>Show code</DialogTrigger>
       <DialogContent className="w-[min(420px,100%)] items-center border-0 bg-[#f2f2f2] p-6 text-[#111]">
         <DialogHeader className="w-full">
           <DialogTitle>{title}</DialogTitle>
@@ -187,7 +165,6 @@ function CodeBox({ url, pairCode, failed }: { url?: string; pairCode?: string; f
             </Button>
           </form>
         )}
-        {stopButton}
       </DialogContent>
     </Dialog>
   )
@@ -531,7 +508,7 @@ export function Connect({
               </code>
             </>
           ) : name === "whatsapp" && "stopped" in at ? (
-            // WhatsApp's stop and its reason (a refused scan, Stop linking), with no command to run.
+            // WhatsApp's stop and its reason (an expired code, a refused scan), with no command to run.
             <>
               <Line bad>{at.line}</Line>
               {at.detail ? <Line>{at.detail}</Line> : null}

@@ -321,7 +321,7 @@ export function AccountsPanel({
                 {held ? (
                   <p className="m-0 text-xs text-muted-foreground">
                     {connecting
-                      ? "Another account is connecting. Finish or stop it to connect this one."
+                      ? "Another account is connecting. This one can connect once it finishes."
                       : "Wait for the sync to finish to connect this one."}
                   </p>
                 ) : null}
