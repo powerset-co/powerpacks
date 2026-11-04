@@ -394,6 +394,8 @@ def rapidapi_experience_to_powerpacks(
         "company_public_identifier": identity.get("company_public_identifier", ""),
         "company_linkedin_url": identity.get("company_linkedin_url", ""),
         "company_key": identity.get("company_key", ""),
+        # LinkedIn's signed logo URL; the app resolves it through the gateway image cache.
+        "company_logo_url": _first_string(exp, ("companyLogo", "company_logo_url", "logo_url")),
         "description": description,
         "title_hash": generate_title_hash(title, description),
         "starts_at": starts_at,
