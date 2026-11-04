@@ -278,3 +278,19 @@ scope here — the pane's table already sorts, and SQL predicates belong to `sea
    for "also in NYC".
 4. **Web**: types + pass control + refined-trait chip style; `RunView`/`RunHeader` tests.
 5. (Optional) Transcript card line for a rerank, and a "Refine…" field in the pane that calls `send()`.
+
+## Astra review (gpt-6-astra via Codex, read-only, against e4a61bc9)
+
+**Agrees:** same Codex thread, reuse `llm_rerank_candidates` (already takes criteria + full profiles), no fork/classifier/dynamic tool; scope wiring is described correctly; keep the run path explicit in the rerank command (thread env is scope, not "which search").
+
+**Corrections to fold in before implementing** (spot-checked):
+- `turn/start` carries only approval/sandbox/model/effort, no config/env (`web/src/lib/api/codex.ts:151-164`); Codex model ≠ scorer model (separate OpenAI client). Per-turn config support in the bundled server is unproven.
+- Scope is a default, not enforcement: explicit backend flags win, null-scope threads get no env (`search_network_pipeline.py:1352`, `codex.rs:331`).
+- Each pass overwrites `llm_rerank_candidates/query_results.csv` and older steps point at it (`llm_rerank_candidates.py:1355-1369`), so pass outputs must be copied out per pass before publishing.
+- Keep pass history in one place (not both ledger and `results.json`); derive current from the last successful pass. Extending legacy ledgers conflicts with `docs/development.md:135`.
+- Cumulative traits aren't free: `state_traits()` / `record_quick_run()` publish the original expansion traits (`llm_rerank_candidates.py:901`, `search_network_pipeline.py:1167`); pass the full intended criteria explicitly.
+- The 3 s catalog poll can see completed→completed and miss a pass; also refresh the active run when the turn ends (`useCatalog.ts:7`, `AgentPage.tsx:233`).
+- Viewing an old pass: Ask only receives `run_id` (`results_web/api.py:73`), so define what Ask targets; "all readers unchanged" is too strong.
+- Spend: `rerank_all()` re-scores every candidate with no cache (`llm_rerank_candidates.py:748`); estimate/approve cost and don't rebill on resume.
+
+**Its answers to the open questions:** (1) re-score the same screened pool, not the previous top-N; (2) "prefer" reorders, "only X" needs a real filter or a clarifying question; (3) keep criteria unless the user replaces/removes them, don't append contradictions; (4) chat-only refine for v1; (5) keep paid pass outputs, no auto-deletion; (6) pin the selected run into pane-originated messages (today's context injection only covers new threads, `store.ts:195`).
