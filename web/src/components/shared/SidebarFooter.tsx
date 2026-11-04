@@ -12,6 +12,7 @@ import { connectRelay } from "@/lib/api/relay"
 import { isRecord } from "@/lib/utils"
 import { errorText } from "@/lib/api/http"
 import { useFeatures } from "@/lib/features"
+import { linkedinSetup } from "@/pages/onboarding/run"
 import type { InstallStatus } from "@/types/install"
 import {
   dismissedVersion,
@@ -74,7 +75,13 @@ function useImport(): { data: InstallStatus; dismiss: () => void } | null {
     readStored("local", IMPORT_DISMISSED_KEY, (raw) => (typeof raw === "string" ? raw : null)),
   )
   const data = install.data
-  if (data === undefined || data.event === "setup.ready" || (finished(data) && dismissed === data.updated_at))
+  // Onboarding's LinkedIn setup is not an import: Add sources shows after it instead.
+  if (
+    data === undefined ||
+    data.event === "setup.ready" ||
+    linkedinSetup(data) ||
+    (finished(data) && dismissed === data.updated_at)
+  )
     return null
   const dismiss = () => {
     writeStored("local", IMPORT_DISMISSED_KEY, data.updated_at)

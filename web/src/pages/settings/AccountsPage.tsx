@@ -1,12 +1,12 @@
 import { useSearchParams } from "react-router-dom"
 import { Checklist } from "@/pages/onboarding/Checklist"
-import { useRun } from "@/pages/onboarding/run"
+import { linkedinSetup, useRun } from "@/pages/onboarding/run"
 import { Page } from "@/components/shared"
 import { isDesktop } from "@/lib/desktop"
 import { AccountsSettings } from "./AccountsSettings"
 
 function BrowserProgress() {
-  const run = useRun(() => true)
+  const run = useRun((data) => !linkedinSetup(data))
   return <Checklist run={run} />
 }
 
