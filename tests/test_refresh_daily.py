@@ -195,7 +195,16 @@ class RunTests(unittest.TestCase):
         run = self.run_with(manifest, {"a@x.com": "healthy"}, signed)
         self.assertEqual(run.status, "failed")
         self.assertEqual(run.problems[-1].detail, "Deep Context stopped: no operator id.")
-        self.assertEqual(run.problems[-1].href, "/tasks")
+        self.assertEqual(run.problems[-1].href, f"/tasks?run={run.id}")
+
+    def test_a_stopped_run_keeps_the_failed_steps_own_line(self):
+        manifest = {"status": "failed", "message": "Installation stopped. Try again to pick up from here.",
+                    "steps": {"gmail_import": {"status": "completed", "message": "Gmail imported"},
+                              "deep_context": {"status": "failed", "message": "Deep Context stopped: OpenAI quota."}}}
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
+        run = self.run_with(manifest, {"a@x.com": "healthy"}, signed)
+        self.assertEqual(run.problems[-1].detail, "Deep Context stopped: OpenAI quota.")
 
     def test_signed_out_of_powerset_stops_before_setup_waits_for_a_sign_in(self):
         run_id = daily._insert(self.root, "daily", 0)
