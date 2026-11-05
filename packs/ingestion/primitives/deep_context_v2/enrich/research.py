@@ -200,14 +200,25 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
         if subject.guidance:
             run_input["guidance"] = subject.guidance
         inputs.append({"input": run_input, "metadata": {"handle": subject.handle}, "processor": PARALLEL_PROCESSOR})
+    # A 402 that outlasts its waits on a later batch stops the submitting there: the runs already
+    # accepted are paid for, so their answers are read and kept below, and the error is raised after.
+    accepted: int = 0
+    unpaid: APIStatusError | None = None
     for start in range(0, len(inputs), PARALLEL_BATCH_SIZE):
         batch = inputs[start:start + PARALLEL_BATCH_SIZE]
-        with_credit(lambda: client.task_group.add_runs(group_id, inputs=batch, default_task_spec=PARALLEL_TASK_SPEC),
-                    f"{len(batch)} runs")
-    counts: dict[str, int] = {"research_submitted": len(todo), "complete": 0, "no_match": 0, "failed": 0}
+        try:
+            with_credit(lambda: client.task_group.add_runs(group_id, inputs=batch, default_task_spec=PARALLEL_TASK_SPEC),
+                        f"{len(batch)} runs")
+        except APIStatusError as error:
+            if error.status_code != 402 or not accepted:
+                raise
+            unpaid = error
+            break
+        accepted += len(batch)
+    counts: dict[str, int] = {"research_submitted": accepted, "complete": 0, "no_match": 0, "failed": 0}
     answered: int = 0
     if on_progress is not None:
-        on_progress("research", answered, len(todo))
+        on_progress("research", answered, accepted)
     with client.task_group.events(group_id, api_timeout=PARALLEL_STREAM_TIMEOUT, timeout=PARALLEL_STREAM_TIMEOUT + 30) as events:
         for event in events:
             if isinstance(event, TaskGroupStatusEvent) and not event.status.is_active:
@@ -227,7 +238,9 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
             counts[row[2]] += 1
             answered += 1
             if on_progress is not None:
-                on_progress("research", answered, len(todo))
+                on_progress("research", answered, accepted)
+    if unpaid is not None:
+        raise unpaid
     return counts
 
 
