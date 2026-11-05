@@ -2,8 +2,7 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey =
-  "agent" | "searches" | "people" | "accounts" | "memory" | "sets" | "team" | "tasks" | "settings"
+export type PageKey = "agent" | "searches" | "people" | "accounts" | "sets" | "team" | "tasks" | "settings"
 
 export interface Page {
   key: PageKey
@@ -18,7 +17,6 @@ const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
   { key: "accounts", label: "Accounts", href: "/accounts" },
-  // Memory (/memory) is reachable but not listed: it is not ready for the nav.
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },
   // The Powerset team only (Sidebar hides it otherwise): teammates' agents and support threads.

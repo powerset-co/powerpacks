@@ -43,6 +43,7 @@ const FINISHED = {
   message: "Search is ready",
   updated_at: "2026-10-30T07:37:30Z",
   steps: {},
+  retry_command: "bin/onboard",
 }
 function dismissImport() {
   writeStored("local", "import-pane-dismissed", FINISHED.updated_at)
@@ -340,4 +341,19 @@ it("Cancel asks first, then stops the running import", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
   await waitFor(() => expect(install.installAction).toHaveBeenCalledWith("cancel"))
   confirm.mockRestore()
+})
+
+it("leaves a refresh to Scheduled tasks: no import notice when it stops", async () => {
+  setup.done = true
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  install.fetchInstall.mockResolvedValue({
+    ...FINISHED,
+    status: "failed",
+    step: "deep_context",
+    retry_command: "bin/onboard --source gmail --refresh",
+  })
+  mount()
+  await waitFor(() => expect(install.fetchInstall).toHaveBeenCalled())
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(screen.queryByText("Import stopped")).toBeNull()
 })

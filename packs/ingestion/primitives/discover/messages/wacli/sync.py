@@ -1,9 +1,7 @@
 """One wacli metadata sync pass: how much to pull, pull it, refresh the rest.
 
-`resolve_effective_max` is the whole sync-mode policy: an empty store gets an
-unbounded (full) sync, a populated one gets the incremental budget plus headroom
-for what arrived since. There is no user-facing sync mode — the primitive reads
-the local store and decides.
+`resolve_effective_max` is the whole sync-mode policy: every sync is unbounded
+unless a cap is set through the environment. There is no user-facing sync mode.
 
 `run_sync` then makes the single `wacli sync --once` call (contacts and groups
 refreshed in the same pass), `refresh_contacts` / `refresh_group_info` top up
@@ -13,8 +11,11 @@ roster for group chats, parsed once into `payloads.GroupInfo`, so the extractor
 can attribute group membership without a second wacli round trip.
 
 Changelog:
+  2026-11-05: incremental syncs are uncapped by default (POWERPACKS_WACLI_INCREMENTAL_BUDGET=0).
+    The old cap (store + 2,000) counted group chatter, so busy groups hit it every refresh, and
+    whatsmeow had already acked the messages wacli refused after the cap, so those were lost.
   2026-11-04: a sync that reaches its cap ("storage limit reached", rc=1) moves on with what it
-    stored instead of failing: after a few busy weeks every refresh stopped there (Jake: 18,355
+    stored instead of failing: after a few busy weeks every refresh stopped there (one store: 18,355
     stored, cap 20,355). The next sync's cap starts from the new total, so it catches up.
   2026-09-23 (typed rows): `run_sync` / `refresh_group_info` read the typed
     `runtime.CommandResult` (`.returncode`, `.combined_text`, `.json`) instead of
@@ -52,11 +53,11 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import (  # noqa
 from packs.ingestion.primitives.discover.messages.wacli.util import linked_device_blocked  # noqa: E402
 
 DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "0"))
-# Store-size target used after the first sync: existing messages + headroom for
-# new ones (headroom = max(1000, budget // 10) via effective_max_messages).
-# The primitive chooses full vs incremental from the local store; there is no
-# user-facing sync mode.
-DEFAULT_INCREMENTAL_BUDGET = int(os.environ.get("POWERPACKS_WACLI_INCREMENTAL_BUDGET", "20000"))
+# Optional store-size cap after the first sync: existing messages + headroom
+# (max(1000, budget // 10)). 0 = no cap, the default: a sync stops at --idle-exit
+# or the timeout. A cap counts group messages too, and whatsmeow acks the
+# messages wacli refuses once it is reached, so a capped sync drops them.
+DEFAULT_INCREMENTAL_BUDGET = int(os.environ.get("POWERPACKS_WACLI_INCREMENTAL_BUDGET", "0"))
 DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "10800"))
 # What wacli prints when a sync stops at --max-messages.
 STORAGE_LIMIT = "storage limit reached"

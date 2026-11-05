@@ -93,9 +93,11 @@ class RequestTests(unittest.TestCase):
                          "- Hello — owner@example.com, jordan@example.com\n\n"
                          "MESSAGES (most relevant, chronological):\n"
                          "Gmail headers give actual addressing; Cc does not imply nonparticipation. Bodies are excerpts and may retain quoted or forwarded words; do not assign those to the sender.\n"
+                         "Group senders: (me) is the owner, (them) is the CONTACT, (other) is a third participant. "
+                         "The contact's own facts come only from (them) lines.\n"
                          "[gmail 2026-10-14 ME; recipients unavailable] Hello: Can we talk?\n"
                          "[imessage 2026-10-15 THEM]: Yes!\n"
-                         "[imessage_group  OTHER-IN-GROUP]: See you there.")
+                         "[(imessage_group)  (other)]: See you there.")
 
     def test_questions_use_messages_and_define_warmth_as_reachability_today(self) -> None:
         self.assertEqual(luna.REQUEST_VERSION, "deep-context-luna-detectors-20261028")
@@ -241,7 +243,7 @@ class WorthRunTests(StoreTests):
             "[gmail 2026-10-15 THEM; recipients unavailable]: Newest",
             "[gmail 2026-10-10 ME; recipients unavailable]: Middle",
             "[gmail 2026-10-01 ME; recipients unavailable]: Oldest",
-            "[imessage_group 2026-09-30 from another group participant to Test Owner (owner) and Jordan Bravo]: Group",
+            "[(imessage_group) 2026-09-30 (other)]: Group",
         ])
         self.assertEqual((state["channels"]["from_me"], state["channels"]["from_them"]), (2, 1))
         self.assertEqual(state["owner"]["name"], "Test Owner")
