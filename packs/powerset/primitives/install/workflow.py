@@ -5,6 +5,12 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-11-04: under the desktop app, Gmail syncs the mailboxes signed in now even when another's
+      sign-in expired; the expired one is only re-read from the mail already archived, so its
+      contacts stay, and it never opens Google's consent mid-run.
+  2026-11-04: the Connect screen's WhatsApp link waits CONNECT_LINK_SECONDS (10 min) for a scan or a
+      phone number, then ends as `whatsapp.expired`, handed back, instead of renewing the QR for up
+      to 3 h: setup's lock is free again for LinkedIn or Gmail.
   2026-10-27: the Gmail and LinkedIn tools step says when it downloads Powerpacks' own browser.
   2026-10-24: the LinkedIn count's read/total go in the event's details too, so the
       onboarding page can estimate the time left from them.
@@ -113,6 +119,8 @@ class GmailCount:
         return {"read": sum(read for read, _ in self.mailboxes.values()),
                 "total": sum(total for _, total in self.mailboxes.values())}
 _PERMISSION_POLL_SECONDS = 2
+# How long the Connect screen's WhatsApp link holds setup's lock waiting on a scan or a phone number.
+CONNECT_LINK_SECONDS = int(os.environ.get("POWERPACKS_WHATSAPP_CONNECT_SECONDS", "600"))
 DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
 _TOOL_STEPS = {Source.LINKEDIN: InstallStep.LINKEDIN_LOGIN, Source.GMAIL: InstallStep.GMAIL_TOOLS,
                Source.WHATSAPP: InstallStep.WHATSAPP_TOOLS}
@@ -136,6 +144,8 @@ class SourceOnboarding:
         if not set(self.skip_sources) <= set(self.sources):
             raise ValueError("Skip only a selected source")
         self.gmail_emails = gmail_emails or tuple(saved.gmail_email)
+        # Mailboxes whose sign-in lapsed: read from msgvault's archive, not synced (desktop only).
+        self.gmail_unsynced: tuple[str, ...] = ()
         # Reuse imported mailboxes or saved choices. Native setup asks before defaulting
         # to the Powerset login; the CLI skill explains that default before setup.
         if not self.gmail_emails and Source.GMAIL in self.sources and Source.GMAIL not in self.skip_sources:
@@ -278,14 +288,15 @@ class SourceOnboarding:
     def _gmail_sync(self) -> bool:
         current = None if self.refresh else import_common.import_manifest_current("gmail")
         imported_emails = {item["account_email"].lower() for item in current.input.get("accounts", [])} if current else set()
-        if current and imported_emails == {email.lower() for email in self.gmail_emails} and self._gmail_covered(current):
+        emails = (*self.gmail_emails, *self.gmail_unsynced)
+        if current and imported_emails == {email.lower() for email in emails} and self._gmail_covered(current):
             self._write("gmail.sync.current")
             self._write("gmail.import.current")
             return True
         self._write("gmail.syncing")
         count = GmailCount()
         result = GmailDiscovery(
-            account_emails=list(self.gmail_emails), sync_after=self.sync_after,
+            account_emails=list(emails), unsynced_emails=self.gmail_unsynced, sync_after=self.sync_after,
             on_progress=lambda email, read, total: self._write("gmail.syncing.count", **count.add(email, read, total),
                                                                details=count.add(email, read, total))).run()
         if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):
@@ -319,13 +330,19 @@ class SourceOnboarding:
             self._write("whatsapp.checking")
         else:
             self._write("whatsapp.qr", details={"store": str(self.wacli_store)})
+        connect = self.status.name == "connect"
+        timeout = {"auth_timeout": CONNECT_LINK_SECONDS} if connect else {}
         while True:
             try:
-                result = auth.auth_report(self.wacli_store, open_qr_page=False)
+                result = auth.auth_report(self.wacli_store, open_qr_page=False, **timeout)
                 break
             except PrimitiveBlocked as blocked:
                 if "command timed out after" not in blocked.payload.get("detail", ""):
                     raise
+                if connect:
+                    # Nobody linked in time: end, so the next sign-in can take setup's lock.
+                    self._write("whatsapp.expired", details=blocked.payload, handed_back=True)
+                    return False
                 self._write("whatsapp.qr.refreshed")
         return self._result(result, "whatsapp.already_linked" if linked else "whatsapp.linked",
                             waiting="whatsapp.blocked", failed="whatsapp.failed")
@@ -429,12 +446,16 @@ class SourceOnboarding:
         self._write("sources.selected")
         # Under the desktop app every sign-in happens on the Connect screen first: setup takes the
         # sources signed in (accounts.signed_in, the answer that screen shows) and leaves the rest
-        # out, so it never waits on the user; Gmail syncs exactly the mailboxes signed in.
+        # out, so it never waits on the user. Gmail syncs exactly the mailboxes signed in now; one
+        # whose sign-in lapsed keeps its archived mail and is the run's problem to report.
         if DESKTOP:
             ready = signed_in(sources=tuple(source.value for source in self.sources))
+            usable = {source: bool(ready.healthy_mailboxes) if source is Source.GMAIL else getattr(ready, source.value)
+                      for source in self.sources}
             self.skip_sources = tuple(dict.fromkeys(
-                [*self.skip_sources, *(source for source in self.sources if not getattr(ready, source.value))]))
-            self.gmail_emails = ready.mailboxes
+                [*self.skip_sources, *(source for source in self.sources if not usable[source])]))
+            self.gmail_emails = ready.healthy_mailboxes
+            self.gmail_unsynced = tuple(email for email in ready.mailboxes if email not in ready.healthy_mailboxes)
         for source in self.sources:
             for step in _SOURCE_STEPS[source]:
                 if source in self.skip_sources:

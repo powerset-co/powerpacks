@@ -44,6 +44,21 @@ DEFAULT_CHILD_TIMEOUT_SECONDS = int(os.environ.get("POWERPACKS_IMPORT_NETWORK_CH
 DEFAULT_PROGRESS_PREFIX = "[discover]"
 
 
+
+def alive(pid: int) -> bool:
+    """Whether the process still exists. Signal 0 delivers nothing; a process we may not signal
+    (another user's, a sandbox's) still exists, so EPERM is alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def emit_progress(message: str, prefix: str = DEFAULT_PROGRESS_PREFIX) -> None:
     """Write one human-readable progress line to stderr, tagged with `prefix`."""
     print(f"{prefix} {message}", file=sys.stderr, flush=True)

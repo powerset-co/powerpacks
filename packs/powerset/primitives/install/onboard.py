@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import shlex
+import signal
 import sys
 import time
 import urllib.error
@@ -53,7 +54,7 @@ class Network:
 
 
 class Onboarding:
-    def __init__(self, root: Path, *, pid: int, retry_command: str) -> None:
+    def __init__(self, root: Path, *, pid: int, retry_command: str, plan: list[str] | None = None) -> None:
         self.root = root.resolve()
         self.env_path = self.root / ".env"
         self.config = keys._read_env_file(self.root / "packs/powerset/templates/env.powerset.example")
@@ -63,13 +64,16 @@ class Onboarding:
         self.base = self.config.get("POWERSET_API_URL", keys.DEFAULT_API_BASE).rstrip("/")
         self.pid = pid
         self.retry_command = retry_command
+        # The whole run's plan from its first line, so the page never lists the last run's rows.
+        self.plan = plan
         self.status = InstallStatus(self.root)
         self.step = InstallStep.ACCOUNT
         self.token = ""
         self.email = ""
 
     def progress(self, event: str, **values) -> dict:
-        record = self.status.write(event, step=self.step, pid=self.pid, retry_command=self.retry_command, **values)
+        record = self.status.write(event, step=self.step, pid=self.pid, retry_command=self.retry_command,
+                                   plan=self.plan, **values)
         self.step = InstallStep(record["step"])
         return record
 
@@ -269,6 +273,10 @@ class Onboarding:
         return self.failed("account.error")
 
 
+def _stop(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, parents=[_parser(add_help=False)])
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -282,6 +290,9 @@ def main() -> None:
     report.install(root)
     status = InstallStatus(root)
     status.directory.mkdir(parents=True, exist_ok=True)
+    # A cancel (the page's Cancel, the app quitting) is SIGTERM: unwind like Ctrl-C, so children
+    # started along the way are stopped on the way out, then record the stop before the lock goes.
+    signal.signal(signal.SIGTERM, _stop)
     # The server and agent can both request a resume. Only this process owns work.
     with (status.directory / "onboard.lock").open("a") as lock:
         try:
@@ -289,9 +300,15 @@ def main() -> None:
         except BlockingIOError:
             print("NEEDS YOU: Setup is already running.", flush=True)
             raise SystemExit(NEEDS_YOU) from None
-        payload = (SourceOnboarding(root, sources=tuple(args.source), gmail_emails=tuple(args.gmail_email),
-                                    wacli_store=args.wacli_store, record="connect").connect()
-                   if args.logins_only else _setup(root, args, parser, status))
+        try:
+            payload = (SourceOnboarding(root, sources=tuple(args.source), gmail_emails=tuple(args.gmail_email),
+                                        wacli_store=args.wacli_store, record="connect").connect()
+                       if args.logins_only else _setup(root, args, parser, status))
+        except KeyboardInterrupt:
+            record = InstallStatus(root, "connect" if args.logins_only else "manifest")
+            record.write("install.stopped", pid=0, retry_command=record.read()["retry_command"])
+            print("STOPPED: The import was stopped.", flush=True)
+            raise SystemExit(1) from None
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
     print(f"{prefix[payload['status']]}: {payload['message']}", flush=True)
     raise SystemExit({"completed": 0, "waiting": NEEDS_YOU, "running": NEEDS_YOU, "failed": 1}[payload["status"]])
@@ -317,8 +334,7 @@ def _setup(root: Path, args: argparse.Namespace, parser: argparse.ArgumentParser
         print("FAILED: The progress page could not start. Check the installation log.", flush=True)
         raise SystemExit(1) from error
     print(f"STATUS PAGE: {page['url']}", flush=True)
-    onboarding = Onboarding(root, pid=os.getpid(),
-                            retry_command=flow.retry_command)
+    onboarding = Onboarding(root, pid=os.getpid(), retry_command=flow.retry_command, plan=flow.plan)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = onboarding.run()

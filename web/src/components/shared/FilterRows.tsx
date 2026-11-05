@@ -4,7 +4,7 @@
 
 import type { ReactNode } from "react"
 
-import { type Field, type Values, names, scalar } from "@/lib/agent/searchFields"
+import { type Field, type Values, names, pairText, scalar } from "@/lib/agent/searchFields"
 import { titleCase } from "@/lib/people/copy"
 import type { FilterValue, Trait } from "@/types/searches"
 
@@ -69,7 +69,7 @@ export function ReadRow({ field, values }: { field: Field; values: Values }) {
       const [low, high] = control.keys.map((key) => shown(values.get(key)))
       return (
         <Row label={field.label}>
-          <span className="text-[13px]">{range(low ?? "", high ?? "")}</span>
+          <span className="text-[13px]">{pairText(control.keys[0], low ?? "", high ?? "")}</span>
         </Row>
       )
     }

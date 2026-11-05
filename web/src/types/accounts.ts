@@ -17,8 +17,8 @@ export interface Account {
 export interface AccountsPayload {
   accounts: Account[]
   jobs: JobsPayload
-  // Whether the daily refresh task is installed in Codex or Claude.
-  scheduled: boolean
+  // The refresh's schedule ("daily at 6:00 AM", "weekly on Monday at 6:00 AM"), or null while it is off.
+  scheduled: string | null
 }
 
 // api.py Job: a Sync or Reconnect the server is running, keyed by card ("gmail",

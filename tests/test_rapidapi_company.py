@@ -222,5 +222,21 @@ class CachedCompanyBatchTests(unittest.TestCase):
             ])
 
 
+class CompanyLogoTests(unittest.TestCase):
+    def test_prefers_the_200px_logo_then_images_logo(self) -> None:
+        details = {"data": {"name": "Acme", "logos": [
+            {"url": "https://media.licdn.com/x/company-logo_100_100/0/1", "width": 100, "height": 100},
+            {"url": "https://media.licdn.com/x/company-logo_200_200/0/1", "width": 200, "height": 200},
+            {"url": "https://media.licdn.com/x/company-logo_400_400/0/1", "width": 400, "height": 400},
+        ]}}
+        self.assertEqual(rapidapi_company.extract_company_context(details)["logo_url"], "https://media.licdn.com/x/company-logo_200_200/0/1")
+        search_shape = {"logo": [{"url": "https://media.licdn.com/x/company-logo_400_400/0/2"}]}
+        self.assertEqual(rapidapi_company.company_logo_url(search_shape), "https://media.licdn.com/x/company-logo_400_400/0/2")
+        self.assertEqual(rapidapi_company.company_logo_url({"Images": {"logo": "https://media.licdn.com/x/company-logo_200_200/0/3"}}),
+                         "https://media.licdn.com/x/company-logo_200_200/0/3")
+        self.assertNotIn("logo_url", rapidapi_company.extract_company_context({"data": {"name": "No logo", "logos": [], "Images": {}}}))
+        self.assertEqual(rapidapi_company.extract_company_context({"error": "nope"}), {})
+
+
 if __name__ == "__main__":
     unittest.main()

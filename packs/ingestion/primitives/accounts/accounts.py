@@ -18,6 +18,11 @@ sign-in writes it (msgvault's tokens, macOS's Full Disk Access, wacli's link, th
 sign-in browser's LinkedIn session).
 
 Changelog:
+  2026-11-04: shorter Gmail notes, one wording for every source's staleness; Accounts' card points to Scheduled tasks for a reconnect.
+  2026-11-04: `signed_in` also names the mailboxes signed in now (`healthy_mailboxes`), so a refresh
+              syncs those while an expired one waits for its reconnect instead of stopping all of Gmail.
+  2026-11-04: `gmail_tokens`, so the server reuses a Gmail check until a sign-in writes a token;
+              Accounts lists the mailboxes its sign-in check found instead of asking msgvault again.
   2026-10-13: `signed_in`, shared by setup and its Connect screen.
   2026-09-28: created for the local Accounts page.
 """
@@ -91,12 +96,14 @@ class Account:
 @dataclass(frozen=True)
 class SignedIn:
     """Which sources need no sign-in, and Gmail's mailboxes (the Google app's owner first: it is
-    the one that lets the others in)."""
+    the one that lets the others in). `gmail` is every mailbox signed in (the Connect screen's
+    row); `healthy_mailboxes` are the ones signed in now, which setup syncs."""
     linkedin: bool
     gmail: bool
     imessage: bool
     whatsapp: bool
     mailboxes: tuple[str, ...]
+    healthy_mailboxes: tuple[str, ...] = ()
 
 
 ALL_SOURCES = ("linkedin", "gmail", "imessage", "whatsapp")
@@ -105,18 +112,21 @@ ALL_SOURCES = ("linkedin", "gmail", "imessage", "whatsapp")
 def signed_in(signins: dict[str, SignIn] | None = None, sources: tuple[str, ...] = ALL_SOURCES) -> SignedIn:
     """Each source's sign-in, read where it lives; only `sources` are read, the rest answer no
     (a LinkedIn-only setup run never touches msgvault or Messages). Gmail counts once every
-    stored mailbox's sign-in is healthy now: an expired one would open Google's consent mid-setup."""
+    stored mailbox's sign-in is healthy now; setup syncs only `healthy_mailboxes`, since an
+    expired one would open Google's consent mid-setup."""
     if "gmail" not in sources:
         signins = {}
     elif signins is None:
         signins = gmail_signins()
     owner = msgvault_home.load_setup_state(MSGVAULT_HOME).email.lower() if signins else ""
+    mailboxes = tuple(sorted(signins, key=lambda email: email != owner))
     return SignedIn(
         linkedin="linkedin" in sources and _linkedin_session(),
         gmail=bool(signins) and all(state == "healthy" for state in signins.values()),
         imessage="imessage" in sources and _messages_readable(),
         whatsapp="whatsapp" in sources and _whatsapp_linked(),
-        mailboxes=tuple(sorted(signins, key=lambda email: email != owner)),
+        mailboxes=mailboxes,
+        healthy_mailboxes=tuple(email for email in mailboxes if signins[email] == "healthy"),
     )
 
 
@@ -138,6 +148,16 @@ def _whatsapp_linked() -> bool:
         return wacli_auth.auth_status(DEFAULT_STORE).authenticated
     except (PrimitiveFailed, OSError):
         return False
+
+
+def gmail_tokens() -> tuple[tuple[str, int], ...]:
+    """msgvault's saved Google tokens and when each was written. A sign-in writes one, so a
+    change here means a Gmail check is out of date; nothing else reads a token's contents."""
+    try:
+        return tuple(sorted((token.name, token.stat().st_mtime_ns)
+                            for token in (MSGVAULT_HOME / "tokens").glob("*.json")))
+    except OSError:
+        return ()
 
 
 def read_accounts(signins: dict[str, SignIn] | None = None) -> list[Account]:
@@ -169,12 +189,14 @@ class _GmailRow:
 
 
 def _gmail_accounts(signins: dict[str, SignIn] | None) -> list[Account]:
-    emails = stored_mailboxes(MSGVAULT_HOME)
+    # A sign-in check names every mailbox msgvault held when it ran; each msgvault command
+    # opens (and migrates) its whole database, which takes seconds on a large mailbox.
+    if signins is None:
+        signins = gmail_signins()
+    emails = tuple(signins)
     if not emails:
         return [Account("gmail", "Gmail", "off", "Not connected", 0, 0, None, None)]
     rows = _gmail_rows(DEFAULT_MSGVAULT_DB, emails)
-    if signins is None:
-        signins = gmail_signins()
     contacts = _gmail_contacts()
     return [_gmail_account(row, signins[row.email], contacts.get(row.email, 0)) for row in rows]
 
@@ -228,17 +250,17 @@ def _gmail_account(row: _GmailRow, signin: SignIn, contacts: int) -> Account:
 
 def _gmail_health(row: _GmailRow, signin: SignIn) -> tuple[Health, str]:
     if signin == "reauthorization_required":
-        return "error", "Sign-in expired. Reconnect to keep syncing."
+        return "error", "Sign-in expired"
     if signin == "missing_token":
-        return "error", "Not signed in. Reconnect to sync."
+        return "error", "Not signed in"
     if row.last_run_status == "failed":
         # Signed in, so it's the sync to retry, not the sign-in.
         return "warning", f"Last sync failed: {row.last_run_error or 'unknown error'}"
     if _days_since(row.last_sync_at) > STALE_SYNC_DAYS:
-        return "warning", "Signed in, but no sync in the last 2 days."
+        return "warning", "No sync in the last 2 days"
     if signin == "transient_error":
         return "warning", "Couldn't reach Google to check the sign-in."
-    return "ok", "Signed in and up to date."
+    return "ok", "Up to date"
 
 
 # ---------------------------------------------------------------- iMessage
@@ -309,7 +331,7 @@ def _import_health(imported_at: str | None) -> tuple[Health, str]:
     if imported_at is None:
         return "off", "Not imported yet"
     if _days_since(imported_at) > STALE_SYNC_DAYS:
-        return "warning", "No refresh in the last 2 days."
+        return "warning", "No sync in the last 2 days"
     return "ok", "Up to date"
 
 

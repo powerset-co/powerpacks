@@ -8,6 +8,9 @@ a store. Every other wacli module goes through `binary.wacli_json` /
 `binary.wacli_bin` instead of assembling its own binary path.
 
 Changelog:
+  2026-11-04 (QR linking fix): pin v0.15.2-fullsync — fails closed on passkey and
+    unknown QR pairing states (upstream wacli #356) and bumps whatsmeow to
+    20261102, which follows WhatsApp's mid-pairing QR secret rotation.
   2026-09-23 (typed rows): `run_command` returns the typed `runtime.CommandResult`,
     so the version/json calls read `.returncode`/`.stdout`/`.failure_detail`
     instead of indexing a dict. Behavior unchanged.
@@ -52,7 +55,7 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import (  # noqa
 # for this tag — no Go toolchain on the user's machine — and keep it off the
 # upstream Homebrew tap so we control the version.
 WACLI_REPO = "powerset-co/wacli"
-WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.15.1-fullsync")
+WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.15.2-fullsync")
 # sha256 of every published release asset for the pinned version above, verified
 # after download and BEFORE the binary is made executable or run (see
 # `verify_wacli_download`). Computed from the public GitHub release assets; the
@@ -60,6 +63,12 @@ WACLI_PINNED_VERSION = os.environ.get("POWERPACKS_WACLI_VERSION", "v0.15.1-fulls
 # env-overridden POWERPACKS_WACLI_VERSION has no entry here and installs
 # unverified — an explicit dev escape hatch, never the shipped default.
 WACLI_ASSET_SHA256: dict[str, dict[str, str]] = {
+    "v0.15.2-fullsync": {
+        "wacli-darwin-arm64": "477a6520638914703dc6482be3ad80482fbd31fc53b52058ec614be1e10ea0db",
+        "wacli-darwin-amd64": "c892c060913263a4fded7b32b55352cb12df05c92f2e53c84aacc530fb8b5e87",
+        "wacli-linux-arm64": "1a0ff62efdb3dedef53a04ec14db32b117fe03e8e21ce1ac23bbf351448da214",
+        "wacli-linux-amd64": "01309e59bd679a3672e8ac8c956a491dfe9cc80b0dd1c21d3397d81f3ad862e3",
+    },
     "v0.15.1-fullsync": {
         "wacli-darwin-arm64": "742e7f516ca8688cc95775546f76b587fb8aecb34a27f0e0689e4d57caa89a19",
         "wacli-darwin-amd64": "92a603c80cabc4fb705d882f9a1d8655f2d1b8df96057f7eafbaf0d730947e02",

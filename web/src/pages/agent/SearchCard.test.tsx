@@ -82,9 +82,11 @@ it("folds a card that no longer asks under its query, and opens to the traits an
   expect(screen.getByText("Metro Areas:")).toBeTruthy()
   expect(screen.getByText("New York Metropolitan Area")).toBeTruthy()
   expect(screen.getByText("Vice-President")).toBeTruthy()
-  expect(screen.getByText("5 – any")).toBeTruthy()
+  expect(screen.getByText("Experience:")).toBeTruthy()
+  expect(screen.getByText("5+ years")).toBeTruthy()
   expect(screen.getByText("VP Finance")).toBeTruthy()
-  expect(screen.getByText("Finance Lead")).toBeTruthy()
+  // The canonical role ids stay in the search but off the card, as on the cloud app.
+  expect(screen.queryByText("Finance Lead")).toBeNull()
   expect(screen.getByText("5 filters applied")).toBeTruthy()
   expect(screen.queryByText("Companies:")).toBeNull()
   expect(screen.queryByRole("textbox")).toBeNull()
@@ -327,24 +329,14 @@ it("keeps showing what it sent once the card no longer asks", () => {
   expect(screen.getAllByRole("button")).toHaveLength(1)
 })
 
-it("adds canonical role ids through the picker", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({ suggestions: [{ id: "product_manager", display_value: "Product Manager" }] }),
-        ),
-      ),
-  )
+it("keeps the role ids it does not show", () => {
   render(<SearchCard search={SEARCH} actions={true} />)
-  fireEvent.click(screen.getByRole("button", { name: "Add Role ids" }))
-  fireEvent.change(screen.getByRole("textbox", { name: "Search Role ids" }), { target: { value: "product" } })
-  fireEvent.click(await screen.findByRole("button", { name: "Product Manager" }))
+  expect(screen.queryByText("Roles:")).toBeNull()
+  expect(screen.queryByRole("button", { name: "Add Role ids" })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
   execute()
-  expect(sent().filters.role_ids).toEqual(["finance_lead", "product_manager"])
-  vi.unstubAllGlobals()
+  // An edit beside them leaves the ids as prepared, so they are not sent as changed.
+  expect(sent().filters).toEqual({ seniority_bands: ["vice-president"] })
 })
 
 it("shows a filter the table doesn't name with its value's own shape and keeps its type", () => {
@@ -368,16 +360,45 @@ it("shows a filter the table doesn't name with its value's own shape and keeps i
   expect(sent().filters).toEqual({ custom_score_min: 4, team_note: "infra" })
 })
 
-it("shows the current-only toggle only to a search without traits", () => {
-  const current: PreparedSearch = {
+it("hides what the cloud app's preview hides, and keeps sending it", () => {
+  const search: PreparedSearch = {
     ...SEARCH,
     traits: [],
-    filters: [...SEARCH.filters, { key: "is_current_role", value: true }],
+    filters: [
+      ...SEARCH.filters,
+      { key: "is_current_role", value: true },
+      { key: "tech_skills", value: ["python"] },
+      { key: "customer_types", value: ["b2b"] },
+      { key: "graduation_year_min", value: 2010 },
+    ],
   }
-  const { rerender } = render(<SearchCard search={current} actions={true} />)
-  expect(screen.getByRole("checkbox", { name: "Current role only" })).toBeTruthy()
-  rerender(<SearchCard search={{ ...current, traits: SEARCH.traits }} actions={true} />)
+  render(<SearchCard search={search} actions={true} />)
   expect(screen.queryByRole("checkbox", { name: "Current role only" })).toBeNull()
+  expect(screen.queryByText("Python")).toBeNull()
+  expect(screen.queryByText("B2b")).toBeNull()
+  expect(screen.queryByText("Graduation Year:")).toBeNull()
+  execute()
+  expect(store.send).toHaveBeenCalledWith("execute")
+})
+
+it("folds a list past ten names behind + N hidden, as the cloud app does", () => {
+  const cities = Array.from({ length: 13 }, (_, at) => `City ${at + 1}`)
+  render(
+    <SearchCard
+      search={{
+        ...SEARCH,
+        filters: [
+          { key: "cities", value: cities },
+          { key: "company_names", value: cities },
+        ],
+      }}
+      actions={false}
+    />,
+  )
+  fireEvent.click(screen.getByRole("button", { name: "Show filters" }))
+  // Companies fold; locations are their own rows and show every name.
+  fireEvent.click(screen.getByRole("button", { name: "+ 3 hidden" }))
+  expect(screen.getByRole("button", { name: "Hide" })).toBeTruthy()
 })
 
 it("resets every edit to the prepared search", () => {

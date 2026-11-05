@@ -8,6 +8,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
@@ -203,6 +204,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         # An explicit positive low-level cap still wins.
         self.assertEqual(sync.resolve_effective_max(10000, 25000), 26000)
         self.assertEqual(sync.resolve_effective_max(10000, 0), 10000)
+
+    def test_sync_that_reaches_its_cap_moves_on(self) -> None:
+        capped = runtime.CommandResult(returncode=1, stdout="Synced 2050 messages... Stopping sync.",
+                                       stderr="storage limit reached: message is 20355, limit is 20355", json={})
+        with mock.patch.object(runtime, "run_command", return_value=capped):
+            summary = sync.run_sync(Path("/tmp/wacli"), timeout=60, idle_exit="30s", max_messages=20355)
+        self.assertTrue(summary["capped"])
+        failed = runtime.CommandResult(returncode=1, stdout="", stderr="connection lost", json={})
+        with mock.patch.object(runtime, "run_command", return_value=failed), \
+             self.assertRaises(runtime.PrimitiveFailed):
+            sync.run_sync(Path("/tmp/wacli"), timeout=60, idle_exit="30s", max_messages=20355)
 
     def test_cold_bootstrap_default_allows_three_hours(self) -> None:
         self.assertEqual(auth.DEFAULT_AUTH_TIMEOUT, 10800)
@@ -419,11 +431,106 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertEqual(code.read_text(), "ABCD-EFGH")
             self.assertFalse(request.exists())
 
-    def test_auth_that_ends_before_a_scan_asks_for_the_qr_again(self) -> None:
+    def test_auth_that_ends_before_a_scan_offers_the_phone_number(self) -> None:
         with self.assertRaises(runtime.PrimitiveBlocked) as ctx:
             self.run_fake_auth(["2@qr-payload"], exits=1)
 
-        self.assertIn("WhatsApp needs a QR scan", ctx.exception.payload["message"])
+        # Nothing said why and no number came before the deadline: the stop still points to the phone.
+        self.assertIn("phone number", ctx.exception.payload["message"])
+
+    def fake_link(self, td: str, outputs: list[list[str]], *, exits: list[int | None], on_start=None):
+        """run_auth over fake wacli runs: run i prints outputs[i] and exits with exits[i] (None: waits)."""
+        files = {name: Path(td) / f"{name}.txt" for name in ("phone", "code", "failed")}
+
+        class FakeProc:
+            def __init__(self, cmd, *, stdout, **kwargs) -> None:
+                self.cmd, self.terminated = cmd, False
+                self.returncode = exits[len(procs)]
+                stdout.write("".join(f"{line}\n" for line in outputs[len(procs)]))
+                stdout.flush()
+                if on_start:
+                    on_start(len(procs), files)
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self) -> None:
+                self.terminated, self.returncode = True, -15
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            def wait(self) -> int:
+                return self.returncode
+
+        procs: list[FakeProc] = []
+        with mock.patch.object(auth, "DEFAULT_AUTH_LOG", Path(td) / "wacli-auth.log"), \
+                mock.patch.object(auth, "DEFAULT_PHONE_REQUEST", files["phone"]), \
+                mock.patch.object(auth, "DEFAULT_PAIR_CODE", files["code"]), \
+                mock.patch.object(auth, "DEFAULT_QR_FAILED", files["failed"]), \
+                mock.patch.object(auth, "DEFAULT_QR_PNG", Path(td) / "qr.png"), \
+                mock.patch.object(auth, "DEFAULT_QR_HTML", Path(td) / "qr.html"), \
+                mock.patch.object(auth.subprocess, "Popen",
+                                  side_effect=lambda cmd, **kw: procs.append(FakeProc(cmd, **kw)) or procs[-1]), \
+                mock.patch.object(qr, "update_qr_page"):
+            try:
+                return auth.run_auth(Path("/tmp/wacli-store"), timeout=5, idle_exit="30s", open_qr_page=False), procs, files
+            except runtime.PrimitiveBlocked as blocked:
+                return blocked, procs, files
+
+    def test_a_refused_scan_waits_for_a_phone_number_instead_of_ending(self) -> None:
+        notes: list[str] = []
+
+        def on_start(index: int, files: dict[str, Path]) -> None:
+            if index == 0:
+                # The page reads the reason, then sends a number while the link waits.
+                threading.Timer(0.3, lambda: (notes.append(files["failed"].read_text()),
+                                              files["phone"].write_text("14155550100"))).start()
+
+        with tempfile.TemporaryDirectory() as td:
+            result, procs, files = self.fake_link(
+                td, [["2@qr-payload", "Error: WhatsApp requires passkey verification, which wacli cannot safely complete yet"],
+                     ['{"event":"connected","ts":2}']], exits=[1, None], on_start=on_start)
+
+            self.assertTrue(result.connected_event)
+            self.assertIn("passkey verification", notes[0])
+            self.assertIn("phone number", notes[0])
+            self.assertEqual(procs[1].cmd[procs[1].cmd.index("--phone") + 1], "14155550100")
+            self.assertFalse(files["failed"].exists())
+
+    def test_wacli_refusal_wording_maps_to_the_phone_fallback(self) -> None:
+        from packs.ingestion.primitives.discover.messages.wacli.util import qr_link_failure
+        for line in ('{"event":"error","data":{"message":"WhatsApp requires passkey confirmation, which wacli '
+                     'cannot safely complete yet; preserve any existing authenticated store"}}',
+                     'unsupported QR pairing state "err-new"; update wacli and try again',
+                     "unexpected QR pairing state; run `wacli auth` again",
+                     "QR scanned, but multi-device is not enabled on the phone",
+                     "QR pairing failed: context canceled"):
+            self.assertIn("phone number", qr_link_failure(line) or "", line)
+        self.assertIsNone(qr_link_failure("websocket closed"))
+        self.assertIn("phone number", qr_link_failure("QR code timed out; run `wacli auth` again") or "")
+
+    def test_a_qr_run_that_ends_unlinked_offers_the_phone_number_until_the_deadline(self) -> None:
+        notes: list[str] = []
+        real_wait = auth.wait_for_phone
+
+        def on_start(index: int, files: dict[str, Path]) -> None:
+            # The reason the page reads, captured as the run starts waiting for a number.
+            auth_wait.side_effect = lambda *args: (notes.append(files["failed"].read_text()), real_wait(*args))[1]
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(auth, "time") as clock, \
+                mock.patch.object(auth, "wait_for_phone") as auth_wait:
+            clock.sleep = lambda seconds: time.sleep(0.001)
+            ticks = iter(range(10_000))
+            clock.time = lambda: next(ticks) * 0.05  # the 5 s deadline passes after ~100 polls
+            blocked, procs, _ = self.fake_link(
+                td, [["2@qr-payload", "QR code timed out; run `wacli auth` again to get a new code"]],
+                exits=[1], on_start=on_start)
+        self.assertIsInstance(blocked, runtime.PrimitiveBlocked)
+        self.assertEqual(len(procs), 1)
+        self.assertEqual(notes, ["The QR code didn't link. Link with your phone number instead."])
+        self.assertIn("phone number", blocked.payload["message"])
+        self.assertNotIn("command timed out", blocked.payload.get("detail", ""))
 
     def test_waiting_for_history_holds_until_wacli_releases_the_store(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -703,7 +810,7 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
 
     def test_pinned_release_points_at_powerset_fork(self) -> None:
         self.assertEqual(binary.WACLI_REPO, "powerset-co/wacli")
-        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.15.1-fullsync")
+        self.assertEqual(binary.WACLI_PINNED_VERSION, "v0.15.2-fullsync")
         self.assertIn("powerset-co/wacli/releases/download", binary.WACLI_RELEASE_BASE)
 
     def test_every_asset_of_the_pinned_version_has_a_sha256_pin(self) -> None:

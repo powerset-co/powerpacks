@@ -53,6 +53,8 @@ it("closes automatically when polling sees permission granted", async () => {
   await screen.findByAltText("Powerpacks")
   vi.mocked(fetchSignedIn).mockResolvedValue({ ...NONE, imessage: true })
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end"), { timeout: 4000 })
+  // Only iMessage's sign-in: Gmail's check is slow on a large mailbox and isn't needed here.
+  expect(fetchSignedIn).toHaveBeenCalledWith(expect.anything(), ["imessage"])
 })
 
 it("reopens via the Python route then arranges Settings again", async () => {

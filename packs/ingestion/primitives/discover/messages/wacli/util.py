@@ -81,6 +81,34 @@ def linked_device_blocked(text: str) -> bool:
     )
 
 
+# What wacli prints when WhatsApp refuses a QR scan (whatsmeow's QR channel errors; passkey-gated
+# accounts from wacli 0.17.1, openclaw/wacli#355), and what the page says about each instead.
+PASSKEY_LINE = ("WhatsApp asked this account for passkey verification, which linking by QR can't do yet. "
+                "Link with your phone number instead.")
+_WRONG_SCREEN = ("That scan didn't link. Link with your phone number, or scan from Settings → Linked devices → "
+                 "Link a device.")
+_REFUSED = "WhatsApp didn't accept the QR scan. Link with your phone number instead."
+# A QR run that ended unlinked with no reason wacli names (a stale code WhatsApp refused silently,
+# or wacli's own QR timeout).
+QR_ENDED_LINE = "The QR code didn't link. Link with your phone number instead."
+# wacli's own wording (powerset-co/wacli, from upstream #356); in --events mode these arrive as
+# {"event":"error","data":{"message":...}}.
+_QR_FAILURES = (
+    ("passkey", PASSKEY_LINE),
+    ("multi-device is not enabled", _WRONG_SCREEN),
+    ("unsupported qr pairing state", _REFUSED),
+    ("unexpected qr pairing state", _REFUSED),
+    ("qr pairing failed", _REFUSED),
+    ("qr code timed out", QR_ENDED_LINE),
+)
+
+
+def qr_link_failure(text: str) -> str | None:
+    """What to tell the person when wacli's output says WhatsApp refused the scan, else None."""
+    lowered = text.lower()
+    return next((line for marker, line in _QR_FAILURES if marker in lowered), None)
+
+
 def result_int(row: dict[str, Any], key: str) -> int:
     try:
         return int(row.get(key) or 0)

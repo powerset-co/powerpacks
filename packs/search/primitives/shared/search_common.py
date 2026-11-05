@@ -672,8 +672,30 @@ def search_mode_for_payload(payload: dict[str, Any]) -> str:
     return COMPANY_INTERSECTION
 
 
+HARD_COMPANY_FILTER_KEYS = (
+    "funding_stage_min",
+    "funding_stage_max",
+    "investors",
+    "investor_names",
+    "yc_batches",
+    "company_cities",
+    "company_states",
+    "company_countries",
+    "company_metro_areas",
+    "company_macro_regions",
+)
+
+
+def has_hard_company_filters(payload: dict[str, Any]) -> bool:
+    # Mirrors cloud CompanyFilterClassification.has_hard_filters_check.
+    return any(payload.get(key) for key in HARD_COMPANY_FILTER_KEYS)
+
+
 def company_filter_applies_to_role_search(payload: dict[str, Any]) -> bool:
-    return search_mode_for_payload(payload) != COMPANY_UNION
+    # Cloud (pipeline/verticals.py) restricts role search to resolved
+    # companies in intersection mode, and in union mode too when hard company
+    # filters (funding stage, investors, YC batch, company location) exist.
+    return search_mode_for_payload(payload) != COMPANY_UNION or has_hard_company_filters(payload)
 
 
 def seniority_intent(payload: dict[str, Any]) -> str | None:
@@ -686,7 +708,15 @@ def seniority_intent(payload: dict[str, Any]) -> str | None:
     return None
 
 
+ADJACENCY_FAMILIES = {"founder", "engineer", "data_ml", "product", "marketing", "sales", "leader"}
+
+
 def adjacency_family_for_payload(payload: dict[str, Any]) -> str | None:
+    # Cloud keys union-mode adjacency on role_function; expand only emits
+    # role_ids for the founder/C-suite shortcuts.
+    role_function = str(payload.get("role_function") or "").strip().lower()
+    if role_function in ADJACENCY_FAMILIES:
+        return role_function
     role_ids = {str(value).lower() for value in payload.get("role_ids") or []}
     if role_ids & {"founder", "cofounder", "co-founder"}:
         return "founder"

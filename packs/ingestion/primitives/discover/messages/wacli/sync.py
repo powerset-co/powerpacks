@@ -13,6 +13,9 @@ roster for group chats, parsed once into `payloads.GroupInfo`, so the extractor
 can attribute group membership without a second wacli round trip.
 
 Changelog:
+  2026-11-04: a sync that reaches its cap ("storage limit reached", rc=1) moves on with what it
+    stored instead of failing: after a few busy weeks every refresh stopped there (Jake: 18,355
+    stored, cap 20,355). The next sync's cap starts from the new total, so it catches up.
   2026-09-23 (typed rows): `run_sync` / `refresh_group_info` read the typed
     `runtime.CommandResult` (`.returncode`, `.combined_text`, `.json`) instead of
     indexing the subprocess result dict. Behavior unchanged.
@@ -55,6 +58,8 @@ DEFAULT_MAX_MESSAGES = int(os.environ.get("POWERPACKS_WACLI_MAX_MESSAGES", "0"))
 # user-facing sync mode.
 DEFAULT_INCREMENTAL_BUDGET = int(os.environ.get("POWERPACKS_WACLI_INCREMENTAL_BUDGET", "20000"))
 DEFAULT_SYNC_TIMEOUT = int(os.environ.get("POWERPACKS_WACLI_SYNC_TIMEOUT", "10800"))
+# What wacli prints when a sync stops at --max-messages.
+STORAGE_LIMIT = "storage limit reached"
 
 
 def effective_max_messages(requested: int, existing: int) -> int:
@@ -96,13 +101,16 @@ def run_sync(store: Path, *, timeout: int, idle_exit: str, max_messages: int) ->
             "message": "WhatsApp cannot link new devices right now. Try again later in WhatsApp, then rerun $import-messages.",
             "command": runtime.command_text(cmd),
         })
-    if result.returncode != 0:
+    # wacli exits 1 at the cap; what it stored up to there is kept and the run goes on.
+    capped = STORAGE_LIMIT in text
+    if result.returncode != 0 and not capped:
         detail = text.strip()[-2000:] or "no wacli output captured"
         raise PrimitiveFailed(
             f"sync failed rc={result.returncode} timeout={timeout}s max_messages={max_messages}; "
             f"command={runtime.command_text(cmd)}; output={detail}"
         )
-    return {"command": runtime.command_text(cmd), "returncode": result.returncode, "max_messages": max_messages, "timeout": timeout}
+    return {"command": runtime.command_text(cmd), "returncode": result.returncode, "max_messages": max_messages,
+            "timeout": timeout, "capped": capped}
 
 
 def refresh_contacts(store: Path) -> dict[str, Any]:

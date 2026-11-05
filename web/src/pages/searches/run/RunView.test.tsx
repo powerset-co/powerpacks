@@ -159,11 +159,14 @@ describe("RunView", () => {
     expect(filters.getByText("Technical recruiter").textContent).toBe("Technical recruiter (current)")
     expect(filters.getByText("Seniority")).toBeTruthy()
     expect(filters.getByText("Mid")).toBeTruthy()
-    expect(filters.getByText("Keywords")).toBeTruthy()
+    expect(filters.getByText("Role Keywords")).toBeTruthy()
+    expect(filters.queryByText("Role ids")).toBeNull()
+    expect(filters.queryByText("Technical_recruiter")).toBeNull()
+    expect(filters.queryByText(/Role function/i)).toBeNull()
     expect(filters.getByText("Location")).toBeTruthy()
     expect(filters.getByText("Austin Metropolitan Area").textContent).toBe("Austin Metropolitan Area · metro")
-    expect(filters.getByText("Years")).toBeTruthy()
-    expect(filters.getByText("3 – any")).toBeTruthy()
+    expect(filters.getByText("Experience")).toBeTruthy()
+    expect(filters.getByText("3+ years")).toBeTruthy()
     // As the cloud app's row: each trait's share with its name and reason, nothing else. The
     // pond's own score (80%) only orders the list; the overall reasoning is the drawer's.
     const jordan = row("p-jordan")
@@ -241,9 +244,13 @@ describe("RunView", () => {
     // Current role · company on one line, the location under it.
     expect(jordan.getByText("Staff Engineer")).toBeTruthy()
     expect(jordan.getByText("Example Labs")).toBeTruthy()
-    expect(jordan.getByText("Staff Engineer").parentElement?.textContent).toBe(
-      "Staff Engineer · Example Labs",
-    )
+    expect(jordan.getByText("·")).toBeTruthy()
+    // The company's logo sits just before its name, not on the avatar.
+    const company = jordan.getByText("Example Labs").parentElement
+    expect(company?.querySelector("[data-company-logo]")?.getAttribute("title")).toBe("Example Labs")
+    expect(
+      document.querySelector("[data-person-id='p-jordan'] .result-person > [data-company-logo]"),
+    ).toBeNull()
     expect(jordan.getByText("Oakland, CA")).toBeTruthy()
     expect(
       row("p-casey")

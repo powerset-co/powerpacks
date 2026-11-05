@@ -31,6 +31,9 @@ import { type ExpandedFilters, fromExpanded, toExpanded } from "@/lib/agent/expa
 import { ENTITY_TYPES, SECTOR_TYPES, SENIORITY_BANDS as BAND_ITEMS } from "@/lib/agent/companyFilters"
 import {
   FIELDS,
+  KEYWORDS,
+  LEAD_KEYS,
+  ROLE_QUERY,
   TEMPORALS,
   type Control,
   type Field,
@@ -38,6 +41,10 @@ import {
   fieldHasValue,
   filledFields,
   names,
+  pairText,
+  range,
+  previewShows,
+  previewTitle,
   scalar,
 } from "@/lib/agent/searchFields"
 import { send, useAgent } from "@/lib/agent/store"
@@ -79,18 +86,8 @@ const LOCATION_LABELS: Record<string, string> = {
 /** The cloud app's order for the location rows. */
 const LOCATION_ORDER = Object.keys(LOCATION_LABELS)
 
-/** The three rows the cloud app shows first, in its order, by the key each edits. */
-const ROLE_QUERY = "semantic_query"
-const SENIORITY = "seniority_bands"
-const KEYWORDS = "bm25_queries"
-const LEAD_KEYS = [ROLE_QUERY, SENIORITY, KEYWORDS]
-
-/** A field's row title: its label in title case; the keywords are the role's. */
-function title(field: Field): string {
-  if (field.control.kind === "chips" && field.control.key === KEYWORDS) return "Role Keywords"
-  if (field.control.kind === "chips" && field.control.key === "role_ids") return "Roles"
-  return field.label.replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
-}
+/** A list row shows its first ten names, then "+ N hidden", as the cloud app's does. */
+const SHOWN_NAMES = 10
 
 interface SearchCardProps {
   search: PreparedSearch
@@ -408,12 +405,15 @@ function Chips({
   onDraft: (draft: Draft) => void
 }) {
   const items = names(values.get(control.key))
+  // Role Keywords show every name, as the cloud app's do; other rows fold past ten.
+  const [folded, fold] = useFoldedNames(items)
+  const shown = control.key === KEYWORDS ? items : folded
   const set = (next: string[]) => onChange(withNames(values, control.key, next))
   // Typed names edit in place; the role keywords read in title case, as the cloud app shows them.
   const typed = editable && !control.readonly && !control.options && control.key !== KEYWORDS
   return (
     <>
-      {items.map((name, index) =>
+      {shown.map((name, index) =>
         typed ? (
           // Index keys: a name changes as it is typed.
           <span key={index} className={cn(BADGE, "pr-1.5 focus-within:border-primary")}>
@@ -441,16 +441,9 @@ function Chips({
           </Badge>
         ),
       )}
+      {control.key === KEYWORDS ? null : fold}
       {editable &&
-        (control.key === "role_ids" ? (
-          <LookupAdd
-            label={field.label}
-            lookup="roles"
-            onPick={(item) => {
-              if (!items.includes(item.id)) set([...items, item.id])
-            }}
-          />
-        ) : control.options ? (
+        (control.options ? (
           <OptionsEdit
             label={field.label}
             options={control.options}
@@ -470,9 +463,21 @@ function Chips({
   )
 }
 
-/** A min and a max as one line; an unset bound reads "any". */
-function range(low: string, high: string): string {
-  return `${low === "" ? "any" : low} – ${high === "" ? "any" : high}`
+/** "+ N hidden" past the first ten names of a row, and "Hide" once they show. */
+function useFoldedNames<T>(items: T[]): [T[], ReactNode] {
+  const [all, setAll] = useState(false)
+  if (items.length <= SHOWN_NAMES) return [items, null]
+  return [
+    all ? items : items.slice(0, SHOWN_NAMES),
+    <button
+      key="fold"
+      type="button"
+      onClick={() => setAll(!all)}
+      className={cn(BADGE_ACTION, "text-muted-foreground")}
+    >
+      {all ? "Hide" : `+ ${items.length - SHOWN_NAMES} hidden`}
+    </button>,
+  ]
 }
 
 /** One field's row (or, for locations, one row per kind), edited in place while the card asks. */
@@ -496,7 +501,7 @@ function FieldRow({
 }) {
   const control: Control = field.control
   const lead = "key" in control && LEAD_KEYS.includes(control.key)
-  const label = title(field)
+  const label = previewTitle(field)
   switch (control.kind) {
     case "chips":
       return (
@@ -661,7 +666,7 @@ function FieldRow({
               </span>
             ))
           ) : (
-            <Badge label={field.label}>{range(low, high)}</Badge>
+            <Badge label={field.label}>{pairText(control.keys[0], low, high)}</Badge>
           )}
         </FilterRow>
       )
@@ -1015,16 +1020,10 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     setNewTrait("")
   }
 
-  // Every field but an id list with nothing in it (ids come from the expand step, never typed) and
-  // the current-only toggles when traits carry that already.
+  // Every field but an id list with nothing in it (ids come from the expand step, never typed).
   function offered(field: Field): boolean {
     const control = field.control
     if (control.kind === "chips" && control.readonly) return fieldHasValue(field, shownValues)
-    if (
-      control.kind === "toggle" &&
-      (control.key === "is_current_role" || control.key === "is_current_company")
-    )
-      return search.traits.length === 0 && traits.length === 0
     return true
   }
 
@@ -1054,6 +1053,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     )
   const rest = filledFields(shownValues, prepared)
     .filter((field) => !("key" in field.control && LEAD_KEYS.includes(field.control.key)))
+    .filter(previewShows)
     .filter(offered)
     .filter((field) => actions || fieldHasValue(field, shownValues))
   const applied = [...shownValues.values()].filter(filled).length

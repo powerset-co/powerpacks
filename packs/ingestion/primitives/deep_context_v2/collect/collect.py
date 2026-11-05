@@ -72,7 +72,9 @@ class Collect(Node):
             "messages_whatsapp": 0,
             "messages_whatsapp_group": 0,
         }
-        for person in people:
+        self.progress("people", 0, len(people))
+        for index, person in enumerate(people, 1):
+            self.progress("people", index, len(people))
             # Direct messages across all of the person's channels, newest-first, capped at the depth.
             # `available` is how many there were before the cap.
             messages: list[MessageEntry]

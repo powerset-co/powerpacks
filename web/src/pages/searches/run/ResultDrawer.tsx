@@ -1,4 +1,4 @@
-import { CompanyLogo, ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
+import { ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import { teamLikeness } from "@/lib/searches/copy"
 import { currentRole, roleLine, shownHeadline } from "@/lib/searches/person"
@@ -62,28 +62,14 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
   return (
     <>
       <div className="drawer-top">
-        <ProxiedLinkedinAvatar
-          name={row.name}
-          size={40}
-          src={row.avatar_url || undefined}
-          badge={
-            current.company ? (
-              <CompanyLogo
-                company={current.company}
-                src={current.logo || undefined}
-                size={14}
-                className="avatar-logo"
-              />
-            ) : null
-          }
-        />
+        <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
         <div className="who">
           <div className="review-name">
             <h2>{row.name}</h2>
             <LinkedInLink row={row} />
           </div>
           <div className="review-role">
-            <RoleLine title={current.title} company={current.company} />
+            <RoleLine title={current.title} company={current.company} logo={current.logo} />
           </div>
           {headline ? <div className="sub review-headline">{headline}</div> : null}
           {row.location ? <div className="sub review-location">{row.location}</div> : null}

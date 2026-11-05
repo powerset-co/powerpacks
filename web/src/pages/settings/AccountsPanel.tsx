@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
-import { ChevronRight, Sparkles } from "lucide-react"
+import { Link, useSearchParams } from "react-router-dom"
+import { ChevronRight, TriangleAlert } from "lucide-react"
 import { CheckIcon, Spinner } from "@/components/shared"
 import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
 import { fetchAccount } from "@/lib/api/account"
 import { continueSetup, fetchConnection, type SetupAnswer } from "@/lib/api/install"
 import { errorText } from "@/lib/api/http"
@@ -16,11 +15,9 @@ import { Connect, type ConnectRow } from "@/pages/install/Connect"
 import { DesktopSetup } from "@/pages/install/DesktopSetup"
 import { live, POLL_MS, STEPS } from "@/pages/install/sources"
 import { Guide } from "@/pages/onboarding/guide/Guide"
-import type { GuideSource } from "@/pages/onboarding/guide/demos"
 import { Checklist } from "@/pages/onboarding/Checklist"
 import { PageShot } from "@/pages/onboarding/PageShot"
-import { useRun } from "@/pages/onboarding/run"
-import type { InstallStatus } from "@/types/install"
+import { linkedinSetup, useRun } from "@/pages/onboarding/run"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
 import { HowItWorks } from "./how-it-works/HowItWorks"
@@ -50,9 +47,11 @@ export function AccountsPanel({
   error: string | null
 }) {
   const [params, setParams] = useSearchParams()
-  const [selected, setSelected] = useState<ConnectRow>("imessage")
-  const [guide, setGuide] = useState<GuideSource | null>(null)
-  const [previous, setPrevious] = useState<InstallStatus>()
+  // A refresh problem links here with ?source=<row> to open that source.
+  const [selected, setSelected] = useState<ConnectRow>(() => {
+    const source = params.get("source")
+    return SOURCES.find((key) => key === source) ?? "imessage"
+  })
   const [startError, setStartError] = useState<string | null>(null)
   // How Deep Context works opens the first time Accounts does.
   const [howItWorks, setHowItWorks] = useState(
@@ -62,21 +61,16 @@ export function AccountsPanel({
     setHowItWorks(open)
     if (!open) writeStored("local", HOW_IT_WORKS_KEY, true)
   }
-  // When a source's sync finishes, the enrich button asks to be pressed.
   const jobs = Object.values(accounts?.jobs ?? {})
   const syncing = jobs.some((job) => job.state === "running")
-  const synced = !syncing && jobs.some((job) => job.state === "done")
-  const wasSyncing = useRef(false)
-  const [nudge, setNudge] = useState(false)
-  useEffect(() => {
-    if (wasSyncing.current && synced) setNudge(true)
-    wasSyncing.current = syncing
-  }, [syncing, synced])
   const progress = params.get("view") === "sync"
   const client = useQueryClient()
-  const run = useRun(() => true, previous)
+  // The pane shows Enrich's run (bin/onboard, also the daily refresh's), never onboarding's
+  // LinkedIn setup, and after a click only what that click's run wrote.
+  const run = useRun((data) => !linkedinSetup(data))
   const starting = run.starting
-  const active = !run.ready && run.data !== undefined && live(run.data)
+  // Any run going, this pane's or not, holds Enrich.
+  const active = run.latest !== undefined && live(run.latest)
   const account = useQuery({ queryKey: ["account"], queryFn: ({ signal }) => fetchAccount(signal) })
   const connection = useQuery({
     queryKey: ["install", "connect"],
@@ -92,17 +86,15 @@ export function AccountsPanel({
     if (run.ready) void client.invalidateQueries({ queryKey: ["accounts"] })
   }, [run.data, run.ready, client])
   const start = (answer: SetupAnswer) => {
-    setPrevious(run.data)
     setStartError(null)
-    setParams({ view: "sync" }, { replace: true })
+    setParams({ view: "sync" }, { replace: true, state: { startedAt: Date.now() } })
     return continueSetup(answer).catch((caught: unknown) => {
       setStartError(errorText(caught))
-      setPrevious(undefined)
+      setParams({ view: "sync" }, { replace: true })
     })
   }
   const choose = (key: ConnectRow) => {
     setSelected(key)
-    setGuide(null)
     setParams({}, { replace: true })
   }
   const layout = (items: Readonly<Record<ConnectRow, ConnectionRowProps>>) => {
@@ -110,13 +102,18 @@ export function AccountsPanel({
     const connected = item.state === "ready"
     const sourceGuide =
       selected === "imessage" || selected === "gmail" || selected === "whatsapp" ? selected : null
-    const showGuide = sourceGuide && (!connected || guide === sourceGuide)
+    // A source shows its guide until it is connected, never after.
+    const showGuide = sourceGuide && !connected
     const connecting = Object.values(items).some((entry) => entry.state === "working")
-    const canSync = SOURCES.some((key) => items[key].state === "ready")
+    // A sign-in, a sync or Enrich under way holds every other account's Connect.
+    const held = item.state === "needed" && (connecting || syncing || active || starting)
+    // A Gmail mailbox whose sign-in is gone: the row says so; Scheduled tasks reconnects it.
+    const expired = accounts?.accounts.some((entry) => entry.source === "gmail" && entry.health === "error")
     const list = (keys: readonly ConnectRow[]) => (
       <div className="flex flex-col gap-1">
         {keys.map((key) => {
           const row = items[key]
+          const warn = key === "gmail" && row.state === "ready" && expired
           return (
             <button
               key={key}
@@ -135,24 +132,33 @@ export function AccountsPanel({
                 <span className="block text-sm font-semibold">{row.title}</span>
                 <span className="mt-1 block text-[11px] text-muted-foreground">{SUBTITLE[key]}</span>
               </span>
+              {/* One outline pill for every state; only its icon is coloured: a green check once
+                  connected, a yellow alert while a Gmail mailbox needs signing in, a spinner while it works. */}
               <span
+                data-status={warn ? "needs" : row.state}
                 className={cn(
-                  "flex shrink-0 items-center gap-1 text-[11px]",
-                  row.state === "ready" ? "text-ok" : "text-muted-foreground",
+                  "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                  row.state === "ready"
+                    ? "border-line-strong text-foreground"
+                    : "border-line text-muted-foreground",
                 )}
               >
-                {row.state === "ready" ? (
-                  <CheckIcon className="size-3" />
+                {warn ? (
+                  <TriangleAlert aria-hidden className="size-3 text-warn" />
+                ) : row.state === "ready" ? (
+                  <CheckIcon className="size-3 text-ok" />
                 ) : row.state === "working" || row.state === "checking" ? (
                   <Spinner className="size-3" />
                 ) : null}
-                {row.state === "ready"
-                  ? "Connected"
-                  : row.state === "working"
-                    ? "Working"
-                    : row.state === "checking"
-                      ? "Checking"
-                      : "Not connected"}
+                {warn
+                  ? "Needs sign-in"
+                  : row.state === "ready"
+                    ? "Connected"
+                    : row.state === "working"
+                      ? "Working"
+                      : row.state === "checking"
+                        ? "Checking"
+                        : "Not connected"}
               </span>
               <ChevronRight className="size-3 text-faint" />
             </button>
@@ -166,17 +172,43 @@ export function AccountsPanel({
           <div className="mx-auto flex w-full max-w-[410px] flex-col gap-6">
             <div>
               <h1 className="m-0 text-[24px] font-semibold tracking-tight">Accounts</h1>
+              {/* What it does, then how your data is handled and when it updates: one statement. */}
               <p className="mb-0 mt-2 text-sm text-muted-foreground">
-                Your people, in one place. See how your data is processed{" "}
+                Connect the apps you talk to people on. Powerpacks finds who you know and makes them
+                searchable.
+              </p>
+              <p className="mb-0 mt-1 text-sm text-muted-foreground">
+                Your messages are saved on this Mac, and{" "}
                 <button
                   type="button"
-                  aria-label="See how your data is processed here"
+                  aria-label="How your data is handled"
                   className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
                   onClick={() => setHowItWorks(true)}
                 >
-                  here
-                </button>
-                .
+                  recent ones go to OpenAI
+                </button>{" "}
+                to summarize each person.{" "}
+                {active || starting ? (
+                  <>
+                    Syncing now:{" "}
+                    <button
+                      type="button"
+                      className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
+                      onClick={() => setParams({ view: "sync" }, { replace: true })}
+                    >
+                      view progress
+                    </button>
+                    .
+                  </>
+                ) : (
+                  <>
+                    It updates{" "}
+                    <Link to="/tasks" className="text-primary no-underline hover:underline">
+                      {accounts?.scheduled ?? "when you turn on the scheduled sync"}
+                    </Link>
+                    .
+                  </>
+                )}
               </p>
             </div>
             <div>
@@ -191,57 +223,11 @@ export function AccountsPanel({
               </h2>
               {list(SERVICES)}
             </div>
-            <div className="mt-3 flex flex-col gap-3 px-3">
-              <p className="m-0 text-xs text-muted-foreground">
-                {active || starting
-                  ? "Updating in the background."
-                  : accounts?.scheduled
-                    ? "Refreshes daily at 6:00 AM."
-                    : "Enrich when you're ready."}
+            {error || startError ? (
+              <p role="alert" className="m-0 px-3 text-xs text-bad">
+                {error ?? startError}
               </p>
-              <Popover open={nudge && canSync && !connecting && !active && !starting} onOpenChange={setNudge}>
-                <PopoverAnchor asChild>
-                  <Button
-                    variant="primary"
-                    disabled={!isDesktop() || !run.data || !canSync || connecting || active || starting}
-                    onClick={() => {
-                      setNudge(false)
-                      void start({ sources: ["linkedin", "gmail", "imessage", "whatsapp"], refresh: true })
-                    }}
-                  >
-                    {active || starting ? <Spinner /> : <Sparkles className="size-3.5" />}
-                    {active || starting ? "Enriching…" : "Enrich imported data"}
-                  </Button>
-                </PopoverAnchor>
-                <PopoverContent
-                  side="top"
-                  onOpenAutoFocus={(event) => event.preventDefault()}
-                  className="w-64 p-3"
-                >
-                  <p className="m-0 text-sm font-semibold">Your sources are synced</p>
-                  <p className="mb-0 mt-1 text-xs text-muted-foreground">
-                    Enrich imported data to build dossiers and update search.
-                  </p>
-                </PopoverContent>
-              </Popover>
-              <p className="m-0 text-center text-[11px] text-muted-foreground">
-                Syncs your sources, then builds dossiers and updates search.
-              </p>
-              {active || starting || previous !== undefined ? (
-                <button
-                  type="button"
-                  className="border-0 bg-transparent text-xs text-primary"
-                  onClick={() => setParams({ view: "sync" }, { replace: true })}
-                >
-                  View sync progress
-                </button>
-              ) : null}
-              {error || startError ? (
-                <p role="alert" className="m-0 text-xs text-bad">
-                  {error ?? startError}
-                </p>
-              ) : null}
-            </div>
+            ) : null}
           </div>
         </section>
         <aside className="border-l border-line bg-card px-8 py-10 max-[900px]:border-l-0 max-[900px]:border-t max-[680px]:px-4">
@@ -273,7 +259,9 @@ export function AccountsPanel({
                   </div>
                 )}
                 <div className="flex flex-col gap-3 text-xs text-muted-foreground">
-                  {item.why}
+                  {/* A source's one-line why repeats its guide or its subtitle; Gmail's is its address
+                      and Add a mailbox, and the account profiles keep theirs. */}
+                  {!SOURCES.includes(selected) || selected === "gmail" ? item.why : null}
                   {item.children}
                 </div>
                 {gmailWorking && selected === "gmail" ? (
@@ -306,20 +294,17 @@ export function AccountsPanel({
                     )}
                   </Button>
                 ) : null}
-                {connected && !showGuide ? item.details : null}
-                {connected && sourceGuide ? (
-                  <button
-                    type="button"
-                    className="self-start border-0 bg-transparent p-0 text-xs text-primary"
-                    onClick={() => setGuide(showGuide ? null : sourceGuide)}
-                  >
-                    {showGuide ? "Back to account" : "View connection guide"}
-                  </button>
+                {held ? (
+                  <p className="m-0 text-xs text-muted-foreground">
+                    {connecting
+                      ? "Another account is connecting. This one can connect once it finishes."
+                      : "Wait for the sync to finish to connect this one."}
+                  </p>
                 ) : null}
+                {connected ? item.details : null}
                 {!connected && selected === "linkedin" ? (
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    Sign in to LinkedIn in the window that opens. Then Resync all imports your connections
-                    alongside your other sources.
+                    Sign in to LinkedIn in the window that opens. The next sync reads your connections.
                   </p>
                 ) : null}
               </>
@@ -331,7 +316,7 @@ export function AccountsPanel({
   }
   return (
     <>
-      <Connect disabled={active || starting} details={details} onGuide={setGuide} layout={layout} />
+      <Connect disabled={active || starting || syncing} details={details} layout={layout} />
       <HowItWorks open={howItWorks} onOpenChange={openHowItWorks} />
     </>
   )

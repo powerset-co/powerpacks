@@ -1,5 +1,83 @@
 # Changelog
 
+## [3.53.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.1...powerpacks-v3.53.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **sidebar:** drop the refresh problem card; the Refresh page is where problems are fixed ([#1093](https://github.com/powerset-co/powerpacks/issues/1093)) ([0d61e5a](https://github.com/powerset-co/powerpacks/commit/0d61e5abc1231c1386e64e4a24d82e621dc0c92e))
+
+## [3.53.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.0...powerpacks-v3.53.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **install:** a dead run reads as stopped, collect reports progress, and the import can be cancelled ([#1091](https://github.com/powerset-co/powerpacks/issues/1091)) ([7f8e2a8](https://github.com/powerset-co/powerpacks/commit/7f8e2a842015928d7ac0966d2a9b0a28170becd3))
+
+## [3.53.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.2...powerpacks-v3.53.0) (2026-11-05)
+
+
+### Features
+
+* **accounts, tasks:** Accounts connects, Scheduled tasks syncs; weekly/monthly schedule picker ([#1084](https://github.com/powerset-co/powerpacks/issues/1084)) ([64b5d92](https://github.com/powerset-co/powerpacks/commit/64b5d9233bdcd44229c296eacb338057a75ea982))
+
+
+### Bug Fixes
+
+* **deep-context:** collect's Gmail count no longer walks the whole archive per person ([#1090](https://github.com/powerset-co/powerpacks/issues/1090)) ([9464a23](https://github.com/powerset-co/powerpacks/commit/9464a231d13cbc028894853836a9e925b85a287c))
+* **refresh:** sync the healthy Gmail mailboxes and reconnect expired ones on the Refresh page ([#1083](https://github.com/powerset-co/powerpacks/issues/1083)) ([2bd7b50](https://github.com/powerset-co/powerpacks/commit/2bd7b5090ef4eb38106421845d93bf0a0a726f54))
+
+## [3.52.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.1...powerpacks-v3.52.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **whatsapp:** a sync that reaches its cap moves on instead of failing ([#1086](https://github.com/powerset-co/powerpacks/issues/1086)) ([f06935d](https://github.com/powerset-co/powerpacks/commit/f06935d500c8c2bb39d54668fd7c21f558284585))
+
+## [3.52.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.0...powerpacks-v3.52.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **accounts:** Gmail sign-in check asks Google about the token, not msgvault; reused across polls ([#1072](https://github.com/powerset-co/powerpacks/issues/1072)) ([96ca1ae](https://github.com/powerset-co/powerpacks/commit/96ca1ae4c46228e81d2eb561c0e0d5c3dc0814eb))
+* **accounts:** WhatsApp switches to phone linking when the QR fails, frees the lock in 10 min, and holds other sign-ins ([#1081](https://github.com/powerset-co/powerpacks/issues/1081)) ([6c39b6b](https://github.com/powerset-co/powerpacks/commit/6c39b6be4f79fe1f5edc945ff4a8e0b0760ea1d3))
+* **connect:** the Full Disk Access poll asks for iMessage alone ([#1080](https://github.com/powerset-co/powerpacks/issues/1080)) ([8e423e0](https://github.com/powerset-co/powerpacks/commit/8e423e08bb71b3995283160192884869cb2e35ed))
+* **whatsapp:** pin wacli v0.15.2-fullsync for QR linking ([#1082](https://github.com/powerset-co/powerpacks/issues/1082)) ([9e08e23](https://github.com/powerset-co/powerpacks/commit/9e08e23966f6d5f2bda1c3df5119509d6ee4521c))
+
+## [3.52.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.51.0...powerpacks-v3.52.0) (2026-11-04)
+
+
+### Features
+
+* **accounts:** Browser row under Account Profiles picks the Chrome profile ([#1060](https://github.com/powerset-co/powerpacks/issues/1060)) ([0b85b20](https://github.com/powerset-co/powerpacks/commit/0b85b20312967d02b4d28c35c1b758ad950bcc63))
+* **chat:** match the search card to the cloud app's search screen; resizable side nav, results and drawers ([#1061](https://github.com/powerset-co/powerpacks/issues/1061)) ([bc0026f](https://github.com/powerset-co/powerpacks/commit/bc0026fcbe2e8ad2ecfccc947b47f5564e4b383e))
+* **logos:** fill company logo_url for local and shared search ([#1067](https://github.com/powerset-co/powerpacks/issues/1067)) ([670f300](https://github.com/powerset-co/powerpacks/commit/670f300e4617d38da3dcac545e38d5cd8d297bdf))
+* **onboarding:** pick a Chrome profile instead of signing in ([#1042](https://github.com/powerset-co/powerpacks/issues/1042)) ([5027695](https://github.com/powerset-co/powerpacks/commit/50276951336b206cd765226adb566fba7bf23704))
+* **people:** paged People list on the server, faster first open, and a QA harness for the real app ([#1056](https://github.com/powerset-co/powerpacks/issues/1056)) ([c837471](https://github.com/powerset-co/powerpacks/commit/c837471351c6cfb4c6433f4969f228076c5ca143))
+* **refresh:** native daily refresh replaces Codex scheduled tasks ([#1063](https://github.com/powerset-co/powerpacks/issues/1063)) ([dc6c8da](https://github.com/powerset-co/powerpacks/commit/dc6c8da55a1ec118ef4f301d6170e03ecc9912a4))
+* **searches:** simpler fast-search results with company logos and real Show more ([#1062](https://github.com/powerset-co/powerpacks/issues/1062)) ([09503bb](https://github.com/powerset-co/powerpacks/commit/09503bb8635e80d938ac13220d0a9c193b896fe6))
+* **whatsapp:** link by phone number when the QR won't scan ([#1057](https://github.com/powerset-co/powerpacks/issues/1057)) ([638ac7a](https://github.com/powerset-co/powerpacks/commit/638ac7a3d592450532d0c1a46896d973e2c7dfad))
+* **worth:** yes unless a detector fires; no maybe ([#1001](https://github.com/powerset-co/powerpacks/issues/1001)) ([8de85d3](https://github.com/powerset-co/powerpacks/commit/8de85d389c6710e385e55653a2b4da22aed2418c))
+
+
+### Bug Fixes
+
+* **accounts:** Enrich's progress never shows the last run's "Search is ready" ([#1076](https://github.com/powerset-co/powerpacks/issues/1076)) ([38aa19f](https://github.com/powerset-co/powerpacks/commit/38aa19fa56f3269ae0c55b537b57d81f094584cd))
+* **chat:** hide on the search card what the cloud app's filter preview hides ([#1069](https://github.com/powerset-co/powerpacks/issues/1069)) ([0db4054](https://github.com/powerset-co/powerpacks/commit/0db40544e3d510d8eaeed51365894da497909b5d))
+* **chat:** hide the cloud personal network from the set picker when a local index exists ([#1073](https://github.com/powerset-co/powerpacks/issues/1073)) ([7cd9634](https://github.com/powerset-co/powerpacks/commit/7cd9634cef82132fb92c469fbf205bcfa4a05112))
+* **chat:** keep the unsent message when leaving the chat page ([#1055](https://github.com/powerset-co/powerpacks/issues/1055)) ([9157d81](https://github.com/powerset-co/powerpacks/commit/9157d81c08123ffd046b73d406161ca7f10fcf30))
+* **desktop:** stop the old install's Python before replacing its code ([#1053](https://github.com/powerset-co/powerpacks/issues/1053)) ([fa74342](https://github.com/powerset-co/powerpacks/commit/fa743427647d0ab659d2d0ae2ebb737f3d1fd692))
+* **indexing:** read only the cache rows a run needs ([#1059](https://github.com/powerset-co/powerpacks/issues/1059)) ([6a9b244](https://github.com/powerset-co/powerpacks/commit/6a9b24406989b39e3429910ab3dc317e42551f12))
+* **indexing:** search is ready before the shared caches are merged ([#1058](https://github.com/powerset-co/powerpacks/issues/1058)) ([d090226](https://github.com/powerset-co/powerpacks/commit/d09022697151ac5522f13c523e84ed280de9835b))
+* **refresh:** sign every Gmail mailbox that needs it back in automatically ([#1065](https://github.com/powerset-co/powerpacks/issues/1065)) ([fda3915](https://github.com/powerset-co/powerpacks/commit/fda3915be2829c9788946dfff1829a8e1550fb08))
+* **refresh:** use the app's styled select for the daily time ([#1068](https://github.com/powerset-co/powerpacks/issues/1068)) ([8f3dff0](https://github.com/powerset-co/powerpacks/commit/8f3dff047be6a891839e1144313545f854cb3792))
+* **remote-assist:** the support agent can run msgvault ([#1064](https://github.com/powerset-co/powerpacks/issues/1064)) ([e968241](https://github.com/powerset-co/powerpacks/commit/e9682411fd656a9994dc3b78404f41c24df712b9))
+* **search:** emit role ids only for founder and C-suite shortcuts, like cloud ([#1071](https://github.com/powerset-co/powerpacks/issues/1071)) ([240d0f6](https://github.com/powerset-co/powerpacks/commit/240d0f6f760e62afc8622490f1a8c5d86c475b72))
+* **searches:** put the company logo next to the company name, not on the avatar ([#1070](https://github.com/powerset-co/powerpacks/issues/1070)) ([ba5aaec](https://github.com/powerset-co/powerpacks/commit/ba5aaec5af117ae1c314a13574200e4f27e0021e))
+* **searches:** saved run's filter panel shows what the search preview shows ([#1077](https://github.com/powerset-co/powerpacks/issues/1077)) ([e4a61bc](https://github.com/powerset-co/powerpacks/commit/e4a61bc92779019418c56f3c932286bfdd3ca136))
+* **search:** finish cloud role-id parity (founder+C-suite ids, C-suite pinning, adjacency, title clustering) ([#1075](https://github.com/powerset-co/powerpacks/issues/1075)) ([072066f](https://github.com/powerset-co/powerpacks/commit/072066f7bc35c6ac1c93daba84c12fd6df09945a))
+* **search:** match cloud on hard company filters and years of experience ([#1074](https://github.com/powerset-co/powerpacks/issues/1074)) ([e207b17](https://github.com/powerset-co/powerpacks/commit/e207b17de3d95117a1f212551184f8d8e957ac4a))
+
 ## [3.51.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.50.0...powerpacks-v3.51.0) (2026-10-31)
 
 

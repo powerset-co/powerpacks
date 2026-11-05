@@ -3,7 +3,7 @@ import { useCallback, useRef, useState, type ReactNode, type SVGProps } from "re
 import { useNavigate } from "react-router-dom"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
-import { fetchInstall } from "@/lib/api/install"
+import { fetchInstall, installAction } from "@/lib/api/install"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { isDesktop } from "@/lib/desktop"
 import { readStored, writeStored } from "@/lib/storage"
@@ -12,6 +12,7 @@ import { connectRelay } from "@/lib/api/relay"
 import { isRecord } from "@/lib/utils"
 import { errorText } from "@/lib/api/http"
 import { useFeatures } from "@/lib/features"
+import { linkedinSetup } from "@/pages/onboarding/run"
 import type { InstallStatus } from "@/types/install"
 import {
   dismissedVersion,
@@ -40,7 +41,7 @@ import { Tip } from "./Tip"
 const SIGNED_OUT_POLL_MS = 5_000
 
 /** The side nav's bottom: the import pane while an import shows, otherwise the sources prompt
- *  (never both), the update pane when a newer app is out, then who is signed in, whose row opens
+ *  (never both), what the last daily refresh needs from the person, the update pane when a newer app is out, then who is signed in, whose row opens
  *  the account menu (Settings, Send feedback, Reconnect). */
 export function SidebarFooter({ rail }: { rail: boolean }) {
   const run = useImport()
@@ -72,7 +73,13 @@ function useImport(): { data: InstallStatus; dismiss: () => void } | null {
     readStored("local", IMPORT_DISMISSED_KEY, (raw) => (typeof raw === "string" ? raw : null)),
   )
   const data = install.data
-  if (data === undefined || data.event === "setup.ready" || (finished(data) && dismissed === data.updated_at))
+  // Onboarding's LinkedIn setup is not an import: Add sources shows after it instead.
+  if (
+    data === undefined ||
+    data.event === "setup.ready" ||
+    linkedinSetup(data) ||
+    (finished(data) && dismissed === data.updated_at)
+  )
     return null
   const dismiss = () => {
     writeStored("local", IMPORT_DISMISSED_KEY, data.updated_at)
@@ -96,6 +103,12 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
   const count = counts.done ?? counts.read
   const completed = typeof count === "number" ? count : 0
   const open = () => void navigate(IMPORT_HREF)
+  const client = useQueryClient()
+  // Cancel stops the run; its record then reads stopped, and Try again picks up from there.
+  const cancel = () => {
+    if (!window.confirm("Stop the import? Nothing is lost; Try again picks up where it left off.")) return
+    void installAction("cancel").then(() => client.invalidateQueries({ queryKey: ["install"] }))
+  }
   const icon = done ? (
     <CheckIcon className="size-4 shrink-0 text-ok" />
   ) : stopped ? (
@@ -144,13 +157,24 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
           <ProgressBar label="Current import stage" done={completed} total={total} />
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={open}
-        className="mt-2 border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
-      >
-        View in Accounts
-      </button>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={open}
+          className="border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
+        >
+          View in Accounts
+        </button>
+        {!done && !stopped ? (
+          <button
+            type="button"
+            onClick={cancel}
+            className="border-0 bg-transparent p-0 text-[11px] text-muted-foreground hover:underline"
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

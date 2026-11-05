@@ -24,7 +24,7 @@ TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
 for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
     sys.path.insert(0, str(_path))
 
-from postgres_client import fetch_interaction_counts, fetch_person_rows, fetch_source_attribution, load_env_file  # noqa: E402
+from postgres_client import fetch_company_logos, fetch_interaction_counts, fetch_person_rows, fetch_source_attribution, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 
 
@@ -626,6 +626,22 @@ def attach_company_logos(conn: Any, position_rows: list[dict[str, Any]]) -> None
             row["company_logo_url"] = logo
 
 
+def attach_remote_company_logos(rows: list[dict[str, Any]], env_file: Path | None = None) -> None:
+    """Copy each position's company logo from the companies table (joined on company_id) onto
+    shared-network profiles whose positions carry none: the Postgres twin of attach_company_logos."""
+    positions = [
+        position
+        for row in rows
+        for position in (_dict_value(row.get("hydrated_context")).get("positions") or [])
+        if isinstance(position, dict) and position.get("company_id") and not position.get("company_logo_url")
+    ]
+    logos = fetch_company_logos(sorted({str(position["company_id"]) for position in positions}), env_file=env_file)
+    for position in positions:
+        logo = logos.get(str(position["company_id"]))
+        if logo:
+            position["company_logo_url"] = logo
+
+
 def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[str, Any]]:
     import duckdb  # type: ignore
 
@@ -778,6 +794,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
         rows = fetch_person_rows(requested, env_file=env_file)
+        attach_remote_company_logos(rows, env_file=env_file)
         interaction_counts = fetch_interaction_counts(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
         source_attribution = fetch_source_attribution(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
         source = {

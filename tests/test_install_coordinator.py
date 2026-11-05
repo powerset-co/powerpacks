@@ -48,7 +48,7 @@ class InstallCoordinatorTests(unittest.TestCase):
         self.processing_class.return_value.run.side_effect = self.run_processing
         self.addCleanup(patch.stopall)
 
-    def build_account(self, root, *, pid, retry_command):
+    def build_account(self, root, *, pid, retry_command, plan=None):
         def run():
             self.events.append("account")
             event = {0: "network.ready", 1: "account.error", 10: "network.empty"}[self.account_code]
@@ -199,7 +199,8 @@ class InstallCoordinatorTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertEqual(self.status.read()['event'], 'sources.all_skipped')
             health.assert_not_called()
-            ready = SignedIn(linkedin=False, gmail=True, imessage=False, whatsapp=False, mailboxes=('mailbox@gmail.com',))
+            ready = SignedIn(linkedin=False, gmail=True, imessage=False, whatsapp=False, mailboxes=('mailbox@gmail.com',),
+                             healthy_mailboxes=('mailbox@gmail.com',))
             code, output = self.run_command()
             self.assertEqual(code, 0, output)
             self.assertEqual(health.call_args.args[1], ['mailbox@gmail.com'])

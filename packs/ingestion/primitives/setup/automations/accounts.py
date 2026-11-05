@@ -12,6 +12,10 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
+  2026-11-04: `check_account` asks Google about the saved token (gmail_token.py) and
+    `stored_mailboxes` reads msgvault's `sources` table read-only: neither runs msgvault,
+    which opens and migrates the whole archive per command and timed out on large ones
+    (Gmail then read as not connected). msgvault verify stays the fallback.
   2026-10-06: configured OAuth requires a valid client secret file.
   2026-09-28 (revoked grant): `unauthorized (401)` also means re-authorize; a grant
     revoked at Google fails verify with a 401 on its cached access token.
@@ -38,6 +42,7 @@ import json
 import re
 import shlex
 import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +57,7 @@ from packs.ingestion.primitives.setup.automations.gcloud_project import (  # noq
     gcloud_context,
 )
 from packs.ingestion.primitives.setup.automations import oauth_browser  # noqa: E402
+from packs.ingestion.primitives.setup.automations.gmail_token import check_token  # noqa: E402
 from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa: E402
     config_path,
     db_path,
@@ -199,10 +205,11 @@ class VaultHealth:
 def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
     """Return one account's verdict; first rule wins.
 
-    Not stored by msgvault at all -> the token is missing. Otherwise `msgvault
-    verify` decides: success is healthy, a revoked/expired token needs the user
-    to re-authorize, and anything else is transient and not the user's problem
-    to fix. Only the stored branch touches the network."""
+    Not stored by msgvault at all -> the token is missing. Otherwise the saved
+    token decides, asked of Google (gmail_token.check_token), or `msgvault verify`
+    when the token file can't answer: success is healthy, a revoked/expired grant
+    needs the user to re-authorize, and anything else is transient and not the
+    user's problem to fix. Only the stored branch touches the network."""
     if not stored:
         return AccountCheck(
             email=email,
@@ -210,6 +217,21 @@ def check_account(home: Path, email: str, *, stored: bool) -> AccountCheck:
             error_code="gmail_authorization_missing",
             authorize_command=msgvault_account_authorize_command(home, email, force=False),
         )
+    token = check_token(home, email)
+    if token is not None and token.status == "healthy":
+        return AccountCheck(email=email, status="healthy", network_called=token.network_called)
+    if token is not None and token.status == "reauthorization_required":
+        return AccountCheck(
+            email=email,
+            status="reauthorization_required",
+            error_code="gmail_reauthorization_required",
+            error=token.error,
+            authorize_command=msgvault_account_authorize_command(home, email, force=True),
+            network_called=True,
+        )
+    if token is not None:
+        return AccountCheck(email=email, status="transient_error", error_code="gmail_auth_check_failed",
+                            error=token.error, network_called=True)
     result = run_msgvault(["verify", email, "--skip-db-check", "--sample", "0", "--local"], home, timeout=60)
     if result.ok:
         return AccountCheck(email=email, status="healthy", network_called=True)
@@ -280,7 +302,8 @@ def add_account(home: Path, email: str, app_name: str, *, headless: bool, force:
 
 def stored_accounts(home: Path) -> tuple[list[dict[str, Any]], str]:
     """The accounts msgvault holds, from msgvault itself (`list-accounts`), and its error if it
-    could not say. msgvault owns its database; nothing else reads it to answer this."""
+    could not say. The setup status payload asks this; the Accounts and Connect checks read
+    `stored_mailboxes` instead, which only falls back to this."""
     if not shutil.which("msgvault") or not db_path(home).exists():
         return [], ""
     result = run_msgvault(["list-accounts", "--json", "--local"], home, timeout=30)
@@ -296,11 +319,23 @@ def stored_accounts(home: Path) -> tuple[list[dict[str, Any]], str]:
 
 
 def stored_mailboxes(home: Path) -> tuple[str, ...]:
-    """The Gmail addresses msgvault holds (its `type` is gmail), lower-cased and sorted."""
-    accounts, _ = stored_accounts(home)
-    return tuple(sorted({str(account.get("email") or account.get("identifier") or "").strip().lower()
-                         for account in accounts
-                         if str(account.get("type") or account.get("source_type") or "gmail").lower() == "gmail"} - {""}))
+    """The Gmail addresses msgvault holds, lower-cased and sorted: its `sources` rows, read
+    read-only. `list-accounts` answers the same but opens and migrates the whole archive first,
+    which takes longer than its timeout on a large one, and then no mailbox showed at all. A
+    database msgvault opened but never added an account to has no `sources` table: no mailboxes."""
+    db = db_path(home)
+    if not db.exists():
+        return ()
+    try:
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5) as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sources'").fetchone():
+                return ()
+            rows = conn.execute("SELECT identifier FROM sources WHERE source_type = 'gmail'").fetchall()
+    except sqlite3.Error:  # locked past the timeout, or a layout this read doesn't know: ask msgvault
+        accounts, _ = stored_accounts(home)
+        rows = [(account.get("email") or account.get("identifier"),) for account in accounts
+                if str(account.get("type") or account.get("source_type") or "gmail").lower() == "gmail"]
+    return tuple(sorted({str(identifier or "").strip().lower() for (identifier,) in rows} - {""}))
 
 
 def status_payload(home: Path) -> dict[str, Any]:

@@ -34,6 +34,7 @@ let state: {
   // Holds back the sign-in answer, and Powerset's browser sign-in, until a test lets them through.
   signedGate: Promise<void> | null
   signedAsks: number
+  messagesAsks: number
   finishGate: Promise<void> | null
   posts: { url: string; body: unknown }[]
 }
@@ -52,6 +53,7 @@ beforeEach(() => {
     signed: NONE,
     signedGate: null,
     signedAsks: 0,
+    messagesAsks: 0,
     finishGate: null,
     posts: [],
   }
@@ -67,6 +69,10 @@ beforeEach(() => {
       }
       if (url === "/api/account") return reply(state.account)
       if (url === "/api/install/connect") return reply(state.connect)
+      if (url === "/accounts/api/signed-in?sources=imessage") {
+        state.messagesAsks += 1
+        return reply({ ...NONE, imessage: state.signed.imessage })
+      }
       if (url === "/accounts/api/signed-in") {
         state.signedAsks += 1
         return (state.signedGate ?? Promise.resolve()).then(() => reply(state.signed))
@@ -157,9 +163,13 @@ it("polls for Full Disk Access without a focus event and closes the helper when 
   mount()
   fireEvent.click(await within(row("Messages")).findByRole("button", { name: "Messages: Connect" }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_begin", undefined))
+  const asked = state.signedAsks
   state.signed = { ...NONE, imessage: true }
   expect(await within(row("Messages")).findByText("Connected", {}, { timeout: 4000 })).toBeTruthy()
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_end", undefined))
+  // The poll asks for iMessage alone; the full check runs once, after the grant lands.
+  expect(state.messagesAsks).toBeGreaterThan(0)
+  await waitFor(() => expect(state.signedAsks).toBe(asked + 1))
 })
 
 it("does not reopen the helper after a relaunch with Full Disk Access granted", async () => {
@@ -351,7 +361,7 @@ it("links WhatsApp by phone number when the QR won't scan, and shows the code Wh
   state.connect = waiting
   mount()
   await screen.findByAltText("WhatsApp code to scan")
-  fireEvent.click(screen.getByRole("button", { name: "QR not working? Use your phone number" }))
+  fireEvent.click(screen.getByRole("button", { name: "Use your phone number instead" }))
   expect(screen.getByRole("dialog", { name: "Link with your phone number" })).toBeTruthy()
   const number = screen.getByLabelText<HTMLInputElement>("WhatsApp phone number")
   fireEvent.change(number, { target: { value: "4155550100" } })
@@ -368,6 +378,63 @@ it("links WhatsApp by phone number when the QR won't scan, and shows the code Wh
   const code = await screen.findByRole("group", { name: "Pairing code ABCD-EFGH" }, { timeout: 4_000 })
   expect(code.textContent).toBe("ABCD–EFGH")
   expect(screen.getByRole("dialog", { name: "Enter this code on your phone" })).toBeTruthy()
+})
+
+it("asks for the phone number by itself once WhatsApp refused the scan, saying why", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: {
+      kind: "qr",
+      qr_failed: "WhatsApp didn't accept the QR scan. Link with your phone number instead.",
+    },
+  }
+  mount()
+  const dialog = await screen.findByRole("dialog", { name: "Link with your phone number" })
+  expect(within(dialog).getByText(/WhatsApp didn't accept the QR scan/)).toBeTruthy()
+  expect(within(dialog).getByLabelText("WhatsApp phone number")).toBeTruthy()
+})
+
+it("holds every other Connect while WhatsApp waits, and frees them once the code expires", async () => {
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    installer_pid: 42,
+    message: "Connect WhatsApp",
+    action: { kind: "qr", qr_url: "/api/install/qr?connect=1&t=1" },
+  }
+  mount()
+  await screen.findByAltText("WhatsApp code to scan")
+  for (const name of ["Messages", "LinkedIn", "Gmail"])
+    expect(
+      within(row(name))
+        .getByRole("button", { name: `${name}: Connect`, hidden: true })
+        .hasAttribute("disabled"),
+    ).toBe(true)
+  state.connect = {
+    ...NOTHING,
+    step: "whatsapp_login",
+    status: "waiting",
+    message: "The WhatsApp code expired. Connect again for a new one.",
+    action: { kind: "expired" },
+  }
+  const whatsapp = row("WhatsApp")
+  expect(
+    await within(whatsapp).findByText(
+      "The WhatsApp code expired. Connect again for a new one.",
+      {},
+      { timeout: 4_000 },
+    ),
+  ).toBeTruthy()
+  await waitFor(() =>
+    expect(
+      within(row("LinkedIn")).getByRole("button", { name: "LinkedIn: Connect" }).hasAttribute("disabled"),
+    ).toBe(false),
+  )
 })
 
 it("shows Powerset Working while you sign in in the browser, then Connected", async () => {
@@ -429,7 +496,7 @@ it("connects Gmail with the Powerset address, then adds another mailbox to the s
   state.signed = { ...NONE, gmail: true, mailboxes: ["casey@example.com"] }
   mount()
   const gmail = row("Gmail")
-  fireEvent.click(await within(gmail).findByRole("button", { name: "Add another" }))
+  fireEvent.click(await within(gmail).findByRole("button", { name: "Add a mailbox" }))
   const field = within(gmail).getByRole("textbox", { name: "Gmail address" })
   fireEvent.change(field, { target: { value: "work@example.com" } })
   fireEvent.submit(field)
@@ -441,19 +508,20 @@ it("connects Gmail with the Powerset address, then adds another mailbox to the s
   )
 })
 
-it("keeps the Google app's owner first when a mailbox needs signing in again", async () => {
+it("keeps an expired mailbox connected, its reconnect left to Scheduled tasks, the owner first", async () => {
   state.signed = { ...NONE, mailboxes: ["owner@example.com"] }
   mount()
   const gmail = row("Gmail")
-  expect(await within(gmail).findByText("owner@example.com")).toBeTruthy()
-  // Signed out, Gmail is left out of setup: nothing to process, so no profile link is needed.
-  const setUp = screen.getByRole("button", { name: "Set up" })
-  await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
-  fireEvent.click(within(gmail).getByRole("button", { name: "Gmail: Connect" }))
+  // No Connect that signs every mailbox in again: one expired mailbox is reconnected on its own.
+  fireEvent.click(await within(gmail).findByRole("button", { name: "Add a mailbox" }))
+  expect(within(gmail).queryByRole("button", { name: "Gmail: Connect" })).toBeNull()
+  const field = within(gmail).getByRole("textbox", { name: "Gmail address" })
+  fireEvent.change(field, { target: { value: "work@example.com" } })
+  fireEvent.submit(field)
   await waitFor(() =>
     expect(state.posts).toContainEqual({
       url: "/api/install/connect",
-      body: { source: "gmail", emails: ["owner@example.com"] },
+      body: { source: "gmail", emails: ["owner@example.com", "work@example.com"] },
     }),
   )
 })

@@ -6,8 +6,11 @@ Change log:
 - 2026-08-14: Codex App automation templates (PR #365).
 - 2026-09-28: one template per harness; installed and removed from the local
   UI's Scheduled tasks page (`packs/ingestion/primitives/refresh/tasks.py`).
+- 2026-11-03: the app no longer offers these. Its Scheduled tasks page runs the native daily
+  refresh (`packs/ingestion/primitives/refresh/daily.py`) in the local server; the
+  templates and `tasks.py` stay for anyone who installs them from the command line.
 
-Each directory is one scheduled task. The Tasks page offers a cadence and local time in each install modal.
+Each directory is one scheduled task, installed from the command line below with a cadence and local time.
 Codex install starts `codex app-server`, persists a chat in the
 Powerpacks checkout, and verifies its Full access permissions before writing a
 heartbeat configuration targeting that chat. It opens the chat through its deep
