@@ -205,6 +205,17 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(sync.resolve_effective_max(10000, 25000), 26000)
         self.assertEqual(sync.resolve_effective_max(10000, 0), 10000)
 
+    def test_sync_that_reaches_its_cap_moves_on(self) -> None:
+        capped = runtime.CommandResult(returncode=1, stdout="Synced 2050 messages... Stopping sync.",
+                                       stderr="storage limit reached: message is 20355, limit is 20355", json={})
+        with mock.patch.object(runtime, "run_command", return_value=capped):
+            summary = sync.run_sync(Path("/tmp/wacli"), timeout=60, idle_exit="30s", max_messages=20355)
+        self.assertTrue(summary["capped"])
+        failed = runtime.CommandResult(returncode=1, stdout="", stderr="connection lost", json={})
+        with mock.patch.object(runtime, "run_command", return_value=failed), \
+             self.assertRaises(runtime.PrimitiveFailed):
+            sync.run_sync(Path("/tmp/wacli"), timeout=60, idle_exit="30s", max_messages=20355)
+
     def test_cold_bootstrap_default_allows_three_hours(self) -> None:
         self.assertEqual(auth.DEFAULT_AUTH_TIMEOUT, 10800)
         self.assertEqual(sync.DEFAULT_SYNC_TIMEOUT, 10800)
