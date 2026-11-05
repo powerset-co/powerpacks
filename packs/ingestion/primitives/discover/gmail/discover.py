@@ -137,7 +137,7 @@ Changelog:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 import argparse
@@ -385,7 +385,9 @@ class GmailDiscovery(Node):
     filesystem side effects so the channels only sync + spawn + read their rows.
 
     Account selection is account_emails ONLY (the resolved --account-email list);
-    an empty list yields the skipped manifest.
+    an empty list yields the skipped manifest. `unsynced_emails` (a subset) are not
+    synced, only extracted from what msgvault already holds: a mailbox whose sign-in
+    expired keeps its contacts while the others sync.
 
     Every run is a full rewrite: extract_gmail re-derives whole-store totals from
     the entire archive, so a child's rows always restate its account's whole truth
@@ -412,6 +414,7 @@ class GmailDiscovery(Node):
         msgvault_db: str | None = None,
         sync_query: str | None = None,
         skip_msgvault_sync: bool = False,
+        unsynced_emails: Collection[str] = (),
         sync_after: str = "",
         sync_before: str = "",
         fresh: bool = False,
@@ -437,13 +440,15 @@ class GmailDiscovery(Node):
         self.manifest_json = output_path("gmail", "manifest_json")
         self.queue_csv.parent.mkdir(parents=True, exist_ok=True)  # the one place the dir is created
         child_output_base = extract_gmail_base_dir(self.queue_csv)
+        unsynced = {email.lower() for email in unsynced_emails}
         self.channels: list[GmailAccountChannel] = [
             GmailAccountChannel(
                 account_email=email,
                 output_base=child_output_base,
                 msgvault_db=self.config.msgvault_db,
                 sync_query=self.config.sync_query,
-                skip_msgvault_sync=skip_msgvault_sync,
+                # A mailbox not signed in now still restates the mail already archived.
+                skip_msgvault_sync=skip_msgvault_sync or email.lower() in unsynced,
                 sync_after=sync_after,
                 sync_before=sync_before,
                 fresh=fresh,

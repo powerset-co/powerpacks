@@ -26,6 +26,9 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-04: Gmail's problem points at the Refresh page, which reconnects each expired mailbox there.
+  2026-11-04: a mailbox Google still wants the person for no longer stops the others: the run
+    syncs the signed-in ones (its Gmail accounts) and reports the rest.
   2026-11-03: Gmail renewal also signs back in a mailbox whose token is gone; the problem says the
     automatic sign-in was tried.
   2026-11-03: created; replaces the app's Codex/Claude scheduled task with a native daily run.
@@ -74,6 +77,8 @@ IMPORT_STEP: dict[SourceName, str] = {"linkedin": "linkedin", "gmail": "gmail_im
                                       "imessage": "imessage_import", "whatsapp": "whatsapp_import"}
 ACCOUNTS_HREF = "/accounts?source="
 SYNC_HREF = "/accounts?view=sync"
+# The Refresh page, which reconnects each expired Gmail mailbox in place.
+REFRESH_HREF = "/tasks"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS refresh_runs (
@@ -416,8 +421,8 @@ def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[s
         who = ", ".join(expired)
         found.append(Problem("gmail", f"Gmail needs you to sign in again for {who}",
                              "The refresh tried your saved Google session, but Google wants you to confirm. "
-                             "Reconnect it on Accounts; the next refresh picks up all the mail since.",
-                             "Reconnect Gmail", ACCOUNTS_HREF + "gmail"))
+                             "Reconnect it here; it syncs right after, with all the mail since.",
+                             "Reconnect Gmail", REFRESH_HREF))
     if "imessage" in connected and not imessage:
         found.append(Problem("imessage", "Messages can't be read",
                              "Turn Full Disk Access on for Powerpacks in System Settings, then refresh again.",
@@ -507,7 +512,7 @@ def run_once(root: Path, run_id: int) -> Run:
     after = signed_in(signins, sources=tuple(connected))
     problems = problems_after(connected, manifest, gmail=signins if "gmail" in connected else {},
                               linkedin=after.linkedin, imessage=after.imessage, whatsapp=after.whatsapp)
-    sources = sources_after(connected, manifest, ready.mailboxes if ready else ())
+    sources = sources_after(connected, manifest, ready.healthy_mailboxes if ready else ())
     failed = manifest.get("status") == "failed" or bool(error)
     status: Status = "failed" if failed else "needs_you" if problems else "ok"
     _update(root, run_id, status=status, finished_at=_iso(now()), sources=sources, problems=problems,

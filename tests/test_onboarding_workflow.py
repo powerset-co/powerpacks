@@ -371,7 +371,7 @@ class SourceOnboardingTests(unittest.TestCase):
                  patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
                 SourceOnboarding(self.root, sources=('gmail',),
                                  gmail_emails=('casey@example.com',), sync_after=requested).run()
-            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after=requested, on_progress=ANY)
+            init.assert_called_once_with(account_emails=['casey@example.com'], unsynced_emails=(), sync_after=requested, on_progress=ANY)
 
     def test_gmail_unknown_or_filtered_history_is_not_proof_of_coverage(self):
         current = import_common.ImportManifest.from_payload('gmail', {
@@ -460,10 +460,12 @@ class SourceOnboardingTests(unittest.TestCase):
                 self.assertNotIn(unsaid, events)
 
     @staticmethod
-    def ready(*sources, mailboxes=()):
-        """What accounts.signed_in reads: the named sources signed in."""
+    def ready(*sources, mailboxes=(), healthy=None):
+        """What accounts.signed_in reads: the named sources signed in (Gmail's mailboxes all healthy
+        unless `healthy` names the ones that are)."""
         return SignedIn(**{name: name in sources for name in ('linkedin', 'gmail', 'imessage', 'whatsapp')},
-                        mailboxes=tuple(mailboxes))
+                        mailboxes=tuple(mailboxes),
+                        healthy_mailboxes=tuple(mailboxes if healthy is None and 'gmail' in sources else healthy or ()))
 
     def test_desktop_setup_takes_only_the_sources_signed_in(self):
         with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
@@ -517,6 +519,31 @@ class SourceOnboardingTests(unittest.TestCase):
              patch.object(SourceOnboarding, '_gmail_sync', return_value=True):
             SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('saved@example.com',), sync_after='2023-01-01').run()
         self.assertEqual(seen, [('owner@example.com', 'work@example.com')])
+
+    def test_desktop_gmail_syncs_the_healthy_mailboxes_when_one_expired(self):
+        # Three expired mailboxes and one working: the working one syncs, the expired ones are read
+        # from the archive only (no Google consent mid-run), so their contacts stay in the import.
+        seen, discovered = [], []
+        mailboxes = ('owner@example.com', 'a@example.com', 'b@example.com', 'work@powerset.co')
+        ready = self.ready(mailboxes=mailboxes, healthy=('work@powerset.co',))
+
+        class Discovery:
+            def __init__(self, **kwargs):
+                discovered.append(kwargs)
+
+            def run(self):
+                return SimpleNamespace(to_payload=lambda: {'status': 'completed'})
+
+        with patch('packs.powerset.primitives.install.workflow.DESKTOP', True), \
+             patch('packs.powerset.primitives.install.workflow.signed_in', return_value=ready), \
+             patch('packs.powerset.primitives.install.workflow.GmailDiscovery', Discovery), \
+             patch('packs.powerset.primitives.install.workflow.GmailImport') as importer, \
+             patch.object(SourceOnboarding, '_gmail_connect', lambda flow: seen.append(flow.gmail_emails) or True):
+            importer.return_value.written = {'status': 'completed'}
+            SourceOnboarding(self.root, sources=('gmail',), sync_after='2023-01-01', refresh=True).run()
+        self.assertEqual(seen, [('work@powerset.co',)])
+        self.assertEqual(discovered[0]['account_emails'], ['work@powerset.co', 'owner@example.com', 'a@example.com', 'b@example.com'])
+        self.assertEqual(discovered[0]['unsynced_emails'], ('owner@example.com', 'a@example.com', 'b@example.com'))
 
     def test_desktop_leaves_out_gmail_not_signed_in(self):
         # No mailbox, or one whose sign-in expired (Google ends a testing app's sign-ins after a
@@ -606,7 +633,7 @@ class SourceOnboardingTests(unittest.TestCase):
             for call in check.call_args_list:
                 self.assertEqual(call.args[1], ['casey@example.com', 'other@example.com'])
             init.assert_called_once_with(account_emails=['casey@example.com', 'other@example.com'],
-                                         sync_after='2023-01-01', on_progress=ANY)
+                                         unsynced_emails=(), sync_after='2023-01-01', on_progress=ANY)
             sync.assert_called_once()
             self.assertEqual(result['step'], 'deep_context')
             self.assertEqual(result['steps']['gmail_import']['status'], 'completed')
@@ -705,7 +732,7 @@ class SourceOnboardingTests(unittest.TestCase):
                 result = SourceOnboarding(self.root, sources=('gmail',),
                                           gmail_emails=('casey@example.com',), sync_after='2023-01-01',
                                           refresh=refresh).run()
-            init.assert_called_once_with(account_emails=['casey@example.com'], sync_after='2023-01-01', on_progress=ANY)
+            init.assert_called_once_with(account_emails=['casey@example.com'], unsynced_emails=(), sync_after='2023-01-01', on_progress=ANY)
             self.assertEqual(result['step'], 'deep_context')
         self.assert_preserved()
 

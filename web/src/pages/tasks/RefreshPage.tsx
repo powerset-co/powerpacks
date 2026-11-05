@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { Link } from "react-router-dom"
 import { Check, TriangleAlert, X } from "lucide-react"
@@ -6,10 +6,11 @@ import { Check, TriangleAlert, X } from "lucide-react"
 import { EmptyState, Page, Select, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { fetchAccounts, reconnectGmail } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { REFRESH_KEY, refreshNow, saveRefreshSettings } from "@/lib/api/refresh"
 import { cn } from "@/lib/utils"
-import type { RefreshRun, RefreshState, SourceRun } from "@/types/refresh"
+import type { Problem, RefreshRun, RefreshState, SourceRun } from "@/types/refresh"
 
 import { added, clock, lower, people, SOURCE_TITLE, stamp, took, trigger, when, lastLine } from "./format"
 import { useRefresh } from "./useRefresh"
@@ -295,9 +296,7 @@ function RunDetail({ run }: { run: RefreshRun }) {
             <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5 text-xs">
               <b className="block">{problem.title}</b>
               {problem.detail}{" "}
-              <Link to={problem.href} className="font-semibold text-info no-underline hover:underline">
-                {problem.action}
-              </Link>
+              {problem.source === "gmail" ? <GmailReconnect /> : <ProblemLink problem={problem} />}
             </div>
           ))
         )}
@@ -306,5 +305,87 @@ function RunDetail({ run }: { run: RefreshRun }) {
         )}
       </div>
     </article>
+  )
+}
+
+function ProblemLink({ problem }: { problem: Problem }) {
+  return (
+    <Link to={problem.href} className="font-semibold text-info no-underline hover:underline">
+      {problem.action}
+    </Link>
+  )
+}
+
+// While a sign-in runs, re-read the mailboxes (and their jobs) this often.
+const JOB_POLL_MS = 2_000
+
+/** Reconnect, right here, each Gmail mailbox whose sign-in is expired now (read live, so one
+ *  signed in since drops off). One sign-in at a time: the others wait while one runs. */
+function GmailReconnect() {
+  const client = useQueryClient()
+  const [error, setError] = useState<string | null>(null)
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: ({ signal }) => fetchAccounts(signal),
+    refetchInterval: (query) =>
+      Object.values(query.state.data?.jobs ?? {}).some((job) => job.state === "running")
+        ? JOB_POLL_MS
+        : false,
+    refetchIntervalInBackground: true,
+  })
+  if (!accounts.data) return accounts.isPending ? <Spinner className="inline-block size-3" /> : null
+  const { jobs } = accounts.data
+  const running = Object.values(jobs).some((job) => job.state === "running")
+  const expired = accounts.data.accounts.filter(
+    (account) => account.source === "gmail" && (account.health === "error" || jobs[account.name]),
+  )
+  if (!expired.length) return <span className="text-muted-foreground">Every mailbox is signed in now.</span>
+  const reconnect = (email: string) => {
+    setError(null)
+    reconnectGmail(email)
+      .catch((caught: unknown) => setError(errorText(caught)))
+      .finally(() => void client.invalidateQueries({ queryKey: ["accounts"] }))
+  }
+  return (
+    <span className="mt-1.5 flex flex-col gap-1.5">
+      {expired.map((account) => {
+        const job = jobs[account.name]
+        const signingIn = job?.state === "running"
+        const fixed = account.health !== "error" && !signingIn
+        return (
+          <span
+            key={account.name}
+            data-mailbox={account.name}
+            className="flex items-center justify-between gap-2"
+          >
+            <span className="flex min-w-0 items-center gap-1.5 truncate">
+              {signingIn && <Spinner className="size-3" />}
+              {account.name}
+              {job && (signingIn || job.state === "failed") && (
+                <span
+                  className={cn("truncate", job.state === "failed" ? "text-bad" : "text-muted-foreground")}
+                >
+                  · {job.step}
+                </span>
+              )}
+            </span>
+            {fixed ? (
+              <span className="text-ok">Signed in</span>
+            ) : (
+              !signingIn && (
+                <Button size="sm" variant="bad" disabled={running} onClick={() => reconnect(account.name)}>
+                  Reconnect
+                </Button>
+              )
+            )}
+          </span>
+        )
+      })}
+      {error && (
+        <span role="alert" className="text-bad">
+          {error}
+        </span>
+      )}
+    </span>
   )
 }
