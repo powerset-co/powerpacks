@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The native daily refresh: the local server runs it once a day while the app is open.
+"""The native scheduled refresh: the local server runs it daily, weekly or monthly (it keeps running in the background when the window is closed).
 
 One run is what Accounts' "Enrich imported data" does, unattended:
 
@@ -30,7 +30,8 @@ longer offers or installs them.
 
 Changelog:
   2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily; a missed
-    run catches up when the app opens unless the next one is within 6 hours.
+    run catches up as soon as it can unless the next one is within 6 hours; new schedules are
+    weekly on Monday at 9:00 AM (an older settings file stays daily).
   2026-11-04: Gmail's problem is one short line; the page is named Scheduled tasks again.
   2026-11-04: Gmail's problem points at the Refresh page, which reconnects each expired mailbox there.
   2026-11-04: a mailbox Google still wants the person for no longer stops the others: the run
@@ -120,10 +121,11 @@ CREATE TABLE IF NOT EXISTS refresh_runs (
 @dataclass(frozen=True)
 class Settings:
     enabled: bool = False
-    time: str = "06:00"
+    time: str = "09:00"
     # When it was last turned on or moved to another day: a slot before this is not a missed run.
     enabled_at: str = ""
-    frequency: Frequency = "daily"
+    # New schedules are weekly; a settings file from before weekly existed was daily (read_settings).
+    frequency: Frequency = "weekly"
     # Weekly: 0 is Monday. Monthly: 1 to 31.
     weekday: int = 0
     day: int = 1
@@ -205,7 +207,7 @@ def read_settings(root: Path) -> Settings:
     path = root / SETTINGS
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return Settings(bool(payload.get("enabled")), str(payload.get("time") or "06:00"),
+        return Settings(bool(payload.get("enabled")), str(payload.get("time") or "09:00"),
                         str(payload.get("enabled_at") or ""), payload.get("frequency") or "daily",
                         int(payload.get("weekday") or 0), int(payload.get("day") or 1))
     except (OSError, ValueError, AttributeError, TypeError):

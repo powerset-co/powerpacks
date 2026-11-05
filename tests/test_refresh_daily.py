@@ -19,7 +19,7 @@ def at(text: str) -> datetime:
 
 
 class ScheduleTests(unittest.TestCase):
-    on = daily.Settings(True, "06:00", "")
+    on = daily.Settings(True, "06:00", "", "daily")
 
     def test_off_is_never_due(self):
         self.assertFalse(daily.due(at("2026-11-03T09:00:00"), daily.Settings(False), None))
@@ -44,7 +44,7 @@ class ScheduleTests(unittest.TestCase):
         self.assertFalse(daily.due(at("2026-11-04T01:00:00"), self.on, last))
 
     def test_turning_it_on_does_not_count_the_past_slot_as_missed(self):
-        settings = daily.Settings(True, "06:00", "2026-11-03T10:00:00")
+        settings = daily.Settings(True, "06:00", "2026-11-03T10:00:00", "daily")
         self.assertFalse(daily.due(at("2026-11-03T11:00:00"), settings, None))
         self.assertTrue(daily.due(at("2026-11-04T06:00:00"), settings, None))
         self.assertEqual(daily.next_run_at(at("2026-11-03T11:00:00"), settings, None), at("2026-11-04T06:00:00"))
@@ -73,6 +73,9 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(daily.Settings(True, "18:30", frequency="monthly", day=22).summary(),
                          "monthly on the 22nd at 6:30 PM")
 
+    def test_new_schedules_are_weekly_at_9_and_old_files_stay_daily(self):
+        self.assertEqual(daily.Settings().summary(), "weekly on Monday at 9:00 AM")
+
     def test_time_is_validated(self):
         with self.assertRaises(ValueError):
             daily.Settings(True, "25:00")
@@ -99,7 +102,11 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(daily.read_settings(self.root), moved)
         self.assertFalse(daily.due(at("2026-11-04T09:01:00"), moved, None))
         self.assertTrue(daily.due(at("2026-12-01T06:00:00"), moved, None))
+        # A settings file from before weekly existed stays daily.
+        (self.root / daily.SETTINGS).write_text('{"enabled": true, "time": "06:00"}', encoding="utf-8")
+        self.assertEqual(daily.read_settings(self.root).frequency, "daily")
         # A field left out keeps its saved value.
+        daily.write_settings(self.root, True, "06:00", "monthly")
         self.assertEqual(daily.write_settings(self.root, True, "07:00").frequency, "monthly")
 
     def test_a_run_whose_process_is_gone_is_closed(self):
@@ -240,8 +247,8 @@ class ApiTests(unittest.TestCase):
         code, payload = self.call("post", api.SETTINGS_PATH, {"enabled": "true", "time": "07:30"})
         self.assertEqual(code, 200)
         self.assertEqual(payload["settings"], {"enabled": True, "time": "07:30", "label": "7:30 AM",
-                                               "frequency": "daily", "weekday": 0, "day": 1,
-                                               "summary": "daily at 7:30 AM"})
+                                               "frequency": "weekly", "weekday": 0, "day": 1,
+                                               "summary": "weekly on Monday at 7:30 AM"})
         code, payload = self.call("post", api.SETTINGS_PATH, {"frequency": "weekly", "weekday": "4"})
         self.assertEqual(code, 200)
         self.assertEqual(payload["settings"]["summary"], "weekly on Friday at 7:30 AM")

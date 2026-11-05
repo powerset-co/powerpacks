@@ -43,14 +43,20 @@ const STATUS: Readonly<
   failed: { label: "Failed", variant: "bad" },
 }
 
-// A synced source is green with a check, a skipped one (signed out) yellow with a warning, a failed
-// one red with an X.
+// A synced source has a check, a skipped one (signed out) a warning, a failed one an X.
 const SOURCE_STATUS: Readonly<
   Record<SourceRun["status"], { label: string; variant: "ok" | "warn" | "bad" }>
 > = {
   synced: { label: "Synced", variant: "ok" },
   skipped: { label: "Skipped: not signed in", variant: "warn" },
   failed: { label: "Failed", variant: "bad" },
+}
+
+// Sources are quiet outlines; only the mark says synced, skipped or failed.
+const SOURCE_ICON_COLOR: Readonly<Record<SourceRun["status"], string>> = {
+  synced: "flex text-ok",
+  skipped: "flex text-warn",
+  failed: "flex text-bad",
 }
 
 function StatusIcon({ variant }: { variant: "ok" | "warn" | "bad" | "info" }) {
@@ -73,6 +79,11 @@ const DAY_OPTIONS = Array.from({ length: 31 }, (_, index) => ({
   label: ordinal(index + 1),
 }))
 const PICKER = "h-7 text-xs"
+
+/** The saved frequency; daily when the server predates weekly and monthly (as it then ran). */
+function frequencyOf(settings: RefreshState["settings"]): RefreshFrequency {
+  return FREQUENCIES.find((option) => option.value === settings.frequency)?.value ?? "daily"
+}
 
 /** The refresh's schedule: on/off, how often, the day and time, Refresh now, then every run. */
 export function RefreshPage() {
@@ -103,6 +114,7 @@ export function RefreshPage() {
   const data = refresh.data
   const runs = data?.runs ?? []
   const latest = runs[0]
+  const frequency = data ? frequencyOf(data.settings) : "weekly"
   const open =
     openId === undefined
       ? latest && latest.status !== "ok" && latest.status !== "running"
@@ -158,7 +170,7 @@ export function RefreshPage() {
             >
               <Select
                 aria-label="Repeat"
-                value={data.settings.frequency}
+                value={frequency}
                 onChange={(value) => {
                   const frequency = FREQUENCIES.find((option) => option.value === value)?.value
                   if (frequency) change({ frequency })
@@ -166,7 +178,7 @@ export function RefreshPage() {
                 options={FREQUENCIES}
                 className={cn(PICKER, "min-w-[92px]")}
               />
-              {data.settings.frequency === "weekly" && (
+              {frequency === "weekly" && (
                 <>
                   <span>on</span>
                   <Select
@@ -178,7 +190,7 @@ export function RefreshPage() {
                   />
                 </>
               )}
-              {data.settings.frequency === "monthly" && (
+              {frequency === "monthly" && (
                 <>
                   <span>on the</span>
                   <Select
@@ -212,7 +224,7 @@ export function RefreshPage() {
                     See progress
                   </Link>
                 ) : data.next_run_at ? (
-                  `Next run ${lower(when(data.next_run_at))} · while the app is open`
+                  `Next run ${lower(when(data.next_run_at))}`
                 ) : (
                   "Off"
                 )}
@@ -310,11 +322,14 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
             {run.sources.map((source) => (
               <Badge
                 key={source.source}
-                variant={SOURCE_STATUS[source.status].variant}
+                variant="outline"
                 aria-label={`${SOURCE_TITLE[source.source]}: ${SOURCE_STATUS[source.status].label}`}
                 data-source-status={source.status}
+                className="font-medium text-muted-foreground"
               >
-                <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
+                <span className={SOURCE_ICON_COLOR[source.status]}>
+                  <StatusIcon variant={SOURCE_STATUS[source.status].variant} />
+                </span>
                 {SOURCE_TITLE[source.source]}
               </Badge>
             ))}
