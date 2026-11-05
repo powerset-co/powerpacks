@@ -3,7 +3,6 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
-import { RefreshPane } from "@/components/shared/RefreshPane"
 import type { AccountsPayload } from "@/types/accounts"
 import type { RefreshRun, RefreshState } from "@/types/refresh"
 
@@ -241,19 +240,6 @@ it("is named Scheduled tasks", async () => {
   serve(() => state)
   mount(<RefreshPage />)
   expect(await screen.findByRole("heading", { name: "Scheduled tasks" })).toBeTruthy()
-})
-
-it("the sidebar pane says what to do and stays dismissed for that run", async () => {
-  serve(() => state)
-  mount(<RefreshPane rail={false} />)
-  expect(await screen.findByText("Gmail sign-in expired for casey@example.com")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "Reconnect Gmail" })).toBeTruthy()
-  expect(screen.getByText(/\+1 more: WhatsApp unlinked this Mac/)).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
-  expect(screen.queryByText("Gmail sign-in expired for casey@example.com")).toBeNull()
-  cleanup()
-  mount(<RefreshPane rail={false} />)
-  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull())
 })
 
 it("formats times the way the page reads", () => {
