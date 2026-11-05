@@ -9,9 +9,11 @@ Created: 2026-10-06
 from __future__ import annotations
 
 import errno
+import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -23,7 +25,7 @@ from packs.ingestion.primitives.deep_context_v2.collect.bundle import (
     Person,
     ThreadParticipants,
 )
-from packs.ingestion.primitives.discover.messages import chatdb
+from packs.ingestion.primitives.discover.messages import chatdb, extract_whatsapp
 from packs.ingestion.primitives.discover.messages.wacli import message_db as wacli_messages
 from packs.ingestion.primitives.discover.messages.wacli import store_db as wacli_store
 
@@ -32,6 +34,13 @@ CHAT_MESSAGE_CAP = 1600
 # Bounds characters, not messages: one heavy correspondent cannot make a bundle unbounded.
 SAFETY_CHAR_CAP = 1_800_000
 WACLI_DB_RELATIVE = Path("messages") / "wacli" / "wacli.db"
+WHATSAPP_MAX_GROUP_SIZE = 10
+# Group messages: the last year, newest first, only as many as fit in the room Gmail and DMs leave
+# in synthesis' window (20 batches x 9k characters, which reads the newest messages of all kinds).
+# Without the room check a busy group would push the person's DMs out of that window.
+GROUP_LOOKBACK_DAYS = 365
+GROUP_WINDOW_CHARS = 150_000   # under the 180k window, leaving room for each line's header
+GROUP_LINE_CHARS = 60          # a group line's rendered header: group, channel, date, role, sender
 MAX_THREADS = 25
 QueryResult = TypeVar("QueryResult")
 _READ_RETRIES = 3
@@ -63,6 +72,19 @@ def apple_epoch_iso(value: int | float | None) -> str:
     return chatdb.apple_timestamp_to_iso(value) or ""
 
 
+def recent_group_messages(group: list[MessageEntry], *, room: int) -> list[MessageEntry]:
+    """Group messages from the last year, newest first, until they fill `room` characters."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=GROUP_LOOKBACK_DAYS)).date().isoformat()
+    kept: list[MessageEntry] = []
+    for message in sorted(group, key=MessageEntry.content_order_key, reverse=True):
+        size = message.content_chars() + GROUP_LINE_CHARS
+        if (message.at or "")[:10] < cutoff or size > room:
+            break
+        kept.append(message)
+        room -= size
+    return kept
+
+
 class ContextSources:
     """One run's message stores and fixed tuning.
 
@@ -74,12 +96,15 @@ class ContextSources:
     """
 
     def __init__(self, *, channels: set[str], msgvault_db: Path, chat_db: Path, wacli_db: Path,
-                 deep_cap: int, max_group_size: int) -> None:
+                 deep_cap: int, max_group_size: int, owner_name: str = "",
+                 contact_names: dict[str, str] | None = None) -> None:
         self.msgvault_db = msgvault_db
         self.chat_db = chat_db
         self.wacli_db = wacli_db
         self.deep_cap = deep_cap
         self.max_group_size = max_group_size
+        self.owner_name = owner_name
+        self.contact_names = contact_names or {}
         self.msgvault: sqlite3.Connection | None = None
         self.accounts: set[str] = set()
         if "gmail_msgvault" in channels:
@@ -227,9 +252,62 @@ class ContextSources:
                     direction=direction,
                     subject=group,
                     text=text.strip(),
+                    sender=(self.owner_name if direction == MessageDirection.FROM_ME else
+                            person.full_name if direction == MessageDirection.FROM_THEM else
+                            self.contact_names.get(row["handle"]) or f'{row["handle"]} (no saved name)'),
                 )
             )
         return out
+
+    def _read_whatsapp_group_messages(self, person: Person) -> list[MessageEntry]:
+        def read() -> list[MessageEntry]:
+            con = wacli_store.open_readonly_db(self.wacli_db)
+            try:
+                contacts = extract_whatsapp.load_contacts_by_jid(con)
+                lid_map = {lid: pn if "@" in pn else f"{pn}@s.whatsapp.net"
+                           for lid, pn in wacli_store.load_lid_map(self.wacli_db.parent).items()}
+                members = set(wacli_store.whatsapp_dm_jids(person.phones))
+                for jid in (*lid_map, *contacts):
+                    if extract_whatsapp.phone_for_jid(lid_map.get(jid, jid), contacts, lid_map) in person.phones:
+                        members.add(jid)
+                rows = wacli_messages.query_whatsapp_small_group_messages(
+                    con, members, max_group_size=WHATSAPP_MAX_GROUP_SIZE, limit=self.deep_cap
+                )
+                out: list[MessageEntry] = []
+                mention_names: dict[str, str] = {}
+                for jid in (*lid_map, *contacts):
+                    name = extract_whatsapp.name_for_jid(jid, contacts, lid_map)
+                    phone = extract_whatsapp.phone_for_jid(lid_map.get(jid, jid), contacts, lid_map)
+                    if phone in person.phones:
+                        name = person.full_name
+                    name = name or self.contact_names.get(phone, "")
+                    if name:
+                        mention_names[jid.split("@", 1)[0]] = name
+                for jid in wacli_store.load_owner_jids(self.wacli_db.parent):
+                    mention_names[jid.split("@", 1)[0]] = self.owner_name
+                for row in rows:
+                    text = wacli_messages.whatsapp_message_text(row, include_media=False)
+                    if not text:
+                        continue
+                    jid = row["sender_jid"] or ""
+                    direction = (MessageDirection.FROM_ME if row["from_me"] else
+                                 MessageDirection.FROM_THEM if jid in members else MessageDirection.FROM_OTHER)
+                    phone = extract_whatsapp.phone_for_jid(lid_map.get(jid, jid), contacts, lid_map)
+                    sender = (self.owner_name if direction == MessageDirection.FROM_ME else
+                              person.full_name if direction == MessageDirection.FROM_THEM else
+                              row["sender_name"] or extract_whatsapp.name_for_jid(jid, contacts, lid_map) or
+                              f'{phone or jid} (no saved name)')
+                    text = re.sub(r"@(\d+)\b", lambda match: "@" + mention_names.get(match[1], match[1]), text)
+                    out.append(MessageEntry(
+                        channel=MessageChannel.WHATSAPP_GROUP,
+                        at=wacli_store.whatsapp_epoch_to_iso(row["ts"]) or "",
+                        direction=direction, subject=row["group_name"], text=text, sender=sender,
+                    ))
+                return out
+            finally:
+                con.close()
+
+        return _read_source(self.wacli_db, read)
 
     def _count_whatsapp(self, person: Person) -> int:
         """The stored total of the candidate's WhatsApp direct messages, so `capped` is honest."""
@@ -288,10 +366,11 @@ class ContextSources:
         if "whatsapp" in person.source_channels:
             whatsapp = self._read_whatsapp(person)
             whatsapp_total = self._count_whatsapp(person)
+            group = self._read_whatsapp_group_messages(person)
         if "imessage" in person.source_channels:
             direct = self._read_imessage(person)
             chat_total = self._count_imessage_dms(person)
-            group = self._read_imessage_group_messages(person)
+            group.extend(self._read_imessage_group_messages(person))
         direct = direct + whatsapp
         chat_total = chat_total + whatsapp_total
 
@@ -299,7 +378,8 @@ class ContextSources:
         # then direct and group chats newest first, with content breaking equal timestamps.
         ordered = list(gmail_messages)
         ordered.extend(sorted(direct, key=MessageEntry.content_order_key, reverse=True))
-        ordered.extend(sorted(group, key=MessageEntry.content_order_key, reverse=True))
+        ordered.extend(recent_group_messages(group, room=GROUP_WINDOW_CHARS - sum(
+            message.content_chars() for message in ordered)))
         pool: list[MessageEntry] = []
         used = 0
         for message in ordered:

@@ -211,8 +211,7 @@ one); tags are the union; the name is the newest human name among its members, e
 `canonical_name` (two members tie and the row may read as either), so "merge these and call him Fahad
 AlSharekh" is the merge insert plus one rename; the row says in progress until the next run relabels
 the family. A rename writes every member, so after a split both sides keep it until renamed again. "Keep it under Inkwon" names the family to keep, not a display name. Dedupe only joins families, never splits one, and refuses a component with two distinct `li:` identities.
-A correction to a known LinkedIn therefore preserves both imported identities. A member of a deleted family cannot be moved (the insert is ignored). Memory picks the change up on
-its next update.
+A correction to a known LinkedIn therefore preserves both imported identities. A member of a deleted family cannot be moved (the insert is ignored).
 
 A named person's saved dossier, or a question about what Powerpacks knows of them, is
 `bin/deep-context-v2 lookup --name "<name>" --json`, answered in the chat. Do not run processing for a lookup.

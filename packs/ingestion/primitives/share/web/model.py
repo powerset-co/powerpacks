@@ -45,6 +45,7 @@ CHANNEL_FAMILIES = {
     "imessage": "imessage",
     "imessage_group": "imessage",
     "whatsapp": "whatsapp",
+    "whatsapp_group": "whatsapp",
     "linkedin_csv": "linkedin",
     "linkedin": "linkedin",
 }

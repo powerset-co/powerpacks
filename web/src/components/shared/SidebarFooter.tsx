@@ -73,11 +73,13 @@ function useImport(): { data: InstallStatus; dismiss: () => void } | null {
     readStored("local", IMPORT_DISMISSED_KEY, (raw) => (typeof raw === "string" ? raw : null)),
   )
   const data = install.data
-  // Onboarding's LinkedIn setup is not an import: Add sources shows after it instead.
+  // Onboarding's LinkedIn setup is not an import: Add sources shows after it instead. A refresh is
+  // Scheduled tasks', whose own notice says when it stops, so it never shows here as well.
   if (
     data === undefined ||
     data.event === "setup.ready" ||
     linkedinSetup(data) ||
+    refreshRun(data) ||
     (finished(data) && dismissed === data.updated_at)
   )
     return null
@@ -86,6 +88,11 @@ function useImport(): { data: InstallStatus; dismiss: () => void } | null {
     setDismissed(data.updated_at)
   }
   return { data, dismiss }
+}
+
+/** A run Scheduled tasks started (onboard --refresh), not an import. */
+function refreshRun(data: InstallStatus): boolean {
+  return /(^|\s)--refresh(\s|$)/.test(data.retry_command)
 }
 
 function finished(data: InstallStatus): boolean {
@@ -458,7 +465,7 @@ function Profile({ rail }: { rail: boolean }) {
           signIn.mutate()
         }}
       >
-        {busy ? "Signing in…" : signedIn ? "Reconnect Powerset" : "Sign in to Powerset"}
+        {busy ? "Signing in…" : signedIn ? "Switch Accounts" : "Sign in to Powerset"}
       </MenuItem>
     </div>
   )

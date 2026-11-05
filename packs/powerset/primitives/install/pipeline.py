@@ -24,7 +24,6 @@ from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.owner import build_owner
 from packs.ingestion.primitives.deep_context_v2.run import archive_v1, index_command, realize, stages
 from packs.ingestion.primitives.discover.linkedin.connections import CONNECTIONS_CSV, SCRAPE_RECORD
-from packs.memory.runner import keep_updated
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.status_prose import PROSE, STAGE_EVENTS
 from packs.powerset.primitives.install.steps import InstallState, InstallStep
@@ -217,7 +216,6 @@ class ProcessingOnboarding:
             load_env()
             try:
                 work()
-                keep_updated(self.root)
             except _Stopped:
                 pass
             except (Exception, SystemExit) as error:

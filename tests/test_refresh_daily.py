@@ -195,7 +195,7 @@ class RunTests(unittest.TestCase):
         run = self.run_with(manifest, {"a@x.com": "healthy"}, signed)
         self.assertEqual(run.status, "failed")
         self.assertEqual(run.problems[-1].detail, "Deep Context stopped: no operator id.")
-        self.assertEqual(run.problems[-1].href, "/accounts?view=sync")
+        self.assertEqual(run.problems[-1].href, "/tasks")
 
     def test_signed_out_of_powerset_stops_before_setup_waits_for_a_sign_in(self):
         run_id = daily._insert(self.root, "daily", 0)
