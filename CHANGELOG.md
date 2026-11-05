@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.53.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.2...powerpacks-v3.53.0) (2026-11-05)
+
+
+### Features
+
+* **accounts, tasks:** Accounts connects, Scheduled tasks syncs; weekly/monthly schedule picker ([#1084](https://github.com/powerset-co/powerpacks/issues/1084)) ([64b5d92](https://github.com/powerset-co/powerpacks/commit/64b5d9233bdcd44229c296eacb338057a75ea982))
+
+
+### Bug Fixes
+
+* **deep-context:** collect's Gmail count no longer walks the whole archive per person ([#1090](https://github.com/powerset-co/powerpacks/issues/1090)) ([9464a23](https://github.com/powerset-co/powerpacks/commit/9464a231d13cbc028894853836a9e925b85a287c))
+* **refresh:** sync the healthy Gmail mailboxes and reconnect expired ones on the Refresh page ([#1083](https://github.com/powerset-co/powerpacks/issues/1083)) ([2bd7b50](https://github.com/powerset-co/powerpacks/commit/2bd7b5090ef4eb38106421845d93bf0a0a726f54))
+
 ## [3.52.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.1...powerpacks-v3.52.2) (2026-11-05)
 
 
