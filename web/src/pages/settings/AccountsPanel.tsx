@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useSearchParams } from "react-router-dom"
-import { ChevronRight } from "lucide-react"
+import { ChevronRight, TriangleAlert } from "lucide-react"
 import { CheckIcon, Spinner } from "@/components/shared"
 import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
@@ -132,13 +132,20 @@ export function AccountsPanel({
                 <span className="block text-sm font-semibold">{row.title}</span>
                 <span className="mt-1 block text-[11px] text-muted-foreground">{SUBTITLE[key]}</span>
               </span>
+              {/* One plain outline pill for every state: a check once connected, an alert while a
+                  Gmail mailbox needs signing in, a spinner while it works. No coloured badges. */}
               <span
+                data-status={warn ? "needs" : row.state}
                 className={cn(
-                  "flex shrink-0 items-center gap-1 text-[11px]",
-                  warn ? "text-warn" : row.state === "ready" ? "text-ok" : "text-muted-foreground",
+                  "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+                  row.state === "ready"
+                    ? "border-line-strong text-foreground"
+                    : "border-line text-muted-foreground",
                 )}
               >
-                {warn ? null : row.state === "ready" ? (
+                {warn ? (
+                  <TriangleAlert aria-hidden className="size-3" />
+                ) : row.state === "ready" ? (
                   <CheckIcon className="size-3" />
                 ) : row.state === "working" || row.state === "checking" ? (
                   <Spinner className="size-3" />
@@ -165,17 +172,43 @@ export function AccountsPanel({
           <div className="mx-auto flex w-full max-w-[410px] flex-col gap-6">
             <div>
               <h1 className="m-0 text-[24px] font-semibold tracking-tight">Accounts</h1>
+              {/* What it does, then how your data is handled and when it updates: one statement. */}
               <p className="mb-0 mt-2 text-sm text-muted-foreground">
-                Your people, in one place. See how your data is processed{" "}
+                Connect the apps you talk to people on. Powerpacks finds who you know and makes them
+                searchable.
+              </p>
+              <p className="mb-0 mt-1 text-sm text-muted-foreground">
+                Your messages stay on this Mac and{" "}
                 <button
                   type="button"
-                  aria-label="See how your data is processed here"
+                  aria-label="How your data is handled"
                   className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
                   onClick={() => setHowItWorks(true)}
                 >
-                  here
+                  only short snippets leave it
                 </button>
-                .
+                .{" "}
+                {active || starting ? (
+                  <>
+                    Syncing now:{" "}
+                    <button
+                      type="button"
+                      className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
+                      onClick={() => setParams({ view: "sync" }, { replace: true })}
+                    >
+                      view progress
+                    </button>
+                    .
+                  </>
+                ) : (
+                  <>
+                    It updates{" "}
+                    <Link to="/tasks" className="text-primary no-underline hover:underline">
+                      {accounts?.scheduled ?? "when you turn on the scheduled sync"}
+                    </Link>
+                    .
+                  </>
+                )}
               </p>
             </div>
             <div>
@@ -190,35 +223,11 @@ export function AccountsPanel({
               </h2>
               {list(SERVICES)}
             </div>
-            <div className="mt-3 flex flex-col gap-2 px-3 text-xs text-muted-foreground">
-              {/* Accounts connects; syncing lives on Scheduled tasks (Refresh now and the daily run). */}
-              <p className="m-0">
-                {active || starting ? (
-                  <>
-                    Syncing now ·{" "}
-                    <button
-                      type="button"
-                      className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline"
-                      onClick={() => setParams({ view: "sync" }, { replace: true })}
-                    >
-                      View progress
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {accounts?.scheduled ? `Syncs ${accounts.scheduled}` : "Automatic sync is off"} ·{" "}
-                    <Link to="/tasks" className="text-primary no-underline hover:underline">
-                      Scheduled tasks
-                    </Link>
-                  </>
-                )}
+            {error || startError ? (
+              <p role="alert" className="m-0 px-3 text-xs text-bad">
+                {error ?? startError}
               </p>
-              {error || startError ? (
-                <p role="alert" className="m-0 text-bad">
-                  {error ?? startError}
-                </p>
-              ) : null}
-            </div>
+            ) : null}
           </div>
         </section>
         <aside className="border-l border-line bg-card px-8 py-10 max-[900px]:border-l-0 max-[900px]:border-t max-[680px]:px-4">
