@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from packs.powerset.primitives.auth import auth
 from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.onboard import Onboarding, main
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as keys
 
@@ -380,6 +381,24 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(state["status"], "failed")
         self.assertIn("503", output)
         login.assert_not_called()
+
+
+class StopTests(unittest.TestCase):
+    def test_a_stop_signal_records_the_import_as_stopped(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        status = InstallStatus(root)
+        status.directory.mkdir(parents=True)
+        status.write("discover.reading", step=InstallStep.DEEP_CONTEXT, pid=os.getpid(), retry_command="bin/onboard --refresh")
+        argv = ["onboard", "--root", str(root), "--source", "gmail"]
+        with patch("sys.argv", argv), patch("packs.powerset.primitives.install.onboard.report.install"), \
+             patch("packs.powerset.primitives.install.onboard._setup", side_effect=KeyboardInterrupt), \
+             contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as stop:
+            main()
+        self.assertEqual(stop.exception.code, 1)
+        self.assertIn("STOPPED", out.getvalue())
+        record = status.read()
+        self.assertEqual((record["status"], record["installer_pid"], record["event"]), ("failed", 0, "install.stopped"))
+        self.assertEqual(record["retry_command"], "bin/onboard --refresh")
 
 
 if __name__ == "__main__":

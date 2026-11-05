@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import json
 import logging
 import os
 import tempfile
@@ -113,6 +114,19 @@ class InstallStatusTests(unittest.TestCase):
         record = self.status.read()
         self.assertEqual(record["status"], "waiting")
         self.assertEqual(record["retry_command"], "bin/onboard --source gmail")
+
+    def test_running_record_of_a_dead_process_reads_as_stopped(self) -> None:
+        self.status.write('discover.reading', step=InstallStep.DEEP_CONTEXT, pid=99999999, retry_command="bin/onboard --refresh")
+        record = self.status.read()
+        self.assertEqual((record["status"], record["installer_pid"], record["event"]), ("failed", 0, "install.stopped"))
+        self.assertEqual(record["steps"]["deep_context"]["status"], "failed")
+        self.assertEqual(record["retry_command"], "bin/onboard --refresh")
+        # The file is the run's; only the reading changes.
+        self.assertEqual(json.loads(self.status.manifest_path.read_text())["installer_pid"], 99999999)
+
+    def test_running_record_of_a_live_process_stays_running(self) -> None:
+        self.status.write('discover.reading', step=InstallStep.DEEP_CONTEXT, pid=os.getpid())
+        self.assertEqual(self.status.read()["status"], "running")
 
     def test_missing_configuration_wait_has_no_running_owner(self) -> None:
         self.status.write('gmail.which_accounts', pid=0)
@@ -411,6 +425,7 @@ class ConnectTests(unittest.TestCase):
                                                   retry_command="bin/onboard --source whatsapp --logins-only")
         (self.root / controller.PAIR_CODE).write_text("ABCD-EFGH\n")
         self.assertEqual(self.controller.connection()["action"]["pair_code"], "ABCD-EFGH")
+
 
 if __name__ == "__main__":
     unittest.main()

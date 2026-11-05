@@ -24,6 +24,7 @@ from pathlib import Path
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso
 from packs.ingestion.primitives.common.manifests import write_stage_manifest
+from packs.ingestion.primitives.common.proc import alive
 from packs.powerset.primitives.install.status_prose import page_prose, render
 from packs.powerset.primitives.install.steps import DEFAULT_PLAN, PROCESSING_STEPS, SOURCE_STEPS, InstallState, InstallStep
 
@@ -135,6 +136,14 @@ class InstallStatus:
             record["note"] = manifest.note
         except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
             return self._unwritten("install.unreadable")
+        # A run owns its record only while its process lives: one that died mid-step (the app quit,
+        # a crash, a cancel) reads as stopped, so nothing waits on it. The file itself is left as
+        # the run wrote it. A waiting record (pid 0) is the person's turn and stays.
+        if record["status"] == InstallState.RUNNING.value and manifest.installer_pid > 0 and not alive(manifest.installer_pid):
+            prose, message, note = render("install.stopped", {})
+            record.update(installer_pid=0, status=prose.state.value, event="install.stopped", message=message,
+                          note=note, action=None)
+            record["steps"] = {**manifest.steps, record["step"]: {"status": prose.state.value, "message": message}}
         return record
 
     def _unwritten(self, event: str) -> dict:

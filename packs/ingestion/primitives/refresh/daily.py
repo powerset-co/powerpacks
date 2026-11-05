@@ -60,6 +60,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from packs.ingestion.primitives.common.proc import alive
+
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -353,22 +355,10 @@ def last_started(root: Path) -> datetime | None:
     return _parse(runs[0].started_at) if runs else None
 
 
-def _alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def reconcile(root: Path) -> None:
     """Close a run whose process is gone (the app quit or the Mac slept through it)."""
     for run in list_runs(root, 5):
-        if run.status == "running" and not _alive(run.pid):
+        if run.status == "running" and not alive(run.pid):
             started = _parse(run.started_at)
             # A run that was just inserted gets a moment to record its process.
             if run.pid == 0 and started and now() - started < timedelta(minutes=2):

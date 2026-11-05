@@ -733,6 +733,11 @@
       "state": "running",
       "line": "Reading your messages"
     },
+    "discover.collect.people": {
+      "step": "deep_context",
+      "state": "running",
+      "line": "Reading your messages: {done:,} of {total:,} people"
+    },
     "discover.estimating": {
       "step": "deep_context",
       "state": "running",

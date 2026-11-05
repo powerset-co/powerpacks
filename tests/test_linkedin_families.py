@@ -134,6 +134,14 @@ class LinkedInFamiliesTests(unittest.TestCase):
         self.assertIsNone(self.conn.execute("SELECT 1 FROM candidates WHERE candidate_id='candidate:linkedin:99'").fetchone())
         self.assertEqual(self.count("candidate_linkedins"), 2)
 
+    def test_collect_reports_each_person_read(self) -> None:
+        node = Collect(self.conn, self.root, 1, self.root / "absent-chat.sqlite")
+        calls: list[tuple[str, int, int]] = []
+        node.on_progress = lambda phase, done, total: calls.append((phase, done, total))
+        node.run()
+        total = calls[0][2]
+        self.assertEqual(calls, [("people", done, total) for done in range(total + 1)])
+
     def test_imported_provider_fields_survive_realize_and_local_index_transforms(self) -> None:
         source = linkedin_row("42")
         payload = json.loads(source["rapidapi_response"])
