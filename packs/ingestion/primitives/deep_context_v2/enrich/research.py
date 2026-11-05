@@ -15,11 +15,13 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
-from parallel import Parallel
+from parallel import APIStatusError, Parallel
 from parallel.types import RunInputParam, TaskGroupStatusEvent, TaskRunEvent, TaskSpecParam
 
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich, queries_worth
@@ -48,6 +50,10 @@ PARALLEL_PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
 PARALLEL_BASE_URL = "https://proxy.powerset.dev/vendor/parallel"
 PARALLEL_BETA_HEADER = "search-extract-2025-10-10,field-basis-2025-11-25"
 PARALLEL_BATCH_SIZE = 500           # runs per add_runs call
+# Parallel reserves a batch's credit when its runs are added and answers 402 when the balance cannot
+# hold it, even while an auto-reload is on its way (2026-11-05: 500 runs, $25, balance mid-reload).
+# A 402 waits these many seconds, in turn, and asks again; after the last wait it is the error it was.
+CREDIT_WAITS_SECONDS = (60, 120, 240)
 PARALLEL_STREAM_TIMEOUT = 3600      # Parallel's maximum for one event stream
 # The task spec has no instructions field: the objective rides on the output schema's description.
 _OUTPUT_SCHEMA: dict[str, Any] = dict(_SCHEMAS["output"])
@@ -158,6 +164,23 @@ class ResearchStep(Node):
         return submit(self.conn, self.subjects())
 
 
+Submitted = TypeVar("Submitted")
+
+
+def with_credit(call: Callable[[], Submitted], what: str, waits: tuple[int, ...] = CREDIT_WAITS_SECONDS) -> Submitted:
+    """`call()`, waiting out Parallel's 402 (insufficient credit) through `waits`; any other error is raised at once."""
+    for wait in waits:
+        try:
+            return call()
+        except APIStatusError as error:
+            if error.status_code != 402:
+                raise
+            print(f"research: Parallel has no credit for {what}; waiting {wait}s for the balance to reload",
+                  file=sys.stderr, flush=True)
+            time.sleep(wait)
+    return call()
+
+
 def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
            on_progress: Callable[[str, int, int], None] | None = None) -> dict[str, int]:
     """One Parallel task group for every subject; each answer is written and committed as it arrives.
@@ -169,7 +192,8 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
     client = Parallel(api_key=auth.gateway_token(), base_url=PARALLEL_BASE_URL,
                       default_headers={"parallel-beta": PARALLEL_BETA_HEADER}, max_retries=0)
     # Submit every run, then read the event stream until the group is done.
-    group_id: str = str(client.task_group.create(metadata={"source": "powerpacks"}).task_group_id)
+    group_id: str = str(with_credit(lambda: client.task_group.create(metadata={"source": "powerpacks"}),
+                                    "a task group").task_group_id)
     inputs: list[RunInputParam] = []
     for subject in todo:
         run_input: dict[str, object] = {"dossier": subject.dossier}
@@ -177,7 +201,9 @@ def submit(conn: sqlite3.Connection, todo: list[ResearchSubject],
             run_input["guidance"] = subject.guidance
         inputs.append({"input": run_input, "metadata": {"handle": subject.handle}, "processor": PARALLEL_PROCESSOR})
     for start in range(0, len(inputs), PARALLEL_BATCH_SIZE):
-        client.task_group.add_runs(group_id, inputs=inputs[start:start + PARALLEL_BATCH_SIZE], default_task_spec=PARALLEL_TASK_SPEC)
+        batch = inputs[start:start + PARALLEL_BATCH_SIZE]
+        with_credit(lambda: client.task_group.add_runs(group_id, inputs=batch, default_task_spec=PARALLEL_TASK_SPEC),
+                    f"{len(batch)} runs")
     counts: dict[str, int] = {"research_submitted": len(todo), "complete": 0, "no_match": 0, "failed": 0}
     answered: int = 0
     if on_progress is not None:
