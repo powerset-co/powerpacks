@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.53.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.1...powerpacks-v3.53.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **sidebar:** drop the refresh problem card; the Refresh page is where problems are fixed ([#1093](https://github.com/powerset-co/powerpacks/issues/1093)) ([0d61e5a](https://github.com/powerset-co/powerpacks/commit/0d61e5abc1231c1386e64e4a24d82e621dc0c92e))
+
 ## [3.53.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.0...powerpacks-v3.53.1) (2026-11-05)
 
 
