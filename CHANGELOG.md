@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.54.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.2...powerpacks-v3.54.0) (2026-11-05)
+
+
+### Features
+
+* **memory:** remove the Memory section ([#1096](https://github.com/powerset-co/powerpacks/issues/1096)) ([c32da52](https://github.com/powerset-co/powerpacks/commit/c32da524fb587bdeb0c604cb0a43582cd975db8e))
+
 ## [3.53.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.1...powerpacks-v3.53.2) (2026-11-05)
 
 
