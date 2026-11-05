@@ -178,37 +178,20 @@ export function AccountsPanel({
                 searchable.
               </p>
               <p className="mb-0 mt-1 text-sm text-muted-foreground">
-                Your messages are saved on this Mac, and{" "}
+                Your messages stay on this Mac and{" "}
                 <button
                   type="button"
                   aria-label="How your data is handled"
                   className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
                   onClick={() => setHowItWorks(true)}
                 >
-                  recent ones go to OpenAI
-                </button>{" "}
-                to summarize each person.{" "}
-                {active || starting ? (
-                  <>
-                    Syncing now:{" "}
-                    <button
-                      type="button"
-                      className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
-                      onClick={() => setParams({ view: "sync" }, { replace: true })}
-                    >
-                      view progress
-                    </button>
-                    .
-                  </>
-                ) : (
-                  <>
-                    It updates{" "}
-                    <Link to="/tasks" className="text-primary no-underline hover:underline">
-                      {accounts?.scheduled ?? "when you turn on the scheduled sync"}
-                    </Link>
-                    .
-                  </>
-                )}
+                  only short snippets leave it
+                </button>
+                . It updates{" "}
+                <Link to="/tasks" className="text-primary no-underline hover:underline">
+                  {accounts?.scheduled ?? "when you turn on the scheduled sync"}
+                </Link>
+                .
               </p>
             </div>
             <div>

@@ -158,7 +158,7 @@ it("connects only: no Enrich or Sync, and the sync line points to Scheduled task
   expect(screen.queryByRole("button", { name: "Enrich imported data" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Sync" })).toBeNull()
 })
-it("while a run goes, says so and opens its progress on Accounts", async () => {
+it("while a run goes, its progress opens on Accounts and the intro stays the same", async () => {
   record = {
     ...idle,
     updated_at: new Date().toISOString(),
@@ -172,8 +172,10 @@ it("while a run goes, says so and opens its progress on Accounts", async () => {
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
   mount()
-  fireEvent.click(await screen.findByRole("button", { name: "view progress" }))
-  expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
+  await screen.findByRole("button", { name: "How your data is handled" })
+  expect(screen.queryByText(/Syncing now/)).toBeNull()
+  cleanup()
+  mount("/accounts?view=sync")
   expect(await screen.findByText(record.message)).toBeTruthy()
   expect(within(screen.getByRole("list", { name: "Setup stages" })).getByText("Gmail imported")).toBeTruthy()
 })
