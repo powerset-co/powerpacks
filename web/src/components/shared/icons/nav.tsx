@@ -52,7 +52,6 @@ export function TeamIcon(props: IconProps) {
   )
 }
 
-/** A head with a spark of recall: the memory directory. */
 export function TasksIcon(props: IconProps) {
   return (
     <svg {...STROKED} {...props}>
