@@ -128,7 +128,7 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
 def refused(answers: list[Answer]) -> bool:
     """A refused choice, score or detector leaves the family unlabelled: the answer is not saved and the
     family is asked again next run, so an unanswered detector never settles as yes. A refused yes/no
-    label only leaves that label out (Luna declines is_minor for some)."""
+    label only leaves that label out."""
     asked: set[str] = {name for name in CHOICE_LABELS + SCORE_LABELS}
     asked.update(DETECTORS)
     return any(answer["type"] == "refusal" and answer["name"] in asked for answer in answers)

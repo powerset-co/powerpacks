@@ -205,10 +205,8 @@ FACET_VALUES = {
     "last": LAST_BUCKET,
     "linkedin": "CASE WHEN public_identifier != '' THEN 'Has LinkedIn' ELSE 'No LinkedIn' END",
     "worth_source": "worth_source",
-    "function": "function",
     "warmth": WARMTH_BUCKET,
     "direction": "direction",
-    "intro_source": "intro_source",
 }
 FACET_LISTS = ("channels", "tags", "labels")
 HIDES = {"linkedin_only": "linkedin_only"}

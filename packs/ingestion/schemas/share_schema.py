@@ -2,4 +2,3 @@
 
 FAMILY = "family"
 ROMANTIC_PARTNER = "romantic_partner"
-MINOR = "minor"

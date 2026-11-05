@@ -152,15 +152,13 @@ class _Providers:
         state = json.loads(body["input"])
         headers = "From:" in state["messages"]
         directly_addressed = "To: Alex Owner <owner@example.com>" in state["messages"]
-        relationship = "unknown" if headers and not directly_addressed else "business_contact"
+        relationship = "stranger" if headers and not directly_addressed else "business_contact"
         answers = []
         for question in body["questions"]:
             name, kind = question["name"], question["type"]
             answer = {"name": name, "type": kind}
             if kind == "choice":
-                choices = {"relationship_kind": relationship,
-                           "intro_source": "work", "function": "engineering"}
-                choice = choices[name]
+                choice = {"relationship_kind": relationship}[name]
                 answer.update(choice=choice, probabilities=[
                     {"value": item["value"], "probability": float(item["value"] == choice)}
                     for item in question["choices"]])
@@ -222,7 +220,7 @@ class GmailAttributionPipelineTests(unittest.TestCase):
                     self.assertNotEqual(before["bundles"][candidate], refreshed["bundles"][candidate])
                     self.assertNotEqual(before["facts"][candidate], refreshed["facts"][candidate])
                     self.assertEqual(json.loads(refreshed["labels"][candidate][4])["relationship_kind"],
-                                     "unknown" if candidate == JORDAN else "business_contact")
+                                     "stranger" if candidate == JORDAN else "business_contact")
                 self.assertEqual(before["facts"][MORGAN], refreshed["facts"][MORGAN])
                 self.assertNotIn(MORGAN, refreshed["labels"])
                 for table in ("bundles", "facts", "labels"):

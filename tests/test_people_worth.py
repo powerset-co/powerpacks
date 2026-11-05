@@ -211,11 +211,6 @@ class PeopleWorthTests(StoreTests):
             self.assertEqual(len(uploaded), int(not flag))
             if uploaded:
                 self.assertEqual(json.loads(uploaded[0].labels_json)["relationship_kind"], kind)
-        self.conn.execute("UPDATE person_labels SET labels_json = ?", (json.dumps({"is_minor": 0.9}),))
-        self.conn.commit()
-        self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "colleague"})
-        self.assertEqual(self.people.load()[0].flag, "minor")
-        self.assertEqual(share_rows(self.root / "store.sqlite"), ())
 
     def test_rename_shows_everywhere_and_survives_refreshes(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
