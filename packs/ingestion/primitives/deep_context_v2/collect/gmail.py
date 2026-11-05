@@ -168,11 +168,14 @@ def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) 
     params: list[Any] = list(contact_ids)
     if owner_ids:
         owner_slots = ",".join("?" for _ in owner_ids)
+        # CROSS JOIN fixes the loop order: the recipient rows by participant first (indexed), then
+        # each message by id. Left to itself SQLite walked every email in the archive by type
+        # instead, 4.8 s per person on a 280k-message archive (2026-11-05).
         arms.append(
             "SELECT m.id FROM message_recipients mr "
-            "JOIN messages m ON m.id = mr.message_id "
-            f"WHERE m.message_type='email' {not_deleted} "
-            f"AND mr.participant_id IN ({contact_slots}) "
+            "CROSS JOIN messages m ON m.id = mr.message_id "
+            f"WHERE mr.participant_id IN ({contact_slots}) "
+            f"AND m.message_type='email' {not_deleted} "
             f"AND m.sender_id IN ({owner_slots})"
         )
         params.extend(contact_ids)
@@ -204,9 +207,9 @@ def thread_participant_rosters(con: sqlite3.Connection, emails: Sequence[str], m
               AND m.sender_id IN ({pid_slots})
             UNION ALL
             SELECT m.conversation_id, COALESCE(m.sent_at, m.received_at, m.internal_date), m.subject
-            FROM message_recipients mr JOIN messages m ON m.id = mr.message_id
-            WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
-              AND mr.participant_id IN ({pid_slots})
+            FROM message_recipients mr CROSS JOIN messages m ON m.id = mr.message_id
+            WHERE mr.participant_id IN ({pid_slots})
+              AND m.message_type='email' AND m.conversation_id IS NOT NULL
         ) GROUP BY conversation_id ORDER BY at DESC LIMIT ?""",
         params,
     )
