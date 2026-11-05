@@ -8,6 +8,8 @@ from contextlib import redirect_stderr
 import base64
 import json
 import os
+import signal
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -20,6 +22,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packs.powerset.primitives.install.status import InstallStatus
+from packs.powerset.primitives.install.steps import InstallStep
 from packs.shared.web import account, feedback
 from packs.shared.web.app import AppRoutes
 from packs.shared.web.server import mounted_handler, persistent_handler
@@ -234,6 +237,17 @@ class AccountRoutesTests(unittest.TestCase):
             start.assert_not_called()
             login.assert_not_called()
 
+
+
+    def test_cancel_with_nothing_running_is_idle(self) -> None:
+        self.assertEqual(self._post("/api/install/cancel", {}), (HTTPStatus.ACCEPTED, {"status": "idle"}))
+
+    def test_cancel_stops_the_recorded_run(self) -> None:
+        child = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(child.kill)
+        InstallStatus(self.root).write("discover.reading", step=InstallStep.DEEP_CONTEXT, pid=child.pid)
+        self.assertEqual(self._post("/api/install/cancel", {}), (HTTPStatus.ACCEPTED, {"status": "stopping", "record": "manifest"}))
+        self.assertEqual(child.wait(timeout=5), -signal.SIGTERM)
 
 
 if __name__ == "__main__":
