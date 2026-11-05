@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.54.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.2...powerpacks-v3.54.0) (2026-11-05)
+
+
+### Features
+
+* **memory:** remove the Memory section ([#1096](https://github.com/powerset-co/powerpacks/issues/1096)) ([c32da52](https://github.com/powerset-co/powerpacks/commit/c32da524fb587bdeb0c604cb0a43582cd975db8e))
+
+## [3.53.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.1...powerpacks-v3.53.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **sidebar:** drop the refresh problem card; the Refresh page is where problems are fixed ([#1093](https://github.com/powerset-co/powerpacks/issues/1093)) ([0d61e5a](https://github.com/powerset-co/powerpacks/commit/0d61e5abc1231c1386e64e4a24d82e621dc0c92e))
+
+## [3.53.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.0...powerpacks-v3.53.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **install:** a dead run reads as stopped, collect reports progress, and the import can be cancelled ([#1091](https://github.com/powerset-co/powerpacks/issues/1091)) ([7f8e2a8](https://github.com/powerset-co/powerpacks/commit/7f8e2a842015928d7ac0966d2a9b0a28170becd3))
+
+## [3.53.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.2...powerpacks-v3.53.0) (2026-11-05)
+
+
+### Features
+
+* **accounts, tasks:** Accounts connects, Scheduled tasks syncs; weekly/monthly schedule picker ([#1084](https://github.com/powerset-co/powerpacks/issues/1084)) ([64b5d92](https://github.com/powerset-co/powerpacks/commit/64b5d9233bdcd44229c296eacb338057a75ea982))
+
+
+### Bug Fixes
+
+* **deep-context:** collect's Gmail count no longer walks the whole archive per person ([#1090](https://github.com/powerset-co/powerpacks/issues/1090)) ([9464a23](https://github.com/powerset-co/powerpacks/commit/9464a231d13cbc028894853836a9e925b85a287c))
+* **refresh:** sync the healthy Gmail mailboxes and reconnect expired ones on the Refresh page ([#1083](https://github.com/powerset-co/powerpacks/issues/1083)) ([2bd7b50](https://github.com/powerset-co/powerpacks/commit/2bd7b5090ef4eb38106421845d93bf0a0a726f54))
+
 ## [3.52.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.1...powerpacks-v3.52.2) (2026-11-05)
 
 

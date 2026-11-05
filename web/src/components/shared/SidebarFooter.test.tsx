@@ -17,7 +17,7 @@ vi.mock("@/lib/api/relay", () => ({ connectRelay: vi.fn() }))
 vi.mock("./RelayDot", () => ({ RelayDot: () => null }))
 const setup = vi.hoisted(() => ({ done: false }))
 vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: () => setup.done }))
-const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
+const install = vi.hoisted(() => ({ fetchInstall: vi.fn(), installAction: vi.fn() }))
 vi.mock("@/lib/api/install", () => install)
 
 const SIGNED_IN = { signed_in: true, email: "casey@example.com", name: "Casey", picture: null }
@@ -325,4 +325,19 @@ it("shows the running import instead of the sources prompt, never both", async (
   mount()
   expect(await screen.findByText("Importing")).toBeTruthy()
   expect(screen.queryByText("Add more sources")).toBeNull()
+})
+
+it("Cancel asks first, then stops the running import", async () => {
+  setup.done = true
+  auth.fetchAccount.mockResolvedValue(SIGNED_IN)
+  install.fetchInstall.mockResolvedValue({ ...FINISHED, status: "running", step: "deep_context" })
+  install.installAction.mockResolvedValue(undefined)
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+  mount()
+  fireEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+  expect(install.installAction).not.toHaveBeenCalled()
+  confirm.mockReturnValue(true)
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await waitFor(() => expect(install.installAction).toHaveBeenCalledWith("cancel"))
+  confirm.mockRestore()
 })

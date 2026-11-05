@@ -27,6 +27,7 @@ class MessageChannel(StrEnum):
     IMESSAGE = "imessage"
     IMESSAGE_GROUP = "imessage_group"
     WHATSAPP = "whatsapp"
+    WHATSAPP_GROUP = "whatsapp_group"
 
 
 class MessageDirection(StrEnum):
@@ -90,6 +91,7 @@ class MessageEntry:
     subject: str
     text: str
     email_headers: EmailHeaders | None = None
+    sender: str = ""
 
     @classmethod
     def of(cls, channel: MessageChannel, at: str, *, from_me: bool, text: str, subject: str = "") -> MessageEntry:
@@ -104,6 +106,7 @@ class MessageEntry:
             payload["subject"],
             payload["text"],
             EmailHeaders.from_payload(payload["email_headers"]) if payload.get("email_headers") else None,
+            payload.get("sender", ""),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -116,12 +119,14 @@ class MessageEntry:
         }
         if self.email_headers is not None:
             payload["email_headers"] = self.email_headers.to_payload()
+        if self.sender:
+            payload["sender"] = self.sender
         return payload
 
     def content_order_key(self) -> tuple[str, ...]:
         """Order by content, so equal timestamps sort the same after a source store is rebuilt."""
         return (self.at, self.channel, self.direction, self.subject, self.text,
-                self.email_headers.render() if self.email_headers is not None else "")
+                self.email_headers.render() if self.email_headers is not None else "", self.sender)
 
     def content_chars(self) -> int:
         """The body plus recorded email headers; phone budgets remain body-only."""

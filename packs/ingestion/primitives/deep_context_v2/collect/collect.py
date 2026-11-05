@@ -19,6 +19,7 @@ from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageEntry, Person
 from packs.ingestion.primitives.deep_context_v2.collect.readers import CHAT_MESSAGE_CAP, WACLI_DB_RELATIVE, ContextSources
 from packs.ingestion.primitives.deep_context_v2.db import queries
+from packs.ingestion.primitives.deep_context_v2.db.owner import read_owner
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
@@ -29,7 +30,7 @@ DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N narrows
 
 class Collect(Node):
     name = "collect"
-    reads = ("candidates", "candidate_identifiers", "candidate_sources")
+    reads = ("owner", "candidates", "candidate_identifiers", "candidate_sources")
     writes = ("bundles",)
 
     def __init__(self, conn: sqlite3.Connection, data_root: Path, limit: int, chat_db: Path, *,
@@ -54,6 +55,11 @@ class Collect(Node):
             wacli_db=self.wacli_db,
             deep_cap=CHAT_MESSAGE_CAP,
             max_group_size=MAX_GROUP_SIZE,
+            owner_name=read_owner(self.conn).name,
+            contact_names={row["normalized_value"]: row["display_name"] for row in self.conn.execute(
+                "SELECT i.normalized_value, c.display_name FROM candidate_identifiers i "
+                "JOIN candidates c ON c.candidate_id = i.candidate_id ORDER BY c.candidate_id"
+            )},
         )
         counts: dict[str, int] = {
             "candidates": len(people),
@@ -64,8 +70,11 @@ class Collect(Node):
             "messages_imessage": 0,
             "messages_imessage_group": 0,
             "messages_whatsapp": 0,
+            "messages_whatsapp_group": 0,
         }
-        for person in people:
+        self.progress("people", 0, len(people))
+        for index, person in enumerate(people, 1):
+            self.progress("people", index, len(people))
             # Direct messages across all of the person's channels, newest-first, capped at the depth.
             # `available` is how many there were before the cap.
             messages: list[MessageEntry]
@@ -77,7 +86,9 @@ class Collect(Node):
             bundle: CollectionBundle = CollectionBundle.of(
                 person,
                 messages=messages,
-                groups=sources.imessage_groups(person),                  # names of every iMessage group shared, any size: context
+                groups=list(dict.fromkeys(sources.imessage_groups(person) + [
+                    message.subject for message in messages if message.channel == "whatsapp_group"
+                ])),
                 thread_participants=sources.thread_participants(person),  # who else was on the email threads
                 available=available,
             )

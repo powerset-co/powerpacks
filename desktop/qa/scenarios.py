@@ -173,7 +173,7 @@ def search_set_picker(app: App) -> None:
 
 
 def refresh_toggle(app: App) -> None:
-    """The Refresh page's daily switch flips on the click and the flip is saved (it survives a
+    """Scheduled tasks' daily switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
     switch = {"css": "[role=switch][aria-label='Refresh every day']"}
     checked = "document.querySelector('[role=switch]')?.getAttribute('aria-checked')"

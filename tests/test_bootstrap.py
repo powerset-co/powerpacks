@@ -51,6 +51,7 @@ class Sandbox:
             "packs/powerset/primitives/install/steps.py",
             "packs/ingestion/primitives/common/manifests.py",
             "packs/ingestion/primitives/common/jsonio.py",
+            "packs/ingestion/primitives/common/proc.py",
         ):
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)

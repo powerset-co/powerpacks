@@ -2,7 +2,7 @@
 // and which sources are signed in, which setup's Connect screen shows.
 
 import { body, failure } from "@/lib/api/http"
-import type { Account, AccountsPayload } from "@/types/accounts"
+import type { AccountsPayload } from "@/types/accounts"
 
 export async function fetchAccounts(signal?: AbortSignal): Promise<AccountsPayload> {
   const response = await fetch("/accounts/api/accounts", { signal })
@@ -65,13 +65,6 @@ export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeP
 /** Copies one profile's sign-ins and saved passwords into the browser Powerpacks signs in with. */
 export function copyChromeProfile(folder: string): Promise<void> {
   return post("/accounts/api/chrome-profile", { folder }, "Couldn't copy that Chrome profile.")
-}
-
-/** Syncs one card now: a Gmail account by its address, or iMessage / WhatsApp. */
-export function syncAccount(account: Account): Promise<void> {
-  const form: Record<string, string> =
-    account.source === "gmail" ? { source: "gmail", email: account.name } : { source: account.source }
-  return post("/accounts/api/sync", form, "Couldn't start the sync.")
 }
 
 /** Opens Google's sign-in for one Gmail account; the server syncs Gmail once it lands. */

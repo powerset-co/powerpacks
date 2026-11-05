@@ -3,7 +3,7 @@ import { useCallback, useRef, useState, type ReactNode, type SVGProps } from "re
 import { useNavigate } from "react-router-dom"
 
 import { ACCOUNT_KEY, fetchAccount } from "@/lib/api/account"
-import { fetchInstall } from "@/lib/api/install"
+import { fetchInstall, installAction } from "@/lib/api/install"
 import { useSetupDone } from "@/hooks/useSetupDone"
 import { isDesktop } from "@/lib/desktop"
 import { readStored, writeStored } from "@/lib/storage"
@@ -33,7 +33,6 @@ import { CheckIcon, CLOSE_MARK } from "./icons/actions"
 import { CirclePlus } from "lucide-react"
 import { SettingsIcon, SetupIcon } from "./icons/nav"
 import { ProgressBar } from "./ProgressBar"
-import { RefreshPane } from "./RefreshPane"
 import { RelayDot } from "./RelayDot"
 import { Spinner } from "./Spinner"
 import { Tip } from "./Tip"
@@ -49,7 +48,6 @@ export function SidebarFooter({ rail }: { rail: boolean }) {
   return (
     <div className="mt-auto flex flex-col">
       {run ? <ImportPane rail={rail} {...run} /> : <SourcesPane rail={rail} />}
-      <RefreshPane rail={rail} />
       <UpdatePane rail={rail} />
       <Profile rail={rail} />
     </div>
@@ -105,6 +103,12 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
   const count = counts.done ?? counts.read
   const completed = typeof count === "number" ? count : 0
   const open = () => void navigate(IMPORT_HREF)
+  const client = useQueryClient()
+  // Cancel stops the run; its record then reads stopped, and Try again picks up from there.
+  const cancel = () => {
+    if (!window.confirm("Stop the import? Nothing is lost; Try again picks up where it left off.")) return
+    void installAction("cancel").then(() => client.invalidateQueries({ queryKey: ["install"] }))
+  }
   const icon = done ? (
     <CheckIcon className="size-4 shrink-0 text-ok" />
   ) : stopped ? (
@@ -153,13 +157,24 @@ function ImportPane({ rail, data, dismiss }: { rail: boolean; data: InstallStatu
           <ProgressBar label="Current import stage" done={completed} total={total} />
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={open}
-        className="mt-2 border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
-      >
-        View in Accounts
-      </button>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={open}
+          className="border-0 bg-transparent p-0 text-[11px] text-primary hover:underline"
+        >
+          View in Accounts
+        </button>
+        {!done && !stopped ? (
+          <button
+            type="button"
+            onClick={cancel}
+            className="border-0 bg-transparent p-0 text-[11px] text-muted-foreground hover:underline"
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

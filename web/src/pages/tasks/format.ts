@@ -1,4 +1,4 @@
-// The Refresh page's words for times, counts and runs.
+// Scheduled tasks' words for times, counts and runs.
 
 import type { RefreshRun, RefreshSource } from "@/types/refresh"
 
@@ -52,7 +52,15 @@ export function stamp(value: string): string {
 
 export function trigger(run: RefreshRun): string {
   if (run.trigger === "manual") return "Manual"
-  return run.missed_days ? `Daily · caught up ${run.missed_days + 1} days` : "Daily"
+  return run.missed_days ? `Scheduled · caught up ${run.missed_days + 1} days` : "Scheduled"
+}
+
+export const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+/** "1st", "22nd", "31st". */
+export function ordinal(day: number): string {
+  const suffix = day % 100 >= 11 && day % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[day % 10] ?? "th")
+  return `${day}${suffix}`
 }
 
 export function added(run: RefreshRun): string {
@@ -73,10 +81,4 @@ export function took(run: RefreshRun): string {
     (new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 60_000,
   )
   return minutes < 1 ? "<1 min" : `${minutes} min`
-}
-
-export function lastLine(run: RefreshRun): string {
-  const delta = added(run)
-  const peopleText = delta === "—" ? "" : ` · ${delta === "0" ? "no new people" : `${delta} people`}`
-  return `Last run ${lower(when(run.started_at))}${peopleText}`
 }

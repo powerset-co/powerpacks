@@ -76,14 +76,7 @@ LEFT JOIN conversations c ON c.id = m.conversation_id
 WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
   AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')
-  -- Each email once: msgvault also files the sender as a 'from' recipient, and one person can be
-  -- both To and Cc.
-  AND m.id IN (
-      SELECT id FROM messages WHERE sender_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?)
-      UNION
-      SELECT message_id FROM message_recipients
-      WHERE participant_id IN (SELECT id FROM participants WHERE LOWER(email_address) = ?)
-  )
+  AND m.id IN (SELECT id FROM ids)
 -- Content survives store rebuilds; physical row ids do not.
 ORDER BY at DESC,
          LOWER(COALESCE(sp.email_address, '')) DESC,
@@ -112,6 +105,17 @@ class EmailRankedMessage:
     message: EmailMessage
 
 
+def person_messages(slots: str) -> str:
+    """The prefix of every per-person query: the ids of the mail the person sent or received, each
+    once (msgvault also files the sender as a 'from' recipient, and one person can be both To and
+    Cc). Both halves are point lookups on the sender and participant indexes, materialized first,
+    and the query body joins messages to them with CROSS JOIN so SQLite keeps that order. Left to
+    its statistics it walked every email in a 273k-message archive for every person instead: 4.8 s
+    for a person with one email, 10 hours a run (2026-11-05)."""
+    return (f"WITH ids(id) AS MATERIALIZED (SELECT id FROM messages WHERE sender_id IN ({slots}) "
+            f"UNION SELECT message_id FROM message_recipients WHERE participant_id IN ({slots})) ")
+
+
 def open_msgvault(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(f"file:{path.expanduser().resolve()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
@@ -137,7 +141,11 @@ def _participant_ids(con: sqlite3.Connection, email: str) -> list[int]:
 
 def fetch_recent_rows(con: sqlite3.Connection, email: str, fetch_limit: int) -> list[sqlite3.Row]:
     """The newest `fetch_limit` emails the candidate sent or received, each once."""
-    return con.execute(_RECENT_SQL, (email.lower(), email.lower(), fetch_limit)).fetchall()
+    ids = _participant_ids(con, email)
+    if not ids:
+        return []
+    slots = ",".join("?" for _ in ids)
+    return con.execute(person_messages(slots) + _RECENT_SQL, (*ids, *ids, fetch_limit)).fetchall()
 
 
 def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) -> int:
@@ -157,27 +165,18 @@ def count_messages_for(con: sqlite3.Connection, email: str, accounts: set[str]) 
         ).fetchall():
             owner_ids.append(row["id"])
     contact_slots = ",".join("?" for _ in contact_ids)
-    not_deleted = (
-        "AND (m.deleted_at IS NULL OR m.deleted_at = '') "
-        "AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '')"
-    )
-    arms = [
-        f"SELECT m.id FROM messages m WHERE m.message_type='email' {not_deleted} "
-        f"AND m.sender_id IN ({contact_slots})"
-    ]
-    params: list[Any] = list(contact_ids)
+    senders = f"m.sender_id IN ({contact_slots})"
+    params: list[Any] = [*contact_ids, *contact_ids, *contact_ids]
     if owner_ids:
-        owner_slots = ",".join("?" for _ in owner_ids)
-        arms.append(
-            "SELECT m.id FROM message_recipients mr "
-            "JOIN messages m ON m.id = mr.message_id "
-            f"WHERE m.message_type='email' {not_deleted} "
-            f"AND mr.participant_id IN ({contact_slots}) "
-            f"AND m.sender_id IN ({owner_slots})"
-        )
-        params.extend(contact_ids)
+        senders = f"({senders} OR m.sender_id IN ({','.join('?' for _ in owner_ids)}))"
         params.extend(owner_ids)
-    sql = f"SELECT COUNT(*) AS n FROM ({' UNION '.join(arms)})"
+    sql = person_messages(contact_slots) + (
+        "SELECT COUNT(*) AS n FROM ids CROSS JOIN messages m ON m.id = ids.id "
+        "WHERE m.message_type='email' "
+        "AND (m.deleted_at IS NULL OR m.deleted_at = '') "
+        "AND (m.deleted_from_source_at IS NULL OR m.deleted_from_source_at = '') "
+        f"AND {senders}"
+    )
     return int(con.execute(sql, params).fetchone()["n"])
 
 
@@ -193,22 +192,14 @@ def thread_participant_rosters(con: sqlite3.Connection, emails: Sequence[str], m
     if not participant_ids:
         return []
     pid_slots = ",".join("?" for _ in participant_ids)
-    params = list(participant_ids)
-    params.extend(participant_ids)
-    params.append(max_threads)
     conversations = con.execute(
-        f"""SELECT conversation_id, MAX(at) AS at, MAX(subject) AS subject FROM (
-            SELECT m.conversation_id, COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
-                   m.subject
-            FROM messages m WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
-              AND m.sender_id IN ({pid_slots})
-            UNION ALL
-            SELECT m.conversation_id, COALESCE(m.sent_at, m.received_at, m.internal_date), m.subject
-            FROM message_recipients mr JOIN messages m ON m.id = mr.message_id
-            WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
-              AND mr.participant_id IN ({pid_slots})
-        ) GROUP BY conversation_id ORDER BY at DESC LIMIT ?""",
-        params,
+        person_messages(pid_slots) + """
+        SELECT m.conversation_id, MAX(COALESCE(m.sent_at, m.received_at, m.internal_date)) AS at,
+               MAX(m.subject) AS subject
+        FROM ids CROSS JOIN messages m ON m.id = ids.id
+        WHERE m.message_type='email' AND m.conversation_id IS NOT NULL
+        GROUP BY m.conversation_id ORDER BY at DESC LIMIT ?""",
+        [*participant_ids, *participant_ids, max_threads],
     )
     threads: list[dict[str, Any]] = []
     for conversation_id, _at, subject in conversations:

@@ -17,8 +17,7 @@ export interface Account {
 export interface AccountsPayload {
   accounts: Account[]
   jobs: JobsPayload
-  // Whether the daily refresh task is installed in Codex or Claude.
-  // The daily refresh's time ("6:00 AM"), or null while it is off.
+  // The refresh's schedule ("daily at 6:00 AM", "weekly on Monday at 6:00 AM"), or null while it is off.
   scheduled: string | null
 }
 

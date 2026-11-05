@@ -1,11 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 import type { AccountsPayload } from "@/types/accounts"
 import { AccountsSettings } from "./AccountsSettings"
 
-const api = vi.hoisted(() => ({ fetchAccounts: vi.fn(), reconnectGmail: vi.fn(), syncAccount: vi.fn() }))
+const api = vi.hoisted(() => ({ fetchAccounts: vi.fn() }))
 vi.mock("@/lib/api/accounts", () => api)
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => false }))
 afterEach(() => {
@@ -27,7 +27,7 @@ const PAYLOAD: AccountsPayload = {
     },
   ],
   jobs: {},
-  scheduled: "6:00 AM",
+  scheduled: "daily at 6:00 AM",
 }
 function mount() {
   return render(
@@ -55,41 +55,38 @@ it("shows loading placeholders, then expandable account data", async () => {
   fireEvent.click(title)
   expect(details.open).toBe(true)
   expect(screen.getByText("120")).toBeTruthy()
-  expect(screen.getByText("Refreshes daily at 6:00 AM.")).toBeTruthy()
+  expect(screen.getByText("Syncs daily at 6:00 AM.")).toBeTruthy()
   fireEvent.click(title)
   expect(details.open).toBe(false)
 })
-it("keeps each Gmail mailbox and reconnects the selected mailbox", async () => {
+it("keeps each Gmail mailbox and sends an expired one to Scheduled tasks to reconnect", async () => {
   api.fetchAccounts.mockResolvedValue({
     ...PAYLOAD,
     accounts: [PAYLOAD.accounts[0], { ...PAYLOAD.accounts[0], name: "jordan@example.com", health: "error" }],
   })
-  api.reconnectGmail.mockResolvedValue(undefined)
   mount()
   fireEvent.click(await screen.findByText("Gmail"))
   expect(screen.getByText("casey@example.com")).toBeTruthy()
   expect(screen.getByText("jordan@example.com")).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "Reconnect" }))
-  await waitFor(() => expect(api.reconnectGmail).toHaveBeenCalledWith("jordan@example.com"))
+  expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull()
+  expect(screen.getByRole("link", { name: "Reconnect in Scheduled tasks" }).getAttribute("href")).toBe(
+    "/tasks",
+  )
 })
-it("preserves sync actions and reports running jobs without allowing another sync", async () => {
+it("never syncs from a card, and shows a running sync's step", async () => {
   const account = {
     ...PAYLOAD.accounts[0],
     source: "whatsapp" as const,
     name: "WhatsApp data",
     health: "warning" as const,
   }
-  api.fetchAccounts.mockResolvedValue({ ...PAYLOAD, accounts: [account] })
-  api.syncAccount.mockResolvedValue(undefined)
-  mount()
-  fireEvent.click(await screen.findByText("WhatsApp"))
   api.fetchAccounts.mockResolvedValue({
     ...PAYLOAD,
     accounts: [account],
     jobs: { whatsapp: { state: "running", step: "Syncing messages" } },
   })
-  fireEvent.click(screen.getByRole("button", { name: "Sync" }))
-  await waitFor(() => expect(api.syncAccount).toHaveBeenCalledWith(account))
+  mount()
+  fireEvent.click(await screen.findByText("WhatsApp"))
   expect(await screen.findByText("Syncing messages")).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Sync" })).toBeNull()
 })

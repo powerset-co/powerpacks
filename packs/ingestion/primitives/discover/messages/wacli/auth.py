@@ -196,36 +196,44 @@ def run_auth_with_qr_page(store: Path, *, timeout: int, idle_exit: str, open_qr_
         asked = ""
         start = len(output)
         timed_out = False
-        with DEFAULT_AUTH_LOG.open(encoding="utf-8") as log:
-            pending = ""
-            while not connected:
-                chunk = log.readline()
-                if chunk:
-                    pending += chunk
-                    if pending.endswith("\n"):
-                        if pending.strip():
-                            handle_line(pending.strip())
-                        pending = ""
-                    continue
-                if not phone and DEFAULT_PHONE_REQUEST.is_file():
-                    asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
-                    DEFAULT_PHONE_REQUEST.unlink()
-                    proc.terminate()
-                    proc.wait()
-                    qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
-                    break
-                if proc.poll() is not None:
-                    for line in (pending + log.read()).splitlines():
-                        if line.strip():
-                            handle_line(line.strip())
-                    break
-                if time.time() > deadline:
-                    proc.kill()
-                    proc.wait()
-                    output.append(f"command timed out after {timeout}s")
-                    timed_out = True
-                    break
-                time.sleep(0.2)
+        try:
+            with DEFAULT_AUTH_LOG.open(encoding="utf-8") as log:
+                pending = ""
+                while not connected:
+                    chunk = log.readline()
+                    if chunk:
+                        pending += chunk
+                        if pending.endswith("\n"):
+                            if pending.strip():
+                                handle_line(pending.strip())
+                            pending = ""
+                        continue
+                    if not phone and DEFAULT_PHONE_REQUEST.is_file():
+                        asked = DEFAULT_PHONE_REQUEST.read_text(encoding="utf-8").strip()
+                        DEFAULT_PHONE_REQUEST.unlink()
+                        proc.terminate()
+                        proc.wait()
+                        qr.clear_qr_artifacts(DEFAULT_QR_HTML, DEFAULT_QR_PNG)
+                        break
+                    if proc.poll() is not None:
+                        for line in (pending + log.read()).splitlines():
+                            if line.strip():
+                                handle_line(line.strip())
+                        break
+                    if time.time() > deadline:
+                        proc.kill()
+                        proc.wait()
+                        output.append(f"command timed out after {timeout}s")
+                        timed_out = True
+                        break
+                    time.sleep(0.2)
+        except BaseException:
+            # Stopped while waiting on the scan (a cancel, the app quitting): the wacli run is ours
+            # to end. A completed scan leaves the loop above instead, with its download running.
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait()
+            raise
         # WhatsApp refused the scan: rather than end, wait for the phone number the page now offers.
         # Any QR run that ends unlinked counts: WhatsApp may refuse a stale code with no error at all,
         # and wacli then ends at its own QR timeout.

@@ -1,7 +1,7 @@
 // The native daily refresh's JSON routes on the Python server (packs/ingestion/primitives/refresh/api.py).
 
 import { body, failure } from "@/lib/api/http"
-import type { RefreshState } from "@/types/refresh"
+import type { RefreshSettingsChange, RefreshState } from "@/types/refresh"
 
 export const REFRESH_KEY = ["refresh"]
 
@@ -11,14 +11,11 @@ export async function fetchRefresh(signal?: AbortSignal): Promise<RefreshState> 
   return body<RefreshState>(response)
 }
 
-/** Turn the daily refresh on or off, or move its time; resolves to the state as it now stands. */
-export async function saveRefreshSettings(settings: {
-  enabled?: boolean
-  time?: string
-}): Promise<RefreshState> {
+/** Turn the refresh on or off, or change how often, which day or what time; resolves to the state
+ *  as it now stands. */
+export async function saveRefreshSettings(settings: RefreshSettingsChange): Promise<RefreshState> {
   const fields: Record<string, string> = {}
-  if (settings.enabled !== undefined) fields.enabled = String(settings.enabled)
-  if (settings.time !== undefined) fields.time = settings.time
+  for (const [name, value] of Object.entries(settings)) fields[name] = String(value)
   const response = await fetch("/tasks/api/refresh/settings", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },

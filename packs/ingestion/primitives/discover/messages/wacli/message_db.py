@@ -174,3 +174,29 @@ def existing_whatsapp_direct_jids(conn: sqlite3.Connection, member_jids: Iterabl
         jids,
     )
     return [str(row["chat_jid"]) for row in rows]
+
+
+def query_whatsapp_small_group_messages(
+    conn: sqlite3.Connection,
+    member_jids: Iterable[str],
+    *,
+    max_group_size: int,
+    limit: int,
+) -> list[sqlite3.Row]:
+    """Newest rows across the member's groups with a known, bounded participant roster."""
+    projection = _message_projection(conn)
+    if projection is None:
+        return []
+    counts = store_db.group_participant_counts(conn)
+    groups = resolve_whatsapp_groups(conn, (), member_jids)
+    rows: list[sqlite3.Row] = []
+    for group in groups:
+        size = counts.get(group["jid"])
+        if size is None or size > max_group_size:
+            continue
+        rows.extend(conn.execute(
+            f"SELECT {projection}, sender_jid, ? AS group_name FROM messages WHERE chat_jid = ?",
+            (group["title"], group["jid"]),
+        ).fetchall())
+    rows.sort(key=lambda row: (_message_content_key(row), row["group_name"], row["sender_jid"] or ""), reverse=True)
+    return rows[:limit]

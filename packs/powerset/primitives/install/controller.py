@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -34,6 +35,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlparse
 
+from packs.ingestion.primitives.common.proc import alive
 from packs.ingestion.primitives.discover.linkedin.connections import (BROWSER_PROFILE, CONNECTIONS_CSV, PAGE_SHOT, PICTURES,
                                                                      SCRAPE_RECORD, picture_path)
 from packs.powerset.primitives.install import preflight
@@ -207,6 +209,16 @@ class InstallController:
         request.write_text(digits, encoding="utf-8")
         return {"status": "started"}
 
+    def cancel(self) -> dict:
+        """Stop the run that owns a record (the import, or a Connect sign-in): SIGTERM, which onboard
+        turns into an orderly stop that writes install.stopped (onboard.main)."""
+        for name in ("manifest", "connect"):
+            pid = int(InstallStatus(self.root, name).read()["installer_pid"])
+            if alive(pid):
+                os.kill(pid, signal.SIGTERM)
+                return {"status": "stopping", "record": name}
+        return {"status": "idle"}
+
     def connect(self, source: object, emails: object = None) -> dict:
         """Sign in to one source before setup: its tools and login, in the background like setup
         (one at a time, by setup's own lock), followed by the page in the connect record. Gmail
@@ -264,6 +276,8 @@ class InstallController:
             elif path == "/api/install/connect":
                 body = self._body(handler)
                 response = self.connect(body.get("source"), body.get("emails"))
+            elif path == "/api/install/cancel":
+                response = self.cancel()
             else:
                 handler._json({"error": "Unknown setup action"}, HTTPStatus.NOT_FOUND)
                 return True

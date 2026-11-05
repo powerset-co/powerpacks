@@ -15,7 +15,6 @@ import { Chats } from "@/pages/agent/Chats"
 import {
   ChatIcon,
   CollapseIcon,
-  MemoryIcon,
   PeopleIcon,
   SearchesIcon,
   SettingsIcon,
@@ -37,7 +36,6 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
-  memory: MemoryIcon,
   sets: HiveIcon,
   team: TeamIcon,
   tasks: TasksIcon,
