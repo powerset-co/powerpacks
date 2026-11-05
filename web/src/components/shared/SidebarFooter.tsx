@@ -465,7 +465,7 @@ function Profile({ rail }: { rail: boolean }) {
           signIn.mutate()
         }}
       >
-        {busy ? "Signing in…" : signedIn ? "Reconnect Powerset" : "Sign in to Powerset"}
+        {busy ? "Signing in…" : signedIn ? "Switch Accounts" : "Sign in to Powerset"}
       </MenuItem>
     </div>
   )
