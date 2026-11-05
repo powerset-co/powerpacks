@@ -33,18 +33,14 @@ export const flows: Record<GuideSource, Flow> = {
   imessage: {
     title: "Bring your conversations along.",
     eyebrow: "MESSAGES · MAC",
-    intro: "Give Powerpacks access to Messages with one macOS permission.",
+    intro: "One macOS permission: Full Disk Access.",
     steps: [
       "Drag Powerpacks into Full Disk Access.",
       "Turn on the switch next to Powerpacks.",
       "When macOS asks to quit, click Later.",
     ],
-    captions: [
-      "Drag the Powerpacks icon into the list.",
-      "Turn on Full Disk Access for Powerpacks.",
-      "macOS asks to quit. Click Later: Powerpacks keeps going without a restart.",
-    ],
-    note: "macOS may ask for your password before the switch moves. Later is the right answer to the quit question.",
+    captions: [],
+    note: "",
     duration: 15,
   },
   gmail: {
@@ -59,18 +55,14 @@ export const flows: Record<GuideSource, Flow> = {
   whatsapp: {
     title: "Link your WhatsApp.",
     eyebrow: "WHATSAPP · ON YOUR IPHONE",
-    intro: "Keep the QR code open on your computer, then open WhatsApp on your iPhone.",
+    intro: "Scan the code in Powerpacks with WhatsApp on your phone.",
     steps: [
       "In WhatsApp, tap Settings, then Linked devices.",
       "Tap Link a device.",
       "Scan the code shown in Powerpacks.",
     ],
-    captions: [
-      "On your phone, open WhatsApp Settings, then Linked devices.",
-      "Tap Link a device on your phone.",
-      "Point your phone at the QR code on your computer.",
-    ],
-    note: "In WhatsApp, tap Settings at the bottom right.",
+    captions: [],
+    note: "",
     duration: 15,
   },
 }
