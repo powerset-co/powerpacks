@@ -166,6 +166,24 @@ def load_lid_map(store: Path) -> dict[str, str]:
         conn.close()
 
 
+def load_owner_jids(store: Path) -> set[str]:
+    db_path = store / "session.db"
+    if not db_path.exists():
+        return set()
+    conn = open_readonly_db(db_path)
+    try:
+        if not table_exists(conn, "whatsmeow_device"):
+            return set()
+        jids: set[str] = set()
+        for row in select_rows(conn, "SELECT jid, lid FROM whatsmeow_device"):
+            for jid in (row["jid"], row["lid"]):
+                if jid:
+                    jids.add(re.sub(r":\d+@", "@", jid))
+        return jids
+    finally:
+        conn.close()
+
+
 def contact_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     columns = table_columns(conn, "contacts")
     if "jid" not in columns:

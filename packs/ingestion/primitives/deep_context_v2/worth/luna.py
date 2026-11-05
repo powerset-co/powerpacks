@@ -86,7 +86,6 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
     direction_labels = {
         MessageDirection.FROM_ME: f"from {owner.name} (owner) to {facts.canonical_name}",
         MessageDirection.FROM_THEM: f"from {facts.canonical_name} to {owner.name} (owner)",
-        MessageDirection.FROM_OTHER: f"from another group participant to {owner.name} (owner) and {facts.canonical_name}",
     }
     messages = []
     for batch in batches(family.messages, chunk_chars=CHUNK_CHARS, max_batches=MAX_BATCHES):
