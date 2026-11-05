@@ -255,8 +255,8 @@ const SERVICES: Record<string, Point> = {
 }
 const TILES = [104, 182, 260, 338]
 const LABELS = { idle: "Idle", working: "Working", done: "Sent back" }
-// Every step plays to its end, then the next one starts this much later.
-const BETWEEN_MS = 500
+// Every step plays to its end, then holds this long so its words can be read before the next.
+const BETWEEN_MS = 5_000
 
 class Stop extends Error {}
 const quiet = (promise: Promise<unknown>) => void promise.catch(() => undefined)
