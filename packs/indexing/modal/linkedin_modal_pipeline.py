@@ -200,23 +200,6 @@ def make_sandbox(cpu: float, memory_mib: int, timeout: int) -> modal.Sandbox:
     )
 
 
-def memory_sandbox(name: str, operator_id: str, *, discover: bool) -> modal.Sandbox:
-    return modal.Sandbox.create(
-        "python", "-m", "packs.memory.modal_entrypoint", f"/data/operators/{operator_id}", str(int(discover)),
-        app=modal.App.lookup(APP_NAME, create_if_missing=True),
-        name=name,
-        image=build_image("parallel-web==1.1.0", "jinja2==3.1.6", "nameparser==2.3.0", "modal==1.5.0"),
-        workdir="/repo",
-        volumes={"/data": get_volume()},
-        secrets=[modal.Secret.from_name("powerset-openai")],
-        env={"POWERPACKS_OPENAI_CONCURRENCY": "64",
-             "POWERPACKS_OPENAI_EMBEDDING_MODEL": os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL")},
-        cpu=16,
-        memory=4096,
-        timeout=4 * 60 * 60,
-    )
-
-
 def sb_exec(sb: modal.Sandbox, *cmd: str, stream: bool = True) -> tuple[int, str]:
     proc = sb.exec(*cmd)
     captured: list[str] = []
