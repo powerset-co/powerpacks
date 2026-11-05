@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Info } from "lucide-react"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -61,12 +61,6 @@ export function HowItWorks({ open, onOpenChange }: { open: boolean; onOpenChange
             >
               <h3 className="m-0 text-base font-semibold">{item.title}</h3>
               <p className="m-0 max-w-[62ch] text-[13px] text-muted-foreground">{item.text}</p>
-              {item.foot ? (
-                <p className="m-0 mt-auto flex max-w-[75ch] items-start gap-2 pt-3 text-xs text-faint">
-                  <Info className="mt-0.5 size-3.5 shrink-0" />
-                  {item.foot}
-                </p>
-              ) : null}
             </div>
           ))}
         </div>

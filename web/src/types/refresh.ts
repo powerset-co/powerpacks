@@ -35,12 +35,26 @@ export interface RefreshRun {
   log: string
 }
 
+export type RefreshFrequency = "daily" | "weekly" | "monthly"
+
 export interface RefreshSettings {
   enabled: boolean
   // HH:MM, 24-hour, this Mac's time.
   time: string
   label: string
+  frequency: RefreshFrequency
+  // Weekly: 0 is Monday, 6 is Sunday.
+  weekday: number
+  // Monthly: 1 to 31; a shorter month runs on its last day.
+  day: number
+  // "weekly on Monday at 6:00 AM".
+  summary: string
 }
+
+/** The fields the settings route takes; each one left out keeps its saved value. */
+export type RefreshSettingsChange = Partial<
+  Pick<RefreshSettings, "enabled" | "time" | "frequency" | "weekday" | "day">
+>
 
 export interface RefreshState {
   settings: RefreshSettings

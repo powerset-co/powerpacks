@@ -26,6 +26,7 @@ refresh_sources' lock file (shared with the scheduled run); a Reconnect waits fo
 browser sign-in before that, so an abandoned sign-in never blocks other syncs. 
 Changelog:
   2026-11-04: signed-in takes ?sources=; both routes share one Gmail check (token change, job end, TTL).
+  2026-11-04: `scheduled` is the whole schedule ("weekly on Monday at 6:00 AM"), or null while off.
   2026-11-03: `scheduled` is the native daily refresh's time, or null while it is off.
   2026-10-30: Chrome profiles to pick from.
   2026-10-13: GET /accounts/api/signed-in for setup's Connect screen.
@@ -124,9 +125,9 @@ class AccountsApi:
 
     @staticmethod
     def _schedule() -> str | None:
-        """The daily refresh's time ("6:00 AM"), or None while it is off."""
+        """The refresh's schedule ("daily at 6:00 AM", "weekly on Monday at 6:00 AM"), or None while it is off."""
         settings = read_settings(Path.cwd())
-        return settings.label() if settings.enabled else None
+        return settings.summary() if settings.enabled else None
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         if parsed.path not in (SYNC_PATH, RECONNECT_PATH, CHROME_PROFILE_PATH):

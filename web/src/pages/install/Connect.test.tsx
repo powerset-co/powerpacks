@@ -496,7 +496,7 @@ it("connects Gmail with the Powerset address, then adds another mailbox to the s
   state.signed = { ...NONE, gmail: true, mailboxes: ["casey@example.com"] }
   mount()
   const gmail = row("Gmail")
-  fireEvent.click(await within(gmail).findByRole("button", { name: "Add another" }))
+  fireEvent.click(await within(gmail).findByRole("button", { name: "Add a mailbox" }))
   const field = within(gmail).getByRole("textbox", { name: "Gmail address" })
   fireEvent.change(field, { target: { value: "work@example.com" } })
   fireEvent.submit(field)
@@ -508,19 +508,20 @@ it("connects Gmail with the Powerset address, then adds another mailbox to the s
   )
 })
 
-it("keeps the Google app's owner first when a mailbox needs signing in again", async () => {
+it("keeps an expired mailbox connected, its reconnect left to Scheduled tasks, the owner first", async () => {
   state.signed = { ...NONE, mailboxes: ["owner@example.com"] }
   mount()
   const gmail = row("Gmail")
-  expect(await within(gmail).findByText("owner@example.com")).toBeTruthy()
-  // Signed out, Gmail is left out of setup: nothing to process, so no profile link is needed.
-  const setUp = screen.getByRole("button", { name: "Set up" })
-  await waitFor(() => expect(setUp.hasAttribute("disabled")).toBe(false))
-  fireEvent.click(within(gmail).getByRole("button", { name: "Gmail: Connect" }))
+  // No Connect that signs every mailbox in again: one expired mailbox is reconnected on its own.
+  fireEvent.click(await within(gmail).findByRole("button", { name: "Add a mailbox" }))
+  expect(within(gmail).queryByRole("button", { name: "Gmail: Connect" })).toBeNull()
+  const field = within(gmail).getByRole("textbox", { name: "Gmail address" })
+  fireEvent.change(field, { target: { value: "work@example.com" } })
+  fireEvent.submit(field)
   await waitFor(() =>
     expect(state.posts).toContainEqual({
       url: "/api/install/connect",
-      body: { source: "gmail", emails: ["owner@example.com"] },
+      body: { source: "gmail", emails: ["owner@example.com", "work@example.com"] },
     }),
   )
 })

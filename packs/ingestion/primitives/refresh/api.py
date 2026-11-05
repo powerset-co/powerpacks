@@ -1,10 +1,12 @@
-"""The Refresh page's JSON routes (the native daily refresh, daily.py).
+"""Scheduled tasks' JSON routes (the native daily refresh, daily.py).
 
 GET  /tasks/api/refresh            settings, next run, the running run and past runs
-POST /tasks/api/refresh/settings   enabled=true|false, time=HH:MM
+POST /tasks/api/refresh/settings   enabled=true|false, time=HH:MM, frequency=daily|weekly|monthly,
+                                   weekday=0-6 (0 is Monday), day=1-31 (each optional)
 POST /tasks/api/refresh/run        start a refresh now (the running one when there is one)
 
 Changelog:
+  2026-11-04: settings take frequency, weekday and day (weekly and monthly schedules).
   2026-11-03: the native daily refresh replaces the Codex/Claude install routes; tasks.py keeps
     their code for the CLI.
   2026-09-28: created for the local Scheduled tasks page.
@@ -33,7 +35,9 @@ def refresh_payload(root: Path) -> dict:
     last = daily._parse(runs[0].started_at) if runs else None
     upcoming = daily.next_run_at(daily.now(), settings, last)
     return {
-        "settings": {"enabled": settings.enabled, "time": settings.time, "label": settings.label()},
+        "settings": {"enabled": settings.enabled, "time": settings.time, "label": settings.label(),
+                     "frequency": settings.frequency, "weekday": settings.weekday, "day": settings.day,
+                     "summary": settings.summary()},
         "next_run_at": upcoming.isoformat(timespec="seconds") if upcoming and not current else None,
         "running": asdict(current) if current else None,
         "runs": [asdict(run) for run in runs],
@@ -59,7 +63,10 @@ class TasksApi:
             if parsed.path == SETTINGS_PATH:
                 current = daily.read_settings(self.root)
                 enabled = fields.get("enabled", str(current.enabled).lower()) == "true"
-                daily.write_settings(self.root, enabled, fields.get("time") or current.time)
+                daily.write_settings(self.root, enabled, fields.get("time") or current.time,
+                                     fields.get("frequency") or None,  # type: ignore[arg-type]
+                                     int(fields["weekday"]) if fields.get("weekday") else None,
+                                     int(fields["day"]) if fields.get("day") else None)
             else:
                 daily.start(self.root, "manual")
         except (ValueError, RuntimeError) as error:
