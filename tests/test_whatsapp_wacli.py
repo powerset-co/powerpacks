@@ -191,15 +191,11 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
         self.assertEqual(sync.effective_max_messages(10000, 25000), 26000)
 
     def test_resolve_effective_max(self) -> None:
-        # Incremental target grows from what the store already has (existing +
-        # headroom), computed via the unchanged effective_max_messages helper.
-        incr = sync.effective_max_messages(sync.DEFAULT_INCREMENTAL_BUDGET, 25000)
-        self.assertGreater(incr, 25000)  # only the delta beyond existing
-
-        # The primitive makes the only decision: full on an empty store,
-        # incremental once populated.
+        # No cap by default, on an empty store or a populated one: a cap counts
+        # group chatter and drops the messages that arrive after it.
+        self.assertEqual(sync.DEFAULT_INCREMENTAL_BUDGET, 0)
         self.assertEqual(sync.resolve_effective_max(0, 0), 0)
-        self.assertEqual(sync.resolve_effective_max(0, 25000), incr)
+        self.assertEqual(sync.resolve_effective_max(0, 25000), 0)
 
         # An explicit positive low-level cap still wins.
         self.assertEqual(sync.resolve_effective_max(10000, 25000), 26000)
@@ -2437,11 +2433,8 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                 )
                 self.assertEqual(run_auth_mock.call_count, int(not authenticated_before))
                 self.assertEqual(payload["doctor"], {"data": {"linked_jid": doctor_jid}})
-                effective_max = run_sync_mock.call_args.kwargs["max_messages"]
-                if existing_messages == 0:
-                    self.assertEqual(effective_max, 0)
-                else:
-                    self.assertGreater(effective_max, existing_messages)
+                # Uncapped by default, cold or incremental.
+                self.assertEqual(run_sync_mock.call_args.kwargs["max_messages"], 0)
                 payload = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
                 self.assertEqual(payload["sync"]["strategy"], expected_strategy)
 
