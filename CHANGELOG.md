@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.53.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.0...powerpacks-v3.53.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **install:** a dead run reads as stopped, collect reports progress, and the import can be cancelled ([#1091](https://github.com/powerset-co/powerpacks/issues/1091)) ([7f8e2a8](https://github.com/powerset-co/powerpacks/commit/7f8e2a842015928d7ac0966d2a9b0a28170becd3))
+
 ## [3.53.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.2...powerpacks-v3.53.0) (2026-11-05)
 
 
