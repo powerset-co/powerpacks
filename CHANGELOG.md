@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.55.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.54.0...powerpacks-v3.55.0) (2026-11-05)
+
+
+### Features
+
+* **deep-context:** read small WhatsApp groups into dossiers ([#1066](https://github.com/powerset-co/powerpacks/issues/1066)) ([e94762f](https://github.com/powerset-co/powerpacks/commit/e94762f33ae2dfedc3b0e3718d30a2428ca10271))
+
+
+### Bug Fixes
+
+* **enrich:** a Parallel 402 waits for the balance to reload instead of failing research ([#1102](https://github.com/powerset-co/powerpacks/issues/1102)) ([728d31f](https://github.com/powerset-co/powerpacks/commit/728d31f88ce8ec44bbd9638b3867b0e62fee1bd2))
+* **refresh, accounts:** one stop notice for a refresh; restore the Accounts intro; How it works trims ([#1095](https://github.com/powerset-co/powerpacks/issues/1095)) ([9512414](https://github.com/powerset-co/powerpacks/commit/9512414330212f0d81852c64cf37762d70c41561))
+
 ## [3.54.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.53.2...powerpacks-v3.54.0) (2026-11-05)
 
 
