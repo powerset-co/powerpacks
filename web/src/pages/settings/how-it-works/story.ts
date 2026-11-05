@@ -10,55 +10,44 @@ import parallelLogo from "@/assets/providers/parallel.svg?inline"
 export interface Step {
   title: string
   text: string
-  foot: string
 }
 
-const PROXY = "Goes through Powerset's proxy. We pass it along and don't keep a copy."
 export const STEPS: readonly Step[] = [
   {
     title: "Your messages stay on your Mac",
-    text: "Gmail, iMessage, WhatsApp and your LinkedIn connections are read locally. Nothing is uploaded to read them.",
-    foot: "Reading happens on your Mac. Nothing leaves at this step.",
+    text: "Powerpacks reads Gmail, iMessage, WhatsApp and LinkedIn right here. Nothing is uploaded to read them.",
   },
   {
-    title: "Short excerpts, not whole inboxes",
-    text: "For each person, we pull a few short excerpts from your conversations and save them on your Mac.",
-    foot: "Excerpts are saved in your people database, on your Mac.",
+    title: "Recent messages with each person",
+    text: "For each person, we gather your latest messages with them and save them on your Mac. Long emails are cut to the new part.",
   },
   {
-    title: "OpenAI writes a dossier",
-    text: "A copy of the excerpts goes to OpenAI, which sends back a short dossier.",
-    foot: "Sent with storage off, so OpenAI doesn't keep it for later. We don't log it on our side.",
+    title: "OpenAI writes a summary",
+    text: "Those messages go to OpenAI, which sends back a short summary of who they are. OpenAI doesn't keep it, and we don't log it.",
   },
   {
-    title: "Only the professional picture",
-    text: "The dossier keeps work, school and topics. Personal details are left out.",
-    foot: "",
+    title: "Work only, nothing personal",
+    text: "The summary keeps work, school and topics. Personal details are dropped.",
   },
   {
-    title: "OpenAI adds tags",
-    text: "From the dossier, OpenAI returns tags: how you know them, how warm it is, whether they're worth keeping.",
-    foot: "Same as the dossier: storage off, nothing logged on our side.",
+    title: "OpenAI adds labels",
+    text: "OpenAI reads the messages and the summary again to label how you know them, how close you are, and whether they're worth keeping.",
   },
   {
-    title: "Parallel looks them up",
-    text: "A short lookup goes to Parallel. It returns their LinkedIn, or a stand-in profile built from the web.",
-    foot: PROXY,
+    title: "Parallel finds them online",
+    text: "Their name, company and city go to Parallel, which finds their LinkedIn page or builds a profile from the web. It goes through Powerset, which doesn't keep a copy.",
   },
   {
-    title: "Fetch the public profile",
-    text: "Only the profile link goes out. Their public LinkedIn profile comes back.",
-    foot: PROXY,
+    title: "Get their LinkedIn profile",
+    text: "Only the LinkedIn link goes out, through Powerset, and their public profile comes back.",
   },
   {
     title: "Is it the same person?",
-    text: "The dossier and the profile go to OpenAI side by side. Only a confident match is kept.",
-    foot: "Storage off at OpenAI, nothing logged on our side.",
+    text: "OpenAI compares the summary with the profile, and we keep it only if it's a clear match. OpenAI doesn't keep it, and we don't log it.",
   },
   {
-    title: "Everything is saved on your Mac",
-    text: "Dossiers, tags, profiles and matches live in your people database on your Mac. That's what you search.",
-    foot: "To build search, your people list (names, emails, phones, profiles; never messages) is processed on Modal through Powerset. It's a faster way to compute; you can run it on your own machine instead.",
+    title: "It all lives on your Mac",
+    text: "Summaries, labels and profiles are saved on your Mac, and that's what you search. To build search, your contact list (never your messages) is processed in the cloud through Powerset.",
   },
 ]
 
@@ -124,7 +113,7 @@ const MARKUP = `${SYMBOLS}
       <div class="dck-schips"><span class="dck-chip" data-k="chip0">Gmail</span><span class="dck-chip" data-k="chip1">iMessage</span><span class="dck-chip" data-k="chip2">WhatsApp</span><span class="dck-chip" data-k="chip3">LinkedIn</span></div>
       <div data-k="saved">
         <div class="dck-slabel">Saved on this Mac</div>
-        ${savedRow("row0", "Excerpts")}${savedRow("row1", "Dossier")}${savedRow("row2", "Tags")}${savedRow("row3", "LinkedIn profile")}${savedRow("row4", "Match")}
+        ${savedRow("row0", "Messages")}${savedRow("row1", "Summary")}${savedRow("row2", "Labels")}${savedRow("row3", "LinkedIn profile")}${savedRow("row4", "Match")}
       </div>
     </div>
     <div class="dck-search" data-k="search">
@@ -136,7 +125,7 @@ const MARKUP = `${SYMBOLS}
 
   <div class="dck-panel">
     <div class="dck-ptitle">${icon("globe")}Internet</div>
-    ${serviceCard("openai", 58, `<img src="${openaiLogo}" alt="">`, "OpenAI", "Writes dossiers, tags and matches", "Not stored")}
+    ${serviceCard("openai", 58, `<img src="${openaiLogo}" alt="">`, "OpenAI", "Writes summaries, labels and matches", "Not stored")}
     ${serviceCard("parallel", 198, `<img src="${parallelLogo}" alt="">`, "Parallel", "Looks people up on the web", "")}
     ${serviceCard("linkedin", 338, `<svg style="color: #0A66C2"><use href="#dck-linkedin"/></svg>`, "LinkedIn data", "Public profiles", "")}
   </div>
@@ -150,7 +139,7 @@ const MARKUP = `${SYMBOLS}
     <div class="dck-obj dck-tile" data-k="src3">${icon("linkedin", "color: #0A66C2")}LinkedIn</div>
 
     <div class="dck-obj dck-sheet" data-k="excerpts">
-      <h4>Excerpts</h4><small>Jordan Bravo · 3 threads</small>
+      <h4>Messages</h4><small>Jordan Bravo · 3 threads</small>
       <div class="dck-q"><b class="dck-hl" style="width: 120px"></b><s style="width: 114px"></s></div>
       <div class="dck-q"><s style="width: 88px"></s></div>
       <div class="dck-q"><b class="dck-hl" style="width: 108px"></b><s style="width: 102px"></s></div>
@@ -169,7 +158,7 @@ const MARKUP = `${SYMBOLS}
     </div>
 
     <div class="dck-obj dck-card dck-dossier" data-k="dossier">
-      <div class="dck-dh"><div class="dck-av">JB</div><div><b>Jordan Bravo</b><small>Dossier</small></div></div>
+      <div class="dck-dh"><div class="dck-av">JB</div><div><b>Jordan Bravo</b><small>Summary</small></div></div>
       <div class="dck-f"><span>Work</span><b>VP Eng, Acme</b>${tick("ok0")}</div>
       <div class="dck-f"><span>School</span><b>Stanford</b>${tick("ok1")}</div>
       <div class="dck-f"><span>Topics</span><b>LLM infra, hiring</b>${tick("ok2")}</div>
@@ -255,8 +244,13 @@ const SERVICES: Record<string, Point> = {
 }
 const TILES = [104, 182, 260, 338]
 const LABELS = { idle: "Idle", working: "Working", done: "Sent back" }
-// Every step plays to its end, then holds this long so its words can be read before the next.
-const BETWEEN_MS = 5_000
+// Every step plays to its end, then holds long enough to read its words at 200 words a minute.
+const MS_PER_WORD = 300
+const MIN_HOLD_MS = 3_000
+export function holdMs(step: Step): number {
+  const words = `${step.title} ${step.text}`.split(/\s+/).filter(Boolean).length
+  return Math.max(MIN_HOLD_MS, words * MS_PER_WORD)
+}
 
 class Stop extends Error {}
 const quiet = (promise: Promise<unknown>) => void promise.catch(() => undefined)
@@ -817,7 +811,8 @@ export function mountStory(root: HTMLElement, onStep: (step: number) => void) {
     if (!scene) return
     scene.play().then(
       () => {
-        if (at === epoch) hold = setTimeout(() => show(current + 1), BETWEEN_MS)
+        if (at === epoch)
+          hold = setTimeout(() => show(current + 1), holdMs(STEPS[current] ?? { title: "", text: "" }))
       },
       (error: unknown) => {
         if (!(error instanceof Stop)) console.error(error)
