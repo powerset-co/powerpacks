@@ -328,11 +328,11 @@ class BoundedWorthTests(StoreTests):
             request = baseline._request(family)
             expected[decisions.request_digest(luna.REQUEST_VERSION, request)] = request
         self.assertEqual(list(expected), [
-            "0dcfe480709a49ed6afc74d48ef35ad4a7bb8a1817d4ba76fea9a32c7fc51a7f",
-            "0da5eeb9207a7a89ac2a4c094f02657407d495f5fd6be4e64e625537463c1a02",
-            "da54fceb57c60ec2cf3a66d02c6db918ce75991cb376cf7ffbbc4cb4e7627a52",
-            "740c96634e1256be7bde9500ca744156bf7a21deeb30bcc2720f39bf17a7b3b4",
-            "025f6387c31d45084d71efa544008cc6b746b2b20fa67f4d05730f6204473c1d",
+            "caf16b85b06babd51cb1765cc6d9537ae2279f35c9f210848970ababa2c2b53c",
+            "6a6be321bb22307dbea82ec9933526df98e6d4e4c157aa29680d8b3059b73291",
+            "e1ddc36549f08a389730b2ed1106fffb59cdc90bfb806792bad5e43e325d52f5",
+            "7adae51c66ef8526d9e3b97dfd931eedb6d150d27c6362ff9f9adedbf826331f",
+            "d744770749f8be448fb49280bf84b38e853e2ebdcdf5f970bbca226439af8a0c",
         ])
         sent = []
         progress = []
@@ -444,9 +444,9 @@ class LabelsTests(unittest.TestCase):
 
     def test_a_refused_choice_leaves_the_family_unlabelled_and_a_refused_yes_no_only_its_label(self) -> None:
         self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "relationship_kind"}]))
-        declined = [*ANSWERS, {"type": "refusal", "name": "is_minor"}]
+        declined = [*ANSWERS, {"type": "refusal", "name": "is_investor"}]
         self.assertFalse(luna.refused(declined))
-        self.assertNotIn("is_minor", luna.labels(declined))
+        self.assertNotIn("is_investor", luna.labels(declined))
         # An unanswered detector is not a yes: the family is asked again.
         self.assertTrue(luna.refused([*ANSWERS, {"type": "refusal", "name": "mailbox"}]))
 
@@ -472,7 +472,7 @@ def saved(**overrides: Any) -> dict[str, Any]:
     """A complete saved label set: everything low and a colleague."""
     cells: dict[str, Any] = {name: 0.1 for name in NOUL_LABELS}
     for name in CHOICE_LABELS:
-        cells[name], cells[f"{name}_p"] = "unknown", 0.5
+        cells[name], cells[f"{name}_p"] = "colleague", 0.5
     for name in SCORE_LABELS:
         cells[name] = 2.0
     cells["relationship_kind"] = "colleague"
@@ -483,16 +483,16 @@ def saved(**overrides: Any) -> dict[str, Any]:
 class FlagTests(unittest.TestCase):
     def test_a_declined_yes_no_question_raises_no_flag(self) -> None:
         cells = saved()
-        del cells["is_minor"]
+        del cells["is_family"]
         self.assertEqual(flag(labels_from_saved(cells)), "")
 
-    def test_family_partner_and_minor_flags(self) -> None:
+    def test_family_and_partner_flags(self) -> None:
         for cells, expected in [
             (saved(), ""),
             (saved(relationship_kind="family"), "family"),
             (saved(is_family=0.5), "family"),
             (saved(relationship_kind="romantic_partner"), "romantic_partner"),
-            (saved(is_minor=0.7), "minor"),
+            (saved(is_minor=0.7), ""),
         ]:
             self.assertEqual(flag(labels_from_saved(cells)), expected)
 

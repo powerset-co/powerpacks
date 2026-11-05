@@ -6,8 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.queries import _batches
-from packs.ingestion.primitives.share.labels import FLAG_P
-from packs.ingestion.schemas.share_schema import FAMILY, MINOR, ROMANTIC_PARTNER
+from packs.ingestion.schemas.share_schema import FAMILY, ROMANTIC_PARTNER
 
 # Row shapes, in column order, for the writers below.
 TagRow = tuple[str, str, str, str]                      # candidate_id, tags, note, updated_at
@@ -120,8 +119,7 @@ def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) ->
             cells = json.loads(labels_json)
             cells["relationship_kind"] = kind
             cells.pop("relationship_kind_p", None)
-            flag = kind if kind in (FAMILY, ROMANTIC_PARTNER) else (
-                MINOR if cells.get("is_minor", 0.0) >= FLAG_P else "")
+            flag = kind if kind in (FAMILY, ROMANTIC_PARTNER) else ""
             labels_json = json.dumps(cells)
         source = "human" if kind is not None else "machine" if row["relationship_kind"] else ""
         found[parent_id] = Labels(row["candidate_id"], row["public_identifier"], names.get(parent_id, row["full_name"]),

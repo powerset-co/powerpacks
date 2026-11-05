@@ -8,8 +8,6 @@ import { Pair } from "./Pair"
 import type { SectionProps } from "./sections"
 import { patchPeople, refetchPeople } from "../hooks/usePeopleList"
 
-// The single-choice labels, each with the model's confidence in the choice; N/A carries none.
-const CHOICES = ["intro_source", "function"] as const
 const RELATIONSHIPS = [
   "family",
   "romantic_partner",
@@ -46,7 +44,6 @@ export function RelationshipSection({ row, detail, onRefresh, ...section }: Rela
       onRefresh()
     },
   })
-  const labelled = Object.keys(detail.probabilities).length > 0
   return (
     <DetailsSection
       sectionKey="relationship"
@@ -72,33 +69,18 @@ export function RelationshipSection({ row, detail, onRefresh, ...section }: Rela
             <small>Saving…</small>
           ) : detail.relationship_kind_source === "human" ? (
             <small>Your choice · kept on refresh</small>
-          ) : detail.choice_p.relationship_kind !== undefined ? (
-            <small>{Math.round(detail.choice_p.relationship_kind * 100)}%</small>
           ) : null}
         </Pair>
+        {row.warmth === null ? null : (
+          <Pair term="Warmth">
+            {row.warmth.toFixed(1)} of 4 <small>{row.warmthBucket}</small>
+          </Pair>
+        )}
       </dl>
       {save.error ? (
         <p role="alert" className="text-destructive">
           {save.error.message}
         </p>
-      ) : null}
-      {labelled ? (
-        <dl className="kv">
-          {CHOICES.filter((key) => row[key]).map((key) => {
-            const facet = facetOf(key)
-            const percent = Math.round((detail.choice_p[key] ?? 0) * 100)
-            return (
-              <Pair key={key} term={facet.label}>
-                {facetText(facet, row[key])} {row[key] === "unknown" ? null : <small>{percent}%</small>}
-              </Pair>
-            )
-          })}
-          {row.warmth === null ? null : (
-            <Pair term="Warmth">
-              {row.warmth.toFixed(1)} of 4 <small>{row.warmthBucket}</small>
-            </Pair>
-          )}
-        </dl>
       ) : null}
     </DetailsSection>
   )

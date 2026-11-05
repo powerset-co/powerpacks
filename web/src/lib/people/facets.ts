@@ -17,10 +17,10 @@ export function lastBucket(days: number | null): LastBucket {
   return LAST[2]
 }
 
-/** The warmth band, or "" when the person has no warmth score. */
+/** The warmth level nearest the score (2.5 reads Close), or "" when the person has no warmth score. */
 export function warmthBucket(value: number | null): WarmthBucket | "" {
   if (value === null) return ""
-  return must(WARMTH[Math.min(3, Math.floor(value))], "warmth band")
+  return must(WARMTH[Math.min(4, Math.floor(value + 0.5))], "warmth level")
 }
 
 export type FacetKey =
@@ -34,10 +34,8 @@ export type FacetKey =
   | "worth_source"
   | "tags"
   | "labels"
-  | "function"
   | "warmth"
   | "direction"
-  | "intro_source"
   | "evidence"
 
 /** The values held per facet: the view's filters. */
@@ -93,15 +91,8 @@ export const FACETS: readonly FacetDef[] = [
     get: (r) => r.labels,
     words: "labels",
   },
-  { key: "function", label: "Function", get: (r) => one(r.function), words: "function" },
   { key: "warmth", label: "Warmth", get: (r) => one(r.warmthBucket) },
   { key: "direction", label: "Who writes", get: (r) => one(r.direction), words: "direction" },
-  {
-    key: "intro_source",
-    label: "How you met",
-    get: (r) => one(r.intro_source),
-    words: "intro_source",
-  },
   {
     key: "evidence",
     label: "Evidence",

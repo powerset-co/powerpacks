@@ -18,7 +18,7 @@ describe("decodePeople", () => {
       channels: ["gmail", "linkedin"],
       worth: "no",
       last: "< 1 year",
-      warmthBucket: "Close (2–3)",
+      warmthBucket: "Close",
       search: "jordan bravo engineer acme ",
     })
   })

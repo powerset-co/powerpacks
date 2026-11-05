@@ -44,8 +44,7 @@ const CASED: Readonly<Record<string, string>> = {
   ...Object.fromEntries(ACRONYMS.map((word) => [word.toLowerCase(), word])),
 }
 
-export type TextKind =
-  "reason" | "worth" | "source" | "intro_source" | "function" | "direction" | "cadence" | "labels"
+export type TextKind = "reason" | "worth" | "source" | "direction" | "cadence" | "labels"
 
 // Plain words for the machine values; anything unmapped falls back to sentence case.
 export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> = {
@@ -58,7 +57,6 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
     family: "Family",
     romantic_partner: "Partner",
     partner: "Partner",
-    minor: "Minor",
     // Reasons from before Luna's share call, until signals are refreshed.
     sensitive_context: "Sensitive context",
     sensitive_provider: "Clinician, lawyer, or banker",
@@ -67,8 +65,6 @@ export const TEXT: Readonly<Record<TextKind, Readonly<Record<string, string>>>> 
   },
   worth: { yes: "Keep", no: "Skip", unjudged: "Not assessed" },
   source: { human: "You", machine: "AI" },
-  intro_source: { mutual_friend: "Mutual friend", cold_outreach: "Unsolicited contact" },
-  function: { founder_exec: "Founder or executive", people: "People and recruiting" },
   direction: { they_initiate: "Mostly them", i_initiate: "Mostly you", mutual: "Both" },
   cadence: { dormant: "No contact in over 2 years", stale: "No contact in over 1 year" },
   labels: {

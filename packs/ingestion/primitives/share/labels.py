@@ -1,4 +1,4 @@
-"""Deterministic labels, saved Luna labels and the family, partner and minor flags."""
+"""Deterministic labels, saved Luna labels and the family and partner flags."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from packs.ingestion.primitives.share.questions import (
     NOUL_LABELS,
     SCORE_LABELS,
 )
-from packs.ingestion.schemas.share_schema import FAMILY, MINOR, ROMANTIC_PARTNER
+from packs.ingestion.schemas.share_schema import FAMILY, ROMANTIC_PARTNER
 
 # Cadence bands, first rule wins: staleness before volume.
 DORMANT_DAYS = 730
@@ -30,7 +30,7 @@ I_INITIATE_ABOVE = 0.65
 
 # A noul label is "active" (listed on the People row) at this probability.
 ACTIVE_P = 0.6
-# is_family or is_minor keeps a family home at this probability — a lower bar, because a
+# is_family keeps a family home at this probability — a lower bar, because a
 # needless hold costs one click and a false share cannot be taken back.
 FLAG_P = 0.5
 
@@ -107,6 +107,4 @@ def flag(labels: Labels | None) -> str:
         return FAMILY
     if labels.choices["relationship_kind"] == "romantic_partner":
         return ROMANTIC_PARTNER
-    if labels.probabilities.get("is_minor", 0.0) >= FLAG_P:
-        return MINOR
     return ""

@@ -32,7 +32,7 @@ LABEL_TITLES: tuple[tuple[str, str], ...] = (
     ("owner_would_intro", "Would introduce"), ("they_would_take_owner_call", "Would take your call"),
     ("notable", "Public figure"), ("sensitive_context", "Sensitive topics"),
     ("is_healthcare_legal_or_financial_provider", "Medical / legal / financial services"),
-    ("confidential_dealings", "Confidential"), ("is_minor", "Under 18"),
+    ("confidential_dealings", "Confidential"),
     ("real_relationship", "Direct contact"), ("work_signal", "Work-related"),
     ("professional_standing", "Established professional"), ("noise", "Spam / broadcasts"),
     ("transactional_only", "Transactional"), ("evidence_incomplete", "Limited context"),

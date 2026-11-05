@@ -3,7 +3,8 @@
 // The derived buckets the client computes and filters on (lib/people/facets.ts).
 export const LAST = ["< 1 year", "1–2 years", "> 2 years", "Never"] as const
 export type LastBucket = (typeof LAST)[number]
-export const WARMTH = ["Distant (0–1)", "Friendly (1–2)", "Close (2–3)", "Inner circle (3–4)"] as const
+// The model's warmth levels 0-4 (share/questions.py SCORE_QUESTIONS), in order.
+export const WARMTH = ["No relationship", "Distant", "Friendly", "Close", "Inner circle"] as const
 export type WarmthBucket = (typeof WARMTH)[number]
 
 /** The worth call; "" when no one judged it. */
