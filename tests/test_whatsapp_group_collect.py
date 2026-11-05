@@ -5,6 +5,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +13,7 @@ from test_logbook_build import make_chat_db, make_wacli, add_whatsapp
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import MessageChannel, MessageDirection, Person
 from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect, MAX_GROUP_SIZE
 from packs.ingestion.primitives.deep_context_v2.collect.readers import (
-    GROUP_MESSAGE_CAP, WHATSAPP_MAX_GROUP_SIZE, ContextSources,
+    GROUP_WINDOW_CHARS, WHATSAPP_MAX_GROUP_SIZE, ContextSources,
 )
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
@@ -125,17 +126,32 @@ class GroupCollectionTests(unittest.TestCase):
         self.assertEqual([m.text for m in messages], ['dm first'])
         self.assertNotIn('sender', messages[0].to_payload())
 
-    def test_group_messages_are_capped_so_dms_stay_in_the_window(self):
+    def test_group_messages_keep_one_year_and_leave_the_window_to_dms(self):
+        now = 1790000000  # 2026-09-21
         self.group('busy@g.us', 3)
-        for n in range(GROUP_MESSAGE_CAP + 10):
-            self.message('busy@g.us', f'group {n}', '15550100@s.whatsapp.net', ts=1790000000 + n)
-        self.message('15550100@s.whatsapp.net', 'dm', '15550100@s.whatsapp.net', ts=1780000000)
-        messages, available = self.source.collect_person(self.person)
-        groups = [m for m in messages if m.channel == MessageChannel.WHATSAPP_GROUP]
-        self.assertEqual(len(groups), GROUP_MESSAGE_CAP)
-        self.assertEqual(groups[0].text, 'group 10')  # the oldest ten are the ones dropped
-        self.assertIn('dm', [m.text for m in messages])
-        self.assertEqual(available, GROUP_MESSAGE_CAP + 11)
+        self.message('busy@g.us', 'too old', '15550100@s.whatsapp.net', ts=now - 400 * 86400)
+        self.message('busy@g.us', 'last year', '15550100@s.whatsapp.net', ts=now - 300 * 86400)
+        dm = 'd' * (GROUP_WINDOW_CHARS - 5000)
+        self.message('15550100@s.whatsapp.net', dm, '15550100@s.whatsapp.net', ts=now - 10 * 86400)
+        for n in range(100):  # 100 x (100 + 60) chars: only ~31 fit in the 5,000 left
+            self.message('busy@g.us', f'{n:03}' + 'g' * 97, '15550100@s.whatsapp.net', ts=now + n)
+        with patch('packs.ingestion.primitives.deep_context_v2.collect.readers.datetime') as clock:
+            clock.now.return_value = datetime.fromtimestamp(now, timezone.utc)
+            messages, available = self.source.collect_person(self.person)
+        groups = [m.text[:3] for m in messages if m.channel == MessageChannel.WHATSAPP_GROUP]
+        self.assertIn(dm, [m.text for m in messages])
+        self.assertEqual(len(groups), 5000 // 160)
+        self.assertEqual(groups[-1], '099')  # the newest are kept
+        self.assertEqual(available, 103)
+        # With no DM, a year of group messages fits; the older one does not.
+        with sqlite3.connect(self.wacli) as con:
+            con.execute("DELETE FROM messages WHERE chat_jid NOT LIKE '%@g.us'")
+        with patch('packs.ingestion.primitives.deep_context_v2.collect.readers.datetime') as clock:
+            clock.now.return_value = datetime.fromtimestamp(now, timezone.utc)
+            texts = [m.text for m in self.source.collect_person(self.person)[0]]
+        self.assertEqual(len(texts), 101)
+        self.assertIn('last year', texts)
+        self.assertNotIn('too old', texts)
 
     def test_collect_persists_group_names_and_sender_using_store_names(self):
         con = open_store(store_path(self.root))
@@ -154,6 +170,9 @@ class GroupCollectionTests(unittest.TestCase):
         self.assertEqual(payload['messages'][0]['sender'], 'Alex Owner')
 
     def test_imessage_twenty_five_cap_and_named_other(self):
+        clock = patch('packs.ingestion.primitives.deep_context_v2.collect.readers.datetime').start()
+        self.addCleanup(patch.stopall)
+        clock.now.return_value = datetime(2020, 1, 10, tzinfo=timezone.utc)  # the message is from 2020-01-02
         with sqlite3.connect(self.chat) as con:
             con.executemany('INSERT INTO handle VALUES (?, ?)', [(n, f'+155501{n-1:02}') for n in range(1,27)])
             for cid, size in ((1,25), (2,26)):

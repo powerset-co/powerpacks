@@ -13,6 +13,7 @@ import re
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -34,9 +35,12 @@ CHAT_MESSAGE_CAP = 1600
 SAFETY_CHAR_CAP = 1_800_000
 WACLI_DB_RELATIVE = Path("messages") / "wacli" / "wacli.db"
 WHATSAPP_MAX_GROUP_SIZE = 10
-# Group messages across both group channels; the newest win. Synthesis reads the newest 180k
-# characters of everything, so without this a busy group pushes the person's DMs out of the window.
-GROUP_MESSAGE_CAP = 400
+# Group messages: the last year, newest first, only as many as fit in the room Gmail and DMs leave
+# in synthesis' window (20 batches x 9k characters, which reads the newest messages of all kinds).
+# Without the room check a busy group would push the person's DMs out of that window.
+GROUP_LOOKBACK_DAYS = 365
+GROUP_WINDOW_CHARS = 150_000   # under the 180k window, leaving room for each line's header
+GROUP_LINE_CHARS = 60          # a group line's rendered header: group, channel, date, role, sender
 MAX_THREADS = 25
 QueryResult = TypeVar("QueryResult")
 _READ_RETRIES = 3
@@ -66,6 +70,19 @@ def _read_source(path: Path, read: Callable[[], QueryResult]) -> QueryResult:
 
 def apple_epoch_iso(value: int | float | None) -> str:
     return chatdb.apple_timestamp_to_iso(value) or ""
+
+
+def recent_group_messages(group: list[MessageEntry], *, room: int) -> list[MessageEntry]:
+    """Group messages from the last year, newest first, until they fill `room` characters."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=GROUP_LOOKBACK_DAYS)).date().isoformat()
+    kept: list[MessageEntry] = []
+    for message in sorted(group, key=MessageEntry.content_order_key, reverse=True):
+        size = message.content_chars() + GROUP_LINE_CHARS
+        if (message.at or "")[:10] < cutoff or size > room:
+            break
+        kept.append(message)
+        room -= size
+    return kept
 
 
 class ContextSources:
@@ -361,7 +378,8 @@ class ContextSources:
         # then direct and group chats newest first, with content breaking equal timestamps.
         ordered = list(gmail_messages)
         ordered.extend(sorted(direct, key=MessageEntry.content_order_key, reverse=True))
-        ordered.extend(sorted(group, key=MessageEntry.content_order_key, reverse=True)[:GROUP_MESSAGE_CAP])
+        ordered.extend(recent_group_messages(group, room=GROUP_WINDOW_CHARS - sum(
+            message.content_chars() for message in ordered)))
         pool: list[MessageEntry] = []
         used = 0
         for message in ordered:
