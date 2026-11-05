@@ -114,7 +114,7 @@ it.each([false, true])("keeps reauthentication reachable with stored identity, r
   auth.signIn.mockResolvedValue(undefined)
   mount(rail)
   fireEvent.click(await screen.findByRole("button", { name: "Account" }))
-  fireEvent.click(await screen.findByRole("menuitem", { name: "Reconnect Powerset" }))
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Switch Accounts" }))
   await waitFor(() => expect(auth.signIn).toHaveBeenCalledOnce())
   expect(screen.queryByRole("menu")).toBeNull()
 })
