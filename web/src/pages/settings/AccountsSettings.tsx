@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { type ReactNode } from "react"
 import { Link } from "react-router-dom"
+import { TriangleAlert } from "lucide-react"
 
 import { EmptyState, CHANNEL_ICON, Spinner } from "@/components/shared"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -140,9 +141,12 @@ function AccountDetails({ account, job }: AccountDetailsProps) {
         <span
           data-tone={tone}
           aria-live="polite"
-          className="flex items-center gap-2 text-xs text-muted-foreground data-[tone=error]:text-bad data-[tone=warning]:text-warn"
+          className="flex items-center gap-2 text-xs text-muted-foreground"
         >
           {running && <Spinner />}
+          {!running && (tone === "error" || tone === "warning") && (
+            <TriangleAlert aria-hidden className="size-3 shrink-0" />
+          )}
           {note}
         </span>
         {!running && <CardAction account={account} />}
@@ -172,7 +176,7 @@ function AccountDetails({ account, job }: AccountDetailsProps) {
 function CardAction({ account }: { account: Account }) {
   if (account.source === "gmail" && account.health === "error")
     return (
-      <Link to="/tasks" className="text-xs font-semibold text-info no-underline hover:underline">
+      <Link to="/tasks" className="text-xs text-primary no-underline hover:underline">
         Reconnect in Scheduled tasks
       </Link>
     )

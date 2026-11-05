@@ -132,7 +132,7 @@ it("opens How Deep Context works on the first visit to Accounts only, and its li
   cleanup()
   mount()
   expect(screen.queryByRole("dialog")).toBeNull()
-  fireEvent.click(await screen.findByRole("button", { name: "See how your data is processed here" }))
+  fireEvent.click(await screen.findByRole("button", { name: "How your data is handled" }))
   expect(screen.getByRole("dialog", { name: "How Deep Context works" })).toBeTruthy()
 })
 it("keeps connected details and the disconnected helper in one Accounts screen", async () => {
@@ -147,18 +147,14 @@ it("keeps connected details and the disconnected helper in one Accounts screen",
   fireEvent.click(screen.getByRole("button", { name: /WhatsApp/ }))
   expect(await screen.findByRole("heading", { name: "Link your WhatsApp." })).toBeTruthy()
   expect(screen.getByTestId("path").textContent).toBe("/accounts")
-  expect(screen.queryByRole("button", { name: "View progress" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "view progress" })).toBeNull()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
 it("connects only: no Enrich or Sync, and the sync line points to Scheduled tasks", async () => {
   mount()
-  const tasks = await screen.findByRole("link", { name: "Scheduled tasks" })
+  // The schedule is part of the header's one statement, linking to Scheduled tasks.
+  const tasks = await screen.findByRole("link", { name: "every day at 6:00 AM" })
   expect(tasks.getAttribute("href")).toBe("/tasks")
-  expect(
-    await screen.findByText(
-      (_, element) => element?.tagName === "P" && element.textContent.startsWith("Syncs daily at 6:00 AM"),
-    ),
-  ).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Enrich imported data" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Sync" })).toBeNull()
 })
@@ -176,7 +172,7 @@ it("while a run goes, says so and opens its progress on Accounts", async () => {
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
   mount()
-  fireEvent.click(await screen.findByRole("button", { name: "View progress" }))
+  fireEvent.click(await screen.findByRole("button", { name: "view progress" }))
   expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
   expect(await screen.findByText(record.message)).toBeTruthy()
   expect(within(screen.getByRole("list", { name: "Setup stages" })).getByText("Gmail imported")).toBeTruthy()
@@ -184,7 +180,7 @@ it("while a run goes, says so and opens its progress on Accounts", async () => {
 it("never shows onboarding's LinkedIn setup as the run's progress", async () => {
   record = { ...idle, retry_command: "/app/bin/linkedin-setup" }
   mount("/accounts?view=sync")
-  await screen.findByRole("link", { name: "Scheduled tasks" })
+  await screen.findByRole("link", { name: "every day at 6:00 AM" })
   expect(screen.queryByText("Search is ready")).toBeNull()
   expect(screen.queryByRole("list", { name: "Setup stages" })).toBeNull()
 })
