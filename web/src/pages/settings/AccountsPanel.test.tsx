@@ -132,7 +132,7 @@ it("opens How Deep Context works on the first visit to Accounts only, and its li
   cleanup()
   mount()
   expect(screen.queryByRole("dialog")).toBeNull()
-  fireEvent.click(await screen.findByRole("button", { name: "How your data is handled" }))
+  fireEvent.click(await screen.findByRole("button", { name: "See how your data is processed here" }))
   expect(screen.getByRole("dialog", { name: "How Deep Context works" })).toBeTruthy()
 })
 it("keeps connected details and the disconnected helper in one Accounts screen", async () => {
@@ -150,11 +150,10 @@ it("keeps connected details and the disconnected helper in one Accounts screen",
   expect(screen.queryByRole("button", { name: "view progress" })).toBeNull()
   expect(invoke).not.toHaveBeenCalledWith("onboard_continue", expect.anything())
 })
-it("connects only: no Enrich or Sync, and the sync line points to Scheduled tasks", async () => {
+it("connects only: no Enrich or Sync, and the intro is one line", async () => {
   mount()
-  // The schedule is part of the header's one statement, linking to Scheduled tasks.
-  const tasks = await screen.findByRole("link", { name: "daily at 6:00 AM" })
-  expect(tasks.getAttribute("href")).toBe("/tasks")
+  expect(await screen.findByText(/Your people, in one place\. See how your data is processed/)).toBeTruthy()
+  expect(screen.queryByRole("link", { name: "daily at 6:00 AM" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Enrich imported data" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Sync" })).toBeNull()
 })
@@ -172,7 +171,7 @@ it("while a run goes, its progress opens on Accounts and the intro stays the sam
     action: { kind: "details", details: { done: 40, total: 298 } },
   }
   mount()
-  await screen.findByRole("button", { name: "How your data is handled" })
+  await screen.findByRole("button", { name: "See how your data is processed here" })
   expect(screen.queryByText(/Syncing now/)).toBeNull()
   cleanup()
   mount("/accounts?view=sync")
@@ -182,7 +181,7 @@ it("while a run goes, its progress opens on Accounts and the intro stays the sam
 it("never shows onboarding's LinkedIn setup as the run's progress", async () => {
   record = { ...idle, retry_command: "/app/bin/linkedin-setup" }
   mount("/accounts?view=sync")
-  await screen.findByRole("link", { name: "daily at 6:00 AM" })
+  await screen.findByRole("button", { name: "See how your data is processed here" })
   expect(screen.queryByText("Search is ready")).toBeNull()
   expect(screen.queryByRole("list", { name: "Setup stages" })).toBeNull()
 })
