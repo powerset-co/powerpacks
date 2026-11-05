@@ -29,6 +29,7 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-05: a stopped refresh points at Scheduled tasks, not Accounts' import view, in its own words.
   2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily; a missed
     run catches up as soon as it can unless the next one is within 6 hours; new schedules are
     weekly on Monday at 9:00 AM (an older settings file stays daily).
@@ -92,9 +93,9 @@ SOURCES: tuple[SourceName, ...] = ("linkedin", "gmail", "imessage", "whatsapp")
 IMPORT_STEP: dict[SourceName, str] = {"linkedin": "linkedin", "gmail": "gmail_import",
                                       "imessage": "imessage_import", "whatsapp": "whatsapp_import"}
 ACCOUNTS_HREF = "/accounts?source="
-SYNC_HREF = "/accounts?view=sync"
 # Scheduled tasks (/tasks), which reconnects each expired Gmail mailbox in place.
 REFRESH_HREF = "/tasks"
+STOPPED_DETAIL = "It didn't finish. Refresh now picks up where it left off."
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS refresh_runs (
@@ -505,9 +506,13 @@ def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[s
                              "Sign in to LinkedIn again on Accounts so new connections are read.",
                              "Sign in to LinkedIn", ACCOUNTS_HREF + "linkedin"))
     if manifest.get("status") in ("failed", "waiting"):
-        found.append(Problem("refresh", "The refresh stopped" if manifest["status"] == "failed" else "The refresh needs you",
-                             str(manifest.get("message") or "Open the import to see what stopped."),
-                             "See what stopped", SYNC_HREF))
+        stopped = manifest["status"] == "failed"
+        message = str(manifest.get("message") or "")
+        # The install record's generic stop line speaks of installing; a refresh says it in its own words.
+        if not message or message.startswith("Installation stopped"):
+            message = STOPPED_DETAIL if stopped else "Open Scheduled tasks to see what it needs."
+        found.append(Problem("refresh", "The refresh stopped" if stopped else "The refresh needs you",
+                             message, "Open Scheduled tasks", REFRESH_HREF))
     return found
 
 
@@ -611,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as caught:  # noqa: BLE001 - the row must not stay running
         traceback.print_exc()
         _update(root, run_id, status="failed", finished_at=_iso(now()), error=f"{type(caught).__name__}: {caught}",
-                problems=[Problem("refresh", "The refresh stopped", f"{caught}", "See what stopped", SYNC_HREF)])
+                problems=[Problem("refresh", "The refresh stopped", f"{caught}", "Open Scheduled tasks", REFRESH_HREF)])
         return 1
     return 1 if run.status == "failed" else 0
 

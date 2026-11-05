@@ -19,11 +19,11 @@ export const STEPS: readonly Step[] = [
   },
   {
     title: "Recent messages with each person",
-    text: "For each person, we gather your latest messages with them and save them on your Mac. Long emails are cut to the new part.",
+    text: "For each person, we gather your latest messages with them and save them on your Mac.",
   },
   {
     title: "OpenAI writes a summary",
-    text: "Those messages go to OpenAI, which sends back a short summary of who they are. OpenAI doesn't keep it, and we don't log it.",
+    text: "Those messages go to OpenAI, which sends back a short summary of who they are.",
   },
   {
     title: "Work only, nothing personal",
@@ -35,19 +35,19 @@ export const STEPS: readonly Step[] = [
   },
   {
     title: "Parallel finds them online",
-    text: "Their name, company and city go to Parallel, which finds their LinkedIn page or builds a profile from the web. It goes through Powerset, which doesn't keep a copy.",
+    text: "Their name, company and city go to Parallel, which finds their LinkedIn page or builds a profile from the web.",
   },
   {
     title: "Get their LinkedIn profile",
-    text: "Only the LinkedIn link goes out, through Powerset, and their public profile comes back.",
+    text: "Only the LinkedIn link goes out, and their public profile comes back.",
   },
   {
     title: "Is it the same person?",
-    text: "OpenAI compares the summary with the profile, and we keep it only if it's a clear match. OpenAI doesn't keep it, and we don't log it.",
+    text: "OpenAI compares the summary with the profile, and we keep it only if it's a clear match.",
   },
   {
     title: "It all lives on your Mac",
-    text: "Summaries, labels and profiles are saved on your Mac, and that's what you search. To build search, your contact list (never your messages) is processed in the cloud through Powerset.",
+    text: "Summaries, labels and profiles are saved on your Mac, and that's what you search. We take each person's profile and enrich their professional information to build a search index in a sandbox. The finished index is downloaded back to your Mac.",
   },
 ]
 
