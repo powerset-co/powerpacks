@@ -191,8 +191,9 @@ def _person(row: sqlite3.Row) -> SharePerson:
 # The page's buckets (web/src/types/people.ts LAST and WARMTH), as SQL over the stored row.
 LAST_BUCKET = ("CASE WHEN recency_days IS NULL THEN 'Never' WHEN recency_days < 365 THEN '< 1 year' "
                "WHEN recency_days <= 730 THEN '1–2 years' ELSE '> 2 years' END")
-WARMTH_BUCKET = ("CASE WHEN warmth IS NULL THEN '' WHEN warmth < 1 THEN 'Distant (0–1)' WHEN warmth < 2 THEN "
-                 "'Friendly (1–2)' WHEN warmth < 3 THEN 'Close (2–3)' ELSE 'Inner circle (3–4)' END")
+# Warmth: the model level nearest the score.
+WARMTH_BUCKET = ("CASE WHEN warmth IS NULL THEN '' WHEN warmth < 0.5 THEN 'No relationship' WHEN warmth < 1.5 THEN "
+                 "'Distant' WHEN warmth < 2.5 THEN 'Friendly' WHEN warmth < 3.5 THEN 'Close' ELSE 'Inner circle' END")
 EVIDENCE = {"No relationship labels": "linkedin_only", "Group chats only": "group_chat_only",
             "Shared employer": "shared_employer", "Shared school": "shared_school"}
 

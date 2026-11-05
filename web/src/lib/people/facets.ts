@@ -17,10 +17,10 @@ export function lastBucket(days: number | null): LastBucket {
   return LAST[2]
 }
 
-/** The warmth band, or "" when the person has no warmth score. */
+/** The warmth level nearest the score (2.5 reads Close), or "" when the person has no warmth score. */
 export function warmthBucket(value: number | null): WarmthBucket | "" {
   if (value === null) return ""
-  return must(WARMTH[Math.min(3, Math.floor(value))], "warmth band")
+  return must(WARMTH[Math.min(4, Math.floor(value + 0.5))], "warmth level")
 }
 
 export type FacetKey =
