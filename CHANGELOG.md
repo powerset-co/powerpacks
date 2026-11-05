@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.52.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.1...powerpacks-v3.52.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **whatsapp:** a sync that reaches its cap moves on instead of failing ([#1086](https://github.com/powerset-co/powerpacks/issues/1086)) ([f06935d](https://github.com/powerset-co/powerpacks/commit/f06935d500c8c2bb39d54668fd7c21f558284585))
+
 ## [3.52.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.52.0...powerpacks-v3.52.1) (2026-11-04)
 
 
