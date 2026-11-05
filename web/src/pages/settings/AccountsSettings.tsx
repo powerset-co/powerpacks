@@ -10,6 +10,7 @@ import { errorText } from "@/lib/api/http"
 import { CHANNELS } from "@/lib/channels"
 import { ago, stamp } from "@/lib/copy"
 import { isDesktop } from "@/lib/desktop"
+import { cn } from "@/lib/utils"
 import type { Account, AccountSource, Job, JobsPayload } from "@/types/accounts"
 
 import { AccountsPanel } from "./AccountsPanel"
@@ -137,20 +138,22 @@ function AccountDetails({ account, job }: AccountDetailsProps) {
     <div data-account={account.source}>
       {/* Gmail can keep several mailboxes, so each card names its own; the other sources have one. */}
       {account.source === "gmail" ? <span className="text-[13px] font-semibold">{account.name}</span> : null}
-      <div className="mt-1 flex min-h-7 items-center justify-between gap-3">
-        <span
-          data-tone={tone}
-          aria-live="polite"
-          className="flex items-center gap-2 text-xs text-muted-foreground"
-        >
-          {running && <Spinner />}
-          {!running && (tone === "error" || tone === "warning") && (
-            <TriangleAlert aria-hidden className="size-3 shrink-0" />
-          )}
-          {note}
-        </span>
+      {/* The note, then what to do about it, on one left-aligned line. */}
+      <p
+        data-tone={tone}
+        aria-live="polite"
+        className="m-0 mt-1 flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+      >
+        {running && <Spinner />}
+        {!running && (tone === "error" || tone === "warning") && (
+          <TriangleAlert
+            aria-hidden
+            className={cn("size-3 shrink-0", tone === "error" ? "text-bad" : "text-warn")}
+          />
+        )}
+        <span>{note}</span>
         {!running && <CardAction account={account} />}
-      </div>
+      </p>
       <dl className="m-0 mt-3 grid grid-cols-2 gap-4">
         {account.source === "linkedin" ? (
           <>

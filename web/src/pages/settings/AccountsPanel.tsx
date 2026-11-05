@@ -132,8 +132,8 @@ export function AccountsPanel({
                 <span className="block text-sm font-semibold">{row.title}</span>
                 <span className="mt-1 block text-[11px] text-muted-foreground">{SUBTITLE[key]}</span>
               </span>
-              {/* One plain outline pill for every state: a check once connected, an alert while a
-                  Gmail mailbox needs signing in, a spinner while it works. No coloured badges. */}
+              {/* One outline pill for every state; only its icon is coloured: a green check once
+                  connected, a yellow alert while a Gmail mailbox needs signing in, a spinner while it works. */}
               <span
                 data-status={warn ? "needs" : row.state}
                 className={cn(
@@ -144,9 +144,9 @@ export function AccountsPanel({
                 )}
               >
                 {warn ? (
-                  <TriangleAlert aria-hidden className="size-3" />
+                  <TriangleAlert aria-hidden className="size-3 text-warn" />
                 ) : row.state === "ready" ? (
-                  <CheckIcon className="size-3" />
+                  <CheckIcon className="size-3 text-ok" />
                 ) : row.state === "working" || row.state === "checking" ? (
                   <Spinner className="size-3" />
                 ) : null}
