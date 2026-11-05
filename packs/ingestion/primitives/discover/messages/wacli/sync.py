@@ -15,7 +15,7 @@ Changelog:
     The old cap (store + 2,000) counted group chatter, so busy groups hit it every refresh, and
     whatsmeow had already acked the messages wacli refused after the cap, so those were lost.
   2026-11-04: a sync that reaches its cap ("storage limit reached", rc=1) moves on with what it
-    stored instead of failing: after a few busy weeks every refresh stopped there (Jake: 18,355
+    stored instead of failing: after a few busy weeks every refresh stopped there (one store: 18,355
     stored, cap 20,355). The next sync's cap starts from the new total, so it catches up.
   2026-09-23 (typed rows): `run_sync` / `refresh_group_info` read the typed
     `runtime.CommandResult` (`.returncode`, `.combined_text`, `.json`) instead of
