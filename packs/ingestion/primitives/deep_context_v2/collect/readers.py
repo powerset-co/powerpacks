@@ -34,6 +34,9 @@ CHAT_MESSAGE_CAP = 1600
 SAFETY_CHAR_CAP = 1_800_000
 WACLI_DB_RELATIVE = Path("messages") / "wacli" / "wacli.db"
 WHATSAPP_MAX_GROUP_SIZE = 10
+# Group messages across both group channels; the newest win. Synthesis reads the newest 180k
+# characters of everything, so without this a busy group pushes the person's DMs out of the window.
+GROUP_MESSAGE_CAP = 400
 MAX_THREADS = 25
 QueryResult = TypeVar("QueryResult")
 _READ_RETRIES = 3
@@ -358,7 +361,7 @@ class ContextSources:
         # then direct and group chats newest first, with content breaking equal timestamps.
         ordered = list(gmail_messages)
         ordered.extend(sorted(direct, key=MessageEntry.content_order_key, reverse=True))
-        ordered.extend(sorted(group, key=MessageEntry.content_order_key, reverse=True))
+        ordered.extend(sorted(group, key=MessageEntry.content_order_key, reverse=True)[:GROUP_MESSAGE_CAP])
         pool: list[MessageEntry] = []
         used = 0
         for message in ordered:

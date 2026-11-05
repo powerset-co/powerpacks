@@ -11,7 +11,9 @@ from unittest.mock import patch
 from test_logbook_build import make_chat_db, make_wacli, add_whatsapp
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import MessageChannel, MessageDirection, Person
 from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect, MAX_GROUP_SIZE
-from packs.ingestion.primitives.deep_context_v2.collect.readers import ContextSources, WHATSAPP_MAX_GROUP_SIZE
+from packs.ingestion.primitives.deep_context_v2.collect.readers import (
+    GROUP_MESSAGE_CAP, WHATSAPP_MAX_GROUP_SIZE, ContextSources,
+)
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import render_batch
@@ -122,6 +124,18 @@ class GroupCollectionTests(unittest.TestCase):
             messages, _ = self.source.collect_person(self.person)
         self.assertEqual([m.text for m in messages], ['dm first'])
         self.assertNotIn('sender', messages[0].to_payload())
+
+    def test_group_messages_are_capped_so_dms_stay_in_the_window(self):
+        self.group('busy@g.us', 3)
+        for n in range(GROUP_MESSAGE_CAP + 10):
+            self.message('busy@g.us', f'group {n}', '15550100@s.whatsapp.net', ts=1790000000 + n)
+        self.message('15550100@s.whatsapp.net', 'dm', '15550100@s.whatsapp.net', ts=1780000000)
+        messages, available = self.source.collect_person(self.person)
+        groups = [m for m in messages if m.channel == MessageChannel.WHATSAPP_GROUP]
+        self.assertEqual(len(groups), GROUP_MESSAGE_CAP)
+        self.assertEqual(groups[0].text, 'group 10')  # the oldest ten are the ones dropped
+        self.assertIn('dm', [m.text for m in messages])
+        self.assertEqual(available, GROUP_MESSAGE_CAP + 11)
 
     def test_collect_persists_group_names_and_sender_using_store_names(self):
         con = open_store(store_path(self.root))
