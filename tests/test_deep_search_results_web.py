@@ -764,7 +764,7 @@ class ResultsWebTest(unittest.TestCase):
             self.assertFalse(hasattr(search.candidate(self.PERSON), "jd_fit"))
             self.assertNotIn("data-view-tab='jd-fit'", render_search_body(search))
 
-    def test_mixed_jev_and_rating_rows_are_not_compared_or_deduped_across_scales(self):
+    def test_mixed_qualification_and_rating_rows_are_not_compared_or_deduped_across_scales(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]
         current, prior = search.ponds

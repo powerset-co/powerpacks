@@ -166,7 +166,7 @@ class TeamSimilarityTest(unittest.TestCase):
                 team = json.loads((run_dir / "team.json").read_text())
                 self.assertEqual([member["name"] for member in team["members"]], ["Jordan Bravo"])
 
-    def test_only_jev_pass_candidates_are_embedded_and_saved(self):
+    def test_only_screen_pass_candidates_are_embedded_and_saved(self):
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             profile_path = run_dir / "profiles.jsonl"
