@@ -1,8 +1,8 @@
 """Screen candidates against a cleaned JD with Luna on OpenAI's Decisions API.
 
-Every hydrated candidate gets one request: the JD first and the profile last, one choice question
-for the capability rating (1-5, the Terra rubric), and a cache key per JD so the shared part can be
-reused across candidates. The qualification score is Luna's probability that the rating is 3 or
+Every hydrated candidate gets one request: the JD part, marked as the cached prefix, then the
+profile part, and one choice question for the capability rating (1-5, the Terra rubric), so every
+candidate after the first reads the JD from the prompt cache. The qualification score is Luna's probability that the rating is 3 or
 more; a candidate passes at THRESHOLD. Answers are saved per exact request, so a rerun pays only
 for new candidates. A refusal is never saved and never passes; the next run asks again.
 
@@ -11,7 +11,6 @@ Changelog:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -106,15 +105,23 @@ def profile_evidence(profile: dict, as_of: str) -> dict:
 
 
 def build_request(*, jd: str, profile: dict, as_of: str) -> dict:
-    """One Decisions request: the job before the profile, so every candidate shares the prefix."""
+    """One Decisions request: the job part, marked as the cached prefix, then the profile part.
+
+    Decisions caches up to a breakpoint inside `input`; with one JSON string the breakpoint
+    falls after the profile and nothing is ever reused (measured 2026-11-06: every call wrote
+    the cache, none read it). Marking the end of the job part lets every candidate for a JD
+    read it back. A prefix under 1,024 tokens is simply not cached.
+    """
     if not isinstance(jd, str) or not jd.strip():
         raise ValueError("Luna screening requires a cleaned JD")
     date.fromisoformat(as_of)
-    state = {"job": jd, "reference_date": as_of, "evidence_policy": EVIDENCE_POLICY,
-             "profile": profile_evidence(profile, as_of)}
-    cache_key = "powerpacks-jd-" + hashlib.sha256(jd.encode("utf-8")).hexdigest()[:16]
-    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False),
-            "questions": [QUESTION], "prompt_cache_key": cache_key}
+    job = {"job": jd, "reference_date": as_of, "evidence_policy": EVIDENCE_POLICY}
+    candidate = {"profile": profile_evidence(profile, as_of)}
+    return {"model": MODEL, "input": [{"role": "user", "content": [
+                {"type": "input_text", "text": json.dumps(job, ensure_ascii=False),
+                 "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_text", "text": json.dumps(candidate, ensure_ascii=False)}]}],
+            "questions": [QUESTION], "prompt_cache_options": {"mode": "explicit"}}
 
 
 def refused(answers: list[dict]) -> bool:
@@ -164,7 +171,9 @@ async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Pa
 
 async def choose(*, state: dict, question: dict, cache_dir: Path, version: str) -> dict:
     """One choice question over a small state, cached like the screen: the chosen answer."""
-    request = {"model": MODEL, "input": json.dumps(state, ensure_ascii=False), "questions": [question]}
+    # One request per JD: explicit mode with no breakpoint keeps it out of the prompt cache.
+    request = {"model": MODEL, "input": json.dumps(state, ensure_ascii=False), "questions": [question],
+               "prompt_cache_options": {"mode": "explicit"}}
     digest = decisions.request_digest(version, request)
     answers = await decisions.decide_all(
         {digest: request}, cache_dir, cache_only=False,

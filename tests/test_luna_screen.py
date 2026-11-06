@@ -37,7 +37,7 @@ class LunaScreenTests(unittest.TestCase):
         def respond(request: httpx.Request) -> httpx.Response:
             body = json.loads(request.content)
             self.sent.append(body)
-            name = json.loads(body["input"])["profile"]["headline"]
+            name = json.loads(body["input"][0]["content"][1]["text"])["profile"]["headline"]
             probabilities = self.ratings[name]
             if probabilities is None:
                 return httpx.Response(200, json={"answers": [{"type": "refusal", "name": "capability"}]})
@@ -72,15 +72,21 @@ class LunaScreenTests(unittest.TestCase):
                          [True, 0.3 >= luna_screen.THRESHOLD, False])
         self.assertIn("Luna rating 4", scores["a"]["evidence"])
 
-    def test_the_job_precedes_the_profile_and_one_cache_key_covers_a_jd(self) -> None:
+    def test_the_job_is_the_marked_cache_prefix_and_the_profile_follows(self) -> None:
         self.ratings = {"Ada": {"3": 1.0}, "Ben": {"3": 1.0}}
         self.screen({"a": profile("Ada"), "b": profile("Ben")})
-        self.assertEqual(len({body["prompt_cache_key"] for body in self.sent}), 1)
+        jobs = set()
         for body in self.sent:
-            self.assertEqual(list(json.loads(body["input"]))[0], "job")
-            self.assertEqual(list(json.loads(body["input"]))[-1], "profile")
-            self.assertEqual(body["model"], decisions.MODEL)
-            self.assertEqual(body["questions"], [luna_screen.QUESTION])
+            [message] = body["input"]
+            job, candidate = message["content"]
+            self.assertEqual(job["prompt_cache_breakpoint"], {"mode": "explicit"})
+            self.assertNotIn("prompt_cache_breakpoint", candidate)
+            self.assertEqual(json.loads(job["text"])["job"], JD)
+            self.assertIn("profile", json.loads(candidate["text"]))
+            self.assertEqual(body["prompt_cache_options"], {"mode": "explicit"})
+            self.assertEqual((body["model"], body["questions"]), (decisions.MODEL, [luna_screen.QUESTION]))
+            jobs.add(job["text"])
+        self.assertEqual(len(jobs), 1)
 
     def test_answers_are_reused_and_a_refusal_never_passes_or_settles(self) -> None:
         self.ratings = {"Ada": {"4": 1.0}, "Ben": None}
@@ -93,7 +99,7 @@ class LunaScreenTests(unittest.TestCase):
 
     def test_profiles_keep_their_most_recent_positions_only(self) -> None:
         request = luna_screen.build_request(jd=JD, profile=profile("Ada", positions=60), as_of=AS_OF)
-        positions = json.loads(request["input"])["profile"]["positions"]
+        positions = json.loads(request["input"][0]["content"][1]["text"])["profile"]["positions"]
         self.assertEqual(len(positions), luna_screen.MAX_POSITIONS)
         self.assertEqual(positions[-1]["title"], "Engineer 59")
 
