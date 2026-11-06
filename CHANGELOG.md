@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.55.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.2...powerpacks-v3.55.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* **whatsapp:** keep known groups in the participants cache; ask only for new ones ([#1108](https://github.com/powerset-co/powerpacks/issues/1108)) ([d021dfe](https://github.com/powerset-co/powerpacks/commit/d021dfeafa8f939b9fca37ee5d292fe6c2f9341e))
+
 ## [3.55.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.1...powerpacks-v3.55.2) (2026-11-06)
 
 
