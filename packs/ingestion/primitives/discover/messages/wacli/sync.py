@@ -39,7 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[6]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json  # noqa: E402
+from packs.ingestion.primitives.common.jsonio import now_iso, read_json, write_json  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli import binary, runtime, store_db  # noqa: E402
 from packs.ingestion.primitives.discover.messages.wacli.paths import (  # noqa: E402
     DEFAULT_GROUP_PARTICIPANTS_CACHE,
@@ -129,16 +129,24 @@ def group_participants_cache_path(store: Path) -> Path:
 
 
 def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dict[str, Any]:
+    """Participants of every group chat, into the group-participants cache.
+
+    Each group costs one `wacli groups info` process, a few seconds (578 groups
+    took 13 minutes on a daily refresh), so a group already in the cache is kept
+    as it is and only groups the cache has not seen are asked for."""
     jids = store_db.group_chat_jids(store)
     cache_path = group_participants_cache_path(store)
+    previous = read_json(cache_path, {})
+    known = previous.get("groups") if isinstance(previous, dict) and isinstance(previous.get("groups"), dict) else {}
     cache = {
         "version": 1,
         "updated_at": now_iso(),
-        "groups": {},
+        "groups": dict(known),
     }
     summary = {
         "status": "ok",
         "group_chats": len(jids),
+        "reused": sum(1 for jid in jids if jid in known),
         "refreshed": 0,
         "not_participating": 0,
         "failed": 0,
@@ -146,6 +154,8 @@ def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dic
         "cached_participants": 0,
     }
     for jid in jids:
+        if jid in known:
+            continue
         result = runtime.run_command(
             [binary.wacli_bin() or "wacli", "--store", str(store), "--json", "groups", "info", "--jid", jid],
             timeout=timeout,
@@ -156,8 +166,6 @@ def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dic
             group = GroupInfo.from_payload(result.json)
             if group:
                 cache["groups"][group.jid] = group.as_cache_entry()
-                summary["cached_groups"] += 1
-                summary["cached_participants"] += len(group.participants)
         elif "not participating" in text or "not a participant" in text:
             summary["not_participating"] += 1
         else:
@@ -166,6 +174,8 @@ def refresh_group_info(store: Path, *, timeout: int, min_interval: float) -> dic
             time.sleep(min_interval)
     if summary["failed"]:
         summary["status"] = "warning"
+    summary["cached_groups"] = len(cache["groups"])
+    summary["cached_participants"] = sum(len(group.get("participants") or []) for group in cache["groups"].values() if isinstance(group, dict))
     write_json(cache_path, cache)
     summary["cache"] = str(cache_path)
     return summary
