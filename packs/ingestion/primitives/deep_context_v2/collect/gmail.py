@@ -117,7 +117,8 @@ def person_messages(slots: str) -> str:
 
 
 def open_msgvault(path: Path) -> sqlite3.Connection:
-    con = sqlite3.connect(f"file:{path.expanduser().resolve()}?mode=ro", uri=True)
+    # Collect's workers open one each and the run closes them all from its own thread.
+    con = sqlite3.connect(f"file:{path.expanduser().resolve()}?mode=ro", uri=True, check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 

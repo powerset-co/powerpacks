@@ -176,27 +176,73 @@ def existing_whatsapp_direct_jids(conn: sqlite3.Connection, member_jids: Iterabl
     return [str(row["chat_jid"]) for row in rows]
 
 
+class WhatsAppGroups:
+    """The store's groups and who is in each, read once for a whole run. Resolving them per person
+    (resolve_whatsapp_groups) scanned every group message once for every person."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.projection = _message_projection(conn)
+        self.counts = store_db.group_participant_counts(conn)
+        self.titles: dict[str, str] = {}
+        for row in [*store_db.chat_rows(conn), *store_db.group_rows(conn)]:
+            jid, title = str(row["jid"] or ""), str(row["name"] or "")
+            if jid.endswith("@g.us") and title and title != jid:
+                self.titles[jid] = title
+        # sender jid -> (store order, group jid, title) per distinct group row it spoke in
+        self.spoke_in: dict[str, list[tuple[int, str, str]]] = {}
+        if "chat_jid" in store_db.table_columns(conn, "messages"):
+            message_columns = store_db.table_columns(conn, "messages")
+            chat_name = "chat_name" if "chat_name" in message_columns else "NULL AS chat_name"
+            sender = "sender_jid" if "sender_jid" in message_columns else "NULL AS sender_jid"
+            rows = conn.execute(f"SELECT DISTINCT chat_jid, {chat_name}, {sender} FROM messages WHERE chat_jid LIKE '%@g.us'")
+            for order, row in enumerate(rows):
+                jid = str(row["chat_jid"] or "")
+                if jid and row["sender_jid"] is not None:
+                    title = self.titles.get(jid) or str(row["chat_name"] or jid)
+                    self.spoke_in.setdefault(row["sender_jid"], []).append((order, jid, title))
+        # user jid -> groups it is a listed participant of, in store order
+        self.listed_in: dict[str, list[str]] = {}
+        for row in store_db.group_participant_rows(conn):
+            jid = str(row["group_jid"] or "")
+            if jid:
+                self.listed_in.setdefault(row["user_jid"], []).append(jid)
+
+    def groups_for(self, member_jids: Iterable[str]) -> dict[str, str]:
+        """Group jid -> title for the groups a member jid spoke in or is listed in; the same set and
+        titles resolve_whatsapp_groups(conn, (), member_jids) returns."""
+        spoken: dict[str, tuple[int, str]] = {}
+        for member in set(member_jids):
+            for order, jid, title in self.spoke_in.get(member, ()):
+                if jid not in spoken or order < spoken[jid][0]:
+                    spoken[jid] = (order, title)
+        found = {jid: title for jid, (_order, title) in spoken.items()}
+        for member in set(member_jids):
+            for jid in self.listed_in.get(member, ()):
+                found.setdefault(jid, self.titles.get(jid) or jid)
+        return found
+
+
 def query_whatsapp_small_group_messages(
     conn: sqlite3.Connection,
     member_jids: Iterable[str],
     *,
     max_group_size: int,
     limit: int,
+    groups: WhatsAppGroups | None = None,
 ) -> list[sqlite3.Row]:
-    """Newest rows across the member's groups with a known, bounded participant roster."""
-    projection = _message_projection(conn)
-    if projection is None:
+    """Newest rows across the member's groups with a known, bounded participant roster. `groups` is
+    the store's group index when the caller reads it once for many people."""
+    groups = groups or WhatsAppGroups(conn)
+    if groups.projection is None:
         return []
-    counts = store_db.group_participant_counts(conn)
-    groups = resolve_whatsapp_groups(conn, (), member_jids)
     rows: list[sqlite3.Row] = []
-    for group in groups:
-        size = counts.get(group["jid"])
+    for jid, title in groups.groups_for(member_jids).items():
+        size = groups.counts.get(jid)
         if size is None or size > max_group_size:
             continue
         rows.extend(conn.execute(
-            f"SELECT {projection}, sender_jid, ? AS group_name FROM messages WHERE chat_jid = ?",
-            (group["title"], group["jid"]),
+            f"SELECT {groups.projection}, sender_jid, ? AS group_name FROM messages WHERE chat_jid = ?",
+            (title, jid),
         ).fetchall())
     rows.sort(key=lambda row: (_message_content_key(row), row["group_name"], row["sender_jid"] or ""), reverse=True)
     return rows[:limit]
