@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { Check, ChevronRight, TriangleAlert, X } from "lucide-react"
 
 import { EmptyState, Page, Select, Spinner } from "@/components/shared"
@@ -19,19 +19,7 @@ import type {
   SourceRun,
 } from "@/types/refresh"
 
-import {
-  added,
-  clock,
-  lower,
-  ordinal,
-  people,
-  SOURCE_TITLE,
-  stamp,
-  took,
-  trigger,
-  WEEKDAYS,
-  when,
-} from "./format"
+import { added, clock, lower, ordinal, SOURCE_TITLE, stamp, took, trigger, WEEKDAYS, when } from "./format"
 import { useRefresh } from "./useRefresh"
 
 const STATUS: Readonly<
@@ -91,7 +79,10 @@ export function RefreshPage() {
   const refresh = useRefresh()
   // The run whose details are open; undefined until one is clicked (the latest opens by itself
   // when it needs you).
-  const [openId, setOpenId] = useState<number | null | undefined>(undefined)
+  // A notice can name a run (?run=id) to open: the one it is about, not the latest.
+  const [params] = useSearchParams()
+  const linked = Number(params.get("run")) || undefined
+  const [openId, setOpenId] = useState<number | null | undefined>(linked)
   const settings = useMutation({
     mutationFn: saveRefreshSettings,
     onSuccess: (next) => client.setQueryData(REFRESH_KEY, next),
@@ -348,47 +339,34 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
   )
 }
 
+/** One line: when it started, how long it took, and the people it added. */
+function summary(run: RefreshRun): string {
+  const delta =
+    run.people_before === null || run.people_after === null ? 0 : run.people_after - run.people_before
+  return [
+    `Started ${stamp(run.started_at)}`,
+    `Duration ${run.finished_at ? took(run) : "still running"}`,
+    delta > 0 ? `People Added ${delta.toLocaleString()}` : "No Change",
+  ].join(" - ")
+}
+
 function RunDetail({ run }: { run: RefreshRun }) {
-  const rows: [string, string][] = [
-    ["Started", stamp(run.started_at)],
-    ["Took", run.finished_at ? took(run) : "Still running"],
-    ...run.sources.map((source): [string, string] => [
-      SOURCE_TITLE[source.source],
-      `${SOURCE_STATUS[source.status].label}${
-        source.accounts.length ? ` · ${source.accounts.join(", ")}` : ""
-      }`,
-    ]),
-    ["People", people(run)],
-    ["Search", run.index_rebuilt ? "Rebuilt" : "No change"],
-  ]
-  if (run.message) rows.push(["Last step", run.message])
   return (
-    <article aria-label="Run details" className="grid grid-cols-2 gap-4 px-8 py-3 max-[820px]:grid-cols-1">
-      <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 self-start text-xs">
-        {rows.map(([name, value]) => (
-          <div key={name} className="contents">
-            <dt className="text-faint">{name}</dt>
-            <dd className="m-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <div className="flex flex-col gap-2">
-        {run.problems.length === 0 ? (
-          <p className="m-0 text-xs text-muted-foreground">
-            {run.status === "running" ? "Running…" : "Nothing needs you."}
-          </p>
-        ) : (
-          run.problems.map((problem) => (
-            <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5 text-xs">
-              <b className="block">{problem.title}</b>
-              {problem.detail} {problem.source === "gmail" ? null : <ProblemLink problem={problem} />}
-            </div>
-          ))
-        )}
-        {run.error && !run.problems.some((problem) => problem.detail === run.error) && (
-          <p className="m-0 text-xs break-words text-bad">{run.error}</p>
-        )}
-      </div>
+    <article aria-label="Run details" className="flex flex-col gap-2 px-8 py-3 text-xs">
+      <p className="m-0">{summary(run)}</p>
+      {run.problems.map((problem) => (
+        <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5">
+          <b className="block">{problem.title}</b>
+          {/* Gmail reconnects at the top; a refresh problem is this run, already open. */}
+          {problem.detail}{" "}
+          {problem.source === "gmail" || problem.source === "refresh" ? null : (
+            <ProblemLink problem={problem} />
+          )}
+        </div>
+      ))}
+      {run.error && !run.problems.some((problem) => problem.detail === run.error) && (
+        <p className="m-0 break-words text-bad">{run.error}</p>
+      )}
     </article>
   )
 }

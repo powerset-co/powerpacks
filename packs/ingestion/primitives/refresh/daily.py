@@ -29,6 +29,7 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-05: a stopped refresh keeps the failed step's own line with the run, and links to that run.
   2026-11-05: a stopped refresh points at Scheduled tasks, not Accounts' import view, in its own words.
   2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily; a missed
     run catches up as soon as it can unless the next one is within 6 hours; new schedules are
@@ -484,7 +485,7 @@ def renew_gmail() -> None:
 
 
 def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[str, str],
-                   linkedin: bool, imessage: bool, whatsapp: bool) -> list[Problem]:
+                   linkedin: bool, imessage: bool, whatsapp: bool, run_id: int | None = None) -> list[Problem]:
     """What the person must do, from each connected source's sign-in after the run and the run's record."""
     found: list[Problem] = []
     expired = sorted(email for email, state in gmail.items() if state in ("missing_token", "reauthorization_required"))
@@ -507,12 +508,16 @@ def problems_after(connected: list[SourceName], manifest: dict, *, gmail: dict[s
                              "Sign in to LinkedIn", ACCOUNTS_HREF + "linkedin"))
     if manifest.get("status") in ("failed", "waiting"):
         stopped = manifest["status"] == "failed"
-        message = str(manifest.get("message") or "")
+        # What stopped this run, saved with it: the failed step's own line, else the record's.
+        failed_steps = [step for step in (manifest.get("steps") or {}).values()
+                        if isinstance(step, dict) and step.get("status") == "failed" and step.get("message")]
+        message = str(failed_steps[0]["message"] if failed_steps else manifest.get("message") or "")
         # The install record's generic stop line speaks of installing; a refresh says it in its own words.
         if not message or message.startswith("Installation stopped"):
             message = STOPPED_DETAIL if stopped else "Open Scheduled tasks to see what it needs."
         found.append(Problem("refresh", "The refresh stopped" if stopped else "The refresh needs you",
-                             message, "Open Scheduled tasks", REFRESH_HREF))
+                             message, "Open Scheduled tasks",
+                             REFRESH_HREF if run_id is None else f"{REFRESH_HREF}?run={run_id}"))
     return found
 
 
@@ -585,7 +590,8 @@ def run_once(root: Path, run_id: int) -> Run:
     signins = gmail_signins()
     after = signed_in(signins, sources=tuple(connected))
     problems = problems_after(connected, manifest, gmail=signins if "gmail" in connected else {},
-                              linkedin=after.linkedin, imessage=after.imessage, whatsapp=after.whatsapp)
+                              linkedin=after.linkedin, imessage=after.imessage, whatsapp=after.whatsapp,
+                              run_id=run_id)
     sources = sources_after(connected, manifest, ready.healthy_mailboxes if ready else ())
     failed = manifest.get("status") == "failed" or bool(error)
     status: Status = "failed" if failed else "needs_you" if problems else "ok"

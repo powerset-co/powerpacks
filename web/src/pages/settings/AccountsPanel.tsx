@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 import { ChevronRight, TriangleAlert } from "lucide-react"
 import { CheckIcon, Spinner } from "@/components/shared"
 import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
@@ -172,25 +172,16 @@ export function AccountsPanel({
           <div className="mx-auto flex w-full max-w-[410px] flex-col gap-6">
             <div>
               <h1 className="m-0 text-[24px] font-semibold tracking-tight">Accounts</h1>
-              {/* What it does, then how your data is handled and when it updates: one statement. */}
               <p className="mb-0 mt-2 text-sm text-muted-foreground">
-                Connect the apps you talk to people on. Powerpacks finds who you know and makes them
-                searchable.
-              </p>
-              <p className="mb-0 mt-1 text-sm text-muted-foreground">
-                Your messages stay on this Mac and{" "}
+                Your people, in one place. See how your data is processed{" "}
                 <button
                   type="button"
-                  aria-label="How your data is handled"
+                  aria-label="See how your data is processed here"
                   className="cursor-pointer border-0 bg-transparent p-0 text-primary underline-offset-2 hover:underline"
                   onClick={() => setHowItWorks(true)}
                 >
-                  only short snippets leave it
+                  here
                 </button>
-                . It updates{" "}
-                <Link to="/tasks" className="text-primary no-underline hover:underline">
-                  {accounts?.scheduled ?? "when you turn on the scheduled sync"}
-                </Link>
                 .
               </p>
             </div>

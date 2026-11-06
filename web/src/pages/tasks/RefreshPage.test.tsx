@@ -62,10 +62,10 @@ const state: RefreshState = {
   runs: [run],
 }
 
-function mount(element: React.ReactElement) {
+function mount(element: React.ReactElement, path = "/tasks") {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter>{element}</MemoryRouter>
+      <MemoryRouter initialEntries={[path]}>{element}</MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -195,8 +195,9 @@ it("lists runs with people added and what to do", async () => {
   mount(<RefreshPage />)
   expect(await screen.findByText("+14")).toBeTruthy()
   expect(screen.getByText("· Scheduled · caught up 2 days")).toBeTruthy()
-  // The latest run needs you, so its details are open.
-  expect(screen.getByText("Rebuilt")).toBeTruthy()
+  // The latest run needs you, so its details are open: one line, then what to do.
+  expect(screen.getByText(/ - Duration 11 min - People Added 14$/)).toBeTruthy()
+  expect(screen.queryByText("Nothing needs you.")).toBeNull()
   // A skipped source is a yellow warning badge, a synced one a green check; no slow native tooltip.
   expect(screen.getByLabelText("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
   expect(screen.getByLabelText("WhatsApp: Synced").dataset.sourceStatus).toBe("synced")
@@ -248,4 +249,12 @@ it("formats times the way the page reads", () => {
   const now = new Date(2026, 10, 3, 12)
   expect(when(new Date(2026, 10, 3, 6).toISOString(), now)).toBe("Today 6:00 AM")
   expect(when(new Date(2026, 10, 4, 6).toISOString(), now)).toBe("Tomorrow 6:00 AM")
+})
+
+it("opens the run a notice names, not the latest", async () => {
+  const older = { ...run, id: 3, status: "failed" as const, problems: [] }
+  serve(() => ({ ...state, runs: [{ ...run, status: "ok" as const, problems: [] }, older] }))
+  mount(<RefreshPage />, "/tasks?run=3")
+  expect(await screen.findByRole("article", { name: "Run details" })).toBeTruthy()
+  expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1)
 })
