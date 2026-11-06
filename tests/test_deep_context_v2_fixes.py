@@ -102,6 +102,30 @@ class GmailBindingTests(unittest.TestCase):
         self.assertEqual([r["subject"] for r in limited], ["owner reply"])
         self.assertEqual(absent, [])
 
+    def test_recent_mail_orders_same_second_duplicates_by_body(self) -> None:
+        """Bodies are read after the newest rows are picked, and still break ties among them."""
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE participants (id INTEGER, email_address TEXT, display_name TEXT DEFAULT '');
+            CREATE TABLE conversations (id TEXT, source_conversation_id TEXT);
+            CREATE TABLE messages (id INTEGER, sender_id INTEGER, sent_at TEXT, received_at TEXT,
+                internal_date TEXT, conversation_id TEXT, subject TEXT, snippet TEXT,
+                message_type TEXT, deleted_at TEXT, deleted_from_source_at TEXT, source_message_id TEXT DEFAULT '');
+            CREATE TABLE message_bodies (message_id INTEGER, body_text TEXT);
+            CREATE TABLE message_recipients (message_id INTEGER, participant_id INTEGER);
+            INSERT INTO participants (id, email_address) VALUES (1, 'jordan@example.com');
+            INSERT INTO messages (id, sender_id, sent_at, conversation_id, subject, snippet, message_type) VALUES
+                (1, 1, '2026-10-01T10:00:00Z', 't1', 'same', 'same', 'email'),
+                (2, 1, '2026-10-01T10:00:00Z', 't1', 'same', 'same', 'email'),
+                (3, 1, '2026-10-02T10:00:00Z', 't2', 'newer', 'newer', 'email');
+            INSERT INTO message_bodies VALUES (1, 'alpha body'), (2, 'beta body');
+        """)
+        rows = fetch_recent_rows(conn, "jordan@example.com", 10)
+        self.assertEqual([r["message_id"] for r in rows], [3, 2, 1])
+        self.assertEqual([r["body_text"] for r in rows], [None, "beta body", "alpha body"])
+
 
 class OwnerCLITests(unittest.TestCase):
     def test_cached_owner_cli_persists_row_visible_to_independent_connection(self) -> None:
