@@ -718,7 +718,7 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(result['steps']['gmail_import']['status'], 'completed')
         self.assert_preserved()
 
-    def test_gmail_new_account_or_refresh_runs_exact_bounded_sync(self):
+    def test_gmail_new_account_runs_exact_bounded_sync_and_refresh_resumes(self):
         current = import_common.ImportManifest.from_payload('gmail', {
             'status': 'completed', 'input': {'accounts': [{'account_email': 'old@example.com'}]},
         })
@@ -732,7 +732,8 @@ class SourceOnboardingTests(unittest.TestCase):
                 result = SourceOnboarding(self.root, sources=('gmail',),
                                           gmail_emails=('casey@example.com',), sync_after='2023-01-01',
                                           refresh=refresh).run()
-            init.assert_called_once_with(account_emails=['casey@example.com'], unsynced_emails=(), sync_after='2023-01-01', on_progress=ANY)
+            init.assert_called_once_with(account_emails=['casey@example.com'], unsynced_emails=(),
+                                         sync_after='' if refresh else '2023-01-01', on_progress=ANY)
             self.assertEqual(result['step'], 'deep_context')
         self.assert_preserved()
 
