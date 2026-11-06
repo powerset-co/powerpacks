@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.55.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.5...powerpacks-v3.55.6) (2026-11-06)
+
+
+### Bug Fixes
+
+* **indexing:** a company whose logo link expired is fetched live, past the gateway's year-old copy ([#1115](https://github.com/powerset-co/powerpacks/issues/1115)) ([2d618ea](https://github.com/powerset-co/powerpacks/commit/2d618ea4d680d065d53442981562e2d6aaa8d6bc))
+
 ## [3.55.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.4...powerpacks-v3.55.5) (2026-11-06)
 
 
