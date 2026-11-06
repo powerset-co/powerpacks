@@ -25,9 +25,10 @@ from packs.search.primitives.llm_rerank_candidates import terra
 MODEL = decisions.MODEL
 SCORE_TYPE = "qualification_score"
 REQUEST_VERSION = "luna-capability-screen-v1-20261106"
-# Pass when Luna gives a 3+ rating at least this probability. Set below 0.5 for recall: the
-# screen only decides who the written judges read, and they make the final call.
-THRESHOLD = 0.35
+# Pass when Luna gives a 3+ rating at least this probability. Measured 2026-11-06 on 1,750
+# Terra ratings: 0.2 keeps 91% of Terra's 3+ (Jev was cut at 93% recall) and passes 38%; 0.35
+# kept 76%. The screen only decides who the written judges read; they make the final call.
+THRESHOLD = 0.2
 PASSING = ("3", "4", "5")
 # The 99.5th percentile of retrieved profiles; a career-long list of board seats stays bounded.
 MAX_POSITIONS = 40
