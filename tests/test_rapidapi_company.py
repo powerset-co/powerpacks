@@ -252,6 +252,23 @@ class FailedLookupTests(unittest.TestCase):
             self.assertEqual(result, {"data": {"name": "Acme"}})
             self.assertEqual(json.loads((cache_dir / "123.json").read_text(encoding="utf-8")), {"data": {"name": "Acme"}})
 
+    def test_a_company_gone_for_good_is_cached_and_never_bought_again(self) -> None:
+        gone_id = {"data": None, "message": "This company is no longer exists. Not valid LinkedIn profile", "success": False}
+        gone_slug = {"data": None, "message": "Not valid LinkedIn company username provided", "success": False}
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            conns = [_fake_connection(_fake_response(200, json.dumps(gone_id))),
+                     _fake_connection(_fake_response(200, json.dumps(gone_slug)))]
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", side_effect=conns):
+                rapidapi_company.fetch_company_details_batch(["123"], api_key="test-key", cache_dir=cache_dir)
+                rapidapi_company.fetch_company_details_batch_by_slug(["gone"], api_key="test-key", cache_dir=cache_dir)
+            # Readers still see no payload; the next run asks for neither.
+            self.assertEqual(rapidapi_company.load_cached_company_details(["123"], cache_dir=cache_dir), {})
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection") as conn_cls:
+                self.assertEqual(rapidapi_company.fetch_company_details_batch(["123"], api_key="test-key", cache_dir=cache_dir), {})
+                self.assertEqual(rapidapi_company.fetch_company_details_batch_by_slug(["gone"], api_key="test-key", cache_dir=cache_dir), {})
+            conn_cls.assert_not_called()
+
 
 class CompanyLogoTests(unittest.TestCase):
     def test_prefers_the_200px_logo_then_images_logo(self) -> None:

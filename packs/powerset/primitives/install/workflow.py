@@ -5,6 +5,8 @@ and the LinkedIn login continue in this process; missing setup or failed
 primitives stop the flow. It never starts enrichment, provider calls, or uploads.
 
 Changelog:
+  2026-11-06: a refresh syncs each Gmail mailbox from its own last sync (msgvault's resume marker,
+    as the Accounts Sync button does) instead of rescanning the setup's year with --noresume.
   2026-11-04: under the desktop app, Gmail syncs the mailboxes signed in now even when another's
       sign-in expired; the expired one is only re-read from the mail already archived, so its
       contacts stay, and it never opens Google's consent mid-run.
@@ -295,8 +297,10 @@ class SourceOnboarding:
             return True
         self._write("gmail.syncing")
         count = GmailCount()
+        # A refresh syncs each mailbox from its own last sync; the window is the first import's.
         result = GmailDiscovery(
-            account_emails=list(emails), unsynced_emails=self.gmail_unsynced, sync_after=self.sync_after,
+            account_emails=list(emails), unsynced_emails=self.gmail_unsynced,
+            sync_after="" if self.refresh else self.sync_after,
             on_progress=lambda email, read, total: self._write("gmail.syncing.count", **count.add(email, read, total),
                                                                details=count.add(email, read, total))).run()
         if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):

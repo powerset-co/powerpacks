@@ -1,14 +1,16 @@
 """Process imported message sources: deep context, enrichment, Modal indexing and validation.
 
 Changelog:
+  2026-11-06: the index is rebuilt on Modal only when the people changed apart from their message
+    counts; new counts alone are written into the local index (write_interactions).
   2026-10-29: LinkedIn setup moves to linkedin_setup.py; this run processes message imports.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import time
 import traceback
@@ -16,6 +18,9 @@ from contextlib import chdir, closing, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Callable
 
+import duckdb
+
+from packs.indexing.lib.people import index_fingerprint, interaction_rows
 from packs.indexing.primitives.validate_search_index.validate_search_index import validate as validate_search_index
 from packs.ingestion.primitives.common.jsonio import read_json
 from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
@@ -37,6 +42,24 @@ _MODAL = ["uv", "run", "--project", ".", "python", "packs/indexing/modal/linkedi
 _FOLLOW_UP_STEPS = (InstallStep.CREDENTIALS.value, InstallStep.ENRICH.value)
 _COUNT_SECONDS = 2.0
 
+
+
+def write_interactions(duckdb_path: Path, people: Path) -> dict:
+    """Write each person's message counts from `people` into the local index's profiles, the one table
+    that holds them, on a copy that then replaces the index (as the download does)."""
+    rows = interaction_rows(people)
+    working = duckdb_path.with_name(duckdb_path.name + ".tmp")
+    shutil.copyfile(duckdb_path, working)
+    with closing(duckdb.connect(str(working))) as conn:
+        conn.execute("CREATE TEMP TABLE counts (id VARCHAR, interaction_counts JSON, total_interactions BIGINT, "
+                     "last_interaction VARCHAR)")
+        conn.executemany("INSERT INTO counts VALUES (?, ?, ?, ?)", rows)
+        updated = conn.execute(
+            "UPDATE local_person_profiles AS p SET interaction_counts = c.interaction_counts, "
+            "total_interactions = c.total_interactions, last_interaction = c.last_interaction "
+            "FROM counts AS c WHERE p.id = c.id").fetchone()[0]
+    working.replace(duckdb_path)
+    return {"status": "completed", "people": len(rows), "updated": updated}
 
 class _Stopped(Exception):
     pass
@@ -174,14 +197,18 @@ class ProcessingOnboarding:
         self._build_index(Path(result["people_csv"]))
 
     def _build_index(self, people: Path) -> None:
-        """The Modal index of `people` unless the index on disk was built from this very file (the
-        fingerprint the download wrote beside it), then the search check."""
-        fingerprint = hashlib.sha256(people.read_bytes()).hexdigest()
+        """The Modal index of `people` unless the index on disk was built from the same people apart
+        from their message counts (the fingerprint the download wrote beside it): then those counts
+        are written into it here. Then the search check."""
+        fingerprint = index_fingerprint(people)
         built = self.index / "people.sha256"
-        if (not (self.index / "manifest.json").is_file() or not (self.index / "local-search.duckdb").is_file()
+        duckdb_path = self.index / "local-search.duckdb"
+        if (not (self.index / "manifest.json").is_file() or not duckdb_path.is_file()
                 or not built.is_file() or built.read_text(encoding="utf-8").strip() != fingerprint):
             command = index_command(self.data_root, people)
             self._run(shlex.join(command), lambda: self._modal(command), "index.building")
+        else:
+            self._run("index-interactions", lambda: write_interactions(duckdb_path, people), "index.preparing")
         self._write("index.done")
         validation = self._run("validate-search-index", lambda: validate_search_index(
                                self.index / "local-search.duckdb", people), "validate.checking")

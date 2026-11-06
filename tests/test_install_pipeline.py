@@ -6,7 +6,6 @@ Changelog:
 - 2026-10-07: v2 stages (load, collect, synthesize, dedupe, worth, enrich, realize); the v1 seed,
   readiness, profile-prefetch, workflow-state and wacli tests are gone with those stages.
 """
-import hashlib
 import io
 import json
 import os
@@ -14,10 +13,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import duckdb
 
 from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect
 from packs.ingestion.primitives.deep_context_v2.db import queries, store
@@ -28,8 +29,9 @@ from packs.ingestion.primitives.deep_context_v2.enrich.enrich import Enrich
 from packs.ingestion.primitives.deep_context_v2.import_load.load import ImportLoad
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import Synthesize
 from packs.ingestion.primitives.deep_context_v2.worth.worth import Worth
+from packs.indexing.lib.people import index_fingerprint, interaction_rows
 from packs.powerset.primitives.install import pipeline
-from packs.powerset.primitives.install.pipeline import ProcessingOnboarding
+from packs.powerset.primitives.install.pipeline import ProcessingOnboarding, write_interactions
 from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 
@@ -68,6 +70,7 @@ class InstallPipelineTests(unittest.TestCase):
             "build_owner": lambda data_root, url, emails: self.native("owner", url=url, emails=emails),
             "realize": self.realize,
             "validate_search_index": lambda *args, **kwargs: self.native("search-validate"),
+            "write_interactions": lambda duckdb_path, people: self.native("index-interactions"),
         }
         for name, operation in functions.items():
             mocked = patch.object(pipeline, name, side_effect=operation)
@@ -145,7 +148,7 @@ class InstallPipelineTests(unittest.TestCase):
             # The download writes the indexed file's fingerprint beside the index (linkedin_modal_pipeline).
             argv = kwargs["argv"]
             people = Path(argv[argv.index("--people-csv") + 1])
-            self.write(self.index / "people.sha256", hashlib.sha256(people.read_bytes()).hexdigest())
+            self.write(self.index / "people.sha256", index_fingerprint(people))
         elif command == "search-validate":
             payload = {"status": self.validation_status, "total_people": 1,
                        "summary": "Search index ready: 1 people searchable."}
@@ -324,6 +327,39 @@ class InstallPipelineTests(unittest.TestCase):
         node.run = lambda: Manifest("worth", "failed", "", "", {}, "synthetic failure")
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             _stage("worth", node)
+
+    def test_new_message_counts_alone_are_written_locally_without_a_rebuild(self):
+        self.csv = "id,full_name,interaction_counts,last_interaction\nsynthetic-jordan,Jordan Bravo,{},\n"
+        self.run_pipeline()
+        self.calls.clear()
+        self.csv = ('id,full_name,interaction_counts,last_interaction\n'
+                    'synthetic-jordan,Jordan Bravo,"{""gmail"": 3}",2026-11-06T12:00:00+00:00\n')
+        self.run_pipeline()
+        self.assertFalse(self.indexed())
+        self.assertTrue(self.did("index-interactions"))
+        self.calls.clear()
+        self.csv = ('id,full_name,interaction_counts,last_interaction\n'
+                    'synthetic-jordan,Jordan B. Bravo,"{""gmail"": 3}",2026-11-06T12:00:00+00:00\n')
+        self.run_pipeline()
+        self.assertTrue(self.indexed())
+        self.assertFalse(self.did("index-interactions"))
+
+    def test_write_interactions_sets_the_profile_counts(self):
+        people = self.root / "people.csv"
+        people.write_text('id,full_name,interaction_counts,last_interaction\n'
+                          'synthetic-jordan,Jordan Bravo,"{""imessage"": 2, ""gmail"": 3}",2026-11-06T12:00:00+00:00\n')
+        [(person_id, *_)] = interaction_rows(people)
+        index = self.root / "local-search.duckdb"
+        with closing(duckdb.connect(str(index))) as conn:
+            conn.execute("CREATE TABLE local_person_profiles (id VARCHAR, interaction_counts JSON, "
+                         "total_interactions BIGINT, last_interaction VARCHAR)")
+            conn.execute("INSERT INTO local_person_profiles VALUES (?, '{}', 0, '')", [person_id])
+        # The module's own function: setUp patches pipeline.write_interactions for the runs.
+        self.assertEqual(write_interactions(index, people), {"status": "completed", "people": 1, "updated": 1})
+        with closing(duckdb.connect(str(index), read_only=True)) as conn:
+            row = conn.execute("SELECT interaction_counts::VARCHAR, total_interactions, last_interaction "
+                               "FROM local_person_profiles").fetchone()
+        self.assertEqual(row, ('{"gmail": 3, "imessage": 2}', 5, "2026-11-06T12:00:00+00:00"))
 
     def test_completed_index_resumes_without_rebuild_and_revalidates(self):
         self.run_pipeline()
