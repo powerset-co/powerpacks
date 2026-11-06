@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -310,9 +311,13 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             self.assertFalse(uncached_row.get("founded_year"))
 
     def test_paid_run_fetches_only_companies_without_a_cached_payload(self) -> None:
-        # Four corpus-known companies: a cached payload without a logo (free, left
+        # Six corpus-known companies: a cached payload without a logo (free, left
         # alone), one whose people.csv row already carries a logo (never bought),
-        # a cached failure and a company never fetched (the two network calls).
+        # a cached failure, a company never fetched and a cached payload whose logo
+        # link expired (the three network calls), and a row whose own logo link
+        # expired while its cached payload's is live (no call; the payload's logo).
+        past = int(time.time()) - 86400
+        future = int(time.time()) + 86400
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             input_path = root / "input.jsonl"
@@ -325,12 +330,17 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 {"company_urn": "urn:li:company:2", "company_name": "Failed Co", "rapidapi_company_id": "2"},
                 {"company_urn": "urn:li:company:3", "company_name": "Absent Co", "rapidapi_company_id": "3"},
                 {"company_urn": "urn:li:company:4", "company_name": "Logo Co", "rapidapi_company_id": "4", "logo_url": "https://x/own.png"},
+                {"company_urn": "urn:li:company:5", "company_name": "Stale Co", "rapidapi_company_id": "5"},
+                {"company_urn": "urn:li:company:6", "company_name": "Row Stale Co", "rapidapi_company_id": "6", "logo_url": f"https://media.licdn.com/x/row?e={past}"},
             ])
             base_artifact = {"entity_types": ["venture_backed_startup"], "sector_types": ["ai_ml"], "doc2query": ["ai company"],
                              "d2q_text": "ai company", "word_text": "ai", "confidence_score": 0.9}
-            self._write_jsonl(artifact_path, [{**base_artifact, "company_name": name, "semantic_text": name} for name in ("Plain Co", "Failed Co", "Absent Co", "Logo Co")])
+            self._write_jsonl(artifact_path, [{**base_artifact, "company_name": name, "semantic_text": name}
+                                              for name in ("Plain Co", "Failed Co", "Absent Co", "Logo Co", "Stale Co", "Row Stale Co")])
             (cache_dir / "1.json").write_text(json.dumps({"success": True, "data": {"staffCount": 7, "logos": [], "Images": {"logo": ""}}}), encoding="utf-8")
             (cache_dir / "2.json").write_text(json.dumps({"success": False, "data": None, "message": "The request failed. You will not be charged for this request"}), encoding="utf-8")
+            (cache_dir / "5.json").write_text(json.dumps({"success": True, "data": {"staffCount": 5, "logos": [{"url": f"https://media.licdn.com/x/old?e={past}", "width": 200}]}}), encoding="utf-8")
+            (cache_dir / "6.json").write_text(json.dumps({"success": True, "data": {"staffCount": 6, "logos": [{"url": f"https://media.licdn.com/x/live?e={future}", "width": 200}]}}), encoding="utf-8")
 
             def fetch(cid, **_kwargs):
                 return {"success": True, "data": {"logos": [{"url": f"https://x/{cid}.png", "width": 200}]}}
@@ -346,12 +356,14 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                     force=False, stop_after_chunks=None,
                 ))
             self.assertEqual(manifest["status"], "completed")
-            self.assertEqual(sorted(call.args[0] for call in fetched.call_args_list), ["2", "3"])
+            self.assertEqual(sorted(call.args[0] for call in fetched.call_args_list), ["2", "3", "5"])
             rows = {row["company_urn"]: row for line in output_path.read_text(encoding="utf-8").splitlines() for row in [json.loads(line)]}
             self.assertEqual((rows["urn:li:company:1"]["headcount"], rows["urn:li:company:1"]["logo_url"]), (7, ""))
             self.assertEqual(rows["urn:li:company:2"]["logo_url"], "https://x/2.png")
             self.assertEqual(rows["urn:li:company:3"]["logo_url"], "https://x/3.png")
             self.assertEqual(rows["urn:li:company:4"]["logo_url"], "https://x/own.png")
+            self.assertEqual(rows["urn:li:company:5"]["logo_url"], "https://x/5.png")
+            self.assertEqual((rows["urn:li:company:6"]["headcount"], rows["urn:li:company:6"]["logo_url"]), (6, f"https://media.licdn.com/x/live?e={future}"))
 
     def test_rapidapi_context_joins_by_company_id_not_name(self) -> None:
         # Two companies share a name but not a RapidAPI id; each gets its own payload.

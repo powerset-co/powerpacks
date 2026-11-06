@@ -1,7 +1,8 @@
 """Fetch company details through the Powerset gateway or direct RapidAPI.
 
 Results are cached to disk under a configurable directory so repeated
-pipeline runs don't re-fetch.
+pipeline runs don't re-fetch. A cached payload is bought again for one reason:
+its logo link (LinkedIn's CDN, ``e=<unix seconds>``) has expired.
 
 Usage:
     from packs.indexing.primitives.enrich_companies_checkpointed.rapidapi_company import fetch_company_details
@@ -13,6 +14,7 @@ from __future__ import annotations
 import concurrent.futures
 import http.client
 import json
+import re
 import sys
 import os
 import random
@@ -60,6 +62,27 @@ def _cached_gone(company_id: str, cache_dir: str | Path | None = None) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(data, dict) and _gone(data)
+
+
+# LinkedIn's CDN logo links carry their expiry: ``e=<unix seconds>``, about two months after the
+# payload was fetched. Past it the image answers 403, so the link is no logo at all.
+_LOGO_EXPIRY = re.compile(r"[?&]e=(\d+)")
+
+
+def live_logo_url(url: Any) -> str:
+    """``url`` while its link still works; empty for no url or an expired one."""
+    text = str(url or "").strip()
+    match = _LOGO_EXPIRY.search(text)
+    if match and int(match.group(1)) < time.time():
+        return ""
+    return text
+
+
+def logo_expired(response: dict[str, Any]) -> bool:
+    """Whether a payload's logo link has expired: the one reason a cached payload is bought again."""
+    data = response.get("data", response)
+    logo = company_logo_url(data) if isinstance(data, dict) else ""
+    return bool(logo) and not live_logo_url(logo)
 
 
 def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
@@ -137,7 +160,7 @@ def fetch_company_details(
     4xx responses (e.g. 400, 404) are permanent and returned immediately.
     """
     cached = _read_cache(company_id, cache_dir)
-    if cached is not None:
+    if cached is not None and not logo_expired(cached):
         return cached
 
     config = LinkedInApiConfig.resolve(api_key or None)
@@ -205,7 +228,8 @@ def fetch_company_details_batch(
     # Serve cache hits immediately, collect misses for network fetch.
     unique_ids = list(dict.fromkeys(company_ids))
     results = _read_cached_values(unique_ids, cache_key=lambda cid: cid, cache_dir=cache_dir)
-    need_fetch = [cid for cid in unique_ids if cid not in results and not _cached_gone(cid, cache_dir)]
+    need_fetch = [cid for cid in unique_ids
+                  if (cid not in results or logo_expired(results[cid])) and not _cached_gone(cid, cache_dir)]
 
     if not need_fetch:
         return results
@@ -262,7 +286,7 @@ def fetch_company_details_by_slug(
     """
     key_name = _slug_cache_key(slug)
     cached = _read_cache(key_name, cache_dir)
-    if cached is not None:
+    if cached is not None and not logo_expired(cached):
         return cached
 
     config = LinkedInApiConfig.resolve(api_key or None)
@@ -320,7 +344,7 @@ def fetch_company_details_batch_by_slug(
     unique_slugs = list(dict.fromkeys(slugs))
     results = _read_cached_values(unique_slugs, cache_key=_slug_cache_key, cache_dir=cache_dir)
     need_fetch = [slug for slug in unique_slugs
-                  if slug not in results and not _cached_gone(_slug_cache_key(slug), cache_dir)]
+                  if (slug not in results or logo_expired(results[slug])) and not _cached_gone(_slug_cache_key(slug), cache_dir)]
     if not need_fetch:
         return results
 
@@ -426,7 +450,7 @@ def extract_company_context(response: dict[str, Any]) -> dict[str, Any]:
     if website and isinstance(website, str):
         result["website"] = website.strip()
 
-    logo = company_logo_url(data)
+    logo = live_logo_url(company_logo_url(data))
     if logo:
         result["logo_url"] = logo
 

@@ -285,6 +285,45 @@ class CompanyLogoTests(unittest.TestCase):
         self.assertNotIn("logo_url", rapidapi_company.extract_company_context({"data": {"name": "No logo", "logos": [], "Images": {}}}))
         self.assertEqual(rapidapi_company.extract_company_context({"error": "nope"}), {})
 
+    def test_an_expired_logo_link_is_no_logo(self) -> None:
+        past = int(time.time()) - 86400
+        future = int(time.time()) + 86400
+        expired = f"https://media.licdn.com/x/company-logo_200_200/0/1/logo?e={past}&v=beta&t=sig"
+        live = f"https://media.licdn.com/x/company-logo_200_200/0/1/logo?e={future}&v=beta&t=sig"
+        self.assertEqual(rapidapi_company.live_logo_url(expired), "")
+        self.assertEqual(rapidapi_company.live_logo_url(live), live)
+        self.assertEqual(rapidapi_company.live_logo_url("https://x/own.png"), "https://x/own.png")
+        self.assertEqual(rapidapi_company.live_logo_url(None), "")
+        self.assertNotIn("logo_url", rapidapi_company.extract_company_context({"data": {"logos": [{"url": expired, "width": 200}]}}))
+        self.assertTrue(rapidapi_company.logo_expired({"data": {"logos": [{"url": expired, "width": 200}]}}))
+        self.assertFalse(rapidapi_company.logo_expired({"data": {"logos": [{"url": live, "width": 200}]}}))
+        self.assertFalse(rapidapi_company.logo_expired({"data": {"logos": [], "Images": {"logo": ""}}}))
+
+    def test_a_cached_payload_with_an_expired_logo_is_bought_again(self) -> None:
+        past = int(time.time()) - 86400
+        future = int(time.time()) + 86400
+        stale = {"success": True, "data": {"staffCount": 7, "logos": [{"url": f"https://media.licdn.com/x/old?e={past}", "width": 200}]}}
+        fresh = {"success": True, "data": {"staffCount": 8, "logos": [{"url": f"https://media.licdn.com/x/new?e={future}", "width": 200}]}}
+        live = {"success": True, "data": {"staffCount": 9, "logos": [{"url": f"https://media.licdn.com/x/live?e={future}", "width": 200}]}}
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            (cache_dir / "1.json").write_text(json.dumps(stale), encoding="utf-8")
+            (cache_dir / "2.json").write_text(json.dumps(live), encoding="utf-8")
+            (cache_dir / "slug__acme.json").write_text(json.dumps(stale), encoding="utf-8")
+            # Still read free, with its context intact apart from the dead link.
+            self.assertEqual(rapidapi_company.load_cached_company_details(["1", "2"], cache_dir=cache_dir), {"1": stale, "2": live})
+            conns = [_fake_connection(_fake_response(200, json.dumps(fresh))), _fake_connection(_fake_response(200, json.dumps(fresh)))]
+            module = FetchCompanyDetailsRetryTests.MODULE
+            with mock.patch(f"{module}.http.client.HTTPSConnection", side_effect=conns) as conn_cls, \
+                    mock.patch.object(rapidapi_company._RATE_LIMITER, "wait"):
+                by_id = rapidapi_company.fetch_company_details_batch(["1", "2"], api_key="test-key", cache_dir=cache_dir)
+                by_slug = rapidapi_company.fetch_company_details_batch_by_slug(["acme"], api_key="test-key", cache_dir=cache_dir)
+            self.assertEqual(conn_cls.call_count, 2)
+            self.assertEqual(by_id, {"1": fresh, "2": live})
+            self.assertEqual(by_slug, {"acme": fresh})
+            self.assertEqual(json.loads((cache_dir / "1.json").read_text(encoding="utf-8")), fresh)
+            self.assertEqual(json.loads((cache_dir / "slug__acme.json").read_text(encoding="utf-8")), fresh)
+
 
 if __name__ == "__main__":
     unittest.main()
