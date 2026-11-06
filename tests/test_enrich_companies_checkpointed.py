@@ -309,6 +309,89 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             self.assertFalse(uncached_row.get("headcount"))
             self.assertFalse(uncached_row.get("founded_year"))
 
+    def test_paid_run_fetches_only_companies_without_a_cached_payload(self) -> None:
+        # Three corpus-known companies: a cached payload without a logo (free, left
+        # alone), a cached failure and a company never fetched (the two network calls).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "input.jsonl"
+            artifact_path = root / "companies_corpus_v3.jsonl"
+            output_path = root / "out.jsonl"
+            cache_dir = root / "rapidapi-cache"
+            cache_dir.mkdir()
+            self._write_jsonl(input_path, [
+                {"company_urn": "urn:li:company:1", "company_name": "Plain Co", "rapidapi_company_id": "1"},
+                {"company_urn": "urn:li:company:2", "company_name": "Failed Co", "rapidapi_company_id": "2"},
+                {"company_urn": "urn:li:company:3", "company_name": "Absent Co", "rapidapi_company_id": "3"},
+            ])
+            base_artifact = {"entity_types": ["venture_backed_startup"], "sector_types": ["ai_ml"], "doc2query": ["ai company"],
+                             "d2q_text": "ai company", "word_text": "ai", "confidence_score": 0.9}
+            self._write_jsonl(artifact_path, [{**base_artifact, "company_name": name, "semantic_text": name} for name in ("Plain Co", "Failed Co", "Absent Co")])
+            (cache_dir / "1.json").write_text(json.dumps({"success": True, "data": {"staffCount": 7, "logos": [], "Images": {"logo": ""}}}), encoding="utf-8")
+            (cache_dir / "2.json").write_text(json.dumps({"success": False, "data": None, "message": "The request failed. You will not be charged for this request"}), encoding="utf-8")
+
+            def fetch(cid, **_kwargs):
+                return {"success": True, "data": {"logos": [{"url": f"https://x/{cid}.png", "width": 200}]}}
+
+            with mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-key", "POWERPACKS_RAPIDAPI_COMPANY_CACHE": str(cache_dir)}), \
+                    mock.patch.object(rapidapi_company, "fetch_company_details", side_effect=fetch) as fetched, \
+                    mock.patch.object(rapidapi_company._RATE_LIMITER, "wait"), \
+                    mock.patch.object(stage, "stream_openai_company_classifiers", side_effect=AssertionError("paid classification attempted")):
+                manifest = stage.run(Namespace(
+                    input=str(input_path), output=str(output_path), output_dir=str(root / "checkpoint"), checkpoint_every=100,
+                    provider="artifact", artifact_path=str(artifact_path), artifact_missing_policy="error",
+                    dry_run=False, estimate=False, allow_paid=True, model=None, api_key="test", base_url=None,
+                    force=False, stop_after_chunks=None,
+                ))
+            self.assertEqual(manifest["status"], "completed")
+            self.assertEqual(sorted(call.args[0] for call in fetched.call_args_list), ["2", "3"])
+            rows = {row["company_urn"]: row for line in output_path.read_text(encoding="utf-8").splitlines() for row in [json.loads(line)]}
+            self.assertEqual((rows["urn:li:company:1"]["headcount"], rows["urn:li:company:1"]["logo_url"]), (7, ""))
+            self.assertEqual(rows["urn:li:company:2"]["logo_url"], "https://x/2.png")
+            self.assertEqual(rows["urn:li:company:3"]["logo_url"], "https://x/3.png")
+
+    def test_rapidapi_context_joins_by_company_id_not_name(self) -> None:
+        # Two companies share a name but not a RapidAPI id; each gets its own payload.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_path = root / "input.jsonl"
+            artifact_path = root / "companies_corpus_v3.jsonl"
+            output_path = root / "out.jsonl"
+            cache_dir = root / "rapidapi-cache"
+            cache_dir.mkdir()
+            self._write_jsonl(input_path, [
+                {"company_urn": "urn:li:company:1", "company_name": "Acme", "rapidapi_company_id": "1"},
+                {"company_urn": "urn:li:company:2", "company_name": "Acme", "rapidapi_company_id": "2"},
+                {"company_urn": "urn:li:company:3", "company_name": "Slug Co", "company_public_identifier": "slug-co"},
+            ])
+            base_artifact = {"entity_types": ["venture_backed_startup"], "sector_types": ["ai_ml"], "doc2query": ["ai company"],
+                             "d2q_text": "ai company", "word_text": "ai", "confidence_score": 0.9}
+            self._write_jsonl(artifact_path, [
+                {**base_artifact, "company_name": "Acme", "semantic_text": "Acme"},
+                {**base_artifact, "company_name": "Slug Co", "semantic_text": "Slug Co"},
+            ])
+            for name, payload in (
+                ("1.json", {"success": True, "data": {"staffCount": 10, "logos": [{"url": "https://x/acme-1.png", "width": 200}]}}),
+                ("2.json", {"success": True, "data": {"staffCount": 20, "logos": [{"url": "https://x/acme-2.png", "width": 200}]}}),
+                ("slug__slug-co.json", {"success": True, "data": {"staffCount": 30, "logos": [{"url": "https://x/slug-co.png", "width": 200}]}}),
+            ):
+                (cache_dir / name).write_text(json.dumps(payload), encoding="utf-8")
+
+            with mock.patch.dict(os.environ, {"POWERSET_API_KEY": "test-key", "POWERPACKS_RAPIDAPI_COMPANY_CACHE": str(cache_dir)}), \
+                    mock.patch.object(rapidapi_company, "fetch_company_details", side_effect=AssertionError("network fetch attempted")), \
+                    mock.patch.object(rapidapi_company, "fetch_company_details_by_slug", side_effect=AssertionError("network fetch attempted")):
+                manifest = stage.run(Namespace(
+                    input=str(input_path), output=str(output_path), output_dir=str(root / "checkpoint"), checkpoint_every=100,
+                    provider="artifact", artifact_path=str(artifact_path), artifact_missing_policy="error",
+                    dry_run=False, estimate=False, allow_paid=False, model=None, api_key=None, base_url=None,
+                    force=False, stop_after_chunks=None,
+                ))
+            self.assertEqual(manifest["status"], "completed")
+            rows = {row["company_urn"]: row for line in output_path.read_text(encoding="utf-8").splitlines() for row in [json.loads(line)]}
+            self.assertEqual([(rows[urn]["headcount"], rows[urn]["logo_url"]) for urn in ("urn:li:company:1", "urn:li:company:2", "urn:li:company:3")], [
+                (10, "https://x/acme-1.png"), (20, "https://x/acme-2.png"), (30, "https://x/slug-co.png"),
+            ])
+
     def test_openai_paid_path_persists_rapidapi_context_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

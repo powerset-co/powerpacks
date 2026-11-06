@@ -222,6 +222,37 @@ class CachedCompanyBatchTests(unittest.TestCase):
             ])
 
 
+class FailedLookupTests(unittest.TestCase):
+    """The API answers a failed lookup with HTTP 200 and ``success: false``. That is
+    not an answer about the company, so it is never cached and a cached one is a miss."""
+
+    MODULE = FetchCompanyDetailsRetryTests.MODULE
+    FAILED = {"data": None, "message": "The request failed. You will not be charged for this request", "success": False}
+
+    def test_a_failed_lookup_is_returned_but_never_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            conn = _fake_connection(_fake_response(200, json.dumps(self.FAILED)))
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn):
+                result = rapidapi_company.fetch_company_details("123", api_key="test-key", cache_dir=cache_dir)
+                by_slug = rapidapi_company.fetch_company_details_by_slug("acme", api_key="test-key", cache_dir=cache_dir)
+            self.assertEqual(result, self.FAILED)
+            self.assertEqual(by_slug, self.FAILED)
+            self.assertEqual(list(cache_dir.iterdir()), [])
+
+    def test_a_cached_failure_is_a_miss_and_is_fetched_again(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            (cache_dir / "123.json").write_text(json.dumps(self.FAILED), encoding="utf-8")
+            self.assertIsNone(rapidapi_company._read_cache("123", cache_dir))
+            self.assertEqual(rapidapi_company.load_cached_company_details(["123"], cache_dir=cache_dir), {})
+            conn = _fake_connection(_fake_response(200, json.dumps({"data": {"name": "Acme"}})))
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn):
+                result = rapidapi_company.fetch_company_details("123", api_key="test-key", cache_dir=cache_dir)
+            self.assertEqual(result, {"data": {"name": "Acme"}})
+            self.assertEqual(json.loads((cache_dir / "123.json").read_text(encoding="utf-8")), {"data": {"name": "Acme"}})
+
+
 class CompanyLogoTests(unittest.TestCase):
     def test_prefers_the_200px_logo_then_images_logo(self) -> None:
         details = {"data": {"name": "Acme", "logos": [
