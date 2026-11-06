@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.56.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.6...powerpacks-v3.56.0) (2026-11-06)
+
+
+### Features
+
+* **search:** screen pasted-JD candidates with Luna Decisions, drop TypeSafe ([#1110](https://github.com/powerset-co/powerpacks/issues/1110)) ([d9af7a9](https://github.com/powerset-co/powerpacks/commit/d9af7a9fb32b9b4eb437a4be9405f6009b9ea588))
+
+
+### Bug Fixes
+
+* **people:** the drawer timeline reads newest first ([#1122](https://github.com/powerset-co/powerpacks/issues/1122)) ([5240a74](https://github.com/powerset-co/powerpacks/commit/5240a74d532bb410024f6b98a8e82dbe33e8ae4e))
+
 ## [3.55.6](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.5...powerpacks-v3.55.6) (2026-11-06)
 
 
