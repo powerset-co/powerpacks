@@ -1,6 +1,8 @@
 """Poll the inbox, answer Powerset support and set debug requests, and announce set presence.
 
 Changelog:
+- 2026-11-02: an install with Remote assist on polls too, whatever its account, so a customer who
+  opted in stays reachable.
 - 2026-10-17: Powerset accounts poll and handle support independently of Sets; support runs serially.
 - 2026-10-12: poll the authenticated HTTP inbox independently of NATS presence.
 - 2026-10-08: add the local NATS loop with durable task delivery.
@@ -115,7 +117,7 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
         WAKE.clear()
         delay = HEARTBEAT_SECONDS
         flags = features.read(repo_root)
-        if not flags.sets and not account.is_team(account.read(repo_root)["email"]):
+        if not flags.sets and not flags.support and not account.is_team(account.read(repo_root)["email"]):
             STATUS["state"] = "offline"
             await asyncio.to_thread(WAKE.wait, delay)
             continue

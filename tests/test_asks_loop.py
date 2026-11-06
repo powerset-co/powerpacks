@@ -126,6 +126,13 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.members.assert_not_called()
         self.worker.assert_not_called()
 
+    async def test_customer_with_remote_assist_on_polls_with_sets_off(self):
+        self.account.return_value = {"email": "jordan@example.com"}
+        features.save(self.root, features.FeatureFlags(sets=False, support=True))
+        await self.poll(2)
+        self.assertEqual(self.pull.call_count, 2)
+        self.assertEqual(asks_loop.STATUS["state"], "connected")
+
     async def test_success_polls_immediately_then_every_thirty_seconds(self):
         wait = await self.poll(2)
         self.assertEqual(self.pull.call_count, 2)
