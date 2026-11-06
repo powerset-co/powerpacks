@@ -29,6 +29,9 @@ from packs.shared.rate_limiter import StartRateLimiter
 
 DEFAULT_HOST = POWERSET_HOST
 ONE_YEAR_SECONDS = "31536000"
+# The gateway keeps a payload for a year and answers from it (x-cache HIT). A payload whose logo
+# link has expired is as dead there as here, so that one fetch bypasses the gateway cache.
+LIVE = "live"
 DEFAULT_TIMEOUT = 30
 DEFAULT_CACHE_DIR = ".powerpacks/rapidapi-company-cache"
 DEFAULT_CACHE_READ_WORKERS = 32
@@ -162,23 +165,30 @@ def fetch_company_details(
     cached = _read_cache(company_id, cache_dir)
     if cached is not None and not logo_expired(cached):
         return cached
+    # Holding a payload with a dead logo link: the gateway's copy is as old, so skip it.
+    freshness = LIVE if cached is not None else ONE_YEAR_SECONDS
 
     config = LinkedInApiConfig.resolve(api_key or None)
     if not config.api_key:
         return {"error": MISSING_LINKEDIN_KEY}
 
-    headers = {**config.headers(ONE_YEAR_SECONDS), "Content-Type": "application/json"}
     request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
         conn = http.client.HTTPSConnection(request_host, timeout=timeout)
         retry_after: float | None = None
+        headers = {**config.headers(freshness), "Content-Type": "application/json"}
         try:
             conn.request("GET", f"{config.path_prefix}/get-company-details-by-id?id={company_id}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:
                 result = json.loads(raw)
+                if freshness != LIVE and logo_expired(result):
+                    # The gateway answered from its own old copy; ask the vendor once.
+                    freshness = LIVE
+                    last_error = {"error": "stale cached payload"}
+                    continue
                 _write_cache(company_id, result, cache_dir)
                 return result
             last_error = {"error": f"HTTP {res.status}", "body": raw[:500]}
@@ -288,23 +298,30 @@ def fetch_company_details_by_slug(
     cached = _read_cache(key_name, cache_dir)
     if cached is not None and not logo_expired(cached):
         return cached
+    # Holding a payload with a dead logo link: the gateway's copy is as old, so skip it.
+    freshness = LIVE if cached is not None else ONE_YEAR_SECONDS
 
     config = LinkedInApiConfig.resolve(api_key or None)
     if not config.api_key:
         return {"error": MISSING_LINKEDIN_KEY}
 
-    headers = {**config.headers(ONE_YEAR_SECONDS), "Content-Type": "application/json"}
     request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
         conn = http.client.HTTPSConnection(request_host, timeout=timeout)
         retry_after: float | None = None
+        headers = {**config.headers(freshness), "Content-Type": "application/json"}
         try:
             conn.request("GET", f"{config.path_prefix}/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)
             res = conn.getresponse()
             raw = res.read().decode("utf-8")
             if res.status == 200:
                 result = json.loads(raw)
+                if freshness != LIVE and logo_expired(result):
+                    # The gateway answered from its own old copy; ask the vendor once.
+                    freshness = LIVE
+                    last_error = {"error": "stale cached payload"}
+                    continue
                 _write_cache(key_name, result, cache_dir)
                 return result
             last_error = {"error": f"HTTP {res.status}", "body": raw[:500]}

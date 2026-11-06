@@ -325,5 +325,56 @@ class CompanyLogoTests(unittest.TestCase):
             self.assertEqual(json.loads((cache_dir / "slug__acme.json").read_text(encoding="utf-8")), fresh)
 
 
+class GatewayFreshnessTests(unittest.TestCase):
+    """The gateway answers from its own copy for a year, so a payload whose logo link has
+    expired is asked for ``live``: when the local copy is stale, and when the gateway's is."""
+
+    MODULE = FetchCompanyDetailsRetryTests.MODULE
+
+    @staticmethod
+    def _payload(staff: int, expires_at: int) -> dict:
+        return {"success": True, "data": {"staffCount": staff, "logos": [{"url": f"https://media.licdn.com/x/logo?e={expires_at}", "width": 200}]}}
+
+    def test_a_stale_local_payload_is_asked_for_live(self) -> None:
+        stale = self._payload(7, int(time.time()) - 86400)
+        fresh = self._payload(8, int(time.time()) + 86400)
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            (cache_dir / "123.json").write_text(json.dumps(stale), encoding="utf-8")
+            (cache_dir / "slug__acme.json").write_text(json.dumps(stale), encoding="utf-8")
+            conns = [_fake_connection(_fake_response(200, json.dumps(fresh))), _fake_connection(_fake_response(200, json.dumps(fresh)))]
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", side_effect=conns):
+                by_id = rapidapi_company.fetch_company_details("123", api_key="test-key", cache_dir=cache_dir)
+                by_slug = rapidapi_company.fetch_company_details_by_slug("acme", api_key="test-key", cache_dir=cache_dir)
+            self.assertEqual((by_id, by_slug), (fresh, fresh))
+            for conn in conns:
+                self.assertEqual(conn.request.call_args.kwargs["headers"]["X-Freshness"], "live")
+            self.assertEqual(json.loads((cache_dir / "123.json").read_text(encoding="utf-8")), fresh)
+
+    def test_a_stale_gateway_copy_is_asked_for_once_more_live(self) -> None:
+        stale = self._payload(7, int(time.time()) - 86400)
+        fresh = self._payload(8, int(time.time()) + 86400)
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            conns = [_fake_connection(_fake_response(200, json.dumps(stale))), _fake_connection(_fake_response(200, json.dumps(fresh)))]
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", side_effect=conns), \
+                    mock.patch(f"{self.MODULE}.time.sleep") as slept:
+                result = rapidapi_company.fetch_company_details("123", api_key="test-key", cache_dir=cache_dir)
+            self.assertEqual(result, fresh)
+            self.assertEqual([c.request.call_args.kwargs["headers"]["X-Freshness"] for c in conns], ["31536000", "live"])
+            slept.assert_not_called()
+            self.assertEqual(json.loads((cache_dir / "123.json").read_text(encoding="utf-8")), fresh)
+
+    def test_a_live_payload_is_asked_for_with_the_year_and_kept(self) -> None:
+        fresh = self._payload(8, int(time.time()) + 86400)
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            conn = _fake_connection(_fake_response(200, json.dumps(fresh)))
+            with mock.patch(f"{self.MODULE}.http.client.HTTPSConnection", return_value=conn):
+                self.assertEqual(rapidapi_company.fetch_company_details("123", api_key="test-key", cache_dir=cache_dir), fresh)
+            self.assertEqual(conn.request.call_count, 1)
+            self.assertEqual(conn.request.call_args.kwargs["headers"]["X-Freshness"], "31536000")
+
+
 if __name__ == "__main__":
     unittest.main()
