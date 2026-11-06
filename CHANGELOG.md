@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.55.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.0...powerpacks-v3.55.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **accounts, tasks:** original Accounts intro; one-line run summary; a stopped run keeps what stopped it ([#1104](https://github.com/powerset-co/powerpacks/issues/1104)) ([699f4fe](https://github.com/powerset-co/powerpacks/commit/699f4fe56bb990cc688b4297bb48de9f9ddc2e8b))
+* **indexing:** company logos come back; failed lookups are not cached ([#1105](https://github.com/powerset-co/powerpacks/issues/1105)) ([9c00f0a](https://github.com/powerset-co/powerpacks/commit/9c00f0aa90c7287dff16075549cfb4d17853592e))
+* **people:** drop unknown, Minor, How you met and Function; plain Relationship and warmth ([#1101](https://github.com/powerset-co/powerpacks/issues/1101)) ([28e1a03](https://github.com/powerset-co/powerpacks/commit/28e1a03ae40a37abc11f963e7864663edfd9c732))
+* **web:** rename Reconnect Powerset to Switch Accounts ([#1097](https://github.com/powerset-co/powerpacks/issues/1097)) ([6a1e829](https://github.com/powerset-co/powerpacks/commit/6a1e8298abcbee9b4732ed1d356083389211b73d))
+* **whatsapp:** uncap incremental sync; read a year of group messages into dossiers ([#1088](https://github.com/powerset-co/powerpacks/issues/1088)) ([64394ca](https://github.com/powerset-co/powerpacks/commit/64394cad875cf4814fec3c25ca6edf9b906b32e1))
+
 ## [3.55.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.54.0...powerpacks-v3.55.0) (2026-11-05)
 
 
