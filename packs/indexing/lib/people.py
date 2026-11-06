@@ -10,6 +10,9 @@ The people-row column list and its normalizers come from
 local alias of `PEOPLE_SCHEMA_COLUMNS`, never a second declaration.
 
 Changelog:
+  2026-11-06: `index_fingerprint` (the people file less its interaction columns) decides whether the
+    index is rebuilt on Modal; `interaction_rows` gives the columns a refresh writes into the local
+    index instead.
   2026-07-24 (one people schema): the `except Exception` "copied primitive
     bundle" fallback that redefined PEOPLE_CSV_COLUMNS/extract_public_identifier/
     normalize_linkedin_url/normalize_people_row/parse_jsonish was deleted for a
@@ -21,6 +24,8 @@ Changelog:
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import re
 from datetime import date, datetime, timezone
@@ -44,6 +49,7 @@ from packs.ingestion.schemas.people_schema import (
     extract_public_identifier,
     normalize_linkedin_url,
     normalize_people_row,
+    parse_interaction_counts,
     parse_jsonish,
 )
 
@@ -414,6 +420,36 @@ def _education_to_profile(item: Any) -> dict[str, Any]:
         "start_year": item.get("start_year") or starts_at.get("year") or start.get("year") or None,
         "end_year": item.get("end_year") or ends_at.get("year") or end.get("year") or None,
     }
+
+
+# The people columns new messages change. They reach the index only in local_person_profiles
+# (interaction_counts, total_interactions, last_interaction), so a refresh writes them there
+# instead of rebuilding the index on Modal.
+INTERACTION_COLUMNS = ("interaction_counts", "last_interaction")
+
+
+def index_fingerprint(people_csv: Path) -> str:
+    """The sha256 of a people file without its interaction columns: the index on Modal is rebuilt
+    only when this changes."""
+    digest = hashlib.sha256()
+    with people_csv.open(newline="", encoding="utf-8") as handle:
+        rows = csv.reader(handle)
+        header = next(rows, [])
+        kept = [index for index, name in enumerate(header) if name not in INTERACTION_COLUMNS]
+        for row in [header, *rows]:
+            digest.update(json.dumps([row[index] for index in kept if index < len(row)]).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def interaction_rows(people_csv: Path) -> list[tuple[str, str, int, str]]:
+    """(person id, interaction_counts JSON, total_interactions, last_interaction) per person, keyed
+    and parsed as the index build does (flatten_people, parse_interaction_counts)."""
+    rows = []
+    for person in flatten_people(people_csv):
+        counts = parse_interaction_counts((person.get("raw") or {}).get("interaction_counts"))
+        rows.append((str(person.get("id") or ""), json.dumps(counts, sort_keys=True), sum(counts.values()),
+                     str((person.get("raw") or {}).get("last_interaction") or "")))
+    return rows
 
 
 def flatten_people(rows: Iterable[dict[str, Any]] | str | Path) -> list[dict[str, Any]]:

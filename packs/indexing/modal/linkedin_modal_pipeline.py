@@ -63,6 +63,7 @@ load_dotenv(_REPO_FOR_ENV / ".env", override=False)
 # for the `packs.*` import below.
 sys.path.insert(0, str(_REPO_FOR_ENV))
 
+from packs.indexing.lib.people import index_fingerprint  # noqa: E402
 from packs.indexing.modal import api_runs  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 import modal  # noqa: E402
@@ -461,7 +462,7 @@ def cmd_index_people(args: argparse.Namespace) -> int:
         started = time.time()
     # The fingerprint of the people file this index was built from, beside it: setup rebuilds only
     # when the file differs (install/pipeline.py _build_index).
-    (dest / "people.sha256").write_text(hashlib.sha256(people_path.read_bytes()).hexdigest(), encoding="utf-8")
+    (dest / "people.sha256").write_text(index_fingerprint(people_path), encoding="utf-8")
     result = {"people_csv": str(people_path), "contacts": rows,
               "duckdb": str(dest / "local-search.duckdb")}
     print(json.dumps({"status": "completed", **result}))
