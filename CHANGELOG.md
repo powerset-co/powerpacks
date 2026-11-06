@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.56.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.0...powerpacks-v3.56.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **indexing:** keep expired company logo links; the gateway serves them ([#1117](https://github.com/powerset-co/powerpacks/issues/1117)) ([8165147](https://github.com/powerset-co/powerpacks/commit/81651470534bc705f2557f69db1961b6934de9f7))
+
+
+### Performance Improvements
+
+* **deep-context:** collect reads Gmail bodies only for the rows it keeps ([#1123](https://github.com/powerset-co/powerpacks/issues/1123)) ([0d209e2](https://github.com/powerset-co/powerpacks/commit/0d209e2ea76fae17f76f64828338dfdf24c19316))
+* **deep-context:** collect reads people in 8 worker processes ([#1125](https://github.com/powerset-co/powerpacks/issues/1125)) ([70f612d](https://github.com/powerset-co/powerpacks/commit/70f612da8d26bdf87b75780433b941dd3144a7ce))
+
 ## [3.56.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.6...powerpacks-v3.56.0) (2026-11-06)
 
 
