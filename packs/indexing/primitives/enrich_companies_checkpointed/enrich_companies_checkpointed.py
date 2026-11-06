@@ -990,33 +990,37 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     chunks_this_run = 0
 
     # RapidAPI company details give the LLM real descriptions, headcounts and
-    # industries for NEW companies, and give every company its logo (people.csv
-    # rows carry none). The payload cache is the one source: on a paid run every
-    # company with a RapidAPI id or LinkedIn slug goes through the batch fetch,
-    # which serves cached payloads free and only fetches the misses, so a
-    # company whose payload simply has no logo is never bought twice. Unpaid
-    # runs read the disk cache alone.
+    # industries for NEW companies, and give a company its logo when people.csv
+    # brought none. Cached payloads are read first, free, for every company
+    # with a RapidAPI id or LinkedIn slug. A paid run then buys a payload only
+    # for a company that has none cached and still needs a logo, so a payload
+    # that simply has no logo is never bought twice and a company already
+    # showing a logo is never bought at all.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi id or "slug:<slug>" → response
     if LinkedInApiConfig.resolve().api_key:
-        keys = list(dict.fromkeys(key for row in read_jsonl(input_path) if (key := rapidapi_key(row))))
-        ids = [key for key in keys if not key.startswith("slug:")]
-        slugs = [key[len("slug:"):] for key in keys if key.startswith("slug:")]
+        needs_logo: dict[str, bool] = {}  # rapidapi_key → no input row for it carries a logo
+        for row in read_jsonl(input_path):
+            key = rapidapi_key(row)
+            if key:
+                needs_logo[key] = needs_logo.get(key, True) and not clean(row.get("logo_url"))
+        ids = [key for key in needs_logo if not key.startswith("slug:")]
+        slugs = [key[len("slug:"):] for key in needs_logo if key.startswith("slug:")]
+        rapidapi_lookup.update(rapidapi_company.load_cached_company_details(ids))
+        rapidapi_lookup.update({f"slug:{slug}": resp for slug, resp in rapidapi_company.load_cached_company_details_by_slug(slugs).items()})
+        sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)} cached company profiles (free)\n")
         if allow_paid:
-            if ids:
-                fetched = rapidapi_company.fetch_company_details_batch(ids)
+            open_ids = [rid for rid in ids if rid not in rapidapi_lookup and needs_logo[rid]]
+            if open_ids:
+                fetched = rapidapi_company.fetch_company_details_batch(open_ids)
                 ok = sum(1 for v in fetched.values() if not v.get("error") and v.get("success") is not False)
-                sys.stderr.write(f"[enrich-companies] company profiles by id: {ok}/{len(ids)} have a payload\n")
+                sys.stderr.write(f"[enrich-companies] finished fetching company profiles: {ok}/{len(open_ids)} successful\n")
                 rapidapi_lookup.update(fetched)
-            if slugs:
-                by_slug = rapidapi_company.fetch_company_details_batch_by_slug(slugs)
+            open_slugs = [slug for slug in slugs if f"slug:{slug}" not in rapidapi_lookup and needs_logo[f"slug:{slug}"]]
+            if open_slugs:
+                by_slug = rapidapi_company.fetch_company_details_batch_by_slug(open_slugs)
                 ok = sum(1 for v in by_slug.values() if not v.get("error") and v.get("success") is not False)
-                sys.stderr.write(f"[enrich-companies] company profiles by slug: {ok}/{len(slugs)} have a payload\n")
+                sys.stderr.write(f"[enrich-companies] finished fetching company profiles by slug: {ok}/{len(open_slugs)} successful\n")
                 rapidapi_lookup.update({f"slug:{slug}": resp for slug, resp in by_slug.items()})
-        else:
-            cached = rapidapi_company.load_cached_company_details(ids)
-            rapidapi_lookup.update(cached)
-            rapidapi_lookup.update({f"slug:{slug}": resp for slug, resp in rapidapi_company.load_cached_company_details_by_slug(slugs).items()})
-            sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)} cached company profiles (free)\n")
 
     def flush_output(force: bool = False) -> dict[str, Any] | None:
         nonlocal batch, chunks_this_run

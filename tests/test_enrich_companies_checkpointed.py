@@ -310,8 +310,9 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             self.assertFalse(uncached_row.get("founded_year"))
 
     def test_paid_run_fetches_only_companies_without_a_cached_payload(self) -> None:
-        # Three corpus-known companies: a cached payload without a logo (free, left
-        # alone), a cached failure and a company never fetched (the two network calls).
+        # Four corpus-known companies: a cached payload without a logo (free, left
+        # alone), one whose people.csv row already carries a logo (never bought),
+        # a cached failure and a company never fetched (the two network calls).
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             input_path = root / "input.jsonl"
@@ -323,10 +324,11 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
                 {"company_urn": "urn:li:company:1", "company_name": "Plain Co", "rapidapi_company_id": "1"},
                 {"company_urn": "urn:li:company:2", "company_name": "Failed Co", "rapidapi_company_id": "2"},
                 {"company_urn": "urn:li:company:3", "company_name": "Absent Co", "rapidapi_company_id": "3"},
+                {"company_urn": "urn:li:company:4", "company_name": "Logo Co", "rapidapi_company_id": "4", "logo_url": "https://x/own.png"},
             ])
             base_artifact = {"entity_types": ["venture_backed_startup"], "sector_types": ["ai_ml"], "doc2query": ["ai company"],
                              "d2q_text": "ai company", "word_text": "ai", "confidence_score": 0.9}
-            self._write_jsonl(artifact_path, [{**base_artifact, "company_name": name, "semantic_text": name} for name in ("Plain Co", "Failed Co", "Absent Co")])
+            self._write_jsonl(artifact_path, [{**base_artifact, "company_name": name, "semantic_text": name} for name in ("Plain Co", "Failed Co", "Absent Co", "Logo Co")])
             (cache_dir / "1.json").write_text(json.dumps({"success": True, "data": {"staffCount": 7, "logos": [], "Images": {"logo": ""}}}), encoding="utf-8")
             (cache_dir / "2.json").write_text(json.dumps({"success": False, "data": None, "message": "The request failed. You will not be charged for this request"}), encoding="utf-8")
 
@@ -349,6 +351,7 @@ class EnrichCompaniesCheckpointedTests(unittest.TestCase):
             self.assertEqual((rows["urn:li:company:1"]["headcount"], rows["urn:li:company:1"]["logo_url"]), (7, ""))
             self.assertEqual(rows["urn:li:company:2"]["logo_url"], "https://x/2.png")
             self.assertEqual(rows["urn:li:company:3"]["logo_url"], "https://x/3.png")
+            self.assertEqual(rows["urn:li:company:4"]["logo_url"], "https://x/own.png")
 
     def test_rapidapi_context_joins_by_company_id_not_name(self) -> None:
         # Two companies share a name but not a RapidAPI id; each gets its own payload.
