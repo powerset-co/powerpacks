@@ -15,7 +15,7 @@ stdout and exit code 1; the agent fixes what it can and runs the same command ag
 
 A v1 store beside the v2 one is archived first: deep-context.sqlite and v1's folders go into
 deep-context-v1-<utc>.tar.gz under the data root and are removed, so the folder holds one
-pipeline's state. owner.json, the profile cache and the JEV caches stay: v2 reads them.
+pipeline's state. owner.json and the profile cache stay: v2 reads them.
 
 Created: 2026-10-07
 """
@@ -63,8 +63,8 @@ INDEX_PID_FILE = Path("deep-context") / "index.pid"
 INDEX_LOG_FILE = Path("deep-context") / "index.log"
 MODAL_PIPELINE = Path("packs/indexing/modal/linkedin_modal_pipeline.py")
 INDEX_MAX_USD = "499.99"  # the install's automatic spend rule: Modal refuses only above this
-# v1's state under <data root>/deep-context, archived and removed before a v2 run. owner.json,
-# identity/ (the JEV caches) and the v2 store are not in this list because v2 reads them.
+# v1's state under <data root>/deep-context, archived and removed before a v2 run. owner.json
+# and the v2 store are not in this list because v2 reads them.
 V1_STATE = ("deep-context.sqlite", "deep-context.sqlite-wal", "deep-context.sqlite-shm", "deep_context.sqlite",
             "raw", "facts", "dossiers", "heal", "parents", "reconcile", "review", "profile-prefetch",
             "index.json", "index.md", "merge-candidates.csv", "merge-candidates.md", "merge-verdicts.csv",

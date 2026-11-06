@@ -55,7 +55,7 @@ confirmed, then `li:<member id>`. Stage manifests are under `deep-context/v2-man
 ## What leaves the machine
 
 Message bodies go to OpenAI for synthesis. Facts (never messages) go to OpenAI's Decisions API
-for worth and the labels, to JEV for the identity check, to Parallel for research,
+for worth and the labels, to OpenAI (Sol) for the identity check, to Parallel for research,
 and to OpenAI for the LinkedIn judge. LinkedIn public
 identifiers go to RapidAPI for profiles. Nothing is uploaded anywhere else by this pipeline.
 

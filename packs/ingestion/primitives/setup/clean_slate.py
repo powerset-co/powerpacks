@@ -10,7 +10,6 @@ priced in tokens or API credits stays in place, keyed by stable identifiers so
 the next full run (linkedin -> gmail -> messages -> deep-context) cache-hits.
 
 PRESERVED (paid caches and the user's own inputs, stable keys):
-  deep-context/jev/, identity/ JEV answers, keyed by request digest
   import/linkedin/             source import + RapidAPI enrichment caches
   profile_cache_v2/            RapidAPI profile cache, keyed by public identifier
   owner.json                   owner bio
@@ -78,8 +77,6 @@ SCRUB = [
 # Explicitly preserved paths, printed for the operator. Nothing outside SCRUB is
 # ever touched; this list exists to make the contract visible and auditable.
 PRESERVE = [
-    ("deep-context/jev", "JEV worth answers, keyed by request digest"),
-    ("deep-context/identity", "JEV identity answers, keyed by request digest"),
     ("deep-context/owner.json", "owner bio"),
     ("network-import/import/linkedin", "LinkedIn source import + enrichment caches"),
     ("network-import/profile_cache_v2", "RapidAPI profile cache"),

@@ -37,10 +37,9 @@ const ACRONYMS = [
   "iOS",
 ]
 
-// Words that keep their own casing, keyed lowercase: the channel titles, JEV and the acronyms.
+// Words that keep their own casing, keyed lowercase: the channel titles and the acronyms.
 const CASED: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(CHANNELS).map(([channel, { title }]) => [channel, title])),
-  jev: "JEV",
   ...Object.fromEntries(ACRONYMS.map((word) => [word.toLowerCase(), word])),
 }
 
