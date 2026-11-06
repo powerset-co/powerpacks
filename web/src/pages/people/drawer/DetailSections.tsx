@@ -1,5 +1,6 @@
 import { DetailsSection } from "@/components/shared"
 import { eventDate } from "@/lib/people/copy"
+import { newestFirst } from "@/lib/people/events"
 import type { Person, PersonDetail } from "@/types/people"
 
 import { ConfidenceSection } from "./ConfidenceSection"
@@ -33,7 +34,7 @@ export function DetailSections({ row, detail, section, onRefresh }: DetailSectio
           {...section("timeline")}
         >
           <ol className="timeline">
-            {detail.events.map((event, position) => (
+            {newestFirst(detail.events).map((event, position) => (
               <li key={position}>
                 <time>{eventDate(event.date)}</time>
                 <span>{event.summary}</span>
