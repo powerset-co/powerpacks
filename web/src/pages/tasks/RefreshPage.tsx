@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { Link, useSearchParams } from "react-router-dom"
-import { Check, ChevronRight, TriangleAlert, X } from "lucide-react"
+import { Link } from "react-router-dom"
+import { Check, TriangleAlert, X } from "lucide-react"
 
 import { EmptyState, Page, Select, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -77,14 +77,6 @@ function frequencyOf(settings: RefreshState["settings"]): RefreshFrequency {
 export function RefreshPage() {
   const client = useQueryClient()
   const refresh = useRefresh()
-  // The runs whose problems are open; undefined until one is clicked (the latest opens by itself
-  // when it needs you). Each opens and closes on its own.
-  // A notice can name a run (?run=id) to open: the one it is about, not the latest.
-  const [params] = useSearchParams()
-  const linked = Number(params.get("run")) || undefined
-  const [openIds, setOpenIds] = useState<ReadonlySet<number> | undefined>(
-    linked === undefined ? undefined : new Set([linked]),
-  )
   const settings = useMutation({
     mutationFn: saveRefreshSettings,
     onSuccess: (next) => client.setQueryData(REFRESH_KEY, next),
@@ -106,15 +98,7 @@ export function RefreshPage() {
   })
   const data = refresh.data
   const runs = data?.runs ?? []
-  const latest = runs[0]
   const frequency = data ? frequencyOf(data.settings) : "weekly"
-  const open =
-    openIds ?? new Set(latest && latest.status !== "ok" && latest.status !== "running" ? [latest.id] : [])
-  const toggle = (id: number) => {
-    const next = new Set(open)
-    if (!next.delete(id)) next.add(id)
-    setOpenIds(next)
-  }
 
   return (
     <Page title="Scheduled tasks">
@@ -231,23 +215,17 @@ export function RefreshPage() {
             )}
           </section>
           <GmailReconnect />
-          <History runs={runs} open={open} onToggle={toggle} />
+          <History runs={runs} />
         </>
       )}
     </Page>
   )
 }
 
-interface HistoryProps {
-  runs: RefreshRun[]
-  open: ReadonlySet<number>
-  onToggle: (id: number) => void
-}
-
 // Rows divide with a line; the card's own border closes the last one.
 const CELL = "border-t border-line px-3 py-2.5"
 
-function History({ runs, open, onToggle }: HistoryProps) {
+function History({ runs }: { runs: RefreshRun[] }) {
   return (
     <section aria-labelledby="history" className="flex flex-col gap-2">
       <h2 id="history" className="m-0 text-[11px] font-semibold uppercase tracking-[.1em] text-faint">
@@ -269,7 +247,7 @@ function History({ runs, open, onToggle }: HistoryProps) {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <RunRow key={run.id} run={run} open={open.has(run.id)} onToggle={() => onToggle(run.id)} />
+                <RunRow key={run.id} run={run} />
               ))}
             </tbody>
           </table>
@@ -279,12 +257,12 @@ function History({ runs, open, onToggle }: HistoryProps) {
   )
 }
 
-/** A run has details only when something went wrong: its problems and what to do. */
+/** A run has details only when something went wrong: its problems and what to do, always shown. */
 function hasDetail(run: RefreshRun): boolean {
   return run.problems.length > 0 || Boolean(run.error)
 }
 
-function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onToggle: () => void }) {
+function RunRow({ run }: { run: RefreshRun }) {
   const detail = hasDetail(run)
   const time = (
     <span className="group relative">
@@ -299,39 +277,10 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
   )
   return (
     <>
-      <tr
-        aria-selected={detail ? open : undefined}
-        onClick={detail ? onToggle : undefined}
-        className={cn(
-          "whitespace-nowrap",
-          detail && "cursor-pointer hover:bg-surface-2 aria-selected:bg-surface-2",
-        )}
-      >
+      <tr className="whitespace-nowrap">
         <td className={CELL}>
-          {detail ? (
-            <button
-              type="button"
-              aria-expanded={open}
-              onClick={(event) => {
-                event.stopPropagation()
-                onToggle()
-              }}
-              className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left text-xs text-foreground"
-            >
-              <ChevronRight
-                aria-hidden
-                className={cn("size-3 text-faint transition-transform duration-fast", open && "rotate-90")}
-              />
-              {time}
-              <span className="text-faint">· {trigger(run)}</span>
-            </button>
-          ) : (
-            <span className="flex items-center gap-1.5">
-              <span aria-hidden className="size-3" />
-              {time}
-              <span className="text-faint">· {trigger(run)}</span>
-            </span>
-          )}
+          {time}
+          <span className="text-faint"> · {trigger(run)}</span>
         </td>
         <td className={CELL}>
           <Badge variant={STATUS[run.status].variant}>
@@ -359,9 +308,9 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
         </td>
         <td className={cn(CELL, "tabular-nums")}>{added(run)}</td>
       </tr>
-      {detail && open && (
+      {detail && (
         <tr>
-          <td colSpan={4} className="border-t border-line bg-surface-2 p-0">
+          <td colSpan={4} className="p-0">
             <RunDetail run={run} />
           </td>
         </tr>
@@ -372,7 +321,7 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
 
 function RunDetail({ run }: { run: RefreshRun }) {
   return (
-    <article aria-label="Run details" className="flex flex-col gap-2 px-8 py-3 text-xs">
+    <article aria-label="Run details" className="flex flex-col gap-2 px-3 pb-2.5 text-xs">
       {run.problems.map((problem) => (
         <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5">
           <b className="block">{problem.title}</b>
