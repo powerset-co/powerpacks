@@ -60,8 +60,8 @@ a working `.env`. Run `$powerset setup` (below) to populate it, or copy
 
 ### `$powerset setup` (recommended setup path)
 
-For provisioned users, pulls local runtime keys, including TypeSafe when
-provisioned, from the authenticated Powerset API into `.env`, ensures Auth0
+For provisioned users, pulls local runtime keys from the authenticated Powerset
+API into `.env`, ensures Auth0
 login. Modal handles hosted processing for Powerset users.
 
 The Google Cloud CLI is only needed for the separate msgvault/Gmail OAuth app
@@ -168,9 +168,6 @@ $powerset setup
 It runs the Powerset doctor, starts Auth0 login if needed, pulls provisioned
 runtime keys into `.env` (no values printed), and imports and indexes your network. `$powerset login` remains available as a smaller
 credential-refresh/backcompat command.
-
-`$update-powerpacks` also fills a missing or empty provisioned
-`TYPESAFE_API_KEY` while preserving any nonempty local value.
 
 ### `$search` — recruiting search
 

@@ -24,8 +24,6 @@ _PROVIDERS = (
               "https://platform.parallel.ai/settings?tab=api-keys"),
     _Provider("openai", "OpenAI", "Models and embeddings", (("OPENAI_API_KEY",),),
               "https://platform.openai.com/api-keys"),
-    _Provider("typesafe", "TypeSafe", "Identity and search judgments", (("TYPESAFE_API_KEY",),),
-              "https://console.typesafe.ai/keys"),
     _Provider("rapidapi-linkedin", "RapidAPI · LinkedIn", "Required for LinkedIn profiles and companies without a Powerset key",
               (("RAPIDAPI_LINKEDIN_KEY",),),
               "https://rapidapi.com/pnd-team-pnd-team/api/professional-network-data"),

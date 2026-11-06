@@ -174,14 +174,14 @@ components and hooks.
 | `dialogs/`                              | Score dialog (five-point rubric) and search feedback dialog, both handing records to `useFeedback`; `FeedbackStatus`, the stopped queue's count with Retry or sign-in                                                  |
 | `styles/`                               | Page CSS: shell, sidebar, run, results, toolbar (panels, `.rise-in`, `.rise-settled`)                                                                                                                                  |
 
-| Path (`src/lib/searches/`) | Role                                                                                           |
-| -------------------------- | ---------------------------------------------------------------------------------------------- |
-| `ranking.ts`               | `rendering.py` ordering: Jev and rating scales never mixed, missing never zero; the panel      |
-| `filters.ts`               | The toolbar's filter (`keptRows` for the table, `filterRows` one per person), labels toggle    |
-| `tags.ts`, `exports.ts`    | Pure tag edits; CSV and clipboard of the filtered rows                                         |
-| `feedback.ts`, `rubric.ts` | Feedback records and their queue, the person's own score; the rubric as choices                |
-| `catalog.ts`, `copy.ts`    | The sidebar filter (and its saved form) and groups; status, date, money and people-count words |
-| `sources.ts`               | A candidate's source pills (busiest first, email and message counts) and operator lines        |
+| Path (`src/lib/searches/`) | Role                                                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ranking.ts`               | `rendering.py` ordering: qualification and rating scales never mixed, missing never zero; the panel |
+| `filters.ts`               | The toolbar's filter (`keptRows` for the table, `filterRows` one per person), labels toggle         |
+| `tags.ts`, `exports.ts`    | Pure tag edits; CSV and clipboard of the filtered rows                                              |
+| `feedback.ts`, `rubric.ts` | Feedback records and their queue, the person's own score; the rubric as choices                     |
+| `catalog.ts`, `copy.ts`    | The sidebar filter (and its saved form) and groups; status, date, money and people-count words      |
+| `sources.ts`               | A candidate's source pills (busiest first, email and message counts) and operator lines             |
 
 The filtered rows are computed once, in `RunView`: the table shows them and the toolbar counts
 them, so the count never disagrees with the table. Export and copy take every filtered person,

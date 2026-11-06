@@ -20,12 +20,12 @@ function withRows(change: (row: PondCandidate) => PondCandidate): SearchResult {
 }
 
 describe("rankResults", () => {
-  it("never compares the two scales: Jev first, then ratings, each by overall then screen score", () => {
+  it("never compares the two scales: qualification first, then ratings, each by overall then screen score", () => {
     const results = rankResults(search)
     expect(names(results)).toEqual(RANKED_NAMES)
     if (results.mode !== "ranked") return
     expect(results.sections.map((section) => section.heading)).toEqual([
-      "Jev qualification scores",
+      "Qualification scores",
       "Rating-based scores",
     ])
   })
@@ -33,14 +33,14 @@ describe("rankResults", () => {
   it("keeps a person's best-screened row once, and says why an unscored person has no overall", () => {
     const results = rankResults(search)
     if (results.mode !== "ranked") throw new Error("expected ranked")
-    const [jev, rating] = results.sections
+    const [screened, rating] = results.sections
     const casey = rating?.rows.find((result) => result.row.name === "Casey Delta")
     expect(rating?.rows.filter((result) => result.row.name === "Casey Delta")).toHaveLength(1)
     expect(casey?.row.cross_encoder_score).toBe(4.1)
     expect([casey?.overall, casey?.reason]).toEqual([null, "Not judged"])
     const morgan = rating?.rows.find((result) => result.row.name === "Morgan Echo")
     expect([morgan?.overall, morgan?.reason]).toEqual([2, "Did not pass screen"])
-    const quinn = jev?.rows.find((result) => result.row.name === "Quinn Hotel")
+    const quinn = screened?.rows.find((result) => result.row.name === "Quinn Hotel")
     expect([quinn?.overall, quinn?.reason]).toEqual([null, "Did not pass screen"])
     expect(rating?.rows[0]?.reason).toBe("Built this exact system twice.")
   })
@@ -54,7 +54,7 @@ describe("rankResults", () => {
     expect(names(rankResults(missing)).flat()).not.toContain("Casey Delta")
   })
 
-  it("a rating below 3 is shown as 1 or 2; 3 and up, and every Jev score, have no overall", () => {
+  it("a rating below 3 is shown as 1 or 2; 3 and up, and every qualification score, have no overall", () => {
     const [row] = search.ponds[0]?.candidates ?? []
     if (!row) throw new Error("fixture has no rows")
     const cases: [number, number | null][] = [
@@ -67,8 +67,12 @@ describe("rankResults", () => {
     for (const [ce, expected] of cases) {
       expect(overallScore({ ...row, cross_encoder_score_1_to_5: ce }, undefined)).toBe(expected)
     }
-    const jev = { ...row, cross_encoder_score_type: "qualification_score", cross_encoder_score_1_to_5: 1.2 }
-    expect(overallScore(jev, undefined)).toBeNull()
+    const screened = {
+      ...row,
+      cross_encoder_score_type: "qualification_score",
+      cross_encoder_score_1_to_5: 1.2,
+    }
+    expect(overallScore(screened, undefined)).toBeNull()
   })
 
   it("a run without a JD shows its ponds even when its rows are rated; a JD run is ranked", () => {

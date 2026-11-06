@@ -1,7 +1,6 @@
 import parallelLogo from "@/assets/providers/parallel.svg?inline"
 import modalLogo from "@/assets/providers/modal.svg?inline"
 import openaiLogo from "@/assets/providers/openai.png?inline"
-import typesafeLogo from "@/assets/providers/typesafe.png?inline"
 import rapidapiLogo from "@/assets/providers/rapidapi.png?inline"
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -82,7 +81,6 @@ const LOGOS = {
   parallel: parallelLogo,
   modal: modalLogo,
   openai: openaiLogo,
-  typesafe: typesafeLogo,
   "rapidapi-linkedin": rapidapiLogo,
 }
 

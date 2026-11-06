@@ -16,7 +16,7 @@ QUALIFICATION_SCORE_TYPE = "qualification_score"
 
 
 def score_1_to_5(score: float, *, score_type: str = "raw_yes_minus_no_logit") -> float | None:
-    """Preserve native ratings, normalize Qwen margins, and leave Jev scores native."""
+    """Preserve native ratings, normalize Qwen margins, and leave screen probabilities native."""
     if score_type == QUALIFICATION_SCORE_TYPE:
         return None
     if score_type in ("expected_rating_1_to_5", "ordinal_rating_1_to_5"):

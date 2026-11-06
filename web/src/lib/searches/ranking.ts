@@ -1,13 +1,13 @@
 // Which people a run shows and in what order: rendering.py _cross_encoder_table,
 // _overall_score, _is_qualification_score and _pond_table, rule for rule. Qualification
-// (Jev) and rating scales are never compared; a missing score is never a zero. One rule is
+// (screen probability) and rating scales are never compared; a missing score is never a zero. One rule is
 // the page's own: a run without a JD shows its ponds, never a rating.
 
 import type { Candidate, Pond, PondCandidate, SearchResult } from "@/types/searches"
 
 // human_ratings.py QUALIFICATION_SCORE_TYPE.
 const QUALIFICATION_SCORE_TYPE = "qualification_score"
-const SECTION_HEADINGS = { qualification: "Jev qualification scores", rating: "Rating-based scores" } as const
+const SECTION_HEADINGS = { qualification: "Qualification scores", rating: "Rating-based scores" } as const
 
 export type ScoreBand = "high" | "medium" | "low"
 

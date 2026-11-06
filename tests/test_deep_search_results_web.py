@@ -746,7 +746,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertLess(beta.index("Jordan Bravo"), beta.index("Morgan Echo"))
         self.assertLess(beta.index("Morgan Echo"), beta.index("Casey Delta"))
         self.assertIn("Senior Software Engineer", beta)
-        # The Jev probability never renders; a person shows the judges' overall or the screen outcome.
+        # The screen probability never renders; a person shows the judges' overall or the screen outcome.
         self.assertNotIn("Qualification score", beta)
         self.assertNotIn("0.310", beta)
         self.assertIn("Did not pass screen", beta)
@@ -773,7 +773,7 @@ class ResultsWebTest(unittest.TestCase):
             cross_encoder_score_type="qualification_score", cross_encoder_passed=True,
             cross_encoder_threshold=.29855554570561965) for row in current.candidates))
         html = render_search_body(replace(search, ponds=(current, prior)))
-        self.assertIn("Jev qualification scores", html)
+        self.assertIn("Qualification scores", html)
         self.assertIn("Rating-based scores", html)
         self.assertEqual(html.count("data-person-name='Jordan Bravo'"), 2)
         self.assertIn("data-person-score='0.85'", html)

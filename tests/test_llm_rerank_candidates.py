@@ -332,7 +332,7 @@ class StateModeQueryResultsCsvTests(unittest.TestCase):
 
     def test_rehydrated_frontier_outranks_a_prior_rerank(self) -> None:
         # A --force rerun re-hydrates after an earlier rerank; with no filter step on
-        # the Jev path, the fresh hydrate output is the newest frontier.
+        # the Luna screen path, the fresh hydrate output is the newest frontier.
         state = {"steps": [
             {"id": "execute_role_search", "output": {"candidate_ids": ["a", "b", "c"]}},
             {"id": "hydrate_people", "output": {"profile_ids": ["a", "b"]}},

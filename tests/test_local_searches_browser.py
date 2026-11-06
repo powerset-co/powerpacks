@@ -221,7 +221,7 @@ class SearchesBrowserTests(unittest.TestCase):
             page.locator("[data-run-id='casey-role']").click()
             expect(page).to_have_url(self.base + "/searches/run?run_id=casey-role")
             expect(page.locator("[data-run='casey-role'] .results-heading")).to_have_text(
-                ["Jev qualification scores", "Rating-based scores"])
+                ["Qualification scores", "Rating-based scores"])
             expect(names).to_have_text(["Riley Foxtrot", "Avery Golf"])
             expect(page.locator("[data-run-id='casey-role']")).to_have_attribute("aria-current", "page")
 

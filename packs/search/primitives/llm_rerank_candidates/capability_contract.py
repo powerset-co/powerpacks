@@ -1,6 +1,8 @@
 """Deterministic input and prompt contract for capability scoring.
 
 Changelog:
+  2026-11-06: the Luna screen (Decisions API) replaces Jev; its spec is the request version and
+    the one rating question.
   2026-09-25: the Jev spec is the seven profile-level questions and the evidence policy;
     the rating rubric and per-position question template are gone with the request.
 """
@@ -11,16 +13,10 @@ import hashlib
 import json
 
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner
-from packs.search.primitives.llm_rerank_candidates import terra
-from packs.search.primitives.llm_rerank_candidates.jev import model as jev_model
-from packs.search.primitives.llm_rerank_candidates.jev.questions import (
-    EVIDENCE_POLICY,
-    REQUEST_VERSION,
-    base_questions,
-)
+from packs.search.primitives.llm_rerank_candidates import luna_screen, terra
 
 # The judge a JD run uses unless the caller names one; trait reranking without a JD has none.
-DEFAULT_JUDGE = "jev"
+DEFAULT_JUDGE = "luna"
 
 
 def _prompt_spec(judge: str, rubric: str | None) -> dict:
@@ -31,17 +27,15 @@ def _prompt_spec(judge: str, rubric: str | None) -> dict:
             "prompt_version": terra.PROMPT_VERSION,
             "rating_rubric": rubric,
         }
-    if judge != "jev":
-        raise ValueError("capability judge must be 'terra' or 'jev'")
+    if judge != "luna":
+        raise ValueError("capability judge must be 'terra' or 'luna'")
     return {
         "judge": judge,
-        "model": jev_model.MODEL_ID,
-        "request_version": REQUEST_VERSION,
-        "prompt_version": jev_model.PROMPT_VERSION,
-        "question_version": jev_model.QUESTION_VERSION,
-        "model_asset_sha256": hashlib.sha256(jev_model.MODEL_ASSET.read_bytes()).hexdigest(),
-        "evidence_policy": EVIDENCE_POLICY,
-        "questions": base_questions(),
+        "model": luna_screen.MODEL,
+        "request_version": luna_screen.REQUEST_VERSION,
+        "threshold": luna_screen.THRESHOLD,
+        "evidence_policy": luna_screen.EVIDENCE_POLICY,
+        "questions": [luna_screen.QUESTION],
     }
 
 

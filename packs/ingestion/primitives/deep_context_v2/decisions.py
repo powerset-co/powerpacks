@@ -86,6 +86,8 @@ async def decide_all(requests: dict[str, dict[str, Any]], cache_dir: Path, *, ca
     if cache_only:
         raise ValueError(f"{len(missing)} answers are not saved yet. Check the cost again.")
     load_env()
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("Luna requires OPENAI_API_KEY")
     cache_dir.mkdir(parents=True, exist_ok=True)
     slots: int = env_or_profile_int("POWERPACKS_OPENAI_CONCURRENCY", "openai_concurrency",
                                     fallback=DEFAULT_OPENAI_CONCURRENCY)

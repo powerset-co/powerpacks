@@ -28,7 +28,7 @@ class CrossEncoderSearchTests(unittest.TestCase):
             {"id": "llm_rerank_candidates", "output": {
                 "ranked_candidate_ids": ["first"],
                 "cross_encoder": {
-                    "status": "ok", "model": "jev", "score_type": "qualification_score",
+                    "status": "ok", "model": "gpt-6-luna", "score_type": "qualification_score",
                     "threshold": threshold,
                     "scores": [{"id": "first", "score": 0.42, "passed": True}],
                 }}},
@@ -62,7 +62,7 @@ class CrossEncoderSearchTests(unittest.TestCase):
         self.assertEqual(row["cross_encoder_score"], 2.25)
         self.assertEqual(row["cross_encoder_score_1_to_5"], 2.25)
 
-    def test_deep_pond_uses_jev_and_original_jd(self):
+    def test_deep_pond_uses_the_luna_screen_and_original_jd(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             results_path = _start(root)
@@ -81,8 +81,8 @@ class CrossEncoderSearchTests(unittest.TestCase):
             self.assertEqual(command[command.index("--jd-file") + 1], str(root / "jd.txt"))
             self.assertEqual(command[command.index("--job-title") + 1], "Search Engineer")
             self.assertEqual(command[command.index("--job-company") + 1], "Acme")
-            self.assertEqual(command[command.index("--model") + 1], "jev-1.13.0")
-            self.assertEqual(command[command.index("--capability-judge") + 1], "jev")
+            self.assertEqual(command[command.index("--model") + 1], "gpt-6-luna")
+            self.assertEqual(command[command.index("--capability-judge") + 1], "luna")
 
 
 class PlainSearchPipelineTests(unittest.TestCase):

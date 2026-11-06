@@ -1,4 +1,4 @@
-"""Rank Jev-pass candidates by prior work similarity to stored current staff."""
+"""Rank screened candidates by prior work similarity to stored current staff."""
 
 from __future__ import annotations
 
