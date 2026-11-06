@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.55.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.1...powerpacks-v3.55.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **whatsapp:** a refresh is the incremental sync alone; depth only on first import ([#1106](https://github.com/powerset-co/powerpacks/issues/1106)) ([43b5164](https://github.com/powerset-co/powerpacks/commit/43b5164f2b1fad50f6ba508ae33c535590ff08d9))
+
 ## [3.55.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.0...powerpacks-v3.55.1) (2026-11-06)
 
 
