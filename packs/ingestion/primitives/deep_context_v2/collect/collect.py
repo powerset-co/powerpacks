@@ -12,11 +12,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import atexit
 import sqlite3
-import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageEntry, Person
@@ -28,9 +28,10 @@ from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 
 MAX_GROUP_SIZE = 25      # iMessage groups larger than this are not the candidate's context
-# People are read in parallel, each worker with its own read-only stores. The reads wait on disk, not
-# CPU: on a 279k-message archive one thread read 1,000 people in 18.9 s, 8 threads in 7.2 s, 16 in 3.9 s.
-WORKERS = 16
+# People are collected in parallel, each worker process with its own read-only stores. The reads wait
+# on disk (a 279k-message archive: 1,000 people took 18.9 s on one reader, 3.9 s on 16) and the Python
+# after them holds the GIL (16 threads: 391 s against 272 s for one), so processes, not threads.
+WORKERS = 8
 DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N narrows a run to the first N
 
 
@@ -61,10 +62,7 @@ class Collect(Node):
             "JOIN candidates c ON c.candidate_id = i.candidate_id ORDER BY c.candidate_id"
         )}
 
-        def open_sources() -> ContextSources:
-            return ContextSources(channels=channels, msgvault_db=self.msgvault_db, chat_db=self.chat_db,
-                                  wacli_db=self.wacli_db, deep_cap=CHAT_MESSAGE_CAP, max_group_size=MAX_GROUP_SIZE,
-                                  owner_name=owner_name, contact_names=contact_names)
+        worker_args = (channels, self.msgvault_db, self.chat_db, self.wacli_db, owner_name, contact_names)
 
         counts: dict[str, int] = {
             "candidates": len(people),
@@ -80,7 +78,7 @@ class Collect(Node):
         self.progress("people", 0, len(people))
         # Workers only read the message stores; this thread alone writes bundles, in candidate order,
         # so the store ends up exactly as a one-by-one run leaves it.
-        for index, (person, collected) in enumerate(collect_all(people, open_sources), 1):
+        for index, (person, collected) in enumerate(collect_all(people, worker_args), 1):
             self.progress("people", index, len(people))
             if collected is None:
                 counts["no_messages"] += 1
@@ -117,29 +115,28 @@ def collect_one(sources: ContextSources, person: Person) -> tuple[CollectionBund
     return bundle, json.dumps(bundle.to_payload(), sort_keys=True, separators=(",", ":"))
 
 
-def collect_all(people: list[Person], open_sources: Callable[[], ContextSources]
+_SOURCES: ContextSources | None = None  # this worker process's stores
+
+
+def open_worker(channels: set[str], msgvault_db: Path, chat_db: Path, wacli_db: Path, owner_name: str,
+                contact_names: dict[str, str]) -> None:
+    global _SOURCES
+    _SOURCES = ContextSources(channels=channels, msgvault_db=msgvault_db, chat_db=chat_db, wacli_db=wacli_db,
+                              deep_cap=CHAT_MESSAGE_CAP, max_group_size=MAX_GROUP_SIZE, owner_name=owner_name,
+                              contact_names=contact_names)
+    atexit.register(_SOURCES.close)
+
+
+def collect_in_worker(person: Person) -> tuple[CollectionBundle, str] | None:
+    assert _SOURCES is not None  # open_worker ran when this process started
+    return collect_one(_SOURCES, person)
+
+
+def collect_all(people: list[Person], worker_args: tuple[object, ...]
                 ) -> Iterator[tuple[Person, tuple[CollectionBundle, str] | None]]:
-    """(person, collect_one result) for every person, in order, read by WORKERS threads. SQLite
-    releases the GIL while a query runs, and the queries are most of the time."""
-    local = threading.local()
-    opened: list[ContextSources] = []
-    lock = threading.Lock()
-
-    def work(person: Person) -> tuple[Person, tuple[CollectionBundle, str] | None]:
-        sources: ContextSources | None = getattr(local, "sources", None)
-        if sources is None:
-            sources = local.sources = open_sources()
-            with lock:
-                opened.append(sources)
-        return person, collect_one(sources, person)
-
-    pool = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="collect")
-    try:
-        yield from pool.map(work, people)
-    finally:
-        pool.shutdown(wait=True, cancel_futures=True)  # a failure stops the people not yet started
-        for sources in opened:
-            sources.close()
+    """(person, collect_one result) for every person, in order, collected by WORKERS processes."""
+    with ProcessPoolExecutor(max_workers=WORKERS, initializer=open_worker, initargs=worker_args) as pool:
+        yield from zip(people, pool.map(collect_in_worker, people, chunksize=16))
 
 
 def main(argv: list[str] | None = None) -> int:
