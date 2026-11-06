@@ -4,6 +4,7 @@ Created: 2026-10-29
 
 Change log:
 - 2026-10-29: First version: the QA hook, the runner, People and set-picker scenarios.
+- 2026-11-06: `--browser`: the same scenarios headless in WebKit, on any machine.
 
 Click through the real app window (WebKit, the Tauri shell, the local page server) from the
 terminal, so a UI change is checked where people use it instead of by hand.
@@ -13,6 +14,7 @@ terminal, so a UI change is checked where people use it instead of by hand.
 | `build.sh` | Builds `Powerpacks QA.app`: the debug-menu build with the QA hook, its own app id |
 | `remote.sh` | Runs the scenarios on casper-mini and brings the pictures back |
 | `run.py` | Opens the QA app on a Powerpacks folder, runs scenarios, prints PASS/FAIL with timings |
+| `browser.py` | The headless driver for `--browser`: Playwright's WebKit on a page server of its own |
 | `app.py` | The driver: find, click, type, wait within a budget, WebKit's picture |
 | `scenarios.py` | One function per flow; each check names the bug it guards |
 | `../src-tauri/src/qa.rs` | The hook: on only in a debug-menu build started with `POWERPACKS_QA_PORT` |
@@ -51,6 +53,20 @@ Jake's store (6,343 people, realized), the size where the People page lagged.
 
 The chat's set picker scenario needs ChatGPT signed in on the QA box's app (Accounts → Connect
 ChatGPT, once).
+
+## Run headless
+
+```bash
+uv run --with playwright playwright install webkit   # once
+uv run --with playwright python desktop/qa/run.py --browser --root ~/workspace/pp-qa-app [scenario ...]
+```
+
+Playwright's WebKit (the engine under the app's window, not the window itself) opens the page
+from a page server it starts on a free port for `--root`, so it runs on the Mac you work on, in
+a cloud thread or in CI without touching the installed Powerpacks or the screen. Each run starts
+from `.powerpacks/deep-context-baseline.sqlite` when the root has one. A plain browser has no
+desktop bridge, so chat (`search-set-picker`), sign-ins and links the app hands to the browser
+are checked only in the native run; a link that leaves the page is recorded the same way.
 
 ## Add a scenario
 
