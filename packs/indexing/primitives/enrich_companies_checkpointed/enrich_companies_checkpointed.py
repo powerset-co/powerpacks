@@ -959,10 +959,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"company provider '{args.provider}' is not supported; no paid API was called")
     if not input_path.exists():
         raise SystemExit(f"missing company input JSONL: {input_path}")
+    artifact_started = time.perf_counter()
     artifact = load_company_artifact(
         getattr(args, "artifact_path", None),
         needed_keys={key for row in read_jsonl(input_path) for key in company_index_keys(row)},
     ) if getattr(args, "artifact_path", None) else {}
+    artifact_seconds = time.perf_counter() - artifact_started
     if getattr(args, "dry_run", False) or getattr(args, "estimate", False):
         return estimate_payload(input_path, provider, artifact, getattr(args, "model", None))
     allow_paid = bool(getattr(args, "allow_paid", False))
@@ -973,6 +975,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if state.get("status") == "completed" and output_path.exists() and not args.force:
         manifest = output_dir / "manifest.json"
         return read_json(manifest) if manifest.exists() else {"status": "completed", "output": str(output_path)}
+    add_timing(state, "artifact_load_seconds", artifact_seconds)
 
     batch: list[dict[str, Any]] = []
     paid_pending: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
@@ -998,6 +1001,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # showing a logo is never bought at all.
     rapidapi_lookup: dict[str, dict[str, Any]] = {}  # rapidapi id or "slug:<slug>" → response
     if LinkedInApiConfig.resolve().api_key:
+        cache_started = time.perf_counter()
         needs_logo: dict[str, bool] = {}  # rapidapi_key → no input row for it carries a logo
         for row in read_jsonl(input_path):
             key = rapidapi_key(row)
@@ -1007,17 +1011,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         slugs = [key[len("slug:"):] for key in needs_logo if key.startswith("slug:")]
         rapidapi_lookup.update(rapidapi_company.load_cached_company_details(ids))
         rapidapi_lookup.update({f"slug:{slug}": resp for slug, resp in rapidapi_company.load_cached_company_details_by_slug(slugs).items()})
-        sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)} cached company profiles (free)\n")
+        add_timing(state, "rapidapi_cache_read_seconds", time.perf_counter() - cache_started)
+        sys.stderr.write(f"[enrich-companies] loaded {len(rapidapi_lookup)} cached company profiles (free) "
+                         f"in {state['timings']['rapidapi_cache_read_seconds']:.0f}s; "
+                         f"company artifact read in {artifact_seconds:.0f}s\n")
         if allow_paid:
             open_ids = [rid for rid in ids if rid not in rapidapi_lookup and needs_logo[rid]]
             if open_ids:
+                fetch_started = time.perf_counter()
                 fetched = rapidapi_company.fetch_company_details_batch(open_ids)
+                add_timing(state, "rapidapi_fetch_seconds", time.perf_counter() - fetch_started)
                 ok = sum(1 for v in fetched.values() if not v.get("error") and v.get("success") is not False)
                 sys.stderr.write(f"[enrich-companies] finished fetching company profiles: {ok}/{len(open_ids)} successful\n")
                 rapidapi_lookup.update(fetched)
             open_slugs = [slug for slug in slugs if f"slug:{slug}" not in rapidapi_lookup and needs_logo[f"slug:{slug}"]]
             if open_slugs:
+                fetch_started = time.perf_counter()
                 by_slug = rapidapi_company.fetch_company_details_batch_by_slug(open_slugs)
+                add_timing(state, "rapidapi_fetch_seconds", time.perf_counter() - fetch_started)
                 ok = sum(1 for v in by_slug.values() if not v.get("error") and v.get("success") is not False)
                 sys.stderr.write(f"[enrich-companies] finished fetching company profiles by slug: {ok}/{len(open_slugs)} successful\n")
                 rapidapi_lookup.update({f"slug:{slug}": resp for slug, resp in by_slug.items()})

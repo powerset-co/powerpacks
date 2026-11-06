@@ -43,6 +43,25 @@ DEFAULT_COMPANY_MAX_RPM = float(os.getenv("POWERPACKS_RAPIDAPI_COMPANY_MAX_RPM",
 _RATE_LIMITER = StartRateLimiter(DEFAULT_COMPANY_MAX_RPM)
 
 
+# RapidAPI's answers (HTTP 200, ``success: false``) for a company that is gone for good: by id, and by
+# a slug LinkedIn no longer knows. Kept in the cache so no rebuild buys them again; "The request
+# failed..." and every other failure stays a miss and is fetched again.
+GONE_MESSAGES = ("no longer exists", "Not valid LinkedIn company username")
+
+
+def _gone(data: dict[str, Any]) -> bool:
+    return data.get("success") is False and any(text in str(data.get("message") or "") for text in GONE_MESSAGES)
+
+
+def _cached_gone(company_id: str, cache_dir: str | Path | None = None) -> bool:
+    """Whether the cache holds RapidAPI's answer that this company is gone for good."""
+    try:
+        data = json.loads(_cache_path(company_id, cache_dir).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and _gone(data)
+
+
 def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
     d = Path(cache_dir or os.getenv("POWERPACKS_RAPIDAPI_COMPANY_CACHE", DEFAULT_CACHE_DIR))
     return d / f"{company_id}.json"
@@ -88,8 +107,8 @@ def _read_cached_values(
 
 
 def _write_cache(company_id: str, data: dict[str, Any], cache_dir: str | Path | None = None) -> None:
-    """Cache a company payload. A failed lookup is not an answer and is not kept."""
-    if data.get("success") is False:
+    """Cache a company payload. A failed lookup is not kept, unless the company is gone for good."""
+    if data.get("success") is False and not _gone(data):
         return
     p = _cache_path(company_id, cache_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +205,7 @@ def fetch_company_details_batch(
     # Serve cache hits immediately, collect misses for network fetch.
     unique_ids = list(dict.fromkeys(company_ids))
     results = _read_cached_values(unique_ids, cache_key=lambda cid: cid, cache_dir=cache_dir)
-    need_fetch = [cid for cid in unique_ids if cid not in results]
+    need_fetch = [cid for cid in unique_ids if cid not in results and not _cached_gone(cid, cache_dir)]
 
     if not need_fetch:
         return results
@@ -300,7 +319,8 @@ def fetch_company_details_batch_by_slug(
 
     unique_slugs = list(dict.fromkeys(slugs))
     results = _read_cached_values(unique_slugs, cache_key=_slug_cache_key, cache_dir=cache_dir)
-    need_fetch = [slug for slug in unique_slugs if slug not in results]
+    need_fetch = [slug for slug in unique_slugs
+                  if slug not in results and not _cached_gone(_slug_cache_key(slug), cache_dir)]
     if not need_fetch:
         return results
 
