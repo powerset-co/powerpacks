@@ -62,7 +62,7 @@ class Collect(Node):
             "JOIN candidates c ON c.candidate_id = i.candidate_id ORDER BY c.candidate_id"
         )}
 
-        worker_args = (channels, self.msgvault_db, self.chat_db, self.wacli_db, owner_name, contact_names)
+        worker_args: WorkerArgs = (channels, self.msgvault_db, self.chat_db, self.wacli_db, owner_name, contact_names)
 
         counts: dict[str, int] = {
             "candidates": len(people),
@@ -115,6 +115,7 @@ def collect_one(sources: ContextSources, person: Person) -> tuple[CollectionBund
     return bundle, json.dumps(bundle.to_payload(), sort_keys=True, separators=(",", ":"))
 
 
+WorkerArgs = tuple[set[str], Path, Path, Path, str, dict[str, str]]  # open_worker's arguments
 _SOURCES: ContextSources | None = None  # this worker process's stores
 
 
@@ -132,7 +133,7 @@ def collect_in_worker(person: Person) -> tuple[CollectionBundle, str] | None:
     return collect_one(_SOURCES, person)
 
 
-def collect_all(people: list[Person], worker_args: tuple[object, ...]
+def collect_all(people: list[Person], worker_args: WorkerArgs
                 ) -> Iterator[tuple[Person, tuple[CollectionBundle, str] | None]]:
     """(person, collect_one result) for every person, in order, collected by WORKERS processes."""
     with ProcessPoolExecutor(max_workers=WORKERS, initializer=open_worker, initargs=worker_args) as pool:
