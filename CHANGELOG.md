@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.55.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.3...powerpacks-v3.55.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* **refresh:** skip index rebuilds for new message counts; stop re-buying gone companies ([#1111](https://github.com/powerset-co/powerpacks/issues/1111)) ([dcac3da](https://github.com/powerset-co/powerpacks/commit/dcac3da9526b50b421da480c34bd863c600c6edc))
+
 ## [3.55.3](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.2...powerpacks-v3.55.3) (2026-11-06)
 
 
