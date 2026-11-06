@@ -2414,23 +2414,21 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
                     rc = extract.run_exit_code(payload)
 
                 self.assertEqual(rc, 0)
-                depth_mock.assert_called_once()
-                self.assertEqual(
-                    depth_mock.call_args.kwargs["cold_start"],
-                    existing_messages == 0,
-                )
-                self.assertEqual(
-                    depth_mock.call_args.kwargs["before_states"],
-                    {"15550001111@s.whatsapp.net": (1, 1768000000)},
-                )
-                self.assertEqual(
-                    depth_mock.call_args.kwargs["before_total_messages"],
-                    existing_messages,
-                )
-                self.assertEqual(
-                    depth_mock.call_args.kwargs["exclude_jids"],
-                    {excluded},
-                )
+                if existing_messages == 0:
+                    # The first import deepens shallow chats once.
+                    depth_mock.assert_called_once()
+                    self.assertTrue(depth_mock.call_args.kwargs["cold_start"])
+                    self.assertEqual(
+                        depth_mock.call_args.kwargs["before_states"],
+                        {"15550001111@s.whatsapp.net": (1, 1768000000)},
+                    )
+                    self.assertEqual(depth_mock.call_args.kwargs["before_total_messages"], 0)
+                    self.assertEqual(depth_mock.call_args.kwargs["exclude_jids"], {excluded})
+                    self.assertEqual(payload["history_depth"]["status"], "completed")
+                else:
+                    # A refresh is the incremental sync alone: no paced deepening.
+                    depth_mock.assert_not_called()
+                    self.assertEqual(payload["history_depth"]["status"], "skipped")
                 self.assertEqual(run_auth_mock.call_count, int(not authenticated_before))
                 self.assertEqual(payload["doctor"], {"data": {"linked_jid": doctor_jid}})
                 # Uncapped by default, cold or incremental.
