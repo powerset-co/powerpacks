@@ -741,15 +741,21 @@ class WhatsAppExtractor:
             sync_summary["existing_messages_at_start"] = existing_messages_at_start
             sync_summary["existing_messages_before_sync"] = before_total_messages
             runtime.write_progress(progress_jsonl, {"event": "synced", "sync": sync_summary})
-            runtime.emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
-            history_depth = depth.run_history_depth_stage(
-                store,
-                out_dir=manifest.parent / "history-depth",
-                before_states=before_states,
-                before_total_messages=before_total_messages,
-                cold_start=cold_start,
-                exclude_jids={linked_jid} if linked_jid else set(),
-            )
+            # Deepening shallow chats is paced by WhatsApp (ten requests a chat, ten
+            # seconds apart, up to 1h45m) and only matters once: on the first import.
+            # A daily refresh is the incremental sync alone.
+            if cold_start:
+                runtime.emit_status("Deepening recent shallow WhatsApp conversations in paced batches.")
+                history_depth = depth.run_history_depth_stage(
+                    store,
+                    out_dir=manifest.parent / "history-depth",
+                    before_states=before_states,
+                    before_total_messages=before_total_messages,
+                    cold_start=True,
+                    exclude_jids={linked_jid} if linked_jid else set(),
+                )
+            else:
+                history_depth = {"status": "skipped", "reason": "incremental sync", "counts": {}}
             runtime.write_progress(
                 progress_jsonl,
                 {
