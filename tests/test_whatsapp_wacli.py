@@ -731,6 +731,40 @@ class ImportWhatsAppWacliTests(unittest.TestCase):
             self.assertIn("+14155559999", contacts)
             self.assertEqual(contacts["+14155558888"].group_names, {"Cached Group"})
 
+    def test_refresh_group_info_asks_only_for_groups_the_cache_lacks(self) -> None:
+        # 578 groups took 13 minutes on Jake's daily refresh, one wacli process each.
+        with tempfile.TemporaryDirectory() as td:
+            store = Path(td) / "wacli"
+            create_wacli_db(store)
+            conn = sqlite3.connect(store / "wacli.db")
+            conn.executemany("INSERT INTO chats (jid, kind) VALUES (?, ?)",
+                             [("cached-group@g.us", "group"), ("new-group@g.us", "group")])
+            conn.commit()
+            conn.close()
+            cached = {"jid": "cached-group@g.us", "name": "Cached Group", "participant_count": 1,
+                      "participants": [{"phone": "+14155558888", "name": "Cached One"}]}
+            write_json(sync.group_participants_cache_path(store), {"version": 1, "groups": {"cached-group@g.us": cached}})
+            asked: list[str] = []
+
+            def fake_run(cmd, **_kwargs):
+                jid = cmd[cmd.index("--jid") + 1]
+                asked.append(jid)
+                return runtime.CommandResult(returncode=0, stdout="", stderr="", json={"data": {
+                    "JID": jid, "Name": "New Group",
+                    "Participants": [{"JID": "14155559999@s.whatsapp.net", "DisplayName": "New One"}],
+                }})
+
+            with mock.patch.object(binary, "wacli_bin", return_value="/tmp/wacli"), \
+                    mock.patch.object(runtime, "run_command", side_effect=fake_run):
+                summary = sync.refresh_group_info(store, timeout=5, min_interval=0)
+
+            # create_wacli_db seeds two groups of its own; the cached one is never asked for.
+            self.assertEqual(sorted(asked), ["111222333@g.us", "987654321@g.us", "new-group@g.us"])
+            self.assertEqual((summary["group_chats"], summary["reused"], summary["refreshed"], summary["cached_groups"]), (4, 1, 3, 4))
+            groups = json.loads(sync.group_participants_cache_path(store).read_text(encoding="utf-8"))["groups"]
+            self.assertEqual(groups["cached-group@g.us"], cached)
+            self.assertEqual(groups["new-group@g.us"]["participants"], [{"phone": "+14155559999", "name": "New One"}])
+
     def test_export_fills_missing_names_from_contacts_csv_by_phone(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
