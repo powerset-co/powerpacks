@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.55.5](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.4...powerpacks-v3.55.5) (2026-11-06)
+
+
+### Bug Fixes
+
+* **indexing:** a company logo link that has expired is no logo; its payload is bought again ([#1113](https://github.com/powerset-co/powerpacks/issues/1113)) ([7924631](https://github.com/powerset-co/powerpacks/commit/7924631710546be0bdbdef256de90763f858f41e))
+
 ## [3.55.4](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.55.3...powerpacks-v3.55.4) (2026-11-06)
 
 
