@@ -19,7 +19,7 @@ import type {
   SourceRun,
 } from "@/types/refresh"
 
-import { added, clock, lower, ordinal, SOURCE_TITLE, stamp, took, trigger, WEEKDAYS, when } from "./format"
+import { added, clock, lower, ordinal, SOURCE_TITLE, took, trigger, WEEKDAYS, when } from "./format"
 import { useRefresh } from "./useRefresh"
 
 const STATUS: Readonly<
@@ -77,12 +77,14 @@ function frequencyOf(settings: RefreshState["settings"]): RefreshFrequency {
 export function RefreshPage() {
   const client = useQueryClient()
   const refresh = useRefresh()
-  // The run whose details are open; undefined until one is clicked (the latest opens by itself
-  // when it needs you).
+  // The runs whose problems are open; undefined until one is clicked (the latest opens by itself
+  // when it needs you). Each opens and closes on its own.
   // A notice can name a run (?run=id) to open: the one it is about, not the latest.
   const [params] = useSearchParams()
   const linked = Number(params.get("run")) || undefined
-  const [openId, setOpenId] = useState<number | null | undefined>(linked)
+  const [openIds, setOpenIds] = useState<ReadonlySet<number> | undefined>(
+    linked === undefined ? undefined : new Set([linked]),
+  )
   const settings = useMutation({
     mutationFn: saveRefreshSettings,
     onSuccess: (next) => client.setQueryData(REFRESH_KEY, next),
@@ -107,11 +109,12 @@ export function RefreshPage() {
   const latest = runs[0]
   const frequency = data ? frequencyOf(data.settings) : "weekly"
   const open =
-    openId === undefined
-      ? latest && latest.status !== "ok" && latest.status !== "running"
-        ? latest.id
-        : null
-      : openId
+    openIds ?? new Set(latest && latest.status !== "ok" && latest.status !== "running" ? [latest.id] : [])
+  const toggle = (id: number) => {
+    const next = new Set(open)
+    if (!next.delete(id)) next.add(id)
+    setOpenIds(next)
+  }
 
   return (
     <Page title="Scheduled tasks">
@@ -228,7 +231,7 @@ export function RefreshPage() {
             )}
           </section>
           <GmailReconnect />
-          <History runs={runs} open={open} onToggle={(id) => setOpenId(id === open ? null : id)} />
+          <History runs={runs} open={open} onToggle={toggle} />
         </>
       )}
     </Page>
@@ -237,7 +240,7 @@ export function RefreshPage() {
 
 interface HistoryProps {
   runs: RefreshRun[]
-  open: number | null
+  open: ReadonlySet<number>
   onToggle: (id: number) => void
 }
 
@@ -266,7 +269,7 @@ function History({ runs, open, onToggle }: HistoryProps) {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <RunRow key={run.id} run={run} open={run.id === open} onToggle={() => onToggle(run.id)} />
+                <RunRow key={run.id} run={run} open={open.has(run.id)} onToggle={() => onToggle(run.id)} />
               ))}
             </tbody>
           </table>
@@ -276,31 +279,59 @@ function History({ runs, open, onToggle }: HistoryProps) {
   )
 }
 
+/** A run has details only when something went wrong: its problems and what to do. */
+function hasDetail(run: RefreshRun): boolean {
+  return run.problems.length > 0 || Boolean(run.error)
+}
+
 function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onToggle: () => void }) {
+  const detail = hasDetail(run)
+  const time = (
+    <span className="group relative">
+      {when(run.started_at)}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute top-1/2 left-full z-10 ml-2 hidden -translate-y-1/2 whitespace-nowrap rounded-[var(--radius-m)] border border-line bg-card px-2 py-1 text-[11px] text-foreground shadow-sm group-hover:block"
+      >
+        {run.finished_at ? `Duration ${took(run)}` : "Still running"}
+      </span>
+    </span>
+  )
   return (
     <>
       <tr
-        aria-selected={open}
-        onClick={onToggle}
-        className="cursor-pointer whitespace-nowrap hover:bg-surface-2 aria-selected:bg-surface-2"
+        aria-selected={detail ? open : undefined}
+        onClick={detail ? onToggle : undefined}
+        className={cn(
+          "whitespace-nowrap",
+          detail && "cursor-pointer hover:bg-surface-2 aria-selected:bg-surface-2",
+        )}
       >
         <td className={CELL}>
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggle()
-            }}
-            className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left text-xs text-foreground"
-          >
-            <ChevronRight
-              aria-hidden
-              className={cn("size-3 text-faint transition-transform duration-fast", open && "rotate-90")}
-            />
-            {when(run.started_at)}
-            <span className="text-faint">· {trigger(run)}</span>
-          </button>
+          {detail ? (
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggle()
+              }}
+              className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left text-xs text-foreground"
+            >
+              <ChevronRight
+                aria-hidden
+                className={cn("size-3 text-faint transition-transform duration-fast", open && "rotate-90")}
+              />
+              {time}
+              <span className="text-faint">· {trigger(run)}</span>
+            </button>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span aria-hidden className="size-3" />
+              {time}
+              <span className="text-faint">· {trigger(run)}</span>
+            </span>
+          )}
         </td>
         <td className={CELL}>
           <Badge variant={STATUS[run.status].variant}>
@@ -328,7 +359,7 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
         </td>
         <td className={cn(CELL, "tabular-nums")}>{added(run)}</td>
       </tr>
-      {open && (
+      {detail && open && (
         <tr>
           <td colSpan={4} className="border-t border-line bg-surface-2 p-0">
             <RunDetail run={run} />
@@ -339,21 +370,9 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
   )
 }
 
-/** One line: when it started, how long it took, and the people it added. */
-function summary(run: RefreshRun): string {
-  const delta =
-    run.people_before === null || run.people_after === null ? 0 : run.people_after - run.people_before
-  return [
-    `Started ${stamp(run.started_at)}`,
-    `Duration ${run.finished_at ? took(run) : "still running"}`,
-    delta > 0 ? `People Added ${delta.toLocaleString()}` : "No Change",
-  ].join(" - ")
-}
-
 function RunDetail({ run }: { run: RefreshRun }) {
   return (
     <article aria-label="Run details" className="flex flex-col gap-2 px-8 py-3 text-xs">
-      <p className="m-0">{summary(run)}</p>
       {run.problems.map((problem) => (
         <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5">
           <b className="block">{problem.title}</b>
