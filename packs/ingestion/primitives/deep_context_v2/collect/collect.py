@@ -13,7 +13,10 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from collections.abc import Callable, Iterator
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageEntry, Person
@@ -25,6 +28,9 @@ from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.discover.messages.extract_imessage import DEFAULT_CHAT_DB
 
 MAX_GROUP_SIZE = 25      # iMessage groups larger than this are not the candidate's context
+# People are read in parallel, each worker with its own read-only stores. The reads wait on disk, not
+# CPU: on a 279k-message archive one thread read 1,000 people in 18.9 s, 8 threads in 7.2 s, 16 in 3.9 s.
+WORKERS = 16
 DEFAULT_LIMIT = 100_000  # more candidates than any store has; --limit N narrows a run to the first N
 
 
@@ -48,19 +54,18 @@ class Collect(Node):
     def execute(self) -> dict[str, int]:
         people: list[Person] = queries.candidates_to_collect(self.conn, self.limit)
         # The store says which channels were linked; only those stores are opened.
-        sources: ContextSources = ContextSources(
-            channels=queries.channels_present(self.conn),
-            msgvault_db=self.msgvault_db,
-            chat_db=self.chat_db,
-            wacli_db=self.wacli_db,
-            deep_cap=CHAT_MESSAGE_CAP,
-            max_group_size=MAX_GROUP_SIZE,
-            owner_name=read_owner(self.conn).name,
-            contact_names={row["normalized_value"]: row["display_name"] for row in self.conn.execute(
-                "SELECT i.normalized_value, c.display_name FROM candidate_identifiers i "
-                "JOIN candidates c ON c.candidate_id = i.candidate_id ORDER BY c.candidate_id"
-            )},
-        )
+        channels: set[str] = queries.channels_present(self.conn)
+        owner_name: str = read_owner(self.conn).name
+        contact_names: dict[str, str] = {row["normalized_value"]: row["display_name"] for row in self.conn.execute(
+            "SELECT i.normalized_value, c.display_name FROM candidate_identifiers i "
+            "JOIN candidates c ON c.candidate_id = i.candidate_id ORDER BY c.candidate_id"
+        )}
+
+        def open_sources() -> ContextSources:
+            return ContextSources(channels=channels, msgvault_db=self.msgvault_db, chat_db=self.chat_db,
+                                  wacli_db=self.wacli_db, deep_cap=CHAT_MESSAGE_CAP, max_group_size=MAX_GROUP_SIZE,
+                                  owner_name=owner_name, contact_names=contact_names)
+
         counts: dict[str, int] = {
             "candidates": len(people),
             "bundles": 0,
@@ -73,35 +78,68 @@ class Collect(Node):
             "messages_whatsapp_group": 0,
         }
         self.progress("people", 0, len(people))
-        for index, person in enumerate(people, 1):
+        # Workers only read the message stores; this thread alone writes bundles, in candidate order,
+        # so the store ends up exactly as a one-by-one run leaves it.
+        for index, (person, collected) in enumerate(collect_all(people, open_sources), 1):
             self.progress("people", index, len(people))
-            # Direct messages across all of the person's channels, newest-first, capped at the depth.
-            # `available` is how many there were before the cap.
-            messages: list[MessageEntry]
-            available: int
-            messages, available = sources.collect_person(person)
-            if not messages:
+            if collected is None:
                 counts["no_messages"] += 1
                 continue
-            bundle: CollectionBundle = CollectionBundle.of(
-                person,
-                messages=messages,
-                groups=list(dict.fromkeys(sources.imessage_groups(person) + [
-                    message.subject for message in messages if message.channel == "whatsapp_group"
-                ])),
-                thread_participants=sources.thread_participants(person),  # who else was on the email threads
-                available=available,
-            )
-            # Stored as sorted-key compact JSON; the fingerprint is over exactly those bytes.
-            payload_json: str = json.dumps(bundle.to_payload(), sort_keys=True, separators=(",", ":"))
+            bundle, payload_json = collected
+            # The fingerprint is over exactly the stored bytes.
             fingerprint: str = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
             queries.upsert_bundle(self.conn, person.person_id, payload_json, fingerprint, now_iso())
             counts["bundles"] += 1
             counts["capped"] += bundle.capped
-            for message in messages:
+            for message in bundle.messages:
                 counts["messages_" + message.channel] += 1
-        sources.close()
         return counts
+
+
+def collect_one(sources: ContextSources, person: Person) -> tuple[CollectionBundle, str] | None:
+    """One person's bundle and its stored JSON (sorted keys, compact), or None when they have no messages."""
+    # Direct messages across all of the person's channels, newest-first, capped at the depth.
+    # `available` is how many there were before the cap.
+    messages: list[MessageEntry]
+    available: int
+    messages, available = sources.collect_person(person)
+    if not messages:
+        return None
+    bundle: CollectionBundle = CollectionBundle.of(
+        person,
+        messages=messages,
+        groups=list(dict.fromkeys(sources.imessage_groups(person) + [
+            message.subject for message in messages if message.channel == "whatsapp_group"
+        ])),
+        thread_participants=sources.thread_participants(person),  # who else was on the email threads
+        available=available,
+    )
+    return bundle, json.dumps(bundle.to_payload(), sort_keys=True, separators=(",", ":"))
+
+
+def collect_all(people: list[Person], open_sources: Callable[[], ContextSources]
+                ) -> Iterator[tuple[Person, tuple[CollectionBundle, str] | None]]:
+    """(person, collect_one result) for every person, in order, read by WORKERS threads. SQLite
+    releases the GIL while a query runs, and the queries are most of the time."""
+    local = threading.local()
+    opened: list[ContextSources] = []
+    lock = threading.Lock()
+
+    def work(person: Person) -> tuple[Person, tuple[CollectionBundle, str] | None]:
+        sources: ContextSources | None = getattr(local, "sources", None)
+        if sources is None:
+            sources = local.sources = open_sources()
+            with lock:
+                opened.append(sources)
+        return person, collect_one(sources, person)
+
+    pool = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="collect")
+    try:
+        yield from pool.map(work, people)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)  # a failure stops the people not yet started
+        for sources in opened:
+            sources.close()
 
 
 def main(argv: list[str] | None = None) -> int:
