@@ -49,11 +49,14 @@ def _cache_path(company_id: str, cache_dir: str | Path | None = None) -> Path:
 
 
 def _read_cache(company_id: str, cache_dir: str | Path | None = None) -> dict[str, Any] | None:
+    """The cached company payload, or None. A failed lookup (``success: false``,
+    which the API returns with HTTP 200) is a miss, so the shared cache's old
+    failure files are fetched again instead of answering every operator."""
     p = _cache_path(company_id, cache_dir)
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and not data.get("error"):
+            if isinstance(data, dict) and not data.get("error") and data.get("success") is not False:
                 return data
         except (json.JSONDecodeError, OSError):
             pass
@@ -85,6 +88,9 @@ def _read_cached_values(
 
 
 def _write_cache(company_id: str, data: dict[str, Any], cache_dir: str | Path | None = None) -> None:
+    """Cache a company payload. A failed lookup is not an answer and is not kept."""
+    if data.get("success") is False:
+        return
     p = _cache_path(company_id, cache_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -102,7 +108,8 @@ def fetch_company_details(
     """Fetch company details by RapidAPI LinkedIn company ID.
 
     Returns the parsed JSON response or {"error": "..."} on failure.
-    Successful responses are cached to disk; error results are never cached.
+    Successful responses are cached to disk; error results and failed lookups
+    (``success: false`` bodies) are never cached.
 
     Transient failures (HTTP 429, HTTP 5xx, connection/timeout exceptions)
     are retried up to *max_attempts* times with exponential backoff plus

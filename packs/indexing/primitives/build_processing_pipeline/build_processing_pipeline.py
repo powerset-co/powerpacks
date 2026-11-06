@@ -1739,7 +1739,6 @@ def step_company(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[str,
         base_url=ledger.get("company_openai_base_url"),
         force=False,
         stop_after_chunks=None,
-        rapidapi_people_csv=ledger.get("input"),
     ))
     enrichment_seconds = round(time.perf_counter() - enrichment_started, 3)
     artifacts_out = {
