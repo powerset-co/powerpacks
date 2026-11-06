@@ -132,7 +132,7 @@ uv run --env-file .env --project . python packs/powerset/primitives/pull_runtime
 ```
 
 This pulls `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `OPENAI_API_KEY`,
-`PARALLEL_API_KEY`, `TYPESAFE_API_KEY`, and `POWERSET_API_KEY` from the
+`PARALLEL_API_KEY`, and `POWERSET_API_KEY` from the
 authenticated Powerset API when the user has been provisioned. Modal handles
 hosted processing for Powerset users.
 The Google Cloud CLI remains relevant
@@ -145,7 +145,7 @@ only to the separate msgvault/Gmail OAuth app setup flow.
 - `auth0_role` warn: "You're logged in but haven't been granted a Powerpacks
   role. Ask a Powerset admin to add your account to the Powerpacks Auth0 role."
 - `runtime_keys` `not_provisioned`: "You're logged in, but your
-  Modal/OpenAI/Parallel/TypeSafe/Powerset API runtime keys have not been
+  Modal/OpenAI/Parallel/Powerset API runtime keys have not been
   provisioned yet. Ask a Powerset admin to provision them, then rerun `$powerset login`."
 
 These are not blockers for unrelated workflows unless that workflow needs the

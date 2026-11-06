@@ -2,11 +2,11 @@
 
 Async fan-out LLM rerank over a JSONL of candidates or a Powerpacks task-state.
 
-For JD capability scoring, use `--jd-file` with `--capability-judge jev` (the
-default: seven profile-level Jev questions into a tree combiner) or
-`--capability-judge terra` (the Luna rating path).
-See [Jev architecture, metrics, and usage](jev/README.md). Jev returns a native
-0–1 qualification score and pass/reject decision; the Luna path returns a 1–5 rating.
+For JD capability scoring, use `--jd-file` with `--capability-judge luna` (the
+default: `luna_screen.py`, one rating question per candidate on OpenAI's Decisions
+API) or `--capability-judge terra` (the written Luna rating path). The screen returns
+a native 0–1 qualification score (the chance of a 3+ rating) and a pass/reject
+decision; the written path returns a 1–5 rating.
 The `terra` selector and module name are retained for CLI compatibility.
 Both JD paths first use the [cached structured JD cleaner](../clean_job_description/README.md).
 Raw postings remain available for retrieval and logistics review.

@@ -2,7 +2,7 @@
 """Pull local runtime keys from the Powerset API using the Auth0 login.
 
 The local machine is a thin dispatcher: heavy work runs on Modal, while local
-steps need OpenAI, Parallel, TypeSafe, and the Powerset vendor gateway. All
+steps need OpenAI, Parallel, and the Powerset vendor gateway. All
 runtime credentials are pulled from the authenticated Powerset API with the
 user's Auth0 bearer:
 
@@ -10,7 +10,6 @@ user's Auth0 bearer:
     GET {API}/v2/integrations/openai/key   -> {"openai_api_key"}
     GET {API}/v2/integrations/parallel/key -> {"parallel_api_key"}
     GET {API}/v2/integrations/powerset-api/key -> {"powerset_api_key"}
-    GET {API}/v2/integrations/typesafe/key -> {"typesafe_api_key"}
     GET {API}/v2/integrations/turbopuffer/key -> {"turbopuffer_api_key"}
     GET {API}/v2/integrations/powerpacks/database-url -> {"database_url"}
 
@@ -53,7 +52,6 @@ KEY_SOURCES: dict[str, tuple[str, str]] = {
     "OPENAI_API_KEY": ("/v2/integrations/openai/key", "openai_api_key"),
     "PARALLEL_API_KEY": ("/v2/integrations/parallel/key", "parallel_api_key"),
     "POWERSET_API_KEY": ("/v2/integrations/powerset-api/key", "powerset_api_key"),
-    "TYPESAFE_API_KEY": ("/v2/integrations/typesafe/key", "typesafe_api_key"),
     "TURBOPUFFER_API_KEY": ("/v2/integrations/turbopuffer/key", "turbopuffer_api_key"),
     "DATABASE_URL": ("/v2/integrations/powerpacks/database-url", "database_url"),
 }
@@ -217,12 +215,9 @@ def refresh_gateway_key(env_path: Path, token: str | None = None) -> dict[str, s
 
 
 def refresh_update_keys(env_path: Path) -> dict[str, str]:
-    """Refresh the gateway and shared credentials, and fill a missing TypeSafe key, with one login."""
-    current = _read_env_file(env_path)
-    existing_typesafe = bool(current.get("TYPESAFE_API_KEY", "").strip())
+    """Refresh the gateway and shared credentials with one login."""
     result = {
         "powerset_api_key_refresh": "not_signed_in",
-        "typesafe_api_key": "preserved" if existing_typesafe else "not_signed_in",
         **{key.lower(): "not_signed_in" for key in SHARED_KEYS},
     }
     try:
@@ -234,16 +229,6 @@ def refresh_update_keys(env_path: Path) -> dict[str, str]:
     for key in SHARED_KEYS:
         result[key.lower()] = _refresh_shared_key(env_path, key, token)
     result["operator_id"] = _refresh_operator_id(env_path, token)
-    if existing_typesafe:
-        return result
-    path, field = KEY_SOURCES["TYPESAFE_API_KEY"]
-    state, payload = fetch_endpoint(api_base(env_path), path, token)
-    key = payload.get(field) if state == "ok" and isinstance(payload, dict) else None
-    if not isinstance(key, str) or not key.strip():
-        result["typesafe_api_key"] = "error" if state == "ok" else state
-        return result
-    write_env(env_path, {"TYPESAFE_API_KEY": key})
-    result["typesafe_api_key"] = "installed"
     return result
 
 
@@ -288,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
     default_env = str(REPO / ".env")
-    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, TypeSafe, Powerset API, TurboPuffer and database keys into .env")
+    pull = sub.add_parser("pull", help="fetch Modal, OpenAI, Parallel, Powerset API, TurboPuffer and database keys into .env")
     pull.add_argument("--env-file", default=default_env)
     pull.set_defaults(func=cmd_pull)
     check = sub.add_parser("check", help="report which runtime keys are present in .env")

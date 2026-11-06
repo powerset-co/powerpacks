@@ -214,7 +214,7 @@ describe("RunView", () => {
     expect([...document.querySelectorAll("[data-pond] .pond-count")].map((pond) => pond.textContent)).toEqual(
       ["Kept 3 of 40", "2 new · Kept 3 of 80"],
     )
-    expect(tableHeadings()).toEqual(["Jev qualification scores", "Rating-based scores"])
+    expect(tableHeadings()).toEqual(["Qualification scores", "Rating-based scores"])
     expect(rowNames()).toEqual(RANKED_NAMES.flat())
   })
 

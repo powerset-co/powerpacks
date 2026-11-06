@@ -369,7 +369,7 @@ def _candidate_row(pond_candidate: PondCandidate, run_id: str,
     overall = None
     reason = pond_candidate.reasoning
     if cross_encoder:
-        # The screen's own number (Luna rating or Jev probability) never renders; a person
+        # The screen's own number (a rating or a screen probability) never renders; a person
         # shows the judges' overall, or the screen outcome when the judges never saw them.
         judgment = graded.candidate_judgment if graded else None
         overall = _overall_score(pond_candidate, graded)
@@ -508,7 +508,7 @@ def _cross_encoder_table(search: SearchResult, *, readonly: bool = False) -> str
                    for row in pond.candidates if row.cross_encoder_score is not None}
     if len(score_kinds) > 1:
         tables = []
-        for qualification, heading in ((True, "Jev qualification scores"), (False, "Rating-based scores")):
+        for qualification, heading in ((True, "Qualification scores"), (False, "Rating-based scores")):
             ponds = tuple(replace(pond, candidates=tuple(
                 row for row in pond.candidates if _is_qualification_score(row) == qualification))
                 for pond in search.ponds)

@@ -182,22 +182,22 @@ It prints `review UI: http://127.0.0.1:8765/searches/run?run_id=<slug>`; that
 page is the viewer. Before a deep-context store exists the same server serves
 the searches alone.
 
-The capability screen is Jev by default (`--capability-judge jev`) and needs
-`TYPESAFE_API_KEY` in the environment. Jev reads every hydrated row; no Luna filter
-runs ahead of it. The Jev tree uses a cutoff calibrated to
-93% recall of the Luna screen; it returns a native qualification score and pass
-decision, not a 1–5 rating. `--capability-judge terra` selects the Luna filter and
-Luna rating path (the CLI name is retained). Keep the chosen judge consistent across ponds when comparing scores.
-See [the Jev README](../../primitives/llm_rerank_candidates/jev/README.md) for metrics.
+The capability screen is Luna on OpenAI's Decisions API by default
+(`--capability-judge luna`) and needs only `OPENAI_API_KEY`. It reads every hydrated
+row; no filter runs ahead of it. Luna answers one 1–5 rating question per candidate
+(the capability rubric); the qualification score is its probability of 3 or more, and
+a candidate passes at the screen's threshold. `--capability-judge terra` selects the
+filter and written-rating path (the CLI name is retained). Keep the chosen judge
+consistent across ponds when comparing scores.
 
 The viewer shows the judges' overall for either screen, sorted by overall; a person
 the judges never saw shows "Did not pass screen" or "Not judged". Each result has a **Score** button
 for a human score and optional notes. Labels are stored in `<run>/fit-labels.jsonl`
 and submitted through the existing Powerset feedback endpoint.
-On approved Powerset JD runs, Jev chooses one of the employee API's 20 fixed
+On approved Powerset JD runs, Luna chooses one of the employee API's 20 fixed
 departments from the JD. The exact request is cached under `<run>/team-department/`.
 Only current staff in that department are requested from the API for prior-work
-embeddings, alongside the pond. After Jev, candidates with a passing capability screen
+embeddings, alongside the pond. After the screen, candidates with a passing capability screen
 receive an independent Team Similarity Rank across the run's deduplicated pass set.
 The rank uses original titles, descriptions, and employer names from five recent jobs;
 it does not change judge scores, result order, tags, or pins. The collapsed Team table

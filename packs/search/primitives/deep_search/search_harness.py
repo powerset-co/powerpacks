@@ -71,7 +71,7 @@ from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 from packs.search.primitives.shared.human_ratings import QUALIFICATION_SCORE_TYPE, score_1_to_5  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
@@ -85,6 +85,7 @@ MAX_PONDS = 4
 REVIEW_SCORE_THRESHOLD = .70
 PIN_FIELDS = ("taste_score", "pin_confidence", "pin_judgment")
 RETRIEVAL_LIMIT = 1000
+TASTE_TIMEOUT_SECONDS = 120
 CANDIDATE_JUDGE_CONCURRENCY = int(os.environ.get(
     "LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
@@ -1184,7 +1185,7 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
     async def annotate_all() -> list[dict[str, Any]]:
         judge_semaphore = asyncio.Semaphore(CANDIDATE_JUDGE_CONCURRENCY)
         judge = judge_client or (make_async_openai_client(keys["OPENAI_API_KEY"]) if keys["OPENAI_API_KEY"] else None)
-        client = http or httpx.AsyncClient(timeout=jev.TIMEOUT_SECONDS)
+        client = http or httpx.AsyncClient(timeout=TASTE_TIMEOUT_SECONDS)
 
         async def taste(batch: list[str]) -> tuple[None, str, Any, dict[str, Any]]:
             scores = await pin_confidence.fetch_taste(client, batch, keys["POWERSET_API_KEY"])
@@ -1418,7 +1419,7 @@ def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
                                         team_count=len(team["employees"]))
             return
         if not people:
-            team_similarity.save_status(run_dir, "no_ce_pass", "No Jev-pass candidates with work history",
+            team_similarity.save_status(run_dir, "no_ce_pass", "No screened candidates with work history",
                                         team_count=len(team["employees"]))
             return
         pond_n = int(results["iterations"][-1]["pond_n"])
@@ -1440,10 +1441,10 @@ def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
              db: str = DEFAULT_LOCAL_DB,
-             capability_judge: str = "jev",
+             capability_judge: str = "luna",
              client: Any | None = None) -> Path:
-    if capability_judge not in {"terra", "jev"}:
-        raise ValueError("capability_judge must be terra or jev")
+    if capability_judge not in {"terra", "luna"}:
+        raise ValueError("capability_judge must be terra or luna")
     results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     if results.get("status") not in {"ready_to_run", "ready_to_rerank"} or not results.get("pending_payload"):
         raise ValueError("search has no reviewed payload ready to run")
@@ -1460,8 +1461,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--model", jev.MODEL if capability_judge == "jev" else terra.MODEL,
-        "--reasoning-effort", "none" if capability_judge == "jev" else terra.REASONING_EFFORT,
+        "--model", luna_screen.MODEL if capability_judge == "luna" else terra.MODEL,
+        "--reasoning-effort", "none" if capability_judge == "luna" else terra.REASONING_EFFORT,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
         "--capability-judge", capability_judge,
@@ -1479,7 +1480,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     os.environ["OPENAI_SERVICE_TIER"] = "flex"
     team_future = None
     team_executor = None
-    if backend == "powerset" and capability_judge == "jev":
+    if backend == "powerset" and capability_judge == "luna":
         try:
             ref = results.get("hiring_company_ref") or resolve_hiring_company_ref(
                 results.get("hiring_company") or {}, results.get("url"))
@@ -1962,7 +1963,7 @@ def main() -> None:
             elif name in {"reannotate-saved", "pin-saved"}:
                 command.add_argument("--pond", type=int)
             if name == "run-pond":
-                command.add_argument("--capability-judge", choices=("terra", "jev"), default="jev")
+                command.add_argument("--capability-judge", choices=("terra", "luna"), default="luna")
         elif name == "set-query":
             command.add_argument("--query", required=True)
         elif name == "review-payload":

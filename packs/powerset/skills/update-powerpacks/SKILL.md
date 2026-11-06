@@ -29,9 +29,8 @@ Do not inspect Git state first. Do not run any other Git command. Do not pop or
 repair the stash. Do not run setup, doctor, imports, or state repair afterward.
 Report the script's final key/value lines.
 
-The updater refreshes `POWERSET_API_KEY` and fills a missing or empty
-`TYPESAFE_API_KEY`. It preserves nonempty TypeSafe keys. Failed pulls leave
-settings intact and never print keys. No inference runs.
+The updater refreshes `POWERSET_API_KEY` and the shared search and upload
+credentials. Failed pulls leave settings intact and never print keys. No inference runs.
 
 ## Channels
 

@@ -5,7 +5,7 @@ population at a time through the ordinary search pipeline. The user reviews the
 initial query and filters once. Each pond compiles, retrieves, hydrates, and screens;
 the viewer shows candidates for human scoring. A model proposes the next pond.
 
-Jev screens every hydrated row; there is no Luna filter ahead of it. Candidates that
+Luna (Decisions API) screens every hydrated row; there is no filter ahead of it. Candidates that
 pass then receive independent Terra domain and opportunity judgments in parallel.
 Overall is `min(domain, opportunity cap)`; human feedback is never changed.
 `--capability-judge terra` keeps the Luna filter followed by the Luna rating screen
@@ -20,7 +20,7 @@ flowchart TD
     REVIEW -->|--query-approved| INIT[Initialize results.json with JD hash, queries, corpus]
     INIT --> COMPILE[compile-pond: ordinary parallel extractors + pattern defaults]
     COMPILE --> CHECK[Agent checks query against compiled geography and reviews payload]
-    CHECK --> RUN[run-pond: retrieval → hydrate → Jev capability screen]
+    CHECK --> RUN[run-pond: retrieval → hydrate → Luna capability screen]
     RUN --> JUDGES[Capability pass: parallel domain + opportunity]
     JUDGES --> SOURCES[Save authorized set source counts and operator attribution]
     SOURCES --> VIEW[Viewer: overall = min of domain and opportunity cap]
@@ -46,7 +46,7 @@ An explicit request for another round can reopen a completed run.
 | Run | `search_harness.run_pond` | Reviewed payload, retrieval corpus | Pipeline candidate/profile artifacts; iteration with scores and pool statistics |
 | Candidate judgments | `search_harness._annotate_candidate_judgments` | Capability ratings >=3, full profiles, JD, pond query, company context | Domain score, opportunity cap, overall score; per-candidate checkpoints |
 | Pin confidence | `search_harness._annotate_pin_confidence`, `pin_confidence.py` | Judged candidates, full profiles, JD, company context | `taste_score` for every judged candidate; `pin_confidence` and `pin_judgment` for overall 4/5; per-candidate checkpoints |
-| Team similarity | `team_department.Department.from_jd`, `team_similarity.prepare_team` | JD, hiring company domain | One cached Jev department choice; API roster and embeddings filtered to that department in `team-embeddings.json` and `team.json` |
+| Team similarity | `team_department.Department.from_jd`, `team_similarity.prepare_team` | JD, hiring company domain | One cached Luna department choice; API roster and embeddings filtered to that department in `team-embeddings.json` and `team.json` |
 | Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; direct Postgres credentials | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
@@ -78,8 +78,8 @@ cap into execution. The summary retains every retrieved row. The viewer sorts by
 overall score, then capability rating, and shows one explanation. Ratings 1–2
 show "Did not pass screen".
 
-`llm_rerank_candidates.py --jd-file` judges with Jev by default (seven profile
-questions and a trained tree; see the [Jev README](../llm_rerank_candidates/jev/README.md)).
+`llm_rerank_candidates.py --jd-file` screens with Luna by default (one 1–5 rating
+question per candidate on the Decisions API; `luna_screen.py`).
 `--capability-judge terra` uses the exact
 [Terra v5 rubric](../../prompts/terra-capability-v5.txt): high reasoning, Flex,
 one full original profile per request, integer 1–5 output. The shared rubric and
@@ -133,8 +133,8 @@ URL intake verifies the saved source URL and reuses the fetched JD.
 Runs after the candidate judges in every pond and in `reannotate-saved`, with the three
 sources concurrent. Taste is a free read of Reporting's stored talent-index score
 (`GET /api/taste/scores`, 100 URLs per call) for every judged candidate. The pin judge,
-gpt-6-sol at low reasoning on `prompts/pin-confidence.txt`, and the four Jev evidence
-questions run only for overall 4/5 candidates. A source that is unreachable, unconfigured
+gpt-6-sol at low reasoning on `prompts/pin-confidence.txt`, runs only for overall 4/5
+candidates. A source that is unreachable, unconfigured
 or returns an invalid answer leaves its fields null and records the error in
 `raw_model_responses`; the pond never fails on it.
 

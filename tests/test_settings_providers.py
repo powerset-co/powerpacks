@@ -28,8 +28,7 @@ class ProviderSettingsTests(unittest.TestCase):
     def test_required_connections_precede_optional_connections(self) -> None:
         rows = list(self.rows().values())
         self.assertEqual([row["id"] for row in rows],
-                         ["parallel", "openai", "typesafe", "rapidapi-linkedin", "modal"])
-        self.assertEqual(rows[2]["name"], "TypeSafe")
+                         ["parallel", "openai", "rapidapi-linkedin", "modal"])
 
     def test_linkedin_key_is_required_only_without_powerset_key(self) -> None:
         self.assertFalse(self.rows()["rapidapi-linkedin"]["connected"])

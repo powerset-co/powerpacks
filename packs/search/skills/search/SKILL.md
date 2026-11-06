@@ -28,7 +28,7 @@ for people like someone continue through search below.
 
 ## How to run this skill
 
-Deep JD searches send every hydrated candidate to the Jev capability screen; there
+Deep JD searches send every hydrated candidate to the Luna capability screen; there
 is no separate cheap filter (`--capability-judge terra` restores the Luna filter and
 Luna rating screen). Candidates that pass receive parallel Terra qualification and Luna
 opportunity judgments. Terra independently rechecks Luna opportunity cap 2;

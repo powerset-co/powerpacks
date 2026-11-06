@@ -79,7 +79,7 @@ from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 
 
 DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
@@ -835,7 +835,7 @@ def latest_step(state: dict[str, Any], step_id: str) -> dict[str, Any] | None:
 def state_frontier_ids(state: dict[str, Any]) -> list[str]:
     # The newest frontier is authoritative, including an empty one: a retried
     # filter is appended after the prior rerank, and a --force rerun appends a
-    # fresh hydrate (the whole frontier on the Jev path, which has no filter).
+    # fresh hydrate (the whole frontier on the Luna screen path, which has no filter).
     for step in reversed(state.get("steps", [])):
         output = step.get("output", {}) if isinstance(step, dict) else {}
         key = ({"llm_rerank_candidates": "ranked_candidate_ids",
@@ -1139,22 +1139,21 @@ async def _rerank_with_terra(items: list[RerankItem], *, jd: str, title: str,
     return results, scores
 
 
-async def _rerank_with_jev(items: list[RerankItem], *, jd: str, title: str,
-                           company_name: str, evaluation_query: str, as_of: str,
-                           output_dir: Path, cleaner_output_dir: Path,
-                           cleaner_api_key: str | None, api_key: str | None, concurrency: int
-                           ) -> tuple[list[RerankResult], dict[str, Any]]:
+async def _rerank_with_luna(items: list[RerankItem], *, jd: str, title: str,
+                            company_name: str, evaluation_query: str, as_of: str,
+                            output_dir: Path, cleaner_output_dir: Path, api_key: str | None,
+                            ) -> tuple[list[RerankResult], dict[str, Any]]:
     cleaned_jd = await _clean_capability_jd(
         jd=jd, title=title, company_name=company_name, evaluation_query=evaluation_query,
-        output_dir=cleaner_output_dir, api_key=cleaner_api_key)
-    scores = await jev.score_candidates(
+        output_dir=cleaner_output_dir, api_key=api_key)
+    scores = await luna_screen.score_candidates(
         jd=cleaned_jd, profiles={item.id: item.payload for item in items},
-        output_dir=output_dir, as_of=as_of, api_key=api_key, concurrency=concurrency)
+        output_dir=output_dir, as_of=as_of)
     by_id = {row["id"]: row for row in scores["scores"]}
     results = [RerankResult(
         id=item.id, score=by_id[item.id]["score"],
         verdict="pass" if by_id[item.id]["passed"] else "fail",
-        reason=by_id[item.id]["evidence"], model=jev.MODEL,
+        reason=by_id[item.id]["evidence"], model=luna_screen.MODEL,
         elapsed_ms=0, input=item.payload,
     ) for item in items]
     return results, scores
@@ -1169,8 +1168,9 @@ def main() -> int:
     parser.add_argument("--out", dest="out_path", default="-", help="JSONL path or '-' for stdout")
     parser.add_argument("--query", help="Search query (prompt context); defaults to state.query in --state mode")
     parser.add_argument("--jd-file", help="JD for capability ranking instead of trait reranking")
-    parser.add_argument("--capability-judge", choices=("terra", "jev"),
-                        help="JD judge: jev (default with --jd-file) is the tree combiner; terra selects the Luna path")
+    parser.add_argument("--capability-judge", choices=("terra", "luna"),
+                        help="JD judge: luna (default with --jd-file) screens on the Decisions API; "
+                             "terra rates each candidate with a written reason")
     parser.add_argument("--job-title", default="")
     parser.add_argument("--job-company", default="")
     parser.add_argument("--jd-cleaner-output-dir",
@@ -1197,11 +1197,11 @@ def main() -> int:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--dump-debug", action="store_true", help="Write raw rerank JSONL for debugging")
     args = parser.parse_args()
-    if args.capability_judge == "jev" and not args.jd_file:
-        parser.error("--capability-judge jev requires --jd-file")
+    if args.capability_judge == "luna" and not args.jd_file:
+        parser.error("--capability-judge luna requires --jd-file")
     if args.jd_file and args.capability_judge is None:
         args.capability_judge = capability_contract.DEFAULT_JUDGE
-    judge = jev if args.capability_judge == "jev" else terra
+    judge = luna_screen if args.capability_judge == "luna" else terra
     if args.jd_file and args.system_file:
         parser.error("--jd-file uses the selected judge's reviewed prompt, not --system-file")
 
@@ -1220,12 +1220,12 @@ def main() -> int:
                 jd=raw_jd, title=args.job_title, company_name=args.job_company,
                 evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
             args.model = judge.MODEL
-            args.reasoning_effort = "none" if args.capability_judge == "jev" else terra.REASONING_EFFORT
-            args.concurrency = min(args.concurrency, 4 if args.capability_judge == "jev" else 32)
+            args.reasoning_effort = "none" if args.capability_judge == "luna" else terra.REASONING_EFFORT
+            args.concurrency = min(args.concurrency, 32)
             system_prompt = terra.system_prompt(as_of)
-            if args.capability_judge == "jev":
+            if args.capability_judge == "luna":
                 system_prompt = json.dumps(capability_contract.prompt_spec(
-                    judge="jev", as_of=as_of), ensure_ascii=False, sort_keys=True)
+                    judge="luna", as_of=as_of), ensure_ascii=False, sort_keys=True)
             system_sha256 = hashlib.sha256(system_prompt.encode()).hexdigest()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1294,19 +1294,18 @@ def main() -> int:
 
     started = time.monotonic()
     if items and args.jd_file:
-        if args.capability_judge == "terra" and not args.api_key:
+        if not args.api_key:
             print("error: --api-key or OPENAI_API_KEY required", file=sys.stderr)
             return 2
         output_dir = (artifact_dir(state_path, state) if state_path else Path(args.out_path).resolve().parent)
         cleaner_output_dir = (Path(args.jd_cleaner_output_dir) if args.jd_cleaner_output_dir
                               else output_dir / "structured-jd")
-        if args.capability_judge == "jev":
-            results, ce_result = asyncio.run(_rerank_with_jev(
+        if args.capability_judge == "luna":
+            results, ce_result = asyncio.run(_rerank_with_luna(
                 items, jd=raw_jd, title=args.job_title, company_name=args.job_company,
                 evaluation_query=args.evaluation_query or "", as_of=as_of,
-                output_dir=output_dir / "jev-capability", cleaner_output_dir=cleaner_output_dir,
-                cleaner_api_key=args.api_key, api_key=os.environ.get("TYPESAFE_API_KEY"),
-                concurrency=args.concurrency))
+                output_dir=output_dir / "luna-capability", cleaner_output_dir=cleaner_output_dir,
+                api_key=args.api_key))
         else:
             results, ce_result = asyncio.run(_rerank_with_terra(
                 items, jd=raw_jd, title=args.job_title, company_name=args.job_company,

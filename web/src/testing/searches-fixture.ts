@@ -341,7 +341,7 @@ export const QUICK_RUN: SearchRunPayload = {
   ratings: RATINGS,
 }
 
-// The documented order: Jev scores first, then ratings; overall, then the screen score.
+// The documented order: qualification scores first, then ratings; overall, then the screen score.
 export const RANKED_NAMES = [
   ["Riley Foxtrot", "Avery Golf", "Quinn Hotel"],
   ["Jordan Bravo", "Morgan Echo", "Casey Delta"],

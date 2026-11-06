@@ -246,7 +246,6 @@ Powerset users runs on Modal.
 | `OPENAI_API_KEY` | Query extraction, LLM filtering/reranking |
 | `OPENROUTER_API_KEY` | Messages contact review |
 | `PARALLEL_API_KEY` | Messages deep research |
-| `TYPESAFE_API_KEY` | Jev capability scoring |
 | `POWERPACKS_DEFAULT_SET_ID` | Local default Powerset set selection |
 | `APOLLO_API_KEY` | Apollo.io outbound build; use a Master API key for sequence/campaign, email-account, schedule, enrichment, and contact endpoints |
 
@@ -424,9 +423,7 @@ uv run --project . python packs/powerset/primitives/pull_runtime_keys/pull_runti
 ```
 
 The primitive redacts secret values in output and only writes the local runtime
-keys returned by the authenticated Powerset API, including a provisioned
-`TYPESAFE_API_KEY`. `$update-powerpacks` fills that key only when it is missing
-or empty and preserves a nonempty local value. Modal holds hosted processing
+keys returned by the authenticated Powerset API. Modal holds hosted processing
 secrets for provisioned Powerset users. The Google Cloud CLI is still used by
 the separate msgvault/Gmail OAuth app setup flow, not by Powerset runtime-key
 pull.

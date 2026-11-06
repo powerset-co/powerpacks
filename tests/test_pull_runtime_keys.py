@@ -12,97 +12,25 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as sta
 
 
 class PullRuntimeKeysTests(unittest.TestCase):
-    def test_update_fills_missing_or_empty_typesafe_key_with_one_bearer(self):
-        for original in (
-            "KEEP=yes\n",
-            "KEEP=yes\nTYPESAFE_API_KEY=\n",
-            "KEEP=yes\nexport TYPESAFE_API_KEY=\n",
-            "KEEP=yes\nTYPESAFE_API_KEY =   \n",
-        ):
-            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
-                env = Path(tmp) / ".env"
-                env.write_text(original)
-
-                def fake_fetch(_base, path, _token, timeout=30):
-                    if "typesafe" in path:
-                        return "ok", {"typesafe_api_key": "typesafe-test"}
-                    return "ok", {"powerset_api_key": "gateway-test"}
-
-                with mock.patch.object(stage, "bearer_token", return_value="tok") as bearer, \
-                     mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
-                    result = stage.refresh_update_keys(env)
-                values = stage._read_env_file(env)
-                self.assertEqual(values["TYPESAFE_API_KEY"], "typesafe-test")
-                self.assertEqual(values["POWERSET_API_KEY"], "gateway-test")
-                self.assertEqual(result["typesafe_api_key"], "installed")
-                self.assertEqual(env.read_text().count("TYPESAFE_API_KEY"), 1)
-                bearer.assert_called_once_with(env)
-
-    def test_update_preserves_nonempty_typesafe_key_without_fetching_it(self):
+    def test_update_refreshes_with_one_bearer_and_never_asks_for_typesafe(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            env.write_text("export TYPESAFE_API_KEY=personal\n")
-            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
+            env.write_text("KEEP=yes\nTYPESAFE_API_KEY=old\n")
+            with mock.patch.object(stage, "bearer_token", return_value="tok") as bearer, \
                  mock.patch.object(stage, "fetch_endpoint", return_value=(
                      "ok", {"powerset_api_key": "gateway-test"})) as fetch:
                 result = stage.refresh_update_keys(env)
-            self.assertEqual(stage._read_env_file(env)["TYPESAFE_API_KEY"], "personal")
-            self.assertEqual(result["typesafe_api_key"], "preserved")
+            values = stage._read_env_file(env)
+            self.assertEqual(values["POWERSET_API_KEY"], "gateway-test")
+            self.assertEqual(values["TYPESAFE_API_KEY"], "old")
+            self.assertNotIn("typesafe_api_key", result)
+            bearer.assert_called_once_with(env)
             self.assertEqual([call.args[1] for call in fetch.call_args_list], [
                 "/v2/integrations/powerset-api/key",
                 "/v2/integrations/turbopuffer/key",
                 "/v2/integrations/powerpacks/database-url",
                 "/v2/team/me",
             ])
-
-    def test_update_rejects_empty_or_non_string_typesafe_response(self):
-        for key in ("", "   ", 123, None):
-            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
-                env = Path(tmp) / ".env"
-
-                def fake_fetch(_base, path, _token, timeout=30):
-                    if "typesafe" in path:
-                        return "ok", {"typesafe_api_key": key}
-                    return "not_provisioned", None
-
-                with mock.patch.object(stage, "bearer_token", return_value="tok"), \
-                     mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
-                    result = stage.refresh_update_keys(env)
-                self.assertFalse(env.exists())
-                self.assertEqual(result["typesafe_api_key"], "error")
-
-    def test_update_signed_out_or_unavailable_leaves_typesafe_setting_intact(self):
-        for state in ("signed_out", "not_provisioned", "error"):
-            with self.subTest(state=state), tempfile.TemporaryDirectory() as tmp:
-                env = Path(tmp) / ".env"
-                original = "KEEP=yes\nTYPESAFE_API_KEY=\n"
-                env.write_text(original)
-                bearer = mock.patch.object(stage, "bearer_token", return_value="tok")
-                fetch = mock.patch.object(stage, "fetch_endpoint", return_value=(state, None))
-                if state == "signed_out":
-                    bearer = mock.patch.object(stage, "bearer_token", side_effect=SystemExit("signed out"))
-                with bearer, fetch as fetch_endpoint:
-                    result = stage.refresh_update_keys(env)
-                self.assertEqual(env.read_text(), original)
-                expected = "not_signed_in" if state == "signed_out" else state
-                self.assertEqual(result["typesafe_api_key"], expected)
-                if state == "signed_out":
-                    fetch_endpoint.assert_not_called()
-
-    def test_update_typesafe_pull_is_independent_of_gateway_provisioning(self):
-        def fake_fetch(_base, path, _token, timeout=30):
-            if "typesafe" in path:
-                return "ok", {"typesafe_api_key": "typesafe-test"}
-            return "not_provisioned", None
-
-        with tempfile.TemporaryDirectory() as tmp:
-            env = Path(tmp) / ".env"
-            with mock.patch.object(stage, "bearer_token", return_value="tok"), \
-                 mock.patch.object(stage, "fetch_endpoint", side_effect=fake_fetch):
-                result = stage.refresh_update_keys(env)
-            self.assertEqual(stage._read_env_file(env)["TYPESAFE_API_KEY"], "typesafe-test")
-            self.assertEqual(result["powerset_api_key_refresh"], "not_provisioned")
-            self.assertEqual(result["typesafe_api_key"], "installed")
 
     def test_update_installs_the_shared_search_and_upload_credentials(self):
         # The API is the source of truth: a stale value is replaced, a missing one filled,
@@ -207,9 +135,9 @@ class PullRuntimeKeysTests(unittest.TestCase):
 
     def test_check_requires_nonempty_values_and_normalizes_assignments(self):
         cases = (
-            ("TYPESAFE_API_KEY=\n", False),
-            ("export TYPESAFE_API_KEY =   \n", False),
-            ("export TYPESAFE_API_KEY = provisioned\n", True),
+            ("PARALLEL_API_KEY=\n", False),
+            ("export PARALLEL_API_KEY =   \n", False),
+            ("export PARALLEL_API_KEY = provisioned\n", True),
         )
         for content, expected_present in cases:
             with self.subTest(content=content), tempfile.TemporaryDirectory() as tmp:
@@ -219,8 +147,8 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 with contextlib.redirect_stdout(output):
                     stage.cmd_check(argparse.Namespace(env_file=str(env)))
                 payload = json.loads(output.getvalue())
-                self.assertEqual("TYPESAFE_API_KEY" in payload["have"], expected_present)
-                self.assertEqual("TYPESAFE_API_KEY" in payload["missing"], not expected_present)
+                self.assertEqual("PARALLEL_API_KEY" in payload["have"], expected_present)
+                self.assertEqual("PARALLEL_API_KEY" in payload["missing"], not expected_present)
 
         for key in stage.KEY_SOURCES:
             with self.subTest(empty_key=key), tempfile.TemporaryDirectory() as tmp:
@@ -261,8 +189,6 @@ class PullRuntimeKeysTests(unittest.TestCase):
                 return "ok", {"openai_api_key": "sk-test"}
             if "parallel" in path:
                 return "ok", {"parallel_api_key": "parallel-test"}
-            if "typesafe" in path:
-                return "ok", {"typesafe_api_key": "typesafe-test"}
             return "ok", {"powerset_api_key": "powerset-test"}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,7 +204,7 @@ class PullRuntimeKeysTests(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY=sk-test", text)
             self.assertIn("PARALLEL_API_KEY=parallel-test", text)
             self.assertIn("POWERSET_API_KEY=powerset-test", text)
-            self.assertIn("TYPESAFE_API_KEY=typesafe-test", text)
+            self.assertNotIn("TYPESAFE_API_KEY", text)
 
     def test_pull_adds_parallel_to_existing_env(self):
         def fake_fetch(base, path, token, timeout=30):
@@ -333,11 +259,8 @@ class PullRuntimeKeysTests(unittest.TestCase):
         )
         self.assertNotIn("RAPIDAPI_LINKEDIN_KEY", stage.KEY_SOURCES)
 
-    def test_typesafe_api_key_uses_dedicated_endpoint(self):
-        self.assertEqual(
-            stage.KEY_SOURCES["TYPESAFE_API_KEY"],
-            ("/v2/integrations/typesafe/key", "typesafe_api_key"),
-        )
+    def test_typesafe_is_no_longer_a_runtime_key(self):
+        self.assertNotIn("TYPESAFE_API_KEY", stage.KEY_SOURCES)
 
     def test_pull_handles_not_provisioned(self):
         with tempfile.TemporaryDirectory() as tmp:

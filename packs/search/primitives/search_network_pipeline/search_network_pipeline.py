@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-11-06: the Luna screen (Decisions API) replaces Jev as the default JD judge and,
+        like Jev, reads every hydrated row without `llm_filter_candidates`.
     2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
         hydrated row. The Luna filter still precedes `--capability-judge terra`.
     2026-09-13: Local title expansion matches complete extracted role phrases,
@@ -43,7 +45,7 @@ from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa
 import postgres_client as pg  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates.jev import client as jev  # noqa: E402
+from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
 from packs.search.primitives.search_feedback.search_feedback import log_edit  # noqa: E402
@@ -288,8 +290,8 @@ def cross_encoder_child_args(args) -> list[str]:
     if jd_file:
         parts = ["--jd-file", jd_file, "--job-title", args.job_title,
                  "--job-company", args.job_company]
-        if getattr(args, "capability_judge", "terra") == "jev":
-            parts += ["--capability-judge", "jev"]
+        if getattr(args, "capability_judge", "terra") == "luna":
+            parts += ["--capability-judge", "luna"]
         cleaner_output_dir = getattr(args, "jd_cleaner_output_dir", None)
         if cleaner_output_dir:
             parts += ["--jd-cleaner-output-dir", cleaner_output_dir]
@@ -912,20 +914,20 @@ def maybe_payload_filters(state: Path) -> dict[str, Any]:
             return ((step.get("output") or {}).get("role_search_filters") or {})
     return {}
 
-def _judged_by_jev(args) -> bool:
-    """Jev screens every hydrated row itself; the Luna filter runs only ahead of the Terra path."""
-    return bool(getattr(args, "jd_file", None)) and getattr(args, "capability_judge", None) == "jev"
+def _screened_by_luna(args) -> bool:
+    """The Luna screen reads every hydrated row itself; the LLM filter runs only ahead of the Terra path."""
+    return bool(getattr(args, "jd_file", None)) and getattr(args, "capability_judge", None) == "luna"
 
 def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
-    use_jev = _judged_by_jev(args)
+    use_screen = _screened_by_luna(args)
     payload = {
         "state": str(state),
-        "model": (jev.MODEL if use_jev else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
+        "model": (luna_screen.MODEL if use_screen else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": ("none" if use_jev else terra.REASONING_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
+        "reasoning_effort": ("none" if use_screen else terra.REASONING_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
@@ -994,7 +996,7 @@ def run_pipeline(args) -> dict[str, Any]:
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
         llm_steps=[]
-        if not _judged_by_jev(args):
+        if not _screened_by_luna(args):
             llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--batch-size",str(args.filter_batch_size),"--concurrency",str(args.filter_concurrency),"--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
         llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--concurrency",str(args.rerank_concurrency),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
@@ -1102,7 +1104,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
                             if getattr(args,"rerank_system_file",None) else [])
         rerank_prompt_args += cross_encoder_child_args(args)
         llm_steps=[]
-        if not _judged_by_jev(args):
+        if not _screened_by_luna(args):
             llm_steps.append(("llm_filter_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_filter_candidates/llm_filter_candidates.py"),"--state",str(state),"--profile-scope","auto","--model",args.filter_model,"--reasoning-effort",args.filter_reasoning_effort,*eval_args,*filter_prompt_args,"--write-state"]))
         llm_steps.append(("llm_rerank_candidates",[sys.executable,str(ROOT/"packs/search/primitives/llm_rerank_candidates/llm_rerank_candidates.py"),"--state",str(state),"--model",args.model,"--reasoning-effort",args.reasoning_effort,*eval_args,*rerank_prompt_args,"--write-state"]))
         for step,cmd in llm_steps:
@@ -1144,9 +1146,9 @@ def run_pipeline_local(args) -> dict[str, Any]:
     }
 
 def _validate_capability_input(args) -> None:
-    """A JD run judges with Jev unless told otherwise; a run without a JD has no capability judge."""
-    if getattr(args, "capability_judge", None) == "jev" and not getattr(args, "jd_file", None):
-        raise Failed("--capability-judge jev requires --jd-file")
+    """A JD run is screened by Luna unless told otherwise; a run without a JD has no capability judge."""
+    if getattr(args, "capability_judge", None) == "luna" and not getattr(args, "jd_file", None):
+        raise Failed("--capability-judge luna requires --jd-file")
     if getattr(args, "jd_file", None) and getattr(args, "capability_judge", None) is None:
         args.capability_judge = capability_contract.DEFAULT_JUDGE
 
@@ -1360,7 +1362,7 @@ def add_backend(p):
 def add_run(p):
     add_backend(p)
     p.add_argument("--jd-file", help="JD: replace trait reranking with capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"))
+    p.add_argument("--capability-judge", choices=("terra", "luna"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
@@ -1401,7 +1403,7 @@ def build_parser() -> argparse.ArgumentParser:
     p=sub.add_parser("prepare")
     add_backend(p)
     p.add_argument("--jd-file", help="JD for capability scoring")
-    p.add_argument("--capability-judge", choices=("terra", "jev"))
+    p.add_argument("--capability-judge", choices=("terra", "luna"))
     p.add_argument("--job-title", default="")
     p.add_argument("--job-company", default="")
     p.add_argument("--jd-cleaner-output-dir")
