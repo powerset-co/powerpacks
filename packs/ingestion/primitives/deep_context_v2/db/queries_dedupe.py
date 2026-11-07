@@ -26,6 +26,7 @@ class SavedVerdict:
     candidate_b: str
     signature: str
     same_person: int | None  # None = Sol said uncertain
+    confidence: float
 
 
 def all_candidate_ids(conn: sqlite3.Connection) -> list[str]:
@@ -97,8 +98,9 @@ def current_parents(conn: sqlite3.Connection) -> dict[str, str]:
 def saved_verdicts(conn: sqlite3.Connection) -> list[SavedVerdict]:
     """Every Sol answer ever saved, under every signature."""
     verdicts: list[SavedVerdict] = []
-    for row in conn.execute("SELECT candidate_a, candidate_b, signature, same_person FROM pair_verdicts"):
-        verdicts.append(SavedVerdict(row["candidate_a"], row["candidate_b"], row["signature"], row["same_person"]))
+    for row in conn.execute("SELECT candidate_a, candidate_b, signature, same_person, confidence FROM pair_verdicts"):
+        verdicts.append(SavedVerdict(row["candidate_a"], row["candidate_b"], row["signature"], row["same_person"],
+                                     row["confidence"]))
     return verdicts
 
 

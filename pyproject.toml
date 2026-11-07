@@ -13,6 +13,7 @@ dependencies = [
     "markdown-it-py>=4.0",
     "modal>=1.5.0",
     "nameparser==2.3.0",
+    "numpy>=2.0",
     "openai>=1.0.0",
     "parallel-web==1.1.0",
     "psycopg2-binary>=2.9.10",
