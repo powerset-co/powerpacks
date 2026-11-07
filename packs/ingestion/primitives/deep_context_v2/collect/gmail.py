@@ -68,10 +68,17 @@ SELECT COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
        LOWER(sp.email_address) AS sender_email, sp.display_name AS sender_name,
        m.subject, m.snippet, mb.body_text
 """
-_RECENT_SQL = _RECENT_SELECT + """
+# The newest rows are picked from the message headers alone, then the bodies are read for those
+# rows only. Joining message_bodies before the LIMIT read and sorted every body the person ever
+# sent or received: 156 s of a 270 s collect on a 279k-message archive (2026-11-06).
+_RECENT_SQL = """
+, top AS (
+SELECT COALESCE(m.sent_at, m.received_at, m.internal_date) AS at,
+       m.id AS message_id, m.conversation_id, c.source_conversation_id AS thread_id,
+       LOWER(sp.email_address) AS sender_email, sp.display_name AS sender_name,
+       m.subject, m.snippet, m.source_message_id
 FROM messages m
 LEFT JOIN participants sp ON sp.id = m.sender_id
-LEFT JOIN message_bodies mb ON mb.message_id = m.id
 LEFT JOIN conversations c ON c.id = m.conversation_id
 WHERE m.message_type = 'email'
   AND (m.deleted_at IS NULL OR m.deleted_at = '')
@@ -79,13 +86,24 @@ WHERE m.message_type = 'email'
   AND m.id IN (SELECT id FROM ids)
 -- Content survives store rebuilds; physical row ids do not.
 ORDER BY at DESC,
-         LOWER(COALESCE(sp.email_address, '')) DESC,
+         COALESCE(sender_email, '') DESC,
          COALESCE(m.subject, '') DESC,
          COALESCE(m.snippet, '') DESC,
-         COALESCE(mb.body_text, '') DESC,
          COALESCE(c.source_conversation_id, '') DESC,
          COALESCE(m.source_message_id, '') DESC
 LIMIT ?
+)
+SELECT top.at, top.message_id, top.conversation_id, top.thread_id,
+       top.sender_email, top.sender_name, top.subject, top.snippet, mb.body_text
+FROM top
+LEFT JOIN message_bodies mb ON mb.message_id = top.message_id
+ORDER BY top.at DESC,
+         COALESCE(top.sender_email, '') DESC,
+         COALESCE(top.subject, '') DESC,
+         COALESCE(top.snippet, '') DESC,
+         COALESCE(mb.body_text, '') DESC,
+         COALESCE(top.thread_id, '') DESC,
+         COALESCE(top.source_message_id, '') DESC
 """
 
 
