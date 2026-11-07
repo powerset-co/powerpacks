@@ -24,7 +24,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from packs.shared.endpoints import openai_base_url  # noqa: E402
+
+DEFAULT_API_BASE = openai_base_url()
 DEFAULT_MODEL = os.environ.get("SALES_NAV_SCORE_MODEL", "gpt-4o-mini")
 DEFAULT_CONCURRENCY = int(os.environ.get("SALES_NAV_SCORE_CONCURRENCY", "50"))
 DEFAULT_THRESHOLD = float(os.environ.get("SALES_NAV_SCORE_THRESHOLD", "0.7"))
@@ -159,7 +162,8 @@ def build_prompt(criteria: str, lead: dict[str, Any], mutuals: list[dict[str, An
 
 
 def call_chat_completion(api_base: str, api_key: str, model: str, system_prompt: str, user_prompt: str, timeout: int) -> dict[str, Any]:
-    url = api_base.rstrip("/") + "/v1/chat/completions"
+    base = api_base.rstrip("/")
+    url = (base if base.endswith("/v1") else base + "/v1") + "/chat/completions"
     payload = {
         "model": model,
         "messages": [

@@ -5,7 +5,6 @@ const MAX_BATCH_SIZE = 100
 // Signed paths last 30 days; refresh well before they expire.
 const CACHE_MS = 24 * 60 * 60 * 1000
 const FAILURE_CACHE_MS = 30_000
-const GATEWAY = "https://proxy.powerset.dev"
 
 type Resolve = (src: string | undefined) => void
 const cache = new Map<string, { promise: Promise<string | undefined>; expires: number }>()
@@ -41,8 +40,8 @@ async function flush() {
       body: JSON.stringify({ urls: batch.map(([url]) => url) }),
     })
     if (!response.ok) throw new Error("Couldn't load thumbnails")
-    const { paths } = await body<{ paths: (string | null)[] }>(response)
-    batch.forEach(([, resolve], index) => resolve(paths[index] ? GATEWAY + paths[index] : undefined))
+    const { paths, gateway } = await body<{ paths: (string | null)[]; gateway: string }>(response)
+    batch.forEach(([, resolve], index) => resolve(paths[index] ? gateway + paths[index] : undefined))
   } catch {
     for (const [url, resolve] of batch) {
       const entry = cache.get(url)

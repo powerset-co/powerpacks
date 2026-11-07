@@ -323,7 +323,7 @@ class RapidApiClient:
                 wait_for_attempt()
             status, data, error = self.http_json(
                 "GET",
-                f"https://{self.config.host}{self.config.path_prefix}/get-profile-data-by-url",
+                f"{self.config.base_url}/get-profile-data-by-url",
                 headers=self.config.headers("live" if fresh else PROFILE_FRESHNESS_SECONDS),
                 params={"url": linkedin_url or f"https://www.linkedin.com/in/{public_identifier}"},
                 timeout=90,

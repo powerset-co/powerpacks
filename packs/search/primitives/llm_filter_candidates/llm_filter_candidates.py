@@ -76,7 +76,7 @@ Score each candidate for relevance."""
 
 DEFAULT_MODEL = os.getenv("POWERPACKS_LLM_FILTER_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.getenv("POWERPACKS_LLM_FILTER_REASONING_EFFORT", "none")
-DEFAULT_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com")
+DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 DEFAULT_THRESHOLD = 0.3
 DEFAULT_BATCH_SIZE = 2
 DEFAULT_CONCURRENCY = int(

@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
 
 from packs.powerset.primitives.auth import auth
+from packs.shared.endpoints import gateway_url
 from dataclasses import dataclass, field
 from typing import Literal
 
 
-POWERSET_HOST = "proxy.powerset.dev"
+POWERSET_HOST = urllib.parse.urlsplit(gateway_url()).netloc
 RAPIDAPI_HOST = "professional-network-data.p.rapidapi.com"
 MISSING_LINKEDIN_KEY = "Neither POWERSET_API_KEY nor RAPIDAPI_LINKEDIN_KEY is set"
 
@@ -31,6 +33,12 @@ class LinkedInApiConfig:
     @property
     def host(self) -> str:
         return POWERSET_HOST if self.provider == "powerset" else RAPIDAPI_HOST
+
+    @property
+    def base_url(self) -> str:
+        if self.provider == "powerset":
+            return f"{gateway_url()}{self.path_prefix}"
+        return f"https://{RAPIDAPI_HOST}"
 
     @property
     def path_prefix(self) -> str:

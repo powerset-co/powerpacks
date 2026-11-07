@@ -106,13 +106,14 @@ from packs.ingestion.schemas.people_schema import (  # noqa: E402
 )
 from packs.shared.csv_io import CsvIO  # noqa: E402
 from packs.powerset.primitives.auth import auth  # noqa: E402
+from packs.shared.endpoints import gateway_url, openai_base_url  # noqa: E402
 
 # Fixed per-stage output root (base/discover/twitter). The handle dir hangs off
 # this; a run overwrites in place, so reruns are idempotent by path. Module-level
 # so tests can patch it to a scratch dir.
 TWITTER_DISCOVER_DIR = DEFAULT_BASE_DIR / "discover" / "twitter"
 TWITTER_API_BASE = "https://twitter241.p.rapidapi.com"
-LINKEDIN_API_BASE = "https://proxy.powerset.dev/vendor/professional-network-data"
+LINKEDIN_API_BASE = f"{gateway_url()}/vendor/professional-network-data"
 
 # Fixed output filenames — the durable per-stage contract. Each step's output is
 # looked up by these names, which is also how resume-by-artifact freshness works.
@@ -513,7 +514,7 @@ def openai_chat_json(system_prompt: str, user_prompt: str, model: str) -> dict[s
         ],
     }
     req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
+        f"{openai_base_url()}/chat/completions",
         method="POST",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         data=json.dumps(payload).encode("utf-8"),

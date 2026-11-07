@@ -32,6 +32,7 @@ from packs.indexing.lib.artifact_io import (  # noqa: E402
     write_parquet_rows,
 )
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.shared.endpoints import openai_base_url  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
@@ -404,7 +405,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         return read_json(manifest) if manifest.exists() else {"status": "completed", "output": str(output_path)}
 
     api_batch_size = int(getattr(args, "api_batch_size", 128) or 128)
-    base_url = getattr(args, "base_url", None) or os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1")
+    base_url = getattr(args, "base_url", None) or openai_base_url()
     model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL)
     pending: list[tuple[str, str, dict[str, Any]]] = []
     chunks_this_run = 0

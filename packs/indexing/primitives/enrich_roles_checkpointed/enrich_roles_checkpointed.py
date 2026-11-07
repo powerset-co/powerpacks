@@ -25,6 +25,7 @@ from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.shared.endpoints import openai_base_url  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 from packs.indexing.lib.text import dense_text  # noqa: E402
 from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
@@ -852,7 +853,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"role provider '{args.provider}' requires --allow-paid; no paid API was called")
     if not getattr(args, "input_classifications", None) and not api_key:
         raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
-    base_url = getattr(args, "base_url", None) or os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1")
+    base_url = getattr(args, "base_url", None) or openai_base_url()
     model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
     state = load_state(flattened, output_dir, args.checkpoint_every, args.force, provider, getattr(args, "input_classifications", None))
     if state.get("status") == "completed" and not args.force:

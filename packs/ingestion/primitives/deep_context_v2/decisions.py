@@ -27,6 +27,7 @@ import tiktoken
 from openai import AsyncOpenAI
 
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
+from packs.shared.endpoints import openai_base_url
 from packs.ingestion.primitives.deep_context_v2.openai import DEFAULT_OPENAI_CONCURRENCY, load_env
 from packs.search.primitives.shared.openai_client import append_usage_row
 
@@ -94,7 +95,7 @@ async def decide_all(requests: dict[str, dict[str, Any]], cache_dir: Path, *, ca
     semaphore = asyncio.Semaphore(slots)
     answered: list[str] = []
     on_progress(0, len(missing))
-    async with AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None,
+    async with AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=openai_base_url(),
                            timeout=TIMEOUT_SECONDS, max_retries=MAX_RETRIES) as client:
 
         async def ask(digest: str, request: dict[str, Any]) -> None:
