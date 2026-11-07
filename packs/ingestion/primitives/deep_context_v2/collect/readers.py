@@ -85,6 +85,26 @@ def recent_group_messages(group: list[MessageEntry], *, room: int) -> list[Messa
     return kept
 
 
+class WhatsAppPeople:
+    """What every person's WhatsApp group read shares: contacts, the @lid map, the owner's ids and the
+    group index, with each jid's phone and name worked out once."""
+
+    def __init__(self, con: sqlite3.Connection, store: Path) -> None:
+        self.contacts = extract_whatsapp.load_contacts_by_jid(con)
+        self.lid_map = {lid: pn if "@" in pn else f"{pn}@s.whatsapp.net"
+                        for lid, pn in wacli_store.load_lid_map(store).items()}
+        self.groups = wacli_messages.WhatsAppGroups(con)
+        self.jids_by_phone: dict[str, list[str]] = {}
+        # (mention key, saved name, phone) per jid, in the order a later jid's name wins
+        self.mention_entries: list[tuple[str, str, str]] = []
+        for jid in (*self.lid_map, *self.contacts):
+            phone = extract_whatsapp.phone_for_jid(self.lid_map.get(jid, jid), self.contacts, self.lid_map)
+            self.jids_by_phone.setdefault(phone, []).append(jid)
+            name = extract_whatsapp.name_for_jid(jid, self.contacts, self.lid_map)
+            self.mention_entries.append((jid.split("@", 1)[0], name, phone))
+        self.owner_keys = [jid.split("@", 1)[0] for jid in wacli_store.load_owner_jids(store)]
+
+
 class ContextSources:
     """One run's message stores and fixed tuning.
 
@@ -106,6 +126,8 @@ class ContextSources:
         self.owner_name = owner_name
         self.contact_names = contact_names or {}
         self.msgvault: sqlite3.Connection | None = None
+        self._whatsapp: WhatsAppPeople | None = None
+        self._handles: tuple[str, list[int]] = ("", [])
         self.accounts: set[str] = set()
         if "gmail_msgvault" in channels:
             connection = gmail.open_msgvault(msgvault_db)
@@ -175,7 +197,11 @@ class ContextSources:
             # immutable=True: no lock and no WAL side files against Apple's live store.
             connection = chatdb.open_sqlite_readonly(self.chat_db, immutable=True)
             try:
-                handles = chatdb.resolve_handle_ids(connection, person.phones, cache_key=self.chat_db)
+                # Four queries per person; the handles are resolved once for the person.
+                if self._handles[0] != person.person_id:
+                    self._handles = (person.person_id,
+                                     chatdb.resolve_handle_ids(connection, person.phones, cache_key=self.chat_db))
+                handles = self._handles[1]
                 if not handles:
                     return empty
                 return query(connection, handles)
@@ -259,32 +285,37 @@ class ContextSources:
             )
         return out
 
+    def _whatsapp_people(self, con: sqlite3.Connection) -> WhatsAppPeople:
+        """The WhatsApp contacts, id map and groups, read on the first group read and kept for the run:
+        reading them per person read the whole contacts table and every group message per person."""
+        if self._whatsapp is None:
+            self._whatsapp = WhatsAppPeople(con, self.wacli_db.parent)
+        return self._whatsapp
+
     def _read_whatsapp_group_messages(self, person: Person) -> list[MessageEntry]:
         def read() -> list[MessageEntry]:
             con = wacli_store.open_readonly_db(self.wacli_db)
             try:
-                contacts = extract_whatsapp.load_contacts_by_jid(con)
-                lid_map = {lid: pn if "@" in pn else f"{pn}@s.whatsapp.net"
-                           for lid, pn in wacli_store.load_lid_map(self.wacli_db.parent).items()}
+                people = self._whatsapp_people(con)
+                contacts, lid_map = people.contacts, people.lid_map
                 members = set(wacli_store.whatsapp_dm_jids(person.phones))
-                for jid in (*lid_map, *contacts):
-                    if extract_whatsapp.phone_for_jid(lid_map.get(jid, jid), contacts, lid_map) in person.phones:
-                        members.add(jid)
+                for phone in person.phones:
+                    members.update(people.jids_by_phone.get(phone, ()))
                 rows = wacli_messages.query_whatsapp_small_group_messages(
-                    con, members, max_group_size=WHATSAPP_MAX_GROUP_SIZE, limit=self.deep_cap
+                    con, members, max_group_size=WHATSAPP_MAX_GROUP_SIZE, limit=self.deep_cap, groups=people.groups
                 )
+                if not rows:
+                    return []
                 out: list[MessageEntry] = []
                 mention_names: dict[str, str] = {}
-                for jid in (*lid_map, *contacts):
-                    name = extract_whatsapp.name_for_jid(jid, contacts, lid_map)
-                    phone = extract_whatsapp.phone_for_jid(lid_map.get(jid, jid), contacts, lid_map)
+                for key, name, phone in people.mention_entries:
                     if phone in person.phones:
                         name = person.full_name
                     name = name or self.contact_names.get(phone, "")
                     if name:
-                        mention_names[jid.split("@", 1)[0]] = name
-                for jid in wacli_store.load_owner_jids(self.wacli_db.parent):
-                    mention_names[jid.split("@", 1)[0]] = self.owner_name
+                        mention_names[key] = name
+                for key in people.owner_keys:
+                    mention_names[key] = self.owner_name
                 for row in rows:
                     text = wacli_messages.whatsapp_message_text(row, include_media=False)
                     if not text:
