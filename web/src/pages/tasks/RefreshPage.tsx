@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { Link, useSearchParams } from "react-router-dom"
-import { Check, ChevronRight, TriangleAlert, X } from "lucide-react"
+import { Link } from "react-router-dom"
+import { Check, TriangleAlert, X } from "lucide-react"
 
 import { EmptyState, Page, Select, Spinner } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
@@ -19,7 +19,7 @@ import type {
   SourceRun,
 } from "@/types/refresh"
 
-import { added, clock, lower, ordinal, SOURCE_TITLE, stamp, took, trigger, WEEKDAYS, when } from "./format"
+import { added, clock, lower, ordinal, SOURCE_TITLE, took, trigger, WEEKDAYS, when } from "./format"
 import { useRefresh } from "./useRefresh"
 
 const STATUS: Readonly<
@@ -77,12 +77,6 @@ function frequencyOf(settings: RefreshState["settings"]): RefreshFrequency {
 export function RefreshPage() {
   const client = useQueryClient()
   const refresh = useRefresh()
-  // The run whose details are open; undefined until one is clicked (the latest opens by itself
-  // when it needs you).
-  // A notice can name a run (?run=id) to open: the one it is about, not the latest.
-  const [params] = useSearchParams()
-  const linked = Number(params.get("run")) || undefined
-  const [openId, setOpenId] = useState<number | null | undefined>(linked)
   const settings = useMutation({
     mutationFn: saveRefreshSettings,
     onSuccess: (next) => client.setQueryData(REFRESH_KEY, next),
@@ -104,14 +98,7 @@ export function RefreshPage() {
   })
   const data = refresh.data
   const runs = data?.runs ?? []
-  const latest = runs[0]
   const frequency = data ? frequencyOf(data.settings) : "weekly"
-  const open =
-    openId === undefined
-      ? latest && latest.status !== "ok" && latest.status !== "running"
-        ? latest.id
-        : null
-      : openId
 
   return (
     <Page title="Scheduled tasks">
@@ -228,23 +215,17 @@ export function RefreshPage() {
             )}
           </section>
           <GmailReconnect />
-          <History runs={runs} open={open} onToggle={(id) => setOpenId(id === open ? null : id)} />
+          <History runs={runs} />
         </>
       )}
     </Page>
   )
 }
 
-interface HistoryProps {
-  runs: RefreshRun[]
-  open: number | null
-  onToggle: (id: number) => void
-}
-
 // Rows divide with a line; the card's own border closes the last one.
 const CELL = "border-t border-line px-3 py-2.5"
 
-function History({ runs, open, onToggle }: HistoryProps) {
+function History({ runs }: { runs: RefreshRun[] }) {
   return (
     <section aria-labelledby="history" className="flex flex-col gap-2">
       <h2 id="history" className="m-0 text-[11px] font-semibold uppercase tracking-[.1em] text-faint">
@@ -266,7 +247,7 @@ function History({ runs, open, onToggle }: HistoryProps) {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <RunRow key={run.id} run={run} open={run.id === open} onToggle={() => onToggle(run.id)} />
+                <RunRow key={run.id} run={run} />
               ))}
             </tbody>
           </table>
@@ -276,31 +257,30 @@ function History({ runs, open, onToggle }: HistoryProps) {
   )
 }
 
-function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onToggle: () => void }) {
+/** A run has details only when something went wrong: its problems and what to do, always shown. */
+function hasDetail(run: RefreshRun): boolean {
+  return run.problems.length > 0 || Boolean(run.error)
+}
+
+function RunRow({ run }: { run: RefreshRun }) {
+  const detail = hasDetail(run)
+  const time = (
+    <span className="group relative">
+      {when(run.started_at)}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute top-1/2 left-full z-10 ml-2 hidden -translate-y-1/2 whitespace-nowrap rounded-[var(--radius-m)] border border-line bg-card px-2 py-1 text-[11px] text-foreground shadow-sm group-hover:block"
+      >
+        {run.finished_at ? `Duration ${took(run)}` : "Still running"}
+      </span>
+    </span>
+  )
   return (
     <>
-      <tr
-        aria-selected={open}
-        onClick={onToggle}
-        className="cursor-pointer whitespace-nowrap hover:bg-surface-2 aria-selected:bg-surface-2"
-      >
+      <tr className="whitespace-nowrap">
         <td className={CELL}>
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggle()
-            }}
-            className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 text-left text-xs text-foreground"
-          >
-            <ChevronRight
-              aria-hidden
-              className={cn("size-3 text-faint transition-transform duration-fast", open && "rotate-90")}
-            />
-            {when(run.started_at)}
-            <span className="text-faint">· {trigger(run)}</span>
-          </button>
+          {time}
+          <span className="text-faint"> · {trigger(run)}</span>
         </td>
         <td className={CELL}>
           <Badge variant={STATUS[run.status].variant}>
@@ -328,9 +308,9 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
         </td>
         <td className={cn(CELL, "tabular-nums")}>{added(run)}</td>
       </tr>
-      {open && (
+      {detail && (
         <tr>
-          <td colSpan={4} className="border-t border-line bg-surface-2 p-0">
+          <td colSpan={4} className="p-0">
             <RunDetail run={run} />
           </td>
         </tr>
@@ -339,21 +319,9 @@ function RunRow({ run, open, onToggle }: { run: RefreshRun; open: boolean; onTog
   )
 }
 
-/** One line: when it started, how long it took, and the people it added. */
-function summary(run: RefreshRun): string {
-  const delta =
-    run.people_before === null || run.people_after === null ? 0 : run.people_after - run.people_before
-  return [
-    `Started ${stamp(run.started_at)}`,
-    `Duration ${run.finished_at ? took(run) : "still running"}`,
-    delta > 0 ? `People Added ${delta.toLocaleString()}` : "No Change",
-  ].join(" - ")
-}
-
 function RunDetail({ run }: { run: RefreshRun }) {
   return (
-    <article aria-label="Run details" className="flex flex-col gap-2 px-8 py-3 text-xs">
-      <p className="m-0">{summary(run)}</p>
+    <article aria-label="Run details" className="flex flex-col gap-2 px-3 pb-2.5 text-xs">
       {run.problems.map((problem) => (
         <div key={problem.title} className="border-l-2 border-warn py-0.5 pl-2.5">
           <b className="block">{problem.title}</b>

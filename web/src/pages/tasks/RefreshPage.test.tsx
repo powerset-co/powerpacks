@@ -194,9 +194,11 @@ it("lists runs with people added and what to do", async () => {
   serve(() => state)
   mount(<RefreshPage />)
   expect(await screen.findByText("+14")).toBeTruthy()
-  expect(screen.getByText("· Scheduled · caught up 2 days")).toBeTruthy()
-  // The latest run needs you, so its details are open: one line, then what to do.
-  expect(screen.getByText(/ - Duration 11 min - People Added 14$/)).toBeTruthy()
+  expect(screen.getByText("· Scheduled · caught up 2 days", { exact: false })).toBeTruthy()
+  // The time shows the duration on hover; no line repeats when it started.
+  expect(screen.getByRole("tooltip", { hidden: true }).textContent).toBe("Duration 11 min")
+  expect(screen.queryByText(/Started /)).toBeNull()
+  // The latest run needs you, so what to do shows under it.
   expect(screen.queryByText("Nothing needs you.")).toBeNull()
   // A skipped source is a yellow warning badge, a synced one a green check; no slow native tooltip.
   expect(screen.getByLabelText("Gmail: Skipped: not signed in").dataset.sourceStatus).toBe("skipped")
@@ -204,9 +206,8 @@ it("lists runs with people added and what to do", async () => {
   expect(screen.getByRole("link", { name: "Link WhatsApp" }).getAttribute("href")).toBe(
     "/accounts?source=whatsapp",
   )
-  // A click folds them away.
-  fireEvent.click(screen.getByRole("button", { expanded: true }))
-  expect(screen.queryByRole("article", { name: "Run details" })).toBeNull()
+  // Nothing to click: rows don't expand.
+  expect(screen.queryByRole("button", { expanded: true })).toBeNull()
 })
 
 it("reconnects an expired Gmail mailbox on the page and lists only the expired ones", async () => {
@@ -251,10 +252,11 @@ it("formats times the way the page reads", () => {
   expect(when(new Date(2026, 10, 4, 6).toISOString(), now)).toBe("Tomorrow 6:00 AM")
 })
 
-it("opens the run a notice names, not the latest", async () => {
-  const older = { ...run, id: 3, status: "failed" as const, problems: [] }
-  serve(() => ({ ...state, runs: [{ ...run, status: "ok" as const, problems: [] }, older] }))
-  mount(<RefreshPage />, "/tasks?run=3")
-  expect(await screen.findByRole("article", { name: "Run details" })).toBeTruthy()
-  expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1)
+it("shows what went wrong under every run that has a problem, and nothing under a fine one", async () => {
+  const fine = { ...run, id: 4, status: "ok" as const, problems: [], error: "" }
+  const failed = { ...run, id: 3, status: "failed" as const, problems: [], error: "The refresh stopped." }
+  serve(() => ({ ...state, runs: [run, fine, failed] }))
+  mount(<RefreshPage />)
+  await screen.findByText("The refresh stopped.")
+  expect(screen.getAllByRole("article", { name: "Run details" })).toHaveLength(2)
 })
