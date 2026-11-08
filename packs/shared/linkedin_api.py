@@ -37,12 +37,14 @@ class LinkedInApiConfig:
     @property
     def base_url(self) -> str:
         if self.provider == "powerset":
-            return f"{gateway_url()}{self.path_prefix}"
+            return f"{gateway_url()}/vendor/professional-network-data"
         return f"https://{RAPIDAPI_HOST}"
 
     @property
     def path_prefix(self) -> str:
-        return "/vendor/professional-network-data" if self.provider == "powerset" else ""
+        if self.provider == "powerset":  # keeps any path on POWERPACKS_GATEWAY_URL
+            return f"{urllib.parse.urlsplit(gateway_url()).path}/vendor/professional-network-data"
+        return ""
 
     def headers(self, freshness: str) -> dict[str, str]:
         if self.provider == "powerset":

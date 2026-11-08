@@ -15,6 +15,13 @@ class EndpointsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"POWERPACKS_GATEWAY_URL": "http://127.0.0.1:9000/"}, clear=True):
             self.assertEqual(endpoints.gateway_url(), "http://127.0.0.1:9000")
 
+    def test_gateway_path_is_kept_for_linkedin_requests(self) -> None:
+        from packs.shared.linkedin_api import LinkedInApiConfig
+        with mock.patch.dict(os.environ, {"POWERPACKS_GATEWAY_URL": "http://localhost:9000/gateway"}, clear=True):
+            config = LinkedInApiConfig("key")
+            self.assertEqual(config.path_prefix, "/gateway/vendor/professional-network-data")
+            self.assertEqual(config.base_url, "http://localhost:9000/gateway/vendor/professional-network-data")
+
     def test_openai_override_and_older_names(self) -> None:
         for env in ({"OPENAI_BASE_URL": "http://mock/v1"}, {"POWERPACKS_OPENAI_BASE": "http://mock/v1/"},
                     {"OPENAI_API_BASE": "http://mock"}, {"OPENAI_BASE_URL": "http://mock/v1", "OPENAI_API_BASE": "http://other"}):
