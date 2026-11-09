@@ -39,6 +39,9 @@ export interface PreparedSearch {
   estimate: number | null
   /** The prepare's folder under `.powerpacks/search/`, where the card saves its edits; null elsewhere. */
   run: string | null
+  /** The prepare's folder as printed, and the command that runs it; null when it printed none. */
+  runDir: string | null
+  executeCommand: string | null
 }
 
 /** The value as the payload holds it, or null for anything empty or of another shape. */
@@ -125,5 +128,7 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
       typeof value.payload_json === "string"
         ? (/\.powerpacks\/search\/([^/]+)\/[^/]+$/.exec(value.payload_json)?.[1] ?? null)
         : null,
+    runDir: typeof value.payload_json === "string" ? value.payload_json.replace(/\/[^/]+$/, "") : null,
+    executeCommand: typeof value.execute_command === "string" ? value.execute_command : null,
   }
 }

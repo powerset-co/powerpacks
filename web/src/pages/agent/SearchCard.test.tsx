@@ -20,13 +20,14 @@ import { isRecord } from "@/lib/utils"
 
 import { SearchCard } from "./SearchCard"
 
-const store = vi.hoisted(() => ({ send: vi.fn(), useAgent: () => ({ scope: null }) }))
+const store = vi.hoisted(() => ({ send: vi.fn(), runCommand: vi.fn(), useAgent: () => ({ scope: null }) }))
 vi.mock("@/lib/agent/store", () => store)
 vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
 afterEach(() => {
   cleanup()
   store.send.mockReset()
+  store.runCommand.mockReset()
 })
 
 const SEARCH: PreparedSearch = {
@@ -47,6 +48,8 @@ const SEARCH: PreparedSearch = {
   local: false,
   estimate: null,
   run: null,
+  runDir: null,
+  executeCommand: null,
 }
 
 /** The one message the card sent. */
@@ -460,6 +463,52 @@ it("puts the edits in the message when the save fails", async () => {
   execute()
   await waitFor(() => expect(store.send).toHaveBeenCalled())
   expect(sent().filters).toEqual({ seniority_bands: ["vice-president"] })
+  vi.unstubAllGlobals()
+})
+
+const RUN =
+  "uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run --ledger x"
+const DIRECT = {
+  ...SEARCH,
+  run: "ab12-vp-finance",
+  runDir: "/Users/casey/powerpacks/.powerpacks/search/ab12-vp-finance",
+  executeCommand: RUN,
+}
+
+it("runs the prepared search on the chat itself, with no message to the agent", () => {
+  render(<SearchCard search={DIRECT} actions={true} />)
+  execute()
+  expect(store.runCommand).toHaveBeenCalledWith(RUN)
+  expect(store.send).not.toHaveBeenCalled()
+})
+
+it("runs filter edits directly with the saved edits file", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("{}"))),
+  )
+  render(<SearchCard search={DIRECT} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "Remove director" }))
+  execute()
+  await waitFor(() =>
+    expect(store.runCommand).toHaveBeenCalledWith(
+      `${RUN} --edits-json '/Users/casey/powerpacks/.powerpacks/search/ab12-vp-finance/card-edits.json'`,
+    ),
+  )
+  expect(store.send).not.toHaveBeenCalled()
+  vi.unstubAllGlobals()
+})
+
+it("leaves a changed query to the agent, which prepares it again", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("{}"))),
+  )
+  render(<SearchCard search={DIRECT} actions={true} />)
+  fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "CFOs" } })
+  execute()
+  await waitFor(() => expect(store.send).toHaveBeenCalledWith("Run the search with my edits"))
+  expect(store.runCommand).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
 })
 

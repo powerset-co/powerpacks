@@ -47,7 +47,7 @@ import {
   previewTitle,
   scalar,
 } from "@/lib/agent/searchFields"
-import { send, useAgent } from "@/lib/agent/store"
+import { runCommand, send, useAgent } from "@/lib/agent/store"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { body } from "@/lib/api/http"
 import { titleCase } from "@/lib/people/copy"
@@ -199,6 +199,23 @@ function modifyEdits(
     if (JSON.stringify(next) !== JSON.stringify(prepared.get(key) ?? null)) body.filters[key] = next
   }
   return body
+}
+
+/** A changed query or trait value: a new prepare, which only the agent can restate. */
+function isNewSearch(search: PreparedSearch, edits: CardEdits): boolean {
+  const values = (list: SearchTrait[]) => JSON.stringify(list.map((trait) => trait.value))
+  return (
+    edits.query !== undefined ||
+    (edits.traits !== undefined && values(edits.traits) !== values(search.traits))
+  )
+}
+
+/** The prepare's own run command, with the saved edits when there are any; null when it printed none. */
+function runLine(search: PreparedSearch, edited: boolean): string | null {
+  if (search.executeCommand === null || search.runDir === null || search.runDir.includes("'")) return null
+  return edited
+    ? `${search.executeCommand} --edits-json '${search.runDir}/card-edits.json'`
+    : search.executeCommand
 }
 
 /** The edits as the message carries them when the card cannot save them to the search's folder. */
@@ -1030,15 +1047,19 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     return next
   }
 
-  /** Execute, or the edits: saved beside the search with a plain line in the chat, else in the message. */
+  /**
+   * Run Search starts the prepared run on the chat straight away, with the edits saved beside it;
+   * a new query or trait, a blocked card's changes, or a failed save go to the agent instead.
+   */
   function submit(run: boolean) {
     setValues(clean(valuesWithDrafts()))
     setDrafts({})
     setTraits(traitsWithTyped())
     setNewTrait("")
     setSubmitted(true)
+    const direct = run && !(dirty && isNewSearch(search, edits)) ? runLine(search, dirty) : null
     if (!dirty) {
-      void send("execute")
+      void (direct === null ? send("execute") : runCommand(direct))
       return
     }
     const message = modifyMessage(edits, run)
@@ -1046,10 +1067,11 @@ export function SearchCard({ search, actions }: SearchCardProps) {
       void send(message)
       return
     }
-    const saved = saveEdits(search.run, edits)
-    void saved.then((ok) =>
-      send(ok ? (run ? "Run the search with my edits" : "Update the search with my edits") : message),
-    )
+    void saveEdits(search.run, edits).then((ok) => {
+      if (!ok) return send(message)
+      if (direct !== null) return runCommand(direct)
+      return send(run ? "Run the search with my edits" : "Update the search with my edits")
+    })
   }
 
   const edits = modifyEdits(search, query, valuesWithDrafts(), traitsWithTyped())

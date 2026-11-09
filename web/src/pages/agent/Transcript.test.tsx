@@ -5,7 +5,7 @@ import type { Entry } from "@/types/agent"
 
 import { Transcript } from "./Transcript"
 
-const store = vi.hoisted(() => ({ send: vi.fn(), useAgent: () => ({ scope: null }) }))
+const store = vi.hoisted(() => ({ send: vi.fn(), runCommand: vi.fn(), useAgent: () => ({ scope: null }) }))
 vi.mock("@/lib/agent/store", () => store)
 vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
@@ -14,6 +14,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
   store.send.mockReset()
+  store.runCommand.mockReset()
 })
 
 it("copies a message's text and says Copied for a moment", async () => {
