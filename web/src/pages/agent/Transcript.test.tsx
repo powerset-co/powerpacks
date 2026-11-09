@@ -254,3 +254,22 @@ it("shows a blocked search's blockers under its notes and offers only Send chang
   expect(within(card).queryByRole("button", { name: "Run Search" })).toBeNull()
   expect(within(card).getByRole("button", { name: "Send changes" })).toBeTruthy()
 })
+
+it("shows the search card's edits as a short line, not the JSON the agent gets", () => {
+  render(
+    <Transcript
+      entries={[
+        {
+          kind: "user",
+          id: "u1",
+          text: 'Modify, then execute:\n{\n "filters": {\n  "metro_areas": ["New York"]\n }\n}',
+        },
+        { kind: "user", id: "u2", text: 'Modify:\n{\n "filters": {}\n}' },
+      ]}
+      running={false}
+    />,
+  )
+  expect(screen.getByText("Run the search with my edits")).toBeTruthy()
+  expect(screen.getByText("Update the search with my edits")).toBeTruthy()
+  expect(screen.queryByText(/metro_areas/)).toBeNull()
+})
