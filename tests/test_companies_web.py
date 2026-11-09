@@ -64,20 +64,26 @@ def request(path, body=None):
     ('PAYLANE', 'Example Payments'), ('paylane.com', 'Example Payments'),
     ('paylnae', 'Example Payments'), ('unrelatedzzzz', None),
 ])
-def test_local_suggestions(local_index, query, name):
-    status, raw = request('/api/companies/suggest?' + urllib.parse.urlencode({'q': query, 'scope': 'local'}))
+def test_local_name_search(local_index, query, name):
+    status, raw = request('/api/companies/search', {'scope': 'local', 'name': query})
     assert status == HTTPStatus.OK
-    suggestions = json.loads(raw)['suggestions']
-    assert len(suggestions) <= 10
-    assert len({row['display_value'] for row in suggestions}) == len(suggestions)
-    assert (suggestions[0]['display_value'] if suggestions else None) == name
+    rows = json.loads(raw)['companies']
+    assert (rows[0]['name'] if rows else None) == name
 
 
-def test_suggestions_are_limited_and_collapse_names(local_index):
+@pytest.mark.parametrize('name', [None, '', '  '])
+def test_no_name_lists_every_company_with_the_true_total(local_index, name):
     with duckdb.connect(str(local_index)) as conn:
-        conn.executemany('INSERT INTO local_companies (id, company_name, name_aliases_text) VALUES (?, ?, ?)',
-                         [(f'company-{i}', f'Example {i}', f'Example {i}') for i in range(15)])
-    assert len(companies.suggest('Example', 'local')['suggestions']) == 10
+        conn.executemany('INSERT INTO local_companies (id, company_name) VALUES (?, ?)',
+                         [(f'company-{i}', f'Example {i}') for i in range(15)])
+    body = {'scope': 'local', 'limit': 5, 'offset': 5}
+    if name is not None:
+        body['name'] = name
+    result = companies.search(body)
+    assert (result['total'], len(result['companies'])) == (19, 5)
+    first = companies.search({**body, 'offset': 0})['companies']
+    # Most local people first: Stripe (2), then Atlas Labs (1).
+    assert [row['id'] for row in first[:2]] == ['stripe', 'atlas']
 
 
 @pytest.mark.parametrize(('query', 'minimum', 'expected'), [
@@ -97,14 +103,11 @@ def test_cli_name_lookup_keeps_tiers_and_filters(local_index, query, minimum, ex
         backend.configure_local_backend(None)
 
 
-@pytest.mark.parametrize('operation', ['suggest', 'search', 'drilldown'])
+@pytest.mark.parametrize('operation', ['search', 'drilldown'])
 def test_local_request_releases_database(local_index, operation):
-    if operation == 'suggest':
-        companies.suggest('strpie', 'local')
-    else:
-        companies.search({'scope': 'local', 'name': 'Stri',
-                          'id': 'stripe' if operation == 'drilldown' else None,
-                          'include_people': operation == 'drilldown'})
+    companies.search({'scope': 'local', 'name': 'Stri',
+                      'id': 'stripe' if operation == 'drilldown' else None,
+                      'include_people': operation == 'drilldown'})
     with duckdb.connect(str(local_index)) as conn:
         assert conn.execute('SELECT count(*) FROM local_companies').fetchone()[0] == 4
 
@@ -124,14 +127,13 @@ def test_directory_tiers_and_distinct_people_ties(local_index):
             ('t1', 'a', 'micro-tools'),
             ('w1', 'a', 'word'), ('w2', 'b', 'word'), ('w3', 'c', 'word')""")
     expected = ['micro', 'microsoft', 'micro-labs', 'micro-tools', 'word', 'typo']
-    assert [row['id'] for row in companies.suggest('Micro', 'local')['suggestions']] == expected
     assert [row['id'] for row in companies.search({'scope': 'local', 'name': 'MICRO'})['companies']] == expected
 
 
 def test_directory_prefix_without_exact_match(local_index):
     with duckdb.connect(str(local_index)) as conn:
         conn.execute("INSERT INTO local_companies (id, company_name) VALUES ('microsoft', 'Microsoft')")
-    assert companies.suggest('Micro', 'local')['suggestions'][0]['id'] == 'microsoft'
+    assert companies.search({'scope': 'local', 'name': 'Micro'})['companies'][0]['id'] == 'microsoft'
 
 
 def test_local_list_and_drilldown(local_index):
@@ -183,11 +185,9 @@ def test_local_people_sort(local_index, sort, direction, first):
 
 def test_no_local_index_is_conflict(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    for path, body in [('/api/companies/suggest?q=Stripe&scope=local', None),
-                       ('/api/companies/search', {'scope': 'local', 'name': 'Stripe'})]:
-        status, raw = request(path, body)
-        assert status == HTTPStatus.CONFLICT
-        assert b'No local index on this Mac' in raw
+    status, raw = request('/api/companies/search', {'scope': 'local', 'name': 'Stripe'})
+    assert status == HTTPStatus.CONFLICT
+    assert b'No local index on this Mac' in raw
 
 
 def test_cloud_proxy():
@@ -207,15 +207,8 @@ def test_cloud_proxy():
         assert sent.full_url == 'https://api.example/v2/companies/search'
         assert sent.get_header('Authorization') == 'Bearer test-token'
         assert json.loads(sent.data) == {**{k: v for k, v in body.items() if k != 'scope'}, 'set_id': 'set-example'}
-        response.__enter__.return_value.read.return_value = b'{"companies":[{"id":"s","name":"Stripe"},{"id":"s2","name":"Stripe"}]}'
-        status, raw = request('/api/companies/suggest?q=strpie&scope=set-example')
-        assert json.loads(raw) == {'suggestions': [{'id': 's', 'display_value': 'Stripe'}]}
-        sent = upstream.call_args.args[0]
-        assert sent.full_url == 'https://api.example/v2/companies/directory'
-        assert sent.get_header('Authorization') == 'Bearer test-token'
-        assert json.loads(sent.data) == {'q': 'strpie', 'limit': 10}
         upstream.side_effect = urllib.error.HTTPError(sent.full_url, 503, 'Unavailable', {}, io.BytesIO(b'{"detail":"directory unavailable"}'))
-        status, raw = request('/api/companies/suggest?q=strpie&scope=set-example')
+        status, raw = request('/api/companies/search', {'scope': 'set-example', 'limit': 3})
         assert status == HTTPStatus.SERVICE_UNAVAILABLE
         assert json.loads(raw) == {'detail': 'directory unavailable'}
 

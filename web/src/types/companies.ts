@@ -48,8 +48,3 @@ export interface CompanySearchResponse {
   limit: number
   offset: number
 }
-
-export interface CompanySuggestion {
-  id: string
-  display_value: string
-}

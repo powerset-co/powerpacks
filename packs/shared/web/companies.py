@@ -16,8 +16,6 @@ from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys
 from packs.search.primitives.local import local_resolve_companies as resolver
 from packs.shared.web.search_scope import LOCAL_INDEX
 
-SUGGEST_LIMIT = 10
-SEARCH_MATCH_LIMIT = 500
 _SENIORITY_ORDER = {
     'founder': 1, 'c_suite': 2, 'c-suite': 2, 'vp': 3, 'vice-president': 3,
     'partner': 3, 'owner': 3, 'director': 4, 'senior': 5, 'manager': 6,
@@ -66,28 +64,6 @@ def _proxy(path: str, body: dict) -> dict:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
-
-
-def suggest(q: str, scope: str) -> dict:
-    if not scope:
-        raise ValueError('Choose a search scope')
-    if scope == 'local':
-        with _local_index() as store:
-            rows = resolver.name_directory_lookup(q, None, top_k=SEARCH_MATCH_LIMIT, store=store) if q.strip() else []
-        names = [(row['id'], row['company_name']) for row in rows]
-    else:
-        rows = _proxy('directory', {'q': q, 'limit': SUGGEST_LIMIT})['companies']
-        names = [(row['id'], row['name']) for row in rows]
-    suggestions = []
-    seen = set()
-    for company_id, name in names:
-        if name.casefold() in seen:
-            continue
-        seen.add(name.casefold())
-        suggestions.append({'id': company_id, 'display_value': name})
-        if len(suggestions) == SUGGEST_LIMIT:
-            break
-    return {'suggestions': suggestions}
 
 
 def search(body: dict) -> dict:
@@ -149,13 +125,13 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
         rows = store.filter_only_rows_for_namespace(
             'companies', ('id', 'Eq', request.id), resolver.COMPANY_INCLUDE_ATTRIBUTES,
         )
-    elif request.name and request.name.strip():
-        rows = resolver.name_directory_lookup(request.name, None, top_k=SEARCH_MATCH_LIMIT, store=store)
+        total = len(rows)
     else:
-        rows = []
-    rows = resolver.dedupe_rows(rows)
-    total = len(rows)
-    rows = rows[request.offset:request.offset + request.limit]
+        # No name lists every company, most local people first. The page is cut in SQL and the
+        # total counts every match by id, so a long list costs one page of rows.
+        name = request.name or ''
+        total = len(resolver.name_directory_lookup(name, None, top_k=None, store=store, include_attributes=[]))
+        rows = resolver.name_directory_lookup(name, None, top_k=request.limit, offset=request.offset, store=store)
     company_ids = [row['id'] for row in rows]
     groups = defaultdict(lambda: defaultdict(list))
     profiles = {}

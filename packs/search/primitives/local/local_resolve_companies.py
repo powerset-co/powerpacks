@@ -345,8 +345,12 @@ async def company_rows_for_names(
     return rows
 
 
-def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int, store: LocalDuckDBSearchStore) -> list[dict[str, Any]]:
-    """Match directory tiers, then order by distinct local people and name."""
+def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None, store: LocalDuckDBSearchStore,
+                          offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES) -> list[dict[str, Any]]:
+    """Match directory tiers, then order by distinct local people and name.
+
+    An empty name matches every company (tier 1). top_k None returns every match from `offset`;
+    `include_attributes=[]` returns only ids (a cheap count of the matches)."""
     query = name.strip().lower()
     return store.query_rows_sql(
         "companies",
@@ -368,9 +372,9 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int, store
         ) people ON people.company_id = ranked.id
         WHERE tier < 4
         ORDER BY tier, coalesce(people_count, 0) DESC, company_name, id
-        LIMIT ?""",
-        [query, r"(^|\W)" + re.escape(query), top_k],
-        filters=filters, include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
+        LIMIT ? OFFSET ?""",
+        [query, r"(^|\W)" + re.escape(query), top_k, offset],
+        filters=filters, include_attributes=include_attributes,
     )
 
 

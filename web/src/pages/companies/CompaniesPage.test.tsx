@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, expect, it, vi } from "vitest"
 
 import { fetchSearchScope } from "@/lib/api/searches"
@@ -46,48 +46,45 @@ function json(payload: unknown): Response {
 }
 
 /** The JSON a request carried. */
-function sent(init: RequestInit | undefined): string {
-  return typeof init?.body === "string" ? init.body : ""
+function sent(init: RequestInit | undefined): unknown {
+  return typeof init?.body === "string" ? JSON.parse(init.body) : null
 }
 
 function list(companies: Company[]): CompanySearchResponse {
   return { companies, total: companies.length, limit: 100, offset: 0 }
 }
 
-it("suggests from the local index, lists the matches, and opens a company's people", async () => {
-  vi.mocked(fetchSearchScope).mockResolvedValue({ sets: [], local_db: "/idx/local-search.duckdb" })
-  const fetch = vi.fn((url: string, init?: RequestInit) => {
-    if (url.startsWith("/api/companies/suggest"))
-      return Promise.resolve(json({ suggestions: [{ id: "c-stripe", display_value: "Stripe" }] }))
-    if (!sent(init).includes('"include_people":true')) return Promise.resolve(json(list([STRIPE])))
+const SCOPE = {
+  sets: [{ set_id: "t-1", name: "Team", is_personal: false, owned: false, person_count: 40 }],
+  local_db: "/idx/local-search.duckdb",
+}
+
+const PEOPLE = [
+  {
+    id: "p1",
+    name: "Ada Lovelace",
+    public_identifier: "ada",
+    position_title: "Engineer",
+    is_current: true,
+    tenure_years: 3,
+  },
+  {
+    id: "p2",
+    name: "Alan Turing",
+    public_identifier: null,
+    position_title: "Researcher",
+    is_current: false,
+    tenure_years: 1,
+  },
+]
+
+/** The page over a mocked server: a list request answers Stripe, a company request its people. */
+function setup() {
+  vi.mocked(fetchSearchScope).mockResolvedValue(SCOPE)
+  const fetch = vi.fn((_url: string, init?: RequestInit) => {
+    const people = typeof init?.body === "string" && init.body.includes('"include_people":true')
     return Promise.resolve(
-      json(
-        list([
-          {
-            ...STRIPE,
-            people_offset: 0,
-            people_has_more: false,
-            people: [
-              {
-                id: "p1",
-                name: "Ada Lovelace",
-                public_identifier: "ada",
-                position_title: "Engineer",
-                is_current: true,
-                tenure_years: 3,
-              },
-              {
-                id: "p2",
-                name: "Alan Turing",
-                public_identifier: null,
-                position_title: "Researcher",
-                is_current: false,
-                tenure_years: 1,
-              },
-            ],
-          },
-        ]),
-      ),
+      json(list([people ? { ...STRIPE, people_offset: 0, people_has_more: false, people: PEOPLE } : STRIPE])),
     )
   })
   vi.stubGlobal("fetch", fetch)
@@ -96,33 +93,53 @@ it("suggests from the local index, lists the matches, and opens a company's peop
       <CompaniesPage />
     </QueryClientProvider>,
   )
+  const requests = () => fetch.mock.calls.map(([, init]) => sent(init))
+  return { fetch, requests }
+}
 
-  // The picker starts on the local index, so the typo goes to the local suggest.
-  await screen.findByRole("combobox", { name: "Search in" })
-  fireEvent.change(screen.getByPlaceholderText("e.g., Stripe, OpenAI..."), { target: { value: "strpie" } })
-  fireEvent.focus(screen.getByPlaceholderText("e.g., Stripe, OpenAI..."))
-  fireEvent.click(await screen.findByRole("button", { name: "Stripe" }, { timeout: 2000 }))
-  expect(fetch.mock.calls[0]?.[0]).toBe("/api/companies/suggest?q=strpie&scope=local")
-  // Picking a suggestion does not search; Search does.
-  expect(fetch).toHaveBeenCalledTimes(1)
+const listRequest = (scope: string, name: string) => ({
+  scope,
+  name,
+  position_type: "all",
+  limit: 100,
+  offset: 0,
+})
 
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  const results = await screen.findByRole("region", { name: "Results" })
-  expect(JSON.parse(sent(fetch.mock.calls[1]?.[1]))).toEqual({
-    scope: "local",
-    name: "Stripe",
-    position_type: "all",
-    limit: 100,
-    offset: 0,
-  })
+it("loads every company on open, on the local index", async () => {
+  const { fetch, requests } = setup()
+  const results = await screen.findByRole("region", { name: "Companies" })
   expect(within(results).getByText("San Francisco, CA, United States")).toBeTruthy()
+  expect(screen.getByText("1 company")).toBeTruthy()
+  expect(fetch.mock.calls[0]?.[0]).toBe("/api/companies/search")
+  expect(requests()).toEqual([listRequest("local", "")])
   // No LinkedIn icons in the company list.
   expect(within(results).queryByRole("link")).toBeNull()
+})
 
+it("asks for the typed name once typing settles", async () => {
+  const { requests } = setup()
+  await screen.findByRole("region", { name: "Companies" })
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search companies" }), {
+    target: { value: "strpie" },
+  })
+  expect(requests()).toEqual([listRequest("local", "")])
+  await waitFor(() => expect(requests()).toContainEqual(listRequest("local", "strpie")))
+})
+
+it("reloads the list for a new scope", async () => {
+  const { requests } = setup()
+  await screen.findByRole("region", { name: "Companies" })
+  pick("Search in", /Team/)
+  await waitFor(() => expect(requests()).toContainEqual(listRequest("t-1", "")))
+})
+
+it("opens a company's people with the scope its list was loaded from", async () => {
+  const { requests } = setup()
+  const results = await screen.findByRole("region", { name: "Companies" })
   fireEvent.click(within(results).getByRole("button", { name: "Stripe" }))
   const people = await screen.findByRole("region", { name: "People" })
   await within(people).findByText("Ada Lovelace")
-  expect(JSON.parse(sent(fetch.mock.calls[2]?.[1]))).toEqual({
+  expect(requests().at(-1)).toEqual({
     scope: "local",
     id: "c-stripe",
     name: "Stripe",
@@ -140,79 +157,8 @@ it("suggests from the local index, lists the matches, and opens a company's peop
       .getAllByRole("link")
       .map((link) => link.getAttribute("href")),
   ).toEqual(["https://www.linkedin.com/in/ada"])
-
   // The name box narrows the loaded page.
   fireEvent.change(within(people).getByLabelText("Search people by name"), { target: { value: "tur" } })
   expect(within(people).queryByText("Ada Lovelace")).toBeNull()
   expect(within(people).getByText("Alan Turing")).toBeTruthy()
-})
-
-function renderPage() {
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <CompaniesPage />
-    </QueryClientProvider>,
-  )
-}
-
-it("a new scope drops the pick and asks the new scope for suggestions", async () => {
-  vi.mocked(fetchSearchScope).mockResolvedValue({
-    sets: [{ set_id: "t-1", name: "Team", is_personal: false, owned: false, person_count: 40 }],
-    local_db: "/idx/local-search.duckdb",
-  })
-  const fetch = vi.fn((url: string) =>
-    Promise.resolve(
-      json({
-        suggestions: [
-          {
-            id: url.includes("scope=local") ? "c-local" : "c-cloud",
-            display_value: url.includes("scope=local") ? "Stripe" : "Stripe Inc",
-          },
-        ],
-      }),
-    ),
-  )
-  vi.stubGlobal("fetch", fetch)
-  renderPage()
-  await screen.findByRole("combobox", { name: "Search in" })
-  const box = () => screen.getByPlaceholderText("e.g., Stripe, OpenAI...")
-  fireEvent.change(box(), { target: { value: "strpie" } })
-  fireEvent.focus(box())
-  fireEvent.click(await screen.findByRole("button", { name: "Stripe" }, { timeout: 2000 }))
-  expect(screen.getByRole("button", { name: "Search" })).toHaveProperty("disabled", false)
-
-  pick("Search in", /Team/)
-  expect(screen.getByRole("button", { name: "Search" })).toHaveProperty("disabled", true)
-  expect(box()).toHaveProperty("value", "")
-  fireEvent.change(box(), { target: { value: "strpie" } })
-  fireEvent.focus(box())
-  await screen.findByRole("button", { name: "Stripe Inc" }, { timeout: 2000 })
-  expect(fetch.mock.calls.at(-1)?.[0]).toBe("/api/companies/suggest?q=strpie&scope=t-1")
-})
-
-it("hides the old results while a new search runs", async () => {
-  vi.mocked(fetchSearchScope).mockResolvedValue({ sets: [], local_db: "/idx/local-search.duckdb" })
-  let release: (response: Response) => void = () => undefined
-  const fetch = vi.fn((url: string) => {
-    if (url.startsWith("/api/companies/suggest"))
-      return Promise.resolve(json({ suggestions: [{ id: "c-stripe", display_value: "Stripe" }] }))
-    if (fetch.mock.calls.filter(([called]) => called === "/api/companies/search").length === 1)
-      return Promise.resolve(json(list([STRIPE])))
-    return new Promise<Response>((resolve) => {
-      release = resolve
-    })
-  })
-  vi.stubGlobal("fetch", fetch)
-  renderPage()
-  await screen.findByRole("combobox", { name: "Search in" })
-  fireEvent.change(screen.getByPlaceholderText("e.g., Stripe, OpenAI..."), { target: { value: "strpie" } })
-  fireEvent.focus(screen.getByPlaceholderText("e.g., Stripe, OpenAI..."))
-  fireEvent.click(await screen.findByRole("button", { name: "Stripe" }, { timeout: 2000 }))
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  await screen.findByRole("region", { name: "Results" })
-
-  fireEvent.click(screen.getByRole("button", { name: "Search" }))
-  expect(screen.queryByRole("region", { name: "Results" })).toBeNull()
-  release(json(list([STRIPE])))
-  await screen.findByRole("region", { name: "Results" })
 })

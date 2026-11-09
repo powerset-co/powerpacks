@@ -46,12 +46,6 @@ class AppRoutes:
     """The app and avatar routes, mountable in any stdlib handler."""
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path == "/api/companies/suggest":
-            from packs.shared.web import companies
-
-            query = urllib.parse.parse_qs(parsed.query)
-            _company_response(handler, lambda: companies.suggest(query.get("q", [""])[0], query.get("scope", [""])[0]))
-            return True
         if parsed.path in {"/api/autocomplete/locations", "/api/autocomplete/roles"}:
             from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
 
