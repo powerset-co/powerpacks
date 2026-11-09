@@ -160,17 +160,30 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
 // Its row borrows from the gap below so messages keep their spacing.
 const COPY = "mt-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
 
+/**
+ * The search card's edits reach the agent as `Modify, then execute:` (or a blocked card's
+ * `Modify:`) and a JSON object; the card above already shows them, so the bubble says what was
+ * asked instead of printing the JSON.
+ */
+function userText(text: string): string {
+  if (text.startsWith("Modify, then execute:\n")) return "Run the search with my edits"
+  if (text.startsWith("Modify:\n")) return "Update the search with my edits"
+  return text
+}
+
 function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   switch (entry.kind) {
-    case "user":
+    case "user": {
+      const text = userText(entry.text)
       return (
         <div className="rise-in group -mb-4 flex flex-col text-[15px] leading-[1.65]">
           <div className="max-w-[82%] self-end whitespace-pre-wrap rounded-[var(--radius-l)] rounded-br-[var(--radius-s)] border border-line bg-surface-2 px-3.5 py-2.5">
-            {entry.text}
+            {text}
           </div>
-          <CopyButton text={entry.text} className={cn(COPY, "self-end")} />
+          <CopyButton text={text} className={cn(COPY, "self-end")} />
         </div>
       )
+    }
     case "agent":
       return (
         <div className="rise-in group -mb-4 flex flex-col text-[15px]">

@@ -5,7 +5,7 @@ import type { Entry } from "@/types/agent"
 
 import { Transcript } from "./Transcript"
 
-const store = vi.hoisted(() => ({ send: vi.fn(), useAgent: () => ({ scope: null }) }))
+const store = vi.hoisted(() => ({ send: vi.fn(), runCommand: vi.fn(), useAgent: () => ({ scope: null }) }))
 vi.mock("@/lib/agent/store", () => store)
 vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
@@ -14,6 +14,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.useRealTimers()
   store.send.mockReset()
+  store.runCommand.mockReset()
 })
 
 it("copies a message's text and says Copied for a moment", async () => {
@@ -253,4 +254,23 @@ it("shows a blocked search's blockers under its notes and offers only Send chang
   expect(within(card).queryByRole("button", { name: /^VP of Finance/ })).toBeNull()
   expect(within(card).queryByRole("button", { name: "Run Search" })).toBeNull()
   expect(within(card).getByRole("button", { name: "Send changes" })).toBeTruthy()
+})
+
+it("shows the search card's edits as a short line, not the JSON the agent gets", () => {
+  render(
+    <Transcript
+      entries={[
+        {
+          kind: "user",
+          id: "u1",
+          text: 'Modify, then execute:\n{\n "filters": {\n  "metro_areas": ["New York"]\n }\n}',
+        },
+        { kind: "user", id: "u2", text: 'Modify:\n{\n "filters": {}\n}' },
+      ]}
+      running={false}
+    />,
+  )
+  expect(screen.getByText("Run the search with my edits")).toBeTruthy()
+  expect(screen.getByText("Update the search with my edits")).toBeTruthy()
+  expect(screen.queryByText(/metro_areas/)).toBeNull()
 })
