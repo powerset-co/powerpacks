@@ -5,6 +5,8 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
+  2026-11-09: quick runs carry `steps` and `current_step`; `record_quick_search`
+      writes s1 and `select_quick_step` repoints the readers at the current step.
   2026-11-03: positions carry the company's `logo_url` and candidates their `headline`, so the
       page can badge the avatar with the current company and show the headline under the role.
   2026-10-09: `record_quick_search` saves a quick search as a one-pond run, its

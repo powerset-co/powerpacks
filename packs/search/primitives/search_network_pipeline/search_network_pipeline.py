@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-11-09: `rerank --criteria` scores the rows showing with the cloud refine
+        prompt and saves a step; `--use <step>` goes back to an earlier step.
     2026-11-06: the Luna screen (Decisions API) replaces Jev as the default JD judge and,
         like Jev, reads every hydrated row without `llm_filter_candidates`.
     2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
