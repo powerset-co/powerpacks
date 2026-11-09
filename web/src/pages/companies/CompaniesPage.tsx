@@ -84,13 +84,16 @@ export function CompaniesPage() {
       <p className="-mt-3 m-0 text-[13px] text-muted-foreground">Search for companies by name</p>
 
       {/* Not a form: the suggestion list's buttons would submit it. */}
-      <div className={`${CARD} flex flex-col gap-4 px-5 py-4`}>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="company-name">Company Name</Label>
+      <div className={`${CARD} flex flex-col gap-2 px-5 py-4`}>
+        <Label htmlFor="company-name">Company Name</Label>
+        {/* One row: the name box a third wide, then the positions checkbox, the scope and Search;
+            items start-aligned so the picked-company chip under the box moves nothing. */}
+        <div className="flex flex-wrap items-start gap-3">
           {/* Keyed by scope: a new scope starts the box over, with no pick or suggestions left from the old. */}
           <AutocompleteInput
             key={scope ? scopeOf(scope) : ""}
             id="company-name"
+            className="w-full min-w-[240px] sm:w-1/3"
             placeholder="e.g., Stripe, OpenAI..."
             value={names}
             // One company at a time: a new pick replaces the last.
@@ -98,15 +101,13 @@ export function CompaniesPage() {
             onSearch={(query) => (scope ? suggestCompanies(query, scopeOf(scope)) : Promise.resolve([]))}
             maxDisplayed={1}
           />
-        </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
+          <div className="flex h-10 items-center gap-2">
             <Checkbox
               id="all-positions"
               checked={allPositions}
               onCheckedChange={(checked) => setAllPositions(checked === true)}
             />
-            <Label htmlFor="all-positions">Include all positions (not just current)</Label>
+            <Label htmlFor="all-positions">Include all positions</Label>
           </div>
           <ScopePicker
             value={scope}
@@ -114,12 +115,11 @@ export function CompaniesPage() {
               setPicked(next)
               setNames([])
             }}
-            className="h-8 w-auto max-w-[280px] gap-2 rounded-[var(--radius-s)] border-line-strong bg-background pl-2.5 pr-2 text-[13px] text-foreground"
+            className="w-auto max-w-[280px] gap-2"
           />
-        </div>
-        <div>
           <Button
             variant="primary"
+            size="lg"
             disabled={searching || !name || !scope}
             onClick={() => {
               if (scope) run({ name, scope: scopeOf(scope), allPositions }, 0)
