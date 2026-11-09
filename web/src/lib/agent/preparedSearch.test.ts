@@ -85,3 +85,13 @@ it("has no traits when the preview carries none, as replies from older builds", 
   expect(search?.traits).toEqual([])
   expect(search?.filters).toEqual([{ key: "metro_areas", value: ["New York Metropolitan Area"] }])
 })
+
+it("names the prepare's folder under .powerpacks/search, where the card saves its edits", () => {
+  const search = (payload_json: string) =>
+    preparedSearch(prepared({ query: "VP", status: "preview_ready", preview: { filters: {} }, payload_json }))
+      ?.run
+  expect(search("/Users/casey/powerpacks/.powerpacks/search/ab12-vp/expand_search_request.json")).toBe(
+    "ab12-vp",
+  )
+  expect(search("/tmp/engine/run/expand_search_request.json")).toBeNull()
+})

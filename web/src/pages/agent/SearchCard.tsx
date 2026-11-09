@@ -168,8 +168,19 @@ function clean(values: Values): Values {
  * as an edit and traits sent as a new search. Nothing is joined or split, so a name with a comma
  * stays one name.
  */
-function modifyMessage(search: PreparedSearch, query: string, values: Values, traits: SearchTrait[]): string {
-  const body: { query?: string; filters: Record<string, FilterValue | null>; traits?: SearchTrait[] } = {
+interface CardEdits {
+  query?: string
+  filters: Record<string, FilterValue | null>
+  traits?: SearchTrait[]
+}
+
+function modifyEdits(
+  search: PreparedSearch,
+  query: string,
+  values: Values,
+  traits: SearchTrait[],
+): CardEdits {
+  const body: CardEdits = {
     filters: {},
   }
   if (query.trim() !== search.query) body.query = query.trim()
@@ -180,14 +191,33 @@ function modifyMessage(search: PreparedSearch, query: string, values: Values, tr
   const values_ = (list: SearchTrait[]) => list.map((trait) => trait.value)
   const newSearch =
     body.query !== undefined || JSON.stringify(values_(traits)) !== JSON.stringify(values_(search.traits))
-  if (newSearch) return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
+  if (newSearch) return body
   const prepared = preparedValues(search)
   const sent = clean(values)
   for (const key of new Set([...prepared.keys(), ...sent.keys()])) {
     const next = sent.get(key) ?? null
     if (JSON.stringify(next) !== JSON.stringify(prepared.get(key) ?? null)) body.filters[key] = next
   }
-  return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
+  return body
+}
+
+/** The edits as the message carries them when the card cannot save them to the search's folder. */
+function modifyMessage(edits: CardEdits, run: boolean): string {
+  return `${run ? "Modify, then execute" : "Modify"}:\n${JSON.stringify(edits, null, 1)}`
+}
+
+/** Saves the edits as `<run>/card-edits.json`, so the chat says only that they were made. */
+async function saveEdits(run: string, edits: CardEdits): Promise<boolean> {
+  try {
+    const response = await fetch("/searches/api/card-edits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run, edits }),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -1000,17 +1030,31 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     return next
   }
 
-  function submit(message: string) {
+  /** Execute, or the edits: saved beside the search with a plain line in the chat, else in the message. */
+  function submit(run: boolean) {
     setValues(clean(valuesWithDrafts()))
     setDrafts({})
     setTraits(traitsWithTyped())
     setNewTrait("")
     setSubmitted(true)
-    void send(message)
+    if (!dirty) {
+      void send("execute")
+      return
+    }
+    const message = modifyMessage(edits, run)
+    if (search.run === null) {
+      void send(message)
+      return
+    }
+    const saved = saveEdits(search.run, edits)
+    void saved.then((ok) =>
+      send(ok ? (run ? "Run the search with my edits" : "Update the search with my edits") : message),
+    )
   }
 
-  const edited = modifyMessage(search, query, valuesWithDrafts(), traitsWithTyped())
-  const dirty = edited !== modifyMessage(search, search.query, prepared, search.traits)
+  const edits = modifyEdits(search, query, valuesWithDrafts(), traitsWithTyped())
+  const dirty =
+    JSON.stringify(edits) !== JSON.stringify(modifyEdits(search, search.query, prepared, search.traits))
 
   function reset() {
     setQuery(search.query)
@@ -1182,12 +1226,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
             Edit Filters
           </Button>
           {search.blockers.length === 0 ? (
-            <Button
-              variant="primary"
-              size="lg"
-              className="flex-1"
-              onClick={() => submit(dirty ? edited : "execute")}
-            >
+            <Button variant="primary" size="lg" className="flex-1" onClick={() => submit(true)}>
               Run Search
             </Button>
           ) : (
@@ -1195,7 +1234,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
               variant="primary"
               size="lg"
               className="flex-1"
-              onClick={() => submit(edited.replace("Modify, then execute:", "Modify:"))}
+              onClick={() => submit(false)}
               disabled={!dirty}
             >
               Send changes

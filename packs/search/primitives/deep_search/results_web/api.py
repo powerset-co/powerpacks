@@ -4,6 +4,7 @@
 `SearchResult.queries` and `Candidate.suggested_pin` are not emitted.
 
 Changelog:
+  2026-11-09: /card-edits saves a chat search card's edits beside its prepare, so the chat shows none of the JSON.
   2026-10-08: the ask routes work out who to ask from the local sets and send agent messages (ask_set.py).
   2026-10-08: /api/ask/preview, /api/ask/status and the ask send for the broadcast button.
   2026-09-26: expose the manifest-only catalog and one saved run as JSON.
@@ -17,6 +18,7 @@ import urllib.parse
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Callable
 
 from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets
@@ -62,7 +64,8 @@ class SearchApi:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if self.routes._relative(parsed.path) != "/ask":
+        path = self.routes._relative(parsed.path)
+        if path not in {"/ask", "/api/card-edits"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
         if origin and (urllib.parse.urlparse(origin).hostname or "").lower() not in LOCAL_HOSTS:
@@ -70,6 +73,9 @@ class SearchApi:
             return True
         length = int(handler.headers.get("Content-Length", "0"))
         request = json.loads(handler.rfile.read(length).decode("utf-8")) if length > 0 else {}
+        if path == "/api/card-edits":
+            self._card_edits(handler, request)
+            return True
         run_id = str(request.get("run_id") or "")
         question = str(request.get("question") or "").strip()
         run_dir = self.routes.results_root / run_id
@@ -78,6 +84,17 @@ class SearchApi:
             return True
         self._ask(handler, lambda: ask_set.send(run_dir, question, self.sets))
         return True
+
+    def _card_edits(self, handler: BaseHTTPRequestHandler, request: dict) -> None:
+        """The card's edits as `<run>/card-edits.json` in a chat prepare's folder (.powerpacks/search/<run>)."""
+        run = str(request.get("run") or "")
+        edits = request.get("edits")
+        run_dir = self.routes.results_root.parent / "search" / run
+        if not run or run != Path(run).name or run.startswith(".") or not run_dir.is_dir() or not isinstance(edits, dict):
+            _send_json(handler, {"error": "run and edits are required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        (run_dir / "card-edits.json").write_text(json.dumps(edits, indent=1) + "\n", encoding="utf-8")
+        _send_json(handler, {"ok": True})
 
     def _ask(self, handler: BaseHTTPRequestHandler, call: Callable[[], dict]) -> None:
         """One ask call under the store lock; a missing sign-in is 401 needs_auth, a relay refusal 502."""

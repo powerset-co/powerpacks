@@ -37,6 +37,8 @@ export interface PreparedSearch {
   local: boolean
   /** How many people the hard filters match, when the prepare counted them (the local index's pool estimate). */
   estimate: number | null
+  /** The prepare's folder under `.powerpacks/search/`, where the card saves its edits; null elsewhere. */
+  run: string | null
 }
 
 /** The value as the payload holds it, or null for anything empty or of another shape. */
@@ -118,6 +120,10 @@ export function preparedSearch(entry: Entry): PreparedSearch | null {
     estimate:
       isRecord(preview.pool_estimate) && typeof preview.pool_estimate.matched_people === "number"
         ? preview.pool_estimate.matched_people
+        : null,
+    run:
+      typeof value.payload_json === "string"
+        ? (/\.powerpacks\/search\/([^/]+)\/[^/]+$/.exec(value.payload_json)?.[1] ?? null)
         : null,
   }
 }
