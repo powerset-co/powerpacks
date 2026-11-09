@@ -32,7 +32,7 @@ function onControl(event: MouseEvent<HTMLElement>): boolean {
 
 /**
  * One person: who they are on the left (name, current role · company from their positions,
- * headline, location, sources), their company's logo on the avatar, the tags and pin over
+ * headline, location, sources), the tags and pin over
  * them; the scores and reasoning on the right. A ranked (job description) run puts Score over
  * the reasoning; a plain run puts the feedback flag there. A click on the row opens them in the
  * drawer, or closes it when they are open. `group/row` shows the row's controls on hover.
@@ -80,7 +80,7 @@ export const ResultRow = memo(function ResultRow({
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
               </span>
-              <RoleLine title={role.title} company={role.company} logo={role.logo} />
+              <RoleLine title={role.title} company={role.company} />
               {headline ? <span className="result-headline">{headline}</span> : null}
               {row.location ? <small className="result-location">{row.location}</small> : null}
               <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
@@ -104,9 +104,9 @@ export const ResultRow = memo(function ResultRow({
   )
 })
 
-// Current role · company, with the company's logo (or its letter) just before its name;
-// whichever is known, else a plain note.
-export function RoleLine({ title, company, logo }: { title: string; company: string; logo: string }) {
+// Current role · company, whichever is known, else a plain note. The drawer passes `logo` to
+// show the company's logo just before its name; the list rows leave it out.
+export function RoleLine({ title, company, logo }: { title: string; company: string; logo?: string }) {
   if (!title && !company) return <span className="result-title result-unknown">Current role unknown</span>
   return (
     <span className="result-title">
@@ -114,7 +114,7 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
       {title && company ? <span className="result-at">·</span> : null}
       {company ? (
         <span className="result-company">
-          <CompanyLogo company={company} src={logo || undefined} size={14} />
+          {logo !== undefined ? <CompanyLogo company={company} src={logo || undefined} size={14} /> : null}
           <span>{company}</span>
         </span>
       ) : null}
