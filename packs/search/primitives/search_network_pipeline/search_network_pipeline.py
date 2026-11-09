@@ -49,6 +49,7 @@ from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
 from packs.search.primitives.search_feedback.search_feedback import log_edit  # noqa: E402
+from packs.search.primitives.search_network_pipeline.refine import rerank  # noqa: E402
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
@@ -1346,7 +1347,6 @@ def cmd_status(args):
     emit({"primitive":"search_network_pipeline","status":"ok","ledger":str(lp),"state":l.get("state"),"mode":l.get("mode"),"current_block":l.get("current_block"),"artifacts":l.get("artifacts",{}),"summary":pipeline_summary(l),"step_counts":{s:sum(1 for r in l.get('steps',{}).values() if r.get('status')==s) for s in sorted({r.get('status') for r in l.get('steps',{}).values()})}}); return 0
 
 def cmd_rerank(args):
-    from packs.search.primitives.search_network_pipeline.refine import rerank
     try:
         emit(rerank(Path(args.run_dir), criteria=args.criteria, use=args.use, model=args.model,
                     env=_run_env(env_file=args.env_file)))

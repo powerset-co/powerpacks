@@ -143,7 +143,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                     step = dict(id=step_id, parent=parent, criteria=criteria, query_type=query_type, shown=len(kept),
                                 scored=len(rows), jsonl=str(jsonl), cost_usd=sum(costs), created_at=now_iso())
                     steps.append(step)
-                except Exception:
+                except BaseException:
                     card.update(status="failed", updated_at=now_iso())
                     write_json(catalog_path, catalog)
                     raise

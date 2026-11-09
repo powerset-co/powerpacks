@@ -11,10 +11,11 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web.model import load_catalog, load_search, record_quick_search
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
-from packs.search.primitives.search_network_pipeline.refine import _has_zero_trait_score
+from packs.search.primitives.search_network_pipeline.refine import _has_zero_trait_score, rerank
 from packs.search.primitives.search_network_pipeline.refine_prompt import candidate_xml, cohort_summary
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -199,6 +200,21 @@ class RefineTest(unittest.TestCase):
         self.cli("--criteria", "malformed", expected=1)
         self.assertEqual(self.result_path.read_bytes(), before)
         self.assertEqual(load_catalog(self.root)[0].status, "failed")
+
+    def test_interrupted_scoring_marks_failed_and_allows_use(self):
+        before = self.result_path.read_bytes()
+        env = {"OPENAI_API_KEY": "test-key", "OPENAI_API_BASE": f"http://127.0.0.1:{self.server.server_port}"}
+        for interruption in (KeyboardInterrupt, SystemExit):
+            with self.subTest(interruption=interruption.__name__):
+                with patch("packs.search.primitives.search_network_pipeline.refine._score_batch", side_effect=interruption):
+                    with self.assertRaises(interruption):
+                        rerank(self.run, criteria="interrupted", use=None, model="gpt-5.1", env=env)
+                self.assertEqual(self.result_path.read_bytes(), before)
+                self.assertEqual(load_catalog(self.root)[0].status, "failed")
+                self.assertFalse((self.run / "query_results.s2.jsonl").exists())
+                self.cli("--use", "s1")
+                self.assertEqual(load_catalog(self.root)[0].status, "completed")
+        self.assertEqual(self.requests, [])
 
     def test_refusals_leave_files_unchanged(self):
         before = self.snapshot()
