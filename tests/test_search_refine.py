@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
@@ -163,6 +164,34 @@ class RefineTest(unittest.TestCase):
         self.cli("--criteria", "who has experience")
         self.assertEqual(self.payload()["steps"][-1]["query_type"], "filter_and_rank")
         self.assertEqual([row["final_score"] for row in self.step_rows()], [.95, .8, .6, .5])
+
+    def test_batch_concurrency_is_capped(self):
+        lock = threading.Lock()
+        active = peak = 0
+        handler = self.server.RequestHandlerClass
+        original = handler.do_POST
+
+        def counted_post(request):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                time.sleep(0.2)
+                original(request)
+            finally:
+                with lock:
+                    active -= 1
+
+        env = {"OPENAI_API_KEY": "test-key", "OPENAI_API_BASE": f"http://127.0.0.1:{self.server.server_port}"}
+        with patch.object(handler, "do_POST", counted_post), patch(
+            "packs.search.primitives.search_network_pipeline.refine.MAX_CONCURRENT_BATCHES", 2
+        ):
+            output = rerank(self.run, criteria="capped", use=None, model="gpt-5.1", env=env)
+        self.assertLessEqual(peak, 2)
+        self.assertEqual(len(self.requests), 3)
+        self.assertEqual(sorted(pid for ids, _, _ in self.requests for pid in ids), self.ids[:6])
+        self.assertEqual(output["step"]["scored"], 6)
 
     def test_use_branch_and_unknown(self):
         self.cli("--criteria", "first")

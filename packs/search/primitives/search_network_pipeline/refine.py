@@ -17,6 +17,8 @@ from packs.search.primitives.search_network_pipeline.refine_prompt import build_
 MIN_RERANK_SCORE = 0.5
 MIN_INITIAL_SCORE = 0.3
 BATCH_SIZE = 2
+# Cloud api_v2/search/agent_rerank.py:367,430 caps concurrent batches at 200.
+MAX_CONCURRENT_BATCHES = 200
 
 
 def _decoded(value, default):
@@ -118,7 +120,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                 try:
                     summary = cohort_summary(inputs)
                     batches = [inputs[i:i + BATCH_SIZE] for i in range(0, len(inputs), BATCH_SIZE)]
-                    with ThreadPoolExecutor(max_workers=max(1, len(batches))) as executor:
+                    with ThreadPoolExecutor(max_workers=max(1, min(len(batches), MAX_CONCURRENT_BATCHES))) as executor:
                         futures = [executor.submit(_score_batch, client, model, batch, payload["iterations"][0]["query"], criteria, summary) for batch in batches]
                         scored = [future.result() for future in futures]
                     votes = Counter(query_type for _, query_type in scored)
