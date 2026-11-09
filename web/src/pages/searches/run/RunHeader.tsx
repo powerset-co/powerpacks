@@ -17,18 +17,31 @@ interface RunHeaderProps {
   status: string | undefined
   people: number
   actions: ReactNode
+  // A one-pond run's traits and filters fold under the title; the caret beside it opens them.
+  filters?: { open: boolean; onToggle: (open: boolean) => void }
 }
 
 // The run's name and facts on one compact block; a run with a job description also names the
 // hiring company and folds the description and the company's team under them (rendering.py
 // _search). The actions slot sits at its right.
-export function RunHeader({ search, status, people, actions }: RunHeaderProps) {
+export function RunHeader({ search, status, people, actions, filters }: RunHeaderProps) {
   const [jdOpen, setJdOpen] = useState(false)
   return (
     <header className="run-head" data-run-head>
       <div className="run-head-id">
         {search.jd_text ? <small>{search.company || "Company unknown"}</small> : null}
-        <h1>{search.title}</h1>
+        <div className="run-head-title">
+          <h1>{search.title}</h1>
+          {filters ? (
+            <button
+              type="button"
+              className="run-head-fold chevron"
+              aria-expanded={filters.open}
+              aria-label={filters.open ? "Hide traits and filters" : "Show traits and filters"}
+              onClick={() => filters.onToggle(!filters.open)}
+            />
+          ) : null}
+        </div>
         <p className="run-head-facts">
           {status === undefined || isComplete(status) ? null : (
             <Badge variant="muted" className="run-head-status" data-status={status}>

@@ -1,7 +1,7 @@
 import { memo, type MouseEvent } from "react"
 
 import { CompanyLogo, ProxiedLinkedinAvatar } from "@/components/shared"
-import { currentRole, shownHeadline } from "@/lib/searches/person"
+import { currentRole } from "@/lib/searches/person"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 
 import { TraitList } from "./Evidence"
@@ -31,8 +31,8 @@ function onControl(event: MouseEvent<HTMLElement>): boolean {
 }
 
 /**
- * One person: who they are on the left (name, current role · company from their positions,
- * headline, location, sources), the tags and pin over
+ * One person: who they are on the left (name and sources, then current role · company from their
+ * positions · location; the headline is the drawer's), the tags and pin over
  * them; the scores and reasoning on the right. A ranked (job description) run puts Score over
  * the reasoning; a plain run puts the feedback flag there. A click on the row opens them in the
  * drawer, or closes it when they are open. `group/row` shows the row's controls on hover.
@@ -48,7 +48,6 @@ export const ResultRow = memo(function ResultRow({
 }: ResultRowProps) {
   const { row, candidate } = result
   const role = currentRole(row)
-  const headline = shownHeadline(row, role)
   return (
     <div
       className="result-row group/row"
@@ -76,14 +75,15 @@ export const ResultRow = memo(function ResultRow({
           <div className="result-person">
             <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
-              <span className="flex items-center gap-1.5">
+              <span className="result-name">
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
+                <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
               </span>
-              <RoleLine title={role.title} company={role.company} />
-              {headline ? <span className="result-headline">{headline}</span> : null}
-              {row.location ? <small className="result-location">{row.location}</small> : null}
-              <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
+              <span className="result-place">
+                <RoleLine title={role.title} company={role.company} />
+                {row.location ? <small className="result-location">{row.location}</small> : null}
+              </span>
             </span>
           </div>
         </div>
