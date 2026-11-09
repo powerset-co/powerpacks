@@ -143,7 +143,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                     jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
                     jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
                     step = dict(id=step_id, parent=parent, criteria=criteria, query_type=query_type, shown=len(kept),
-                                scored=len(rows), jsonl=str(jsonl), cost_usd=sum(costs), created_at=now_iso())
+                                scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=sum(costs), created_at=now_iso())
                     steps.append(step)
                 except BaseException:
                     card.update(status="failed", updated_at=now_iso())

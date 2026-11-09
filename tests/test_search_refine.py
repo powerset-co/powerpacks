@@ -47,7 +47,7 @@ class RefineTest(unittest.TestCase):
         self.state.write_text(json.dumps({"steps": [{"id": "hydrate_people", "output": {"profiles_path": str(self.profiles)}}]}))
         (self.run / "pipeline.ledger.json").write_text(json.dumps({"state": str(self.state)}))
         record_quick_search(self.root, "fixture", query="engineers", filters={}, traits=[], created_at="2026-11-09",
-                            jsonl=str(self.jsonl), profiles_path=str(self.profiles), status="completed")
+                            jsonl=str(self.jsonl.relative_to(self.project)), profiles_path=str(self.profiles), status="completed")
         self.result_path = self.root / "fixture/results.json"
         self.catalog_path = self.root / "catalog.json"
         self.requests = []
@@ -114,7 +114,7 @@ class RefineTest(unittest.TestCase):
 
     def step_rows(self):
         path = self.payload()["iterations"][0]["arm"]["artifacts"]["jsonl"]
-        return [json.loads(line) for line in Path(path).read_text().splitlines()]
+        return [json.loads(line) for line in (self.project / path).read_text().splitlines()]
 
     def snapshot(self):
         return {str(path): path.read_bytes() for path in self.project.rglob("*") if path.is_file()}
@@ -132,8 +132,9 @@ class RefineTest(unittest.TestCase):
         self.assertEqual(payload["current_step"], "s2")
         self.assertEqual(payload["summary"]["pond_chain"][0]["result_count"], 4)
         self.assertEqual(payload["iterations"][0]["arm"]["artifacts"]["jsonl"], step["jsonl"])
-        self.assertEqual(payload["steps"][0]["jsonl"], str(self.jsonl))
-        self.assertEqual(Path(step["jsonl"]).name, "query_results.s2.jsonl")
+        self.assertEqual(payload["steps"][0]["jsonl"], str(self.jsonl.relative_to(self.project)))
+        self.assertFalse(Path(step["jsonl"]).is_absolute())
+        self.assertEqual(step["jsonl"], ".powerpacks/search/fixture/query_results.s2.jsonl")
         self.assertEqual([row["final_score"] for row in self.step_rows()], [.95, .8, .6, .5])
         for row in self.step_rows():
             original = next(r for r in self.rows if r["person_id"] == row["person_id"])
@@ -196,7 +197,7 @@ class RefineTest(unittest.TestCase):
     def test_use_branch_and_unknown(self):
         self.cli("--criteria", "first")
         s2 = self.payload()["steps"][1]
-        s2_bytes = Path(s2["jsonl"]).read_bytes()
+        s2_bytes = (self.project / s2["jsonl"]).read_bytes()
         count = len(self.requests)
         output, _ = self.cli("--use", "s1")
         self.assertEqual(output["step"]["cost_usd"], 0)
@@ -206,7 +207,7 @@ class RefineTest(unittest.TestCase):
         self.cli("--criteria", "branch")
         self.assertEqual(self.payload()["steps"][-1]["parent"], "s1")
         self.assertEqual(self.payload()["steps"][-1]["id"], "s3")
-        self.assertEqual(Path(s2["jsonl"]).read_bytes(), s2_bytes)
+        self.assertEqual((self.project / s2["jsonl"]).read_bytes(), s2_bytes)
         count = len(self.requests)
         self.cli("--use", "s2")
         self.assertEqual(self.payload()["current_step"], "s2")
@@ -271,7 +272,7 @@ class RefineTest(unittest.TestCase):
         self.fenced = self.bare = True
         self.usage = False
         self.cli("--criteria", "test", "--model", "unpriced-mock")
-        self.assertEqual(self.payload()["steps"][0]["jsonl"], str(self.jsonl))
+        self.assertEqual(self.payload()["steps"][0]["jsonl"], str(self.jsonl.relative_to(self.project)))
         self.assertEqual(self.payload()["steps"][1]["query_type"], "rerank")
         self.assertEqual(self.payload()["steps"][1]["cost_usd"], 0)
         self.assertTrue(all(body["max_tokens"] == 4096 and body["temperature"] == .1 for _, body, _ in self.requests))
