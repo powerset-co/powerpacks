@@ -245,12 +245,8 @@ describe("RunView", () => {
     expect(jordan.getByText("Staff Engineer")).toBeTruthy()
     expect(jordan.getByText("Example Labs")).toBeTruthy()
     expect(jordan.getByText("·")).toBeTruthy()
-    // The company's logo sits just before its name, not on the avatar.
-    const company = jordan.getByText("Example Labs").parentElement
-    expect(company?.querySelector("[data-company-logo]")?.getAttribute("title")).toBe("Example Labs")
-    expect(
-      document.querySelector("[data-person-id='p-jordan'] .result-person > [data-company-logo]"),
-    ).toBeNull()
+    // The list shows no company logos; the drawer does.
+    expect(document.querySelector("[data-person-id='p-jordan'] [data-company-logo]")).toBeNull()
     expect(jordan.getByText("Oakland, CA")).toBeTruthy()
     expect(
       row("p-casey")
@@ -341,6 +337,10 @@ describe("RunView", () => {
     expect(panel.getByText("Built this exact system twice.")).toBeTruthy()
     expect(panel.getByText("Example University")).toBeTruthy()
     expect(panel.getByText(/^Rank 2 of 6 by likeness/)).toBeTruthy()
+    // The drawer keeps company logos; one without a logo is an empty square, never a letter.
+    const logos = drawer()?.querySelectorAll("[data-company-logo]") ?? []
+    expect(logos.length).toBeGreaterThan(0)
+    for (const logo of logos) expect(logo.textContent).toBe("")
     expect(document.querySelector("[data-person-id='p-jordan']")?.getAttribute("data-open")).toBe("true")
     expect(document.querySelector(".result-chevron")).toBeNull()
     fireEvent.click(main("p-casey"))
