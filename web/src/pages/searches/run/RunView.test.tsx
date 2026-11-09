@@ -152,7 +152,15 @@ describe("RunView", () => {
     // No job description, so no hiring company and no team under the title.
     expect(screen.queryByText("Company unknown")).toBeNull()
     expect(screen.queryByText("No team information available")).toBeNull()
-    const filters = within(screen.getByRole("region", { name: "Search filters" }))
+    // The traits and filters start folded under the title; its caret opens them.
+    const region = screen.getByRole("region", { name: "Search filters" })
+    expect(region.closest("[data-open]")?.getAttribute("data-open")).toBe("false")
+    fireEvent.click(screen.getByRole("button", { name: "Show traits and filters" }))
+    expect(region.closest("[data-open]")?.getAttribute("data-open")).toBe("true")
+    expect(
+      screen.getByRole("button", { name: "Hide traits and filters" }).getAttribute("aria-expanded"),
+    ).toBe("true")
+    const filters = within(region)
     // The title is the query, so no Query row.
     expect(filters.queryByText("Query")).toBeNull()
     expect(filters.getByText("Traits")).toBeTruthy()
