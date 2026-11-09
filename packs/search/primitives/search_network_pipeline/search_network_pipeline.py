@@ -1345,6 +1345,16 @@ def cmd_status(args):
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None); l=load_ledger(lp)
     emit({"primitive":"search_network_pipeline","status":"ok","ledger":str(lp),"state":l.get("state"),"mode":l.get("mode"),"current_block":l.get("current_block"),"artifacts":l.get("artifacts",{}),"summary":pipeline_summary(l),"step_counts":{s:sum(1 for r in l.get('steps',{}).values() if r.get('status')==s) for s in sorted({r.get('status') for r in l.get('steps',{}).values()})}}); return 0
 
+def cmd_rerank(args):
+    from packs.search.primitives.search_network_pipeline.refine import rerank
+    try:
+        emit(rerank(Path(args.run_dir), criteria=args.criteria, use=args.use, model=args.model,
+                    env=_run_env(env_file=args.env_file)))
+        return 0
+    except Exception as error:
+        emit({"primitive": "search_network_pipeline", "status": "failed", "error": str(error)})
+        return 1
+
 def cmd_approve(args):
     if not args.confirm: emit({"status":"blocked","error":"pass --confirm"}); return 2
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None); l=load_ledger(lp); cur=l.get("current_block") or {}; aid=args.approval_id or cur.get("approval_id")
@@ -1427,6 +1437,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_prepare)
     r=sub.add_parser("run"); add_run(r); r.set_defaults(func=cmd_run)
     c=sub.add_parser("continue"); add_run(c); c.set_defaults(func=cmd_run)
+    r=sub.add_parser("rerank")
+    r.add_argument("--run-dir", required=True)
+    action=r.add_mutually_exclusive_group(required=True)
+    action.add_argument("--criteria")
+    action.add_argument("--use")
+    r.add_argument("--model", default="gpt-5.1")
+    r.add_argument("--env-file", default=".env")
+    r.set_defaults(func=cmd_rerank)
     s=sub.add_parser("status"); s.add_argument("--ledger"); s.add_argument("--state"); s.set_defaults(func=cmd_status)
     a=sub.add_parser("approve"); a.add_argument("kind",choices=["llm"]); a.add_argument("--ledger"); a.add_argument("--state"); a.add_argument("--approval-id"); a.add_argument("--confirm",action="store_true"); a.set_defaults(func=cmd_approve)
     return ap

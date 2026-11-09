@@ -809,6 +809,19 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
     write_json(root / CATALOG_FILE, catalog)
 
 
+def original_quick_step(payload: dict[str, Any]) -> dict[str, Any]:
+    return {"id": "s1", "parent": None, "criteria": None, "query_type": None,
+            "shown": payload["summary"]["pond_chain"][0]["result_count"], "scored": None,
+            "jsonl": payload["iterations"][0]["arm"]["artifacts"]["jsonl"],
+            "cost_usd": 0, "created_at": payload["created_at"]}
+
+
+def select_quick_step(payload: dict[str, Any], step: dict[str, Any]) -> None:
+    payload["current_step"] = step["id"]
+    payload["iterations"][0]["arm"]["artifacts"]["jsonl"] = step["jsonl"]
+    payload["summary"]["pond_chain"][0]["result_count"] = step["shown"]
+
+
 def record_quick_search(root: Path, run_id: str, *, query: str, title: str | None = None, filters: dict[str, Any],
                         traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
                         status: str, person_attribution: dict[str, Any] | None = None,
@@ -830,6 +843,8 @@ def record_quick_search(root: Path, run_id: str, *, query: str, title: str | Non
         payload["person_attribution"] = person_attribution
     if person_attribution_error:
         payload["person_attribution_error"] = person_attribution_error
+    payload["steps"] = [original_quick_step(payload)]
+    payload["current_step"] = "s1"
     write_json(root / run_id / "results.json", payload)
     card = SearchCard(run_id=run_id, title=title or query, company="", status=status,
                       created_at=created_at, updated_at=created_at, search_version="quick",
