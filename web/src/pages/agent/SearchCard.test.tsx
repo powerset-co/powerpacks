@@ -20,7 +20,11 @@ import { isRecord } from "@/lib/utils"
 
 import { SearchCard } from "./SearchCard"
 
-const store = vi.hoisted(() => ({ send: vi.fn(), runCommand: vi.fn(), useAgent: () => ({ scope: null }) }))
+const store = vi.hoisted(() => ({
+  send: vi.fn(),
+  runCommand: vi.fn(() => Promise.resolve(true)),
+  useAgent: () => ({ scope: null }),
+}))
 vi.mock("@/lib/agent/store", () => store)
 vi.mock("@/lib/agent/useSearchScope", () => ({ useSearchScope: () => ({ data: undefined }) }))
 
@@ -28,6 +32,7 @@ afterEach(() => {
   cleanup()
   store.send.mockReset()
   store.runCommand.mockReset()
+  store.runCommand.mockImplementation(() => Promise.resolve(true))
 })
 
 const SEARCH: PreparedSearch = {
@@ -497,6 +502,13 @@ it("runs filter edits directly with the saved edits file", async () => {
   )
   expect(store.send).not.toHaveBeenCalled()
   vi.unstubAllGlobals()
+})
+
+it("asks the agent when the app refuses the run", async () => {
+  store.runCommand.mockImplementation(() => Promise.resolve(false))
+  render(<SearchCard search={DIRECT} actions={true} />)
+  execute()
+  await waitFor(() => expect(store.send).toHaveBeenCalledWith("execute"))
 })
 
 it("leaves a changed query to the agent, which prepares it again", async () => {

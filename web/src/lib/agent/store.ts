@@ -210,15 +210,15 @@ export async function send(message: string): Promise<void> {
   }
 }
 
-/** A search pipeline command run on the open chat straight away, with no model turn. */
-export async function runCommand(command: string): Promise<void> {
+/** A search pipeline command run on the open chat straight away, with no model turn; false when it did not start. */
+export async function runCommand(command: string): Promise<boolean> {
   wire()
-  if (state.threadId === null) return
-  set({ ...state, running: true })
+  if (state.threadId === null) return false
   try {
     await runShellCommand(state.threadId, command)
-  } catch (error: unknown) {
-    set(failed(state, errorText(error)))
+    return true
+  } catch {
+    return false
   }
 }
 

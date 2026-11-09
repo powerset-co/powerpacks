@@ -1058,8 +1058,11 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     setNewTrait("")
     setSubmitted(true)
     const direct = run && !(dirty && isNewSearch(search, edits)) ? runLine(search, dirty) : null
+    // A run the app refuses (a command it does not allow) goes to the agent as before.
+    const runOr = (line: string, fallback: string) =>
+      runCommand(line).then((started) => (started ? undefined : send(fallback)))
     if (!dirty) {
-      void (direct === null ? send("execute") : runCommand(direct))
+      void (direct === null ? send("execute") : runOr(direct, "execute"))
       return
     }
     const message = modifyMessage(edits, run)
@@ -1069,8 +1072,8 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     }
     void saveEdits(search.run, edits).then((ok) => {
       if (!ok) return send(message)
-      if (direct !== null) return runCommand(direct)
-      return send(run ? "Run the search with my edits" : "Update the search with my edits")
+      const short = run ? "Run the search with my edits" : "Update the search with my edits"
+      return direct === null ? send(short) : runOr(direct, short)
     })
   }
 
