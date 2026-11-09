@@ -22,7 +22,7 @@ import {
   TeamIcon,
 } from "./icons/nav"
 import { HiveIcon } from "./icons/actions"
-import { CircleUserRound } from "lucide-react"
+import { Building2, CircleUserRound } from "lucide-react"
 import { PowersetMark } from "./PowersetMark"
 import { useStoredSize } from "@/hooks/useStoredSize"
 
@@ -36,6 +36,7 @@ const ICONS: Record<PageKey, ComponentType<SVGProps<SVGSVGElement>>> = {
   agent: ChatIcon,
   searches: SearchesIcon,
   people: PeopleIcon,
+  companies: Building2,
   sets: HiveIcon,
   team: TeamIcon,
   tasks: TasksIcon,

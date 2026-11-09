@@ -7,6 +7,7 @@ the repo's `web/dist/` (see `web/README.md`). POST `/api/profile-image/sign/batc
 LinkedIn CDN URLs server-side for the gateway's saved images. Everything else falls through.
 
 Changelog:
+  2026-11-09: /companies searches the local index or a selected Powerset set.
   2026-10-13: /settings is an app page.
   2026-10-08: the shell also answers /agent (the desktop app's Codex agent).
   2026-10-08: /sets is an app page.
@@ -34,7 +35,7 @@ WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 APP_HTML = Path(__file__).resolve().parent / "app.html"
 ASSET_PREFIX = "/app/assets/"
 # The paths the React router owns; the server answers each with the shell page.
-PAGE_PATHS = frozenset({"/", "/home", "/install", "/permission", "/people", "/people/logbook", "/searches", "/searches/run", "/sets", "/accounts", "/tasks", "/agent", "/settings", "/team", "/onboarding", "/onboarding/signup", "/onboarding/codex", "/onboarding/linkedin", "/onboarding/setup", "/onboarding/sources", "/onboarding/import"})
+PAGE_PATHS = frozenset({"/", "/home", "/install", "/permission", "/people", "/people/logbook", "/companies", "/searches", "/searches/run", "/sets", "/accounts", "/tasks", "/agent", "/settings", "/team", "/onboarding", "/onboarding/signup", "/onboarding/codex", "/onboarding/linkedin", "/onboarding/setup", "/onboarding/sources", "/onboarding/import"})
 ASSETS = {
     "app.js": (WEB_DIST / "app.js", "text/javascript; charset=utf-8"),
     "app.css": (WEB_DIST / "app.css", "text/css; charset=utf-8"),
@@ -45,6 +46,12 @@ class AppRoutes:
     """The app and avatar routes, mountable in any stdlib handler."""
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        if parsed.path == "/api/companies/suggest":
+            from packs.shared.web import companies
+
+            query = urllib.parse.parse_qs(parsed.query)
+            _company_response(handler, lambda: companies.suggest(query.get("q", [""])[0], query.get("scope", [""])[0]))
+            return True
         if parsed.path in {"/api/autocomplete/locations", "/api/autocomplete/roles"}:
             from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
 
@@ -88,7 +95,38 @@ class AppRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
+        if parsed.path == "/api/companies/search":
+            from packs.shared.web import companies
+
+            def search() -> dict:
+                body = json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))
+                return companies.search(body)
+
+            _company_response(handler, search)
+            return True
         return post_profile_images(handler, parsed)
+
+
+def _company_response(handler: BaseHTTPRequestHandler, read) -> None:
+    status = HTTPStatus.OK
+    try:
+        body = json.dumps(read()).encode()
+    except urllib.error.HTTPError as error:
+        status = HTTPStatus(error.code)
+        body = error.read()
+    except FileNotFoundError as error:
+        status = HTTPStatus.CONFLICT
+        body = json.dumps({"error": str(error)}).encode()
+    except SystemExit:
+        status = HTTPStatus.UNAUTHORIZED
+        body = b'{"error":"Sign in to Powerset to search companies."}'
+    except ValueError as error:
+        status = HTTPStatus.BAD_REQUEST
+        body = json.dumps({"error": str(error)}).encode()
+    except OSError:
+        status = HTTPStatus.BAD_GATEWAY
+        body = b'{"error":"Could not reach Powerset."}'
+    _send(handler, body, "application/json", cache="no-store", status=status)
 
 
 def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str, *, cache: str,

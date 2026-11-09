@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
 import local_search_backend as local_backend  # noqa: E402
+from local_duckdb_store import LocalDuckDBSearchStore  # noqa: E402
 from search_common import (  # noqa: E402
     allowed_operator_ids_from_payload,
     comparison,
@@ -331,7 +333,45 @@ async def company_rows_for_names(
 ) -> list[dict[str, Any]]:
     names = expanded_company_names(names)
     rows = await exact_name_lookup(names, filters, top_k=top_k)
-    return rows or await name_bm25_lookup(names, filters, top_k=top_k)
+    rows = rows or await name_bm25_lookup(names, filters, top_k=top_k)
+    if rows:
+        return rows
+    store = local_backend.local_store()
+    try:
+        for name in names:
+            rows.extend(await asyncio.to_thread(name_directory_lookup, name, filters, top_k=top_k, store=store))
+    finally:
+        store.conn.close()
+    return rows
+
+
+def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int, store: LocalDuckDBSearchStore) -> list[dict[str, Any]]:
+    """Match directory tiers, then order by distinct local people and name."""
+    query = name.strip().lower()
+    return store.query_rows_sql(
+        "companies",
+        r"""WITH ranked AS (
+            SELECT filtered.*, CASE
+                WHEN lower(company_name) = q OR lower(website_domain) = q
+                    OR split_part(lower(website_domain), '.', 1) = q THEN 0
+                WHEN starts_with(lower(company_name), q) OR starts_with(lower(website_domain), q) THEN 1
+                WHEN regexp_matches(lower(company_name), word_prefix) THEN 2
+                WHEN jaro_winkler_similarity(lower(company_name), q) >= 0.94
+                    OR jaro_winkler_similarity(split_part(lower(website_domain), '.', 1), q) >= 0.94 THEN 3
+                ELSE 4 END AS tier
+            FROM filtered CROSS JOIN (SELECT ? AS q, ? AS word_prefix)
+        )
+        SELECT ranked.* FROM ranked
+        LEFT JOIN (
+            SELECT company_id, count(DISTINCT person_id) AS people_count
+            FROM local_people_positions GROUP BY company_id
+        ) people ON people.company_id = ranked.id
+        WHERE tier < 4
+        ORDER BY tier, coalesce(people_count, 0) DESC, company_name, id
+        LIMIT ?""",
+        [query, r"(^|\W)" + re.escape(query), top_k],
+        filters=filters, include_attributes=COMPANY_INCLUDE_ATTRIBUTES,
+    )
 
 
 def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
