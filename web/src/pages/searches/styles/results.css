@@ -212,9 +212,9 @@
   min-width: 0;
   padding-right: 132px;
 }
-/* A plain run's only control there is the feedback flag. */
+/* A plain run has no Score there: its feedback flag sits with the tags and the pin. */
 .result-indicators[data-ranked="false"] {
-  padding-right: 40px;
+  padding-right: 0;
 }
 .result-actions {
   position: absolute;
@@ -657,6 +657,10 @@ section.review-sections {
     gap: 10px;
     padding-top: 0;
     padding-right: 96px;
+  }
+  /* A plain run's flag adds a third control beside the tag editor and the pin. */
+  .result-tags:has([data-feedback-flag]) + .result-person {
+    padding-right: 126px;
   }
   .result-person > :first-child {
     width: 32px;

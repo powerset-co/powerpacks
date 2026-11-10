@@ -70,6 +70,7 @@ export const ResultRow = memo(function ResultRow({
           {candidate ? (
             <span className="result-tags">
               <RowTags candidate={candidate} context={context} />
+              {ranked ? null : <RowFlag candidate={candidate} context={context} />}
             </span>
           ) : null}
           <div className="result-person">
@@ -88,13 +89,9 @@ export const ResultRow = memo(function ResultRow({
           </div>
         </div>
         <div className="result-indicators" data-ranked={ranked}>
-          {candidate ? (
+          {candidate && ranked ? (
             <span className="result-actions">
-              {ranked ? (
-                <RowScore result={result} candidate={candidate} context={context} />
-              ) : (
-                <RowFlag candidate={candidate} context={context} />
-              )}
+              <RowScore result={result} candidate={candidate} context={context} />
             </span>
           ) : null}
           <Score result={result} ranked={ranked} labels={labels} parentScores={context.parentScores} />
