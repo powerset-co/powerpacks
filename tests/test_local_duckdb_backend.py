@@ -503,6 +503,28 @@ class LocalDuckDBFixtureMixin:
 
 
 class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
+    def test_bm25_projects_before_ranking_and_preserves_rows(self) -> None:
+        store = local_backend.local_store()
+        for namespace, field, query, filters, attributes in [
+            ('companies', 'name_aliases_text', 'InfraDB Startup', None, ['company_name', 'vector']),
+            ('companies', 'semantic_text', 'developer tooling', ('headcount', 'Gte', 100), ['company_name']),
+            ('people', 'position_title', 'engineer founder', None, ['position_title', 'base_id']),
+            ('companies', 'name_aliases_text', 'unmatchedzzzz', None, []),
+        ]:
+            for top_k in (1, 10, 0):
+                with self.subTest(namespace=namespace, field=field, top_k=top_k):
+                    rank_by = (field, 'BM25', query)
+                    ranked = store._rank_rows(namespace, store._filtered_rows(namespace, filters), rank_by)
+                    expected = ranked[:top_k] if top_k else ranked
+                    expected = [vars(store._project_row_object(row, attributes)) for row in expected]
+                    with patch.object(store, '_filtered_rows_sql', wraps=store._filtered_rows_sql) as reads:
+                        result = store.query_namespace(namespace, rank_by, filters, top_k, attributes)
+                    self.assertEqual([vars(row) for row in result.rows], expected)
+                    self.assertEqual(reads.call_args_list[0].kwargs['include_attributes'], [field])
+                    if expected:
+                        self.assertEqual(reads.call_args_list[1].kwargs['include_attributes'], attributes)
+        store.conn.close()
+
     def test_local_table_contract_fields_and_vectors(self) -> None:
         import duckdb
 
