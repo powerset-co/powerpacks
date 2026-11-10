@@ -399,8 +399,10 @@ person-data errors still use `$feedback`.
 ## Refine a finished search
 
 For narrowing or re-ordering the people already found, run
-`rerank --run-dir <the chat's run under .powerpacks/search> --criteria '<the user's words>'`
+`rerank --run-dir .powerpacks/search/<run_id> --criteria '<the user's words>'`
 in the background, using the `search_network_pipeline.py` command below, then reply with one line.
+Use the `<run_id>` named in the chat's “About the search saved in .powerpacks/deep-search/<run_id>”
+line: the same id; only the parent folder differs.
 For “undo” or “go back to …”, run `rerank --run-dir … --use <step>`.
 Choose the step from `steps` in `.powerpacks/deep-search/<run_id>/results.json` by matching the user's words to
 `criteria`; the original search is s1. Never show step ids to the user.
