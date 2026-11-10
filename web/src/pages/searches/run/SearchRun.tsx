@@ -33,6 +33,8 @@ export interface SearchRunProps {
   // The run's controls (web/README.md "Searches").
   toolbar: ReactNode
   headerActions: ReactNode
+  // A refined run's tags under the title.
+  trail: ReactNode
   rowContext: RowContext
 }
 
@@ -79,6 +81,7 @@ export function SearchRun(props: SearchRunProps) {
         people={props.people}
         actions={props.headerActions}
         filters={foldable ? { open: filtersOpen, onToggle: setFiltersOpen } : undefined}
+        trail={props.trail}
       />
       {search.ponds.length > 1 ? (
         <PondChain

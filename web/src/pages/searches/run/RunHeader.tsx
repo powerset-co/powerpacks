@@ -19,12 +19,14 @@ interface RunHeaderProps {
   actions: ReactNode
   // A one-pond run's traits and filters fold under the title; the caret beside it opens them.
   filters?: { open: boolean; onToggle: (open: boolean) => void }
+  // A refined run's tags (StepTrail), under the title whether or not the fold is open.
+  trail?: ReactNode
 }
 
 // The run's name and facts on one compact block; a run with a job description also names the
 // hiring company and folds the description and the company's team under them (rendering.py
 // _search). The actions slot sits at its right.
-export function RunHeader({ search, status, people, actions, filters }: RunHeaderProps) {
+export function RunHeader({ search, status, people, actions, filters, trail }: RunHeaderProps) {
   const [jdOpen, setJdOpen] = useState(false)
   return (
     <header className="run-head" data-run-head>
@@ -42,6 +44,7 @@ export function RunHeader({ search, status, people, actions, filters }: RunHeade
             />
           ) : null}
         </div>
+        {trail}
         <p className="run-head-facts">
           {status === undefined || isComplete(status) ? null : (
             <Badge variant="muted" className="run-head-status" data-status={status}>

@@ -97,7 +97,7 @@ export const ResultRow = memo(function ResultRow({
               )}
             </span>
           ) : null}
-          <Score result={result} ranked={ranked} labels={labels} />
+          <Score result={result} ranked={ranked} labels={labels} parentScores={context.parentScores} />
         </div>
       </div>
     </div>
@@ -127,10 +127,20 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
 // the cloud app's row shows: each trait's share with its name and reason, nothing else. The
 // pond's own 0–1 only orders the list, and the overall reasoning is the drawer's.
-function Score({ result, ranked, labels }: { result: Result; ranked: boolean; labels: boolean }) {
+interface ScoreProps {
+  result: Result
+  ranked: boolean
+  labels: boolean
+  parentScores: RowContext["parentScores"]
+}
+
+function Score({ result, ranked, labels, parentScores }: ScoreProps) {
   if (!ranked) {
     return (
       <div className="result-overall">
+        {parentScores ? (
+          <ScoreCell result={result} ranked={false} parentScore={parentScores.get(result.row.person_id)} />
+        ) : null}
         <div className="result-reason">
           <TraitList traits={result.row.traits} />
         </div>
