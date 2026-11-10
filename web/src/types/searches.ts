@@ -213,6 +213,17 @@ export interface CandidateGroup {
   candidates: Candidate[]
 }
 
+export interface SearchStep {
+  id: string
+  parent: string | null
+  criteria: string | null
+  query_type: string | null
+  shown: number
+  scored: number | null
+  cost_usd: number
+  created_at: string
+}
+
 export interface SearchResult {
   run_id: string
   title: string
@@ -226,6 +237,8 @@ export interface SearchResult {
   team: TeamMember[]
   team_fetched_at: string
   team_status: string
+  steps: SearchStep[]
+  current_step: string | null
 }
 
 export interface CatalogPayload {

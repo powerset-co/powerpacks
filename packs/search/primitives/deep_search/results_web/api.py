@@ -26,6 +26,7 @@ from packs.powerset.primitives.agent_inbox.messages import Rejected
 from packs.search.primitives.ask_set import ask_set
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 
+from .model import load_search
 from .server import LOCAL_HOSTS, SearchRoutes, _send_json
 
 
@@ -60,6 +61,12 @@ class SearchApi:
         if search is None:
             _send_json(handler, {"error": f"unknown search: {run_id}"}, status=HTTPStatus.NOT_FOUND)
             return True
+        step = (urllib.parse.parse_qs(parsed.query).get("step") or [None])[0]
+        if step is not None:
+            if not any(item.id == step for item in search.steps):
+                _send_json(handler, {"error": f"unknown step: {step}"}, status=HTTPStatus.NOT_FOUND)
+                return True
+            search = load_search(self.routes.results_root, run_id, step=step)
         _send_json(handler, {"search": asdict(search), "ratings": {"rubric": RUBRIC, "legacy": LEGACY_SCORES}})
         return True
 

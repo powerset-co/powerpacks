@@ -8,6 +8,7 @@ Changelog:
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import re
@@ -30,7 +31,7 @@ from test_deep_search_catalog import _write_run
 TYPES = Path(__file__).resolve().parents[1] / "web/src/types/searches.ts"
 DATACLASSES = {
     name: getattr(model, name) for name in (
-        "SearchCard", "SearchResult", "Pond", "PondCandidate", "TraitScore", "Position",
+        "SearchCard", "SearchResult", "SearchStep", "Pond", "PondCandidate", "TraitScore", "Position",
         "Education", "Candidate", "CandidatePond", "CandidateGroup", "MoveLikelihood",
         "CandidateJudgment", "PinJudgment", "PersonAttribution", "NetworkSource",
         "NetworkOperator", "GmailAccountDetail", "TeamMember", "TeamSimilarity",
@@ -109,6 +110,55 @@ class SearchJsonContractTest(unittest.TestCase):
                          (400, {"error": "run_id is required"}))
         self.assertFalse(self.api.get(mock.Mock(), urllib.parse.urlparse("/searches/tags")))
         self.assertFalse(self.api.get(mock.Mock(), urllib.parse.urlparse("/other/api/catalog")))
+
+    def test_old_run_preserves_json_bytes(self) -> None:
+        status, payload = self.get("/searches/api/search.json?run_id=jordan-role")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["search"].pop("steps"), [])
+        self.assertIsNone(payload["search"].pop("current_step"))
+        # Same fixture serialized by BASE 18f5f39, before step fields were added.
+        self.assertEqual(hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
+                         "62c21bb4dab3d32640ef0d0605c5937a9754f716e21979aa406fa72a53be7a31")
+        self.assertEqual(self.get("/searches/api/search.json?run_id=jordan-role&step=s1"),
+                         (404, {"error": "unknown step: s1"}))
+
+    def test_step_rows_and_snapshot(self) -> None:
+        from packs.search.primitives.deep_search.results_web.snapshot import export_snapshot, validate_snapshot
+
+        original = self.root / "original.jsonl"
+        refined = self.root / "refined.jsonl"
+        original.write_text(json.dumps({"person_id": "jordan", "name": "Jordan Bravo", "final_score": 0.8}) + "\n"
+                            + json.dumps({"person_id": "casey", "name": "Casey Example", "final_score": 0.6}) + "\n")
+        refined.write_text(json.dumps({"person_id": "casey", "name": "Casey Example", "final_score": 0.9}) + "\n")
+        model.record_quick_search(self.root, "quick", query="Engineers", filters={}, traits=[],
+                                 created_at="2026-11-09", jsonl=str(original), profiles_path="", status="completed")
+        path = self.root / "quick/results.json"
+        saved = json.loads(path.read_text())
+        saved["steps"].append(dict(id="s2", parent="s1", criteria="only startup people", query_type="filter",
+                                   shown=1, scored=2, cost_usd=0.01, created_at="2026-11-09", jsonl=str(refined)))
+        model.select_quick_step(saved, saved["steps"][1])
+        path.write_text(json.dumps(saved))
+        before = path.read_bytes()
+        for query, people in (("", ["casey"]),
+                              ("&step=s1", ["jordan", "casey"]),
+                              ("&step=s2", ["casey"]),
+                              ("", ["casey"])):
+            with self.subTest(query=query):
+                status, payload = self.get("/searches/api/search.json?run_id=quick" + query)
+                self.assertEqual(status, 200)
+                search = payload["search"]
+                self.assertEqual([row["person_id"] for row in search["candidates"]], people)
+                self.assertNotIn("criteria", search)
+                self.assertEqual(search["current_step"], "s2")
+                self.assertEqual(search["steps"], [{key: value for key, value in step.items() if key != "jsonl"}
+                                                  for step in saved["steps"]])
+                validate_snapshot({"schema_version": 1, "search": search, "tags": {"tags": [], "assignments": {}}})
+        self.assertEqual(self.get("/searches/api/search.json?run_id=quick&step=s9"),
+                         (404, {"error": "unknown step: s9"}))
+        self.assertEqual(path.read_bytes(), before)
+        snapshot = export_snapshot(path.parent)
+        self.assertEqual(snapshot["search"]["current_step"], "s2")
+        self.assertEqual(len(snapshot["search"]["steps"]), 2)
 
     def test_client_interfaces_match_dataclasses(self) -> None:
         interfaces = _interfaces()
