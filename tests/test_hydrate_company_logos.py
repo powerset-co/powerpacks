@@ -5,6 +5,7 @@ import duckdb
 
 from packs.search.primitives.hydrate_people import hydrate_people
 from packs.search.primitives.hydrate_people.hydrate_people import attach_company_logos, attach_remote_company_logos, local_position
+from packs.search.primitives.lib.powerpacks_contracts import assert_columns_in_contract
 
 
 class AttachCompanyLogosTest(unittest.TestCase):
@@ -43,6 +44,11 @@ class AttachRemoteCompanyLogosTest(unittest.TestCase):
         fetch.assert_called_once_with(["c1"], env_file=None)
         positions = rows[0]["hydrated_context"]["positions"]
         self.assertEqual([p.get("company_logo_url") for p in positions], ["https://x/roblox.png", "https://x/kept.png", None])
+
+
+class CompanyLogoContractTest(unittest.TestCase):
+    def test_remote_logo_query_columns_are_in_the_companies_contract(self):
+        assert_columns_in_contract("companies", ["id", "logo_url"])
 
 
 if __name__ == "__main__":
