@@ -23,12 +23,12 @@ def local_index(tmp_path, monkeypatch):
     with duckdb.connect(str(path)) as conn:
         conn.execute('''CREATE TABLE local_companies (
             id VARCHAR, company_name VARCHAR, name_aliases_text VARCHAR,
-            website_domain VARCHAR, headcount DOUBLE, city VARCHAR)''')
+            website_domain VARCHAR, headcount DOUBLE, city VARCHAR, linkedin_url VARCHAR)''')
         conn.execute("""INSERT INTO local_companies VALUES
-            ('stripe', 'Stripe', 'Stripe payments', 'stripe.com', 100, 'Example City'),
-            ('stripe-copy', 'Stripe', 'Stripe payments', 'stripe.com', 50, NULL),
-            ('atlas', 'Atlas Labs', 'Atlas Labs mapping', 'atlas.example', 20, NULL),
-            ('domain', 'Example Payments', 'Example Payments', 'paylane.com', 10, NULL)""")
+            ('stripe', 'Stripe', 'Stripe payments', 'stripe.com', 100, 'Example City', 'https://www.linkedin.com/company/stripe'),
+            ('stripe-copy', 'Stripe', 'Stripe payments', 'stripe.com', 50, NULL, 'https://www.linkedin.com/company/stripe-copy'),
+            ('atlas', 'Atlas Labs', 'Atlas Labs mapping', 'atlas.example', 20, NULL, 'https://www.linkedin.com/company/atlas'),
+            ('domain', 'Example Payments', 'Example Payments', 'paylane.com', 10, NULL, 'https://www.linkedin.com/company/paylane')""")
         conn.execute('''CREATE TABLE local_people_positions (
             id VARCHAR, person_id VARCHAR, company_id VARCHAR, position_title VARCHAR,
             is_current BOOLEAN, tenure_years DOUBLE, start_date_epoch BIGINT,
@@ -74,8 +74,11 @@ def test_local_name_search(local_index, query, name):
 @pytest.mark.parametrize('name', [None, '', '  '])
 def test_no_name_lists_every_company_with_the_true_total(local_index, name):
     with duckdb.connect(str(local_index)) as conn:
-        conn.executemany('INSERT INTO local_companies (id, company_name) VALUES (?, ?)',
-                         [(f'company-{i}', f'Example {i}') for i in range(15)])
+        conn.executemany('INSERT INTO local_companies (id, company_name, linkedin_url) VALUES (?, ?, ?)',
+                         [(f'company-{i}', f'Example {i}', f'https://www.linkedin.com/company/{i}')
+                          for i in range(15)])
+        # A typed-in company without a LinkedIn page is not listed.
+        conn.execute("INSERT INTO local_companies (id, company_name) VALUES ('typed', 'Typed In')")
     body = {'scope': 'local', 'limit': 5, 'offset': 5}
     if name is not None:
         body['name'] = name
@@ -90,8 +93,9 @@ def test_no_name_lists_every_company_with_the_true_total(local_index, name):
 def test_no_name_orders_by_people_then_headcount(local_index):
     # A blank domain is no match for an empty name; it used to put these rows first.
     with duckdb.connect(str(local_index)) as conn:
-        conn.execute("""INSERT INTO local_companies (id, company_name, website_domain, headcount) VALUES
-            ('blank', 'Blank Domain', '', 5000), ('big', 'Zeta Defense', 'zeta.example', 90000)""")
+        conn.execute("""INSERT INTO local_companies (id, company_name, website_domain, headcount, linkedin_url) VALUES
+            ('blank', 'Blank Domain', '', 5000, 'https://www.linkedin.com/company/blank'),
+            ('big', 'Zeta Defense', 'zeta.example', 90000, 'https://www.linkedin.com/company/zeta')""")
         conn.execute("""INSERT INTO local_people_positions (id, person_id, company_id) VALUES
             ('x1', 'x', 'blank'), ('z1', 'z', 'big')""")
     rows = companies.search({'scope': 'local'})['companies']
@@ -125,13 +129,13 @@ def test_local_request_releases_database(local_index, operation):
 
 def test_directory_tiers_and_distinct_people_ties(local_index):
     with duckdb.connect(str(local_index)) as conn:
-        conn.execute("""INSERT INTO local_companies (id, company_name, website_domain) VALUES
-            ('micro', 'Micro', NULL),
-            ('microsoft', 'Microsoft', 'microsoft.com'),
-            ('micro-labs', 'Micro Labs', NULL),
-            ('micro-tools', 'Micro Tools', NULL),
-            ('word', 'Example Micro', NULL),
-            ('typo', 'Micor', NULL)""")
+        conn.execute("""INSERT INTO local_companies (id, company_name, website_domain, linkedin_url) VALUES
+            ('micro', 'Micro', NULL, 'https://www.linkedin.com/company/micro'),
+            ('microsoft', 'Microsoft', 'microsoft.com', 'https://www.linkedin.com/company/microsoft'),
+            ('micro-labs', 'Micro Labs', NULL, 'https://www.linkedin.com/company/micro-labs'),
+            ('micro-tools', 'Micro Tools', NULL, 'https://www.linkedin.com/company/micro-tools'),
+            ('word', 'Example Micro', NULL, 'https://www.linkedin.com/company/word'),
+            ('typo', 'Micor', NULL, 'https://www.linkedin.com/company/typo')""")
         conn.execute("""INSERT INTO local_people_positions (id, person_id, company_id) VALUES
             ('m1', 'a', 'microsoft'), ('m2', 'b', 'microsoft'),
             ('l1', 'a', 'micro-labs'), ('l2', 'a', 'micro-labs'), ('l3', 'a', 'micro-labs'),
@@ -143,7 +147,8 @@ def test_directory_tiers_and_distinct_people_ties(local_index):
 
 def test_directory_prefix_without_exact_match(local_index):
     with duckdb.connect(str(local_index)) as conn:
-        conn.execute("INSERT INTO local_companies (id, company_name) VALUES ('microsoft', 'Microsoft')")
+        conn.execute("INSERT INTO local_companies (id, company_name, linkedin_url) VALUES "
+                     "('microsoft', 'Microsoft', 'https://www.linkedin.com/company/microsoft')")
     assert companies.search({'scope': 'local', 'name': 'Micro'})['companies'][0]['id'] == 'microsoft'
 
 
