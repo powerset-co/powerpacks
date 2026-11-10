@@ -21,6 +21,14 @@ describe("view query parameters", () => {
     expect(readView(new URLSearchParams("tab=gone&sort=gone&dir=gone&filter.gone=x"))).toEqual(DEFAULT_VIEW)
   })
 
+  it("defaults to warmest first and keeps an explicit name sort in the URL", () => {
+    expect(DEFAULT_VIEW.sort).toEqual({ key: "warmth", dir: 1 })
+    const byName: PeopleView = { ...DEFAULT_VIEW, sort: { key: "name", dir: 1 } }
+    const params = writeView(byName, new URLSearchParams())
+    expect(params.get("sort")).toBe("name")
+    expect(readView(params)).toEqual(byName)
+  })
+
   it("removes cleared filters, search and sort while preserving other parameters", () => {
     const params = writeView(
       DEFAULT_VIEW,

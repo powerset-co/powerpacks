@@ -256,7 +256,7 @@ class PeopleQuery:
         return cls(
             tab=one("tab", "all") if one("tab", "all") in TABS else "all",
             text=one("q", "").strip().lower(),
-            sort=one("sort", "name") if one("sort", "name") in SORTS else "name",
+            sort=one("sort", "warmth") if one("sort", "warmth") in SORTS else "warmth",
             desc=one("dir", "") == "desc",
             filters=tuple((key, tuple(query[f"filter.{key}"])) for key in facets if query.get(f"filter.{key}")),
             hide=tuple(key for key in HIDES if key not in query.get("show", [])),

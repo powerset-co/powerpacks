@@ -43,6 +43,7 @@ class PeoplePageTests(unittest.TestCase):
         self.assertEqual(self.names(tab=["no"]), ["Casey Delta", "Jordan Bravo", "Riley Echo"])
         self.assertEqual(self.names(sort=["messages"]), ["Jordan Bravo", "Morgan Fox", "Casey Delta", "Riley Echo"])
         self.assertEqual(self.names(sort=["last"], dir=["desc"])[0], "Riley Echo")  # never written: last
+        self.assertEqual(PeopleQuery.parse({}).sort, "warmth")  # no sort: warmest first
 
     def test_linkedin_only_people_hide_only_while_anyone_else_shows(self) -> None:
         self.conn.execute("UPDATE families SET linkedin_only = 1 WHERE parent_id = 'p:casey'")

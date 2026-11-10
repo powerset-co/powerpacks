@@ -23,7 +23,8 @@ export const DEFAULT_VIEW: PeopleView = {
   filters: new Map(),
   hide: new Set(HIDES.map(({ key }) => key)),
   text: "",
-  sort: { key: "name", dir: 1 },
+  // Warmest first: warmth sorts warmest-first in its ascending direction, like the column's first click.
+  sort: { key: "warmth", dir: 1 },
 }
 
 export function readView(params: URLSearchParams): PeopleView {
@@ -31,7 +32,7 @@ export function readView(params: URLSearchParams): PeopleView {
   return {
     tab: TABS.find((tab) => tab === params.get("tab")) ?? DEFAULT_VIEW.tab,
     text: params.get("q") ?? "",
-    sort: { key: isSortKey(key) ? key : "name", dir: params.get("dir") === "desc" ? -1 : 1 },
+    sort: { key: isSortKey(key) ? key : DEFAULT_VIEW.sort.key, dir: params.get("dir") === "desc" ? -1 : 1 },
     filters: new Map(
       FACETS.flatMap(({ key }) => {
         const values = params.getAll(`filter.${key}`)
@@ -50,7 +51,7 @@ export function writeView(
   params.set("tab", tab)
   if (text) params.set("q", text)
   else params.delete("q")
-  if (sort.key !== "name") params.set("sort", sort.key)
+  if (sort.key !== DEFAULT_VIEW.sort.key) params.set("sort", sort.key)
   else params.delete("sort")
   if (sort.dir === -1) params.set("dir", "desc")
   else params.delete("dir")
