@@ -650,13 +650,48 @@ section.review-sections {
   .result-line {
     gap: 6px;
   }
-  .result-tags {
-    top: 0;
-  }
   .result-person {
     gap: 10px;
     padding-top: 0;
-    padding-right: 96px;
+  }
+  /* The name's line: name and LinkedIn on the left; the tags, pin and sources at the right end.
+     The name keeps its line (ellipsis only past 60%); busy sources clip at the row's edge, and
+     their popovers hold the full list. */
+  .result-name {
+    flex-wrap: nowrap;
+  }
+  .result-name > b {
+    flex: 0 0 auto;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .result-name > :not(b) {
+    flex-shrink: 0;
+  }
+  .result-name > .result-tags {
+    position: static;
+    flex-shrink: 1;
+    max-width: none;
+    min-width: 0;
+    margin-left: auto;
+  }
+  .result-name > .result-network {
+    flex-shrink: 1;
+    flex-wrap: nowrap;
+    margin-left: auto;
+    overflow: hidden;
+  }
+  .result-name > .result-tags + .result-network {
+    margin-left: 0;
+  }
+  .result-name .result-sources {
+    flex-wrap: nowrap;
+  }
+  .result-name .result-network > *,
+  .result-name .result-sources > * {
+    flex-shrink: 0;
   }
   .result-person > :first-child {
     width: 32px;

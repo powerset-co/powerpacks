@@ -32,8 +32,8 @@ function onControl(event: MouseEvent<HTMLElement>): boolean {
 
 /**
  * One person: who they are on the left (name and sources, then current role · company from their
- * positions · location; the headline is the drawer's), the tags and pin over
- * them; the scores and reasoning on the right. A ranked (job description) run puts Score over
+ * positions · location; the headline is the drawer's; beside a chat the sources sit at the
+ * line's right end), the tags and pin over them; the scores and reasoning on the right. A ranked (job description) run puts Score over
  * the reasoning; a plain run puts the feedback flag there. A click on the row opens them in the
  * drawer, or closes it when they are open. `group/row` shows the row's controls on hover.
  */
@@ -67,17 +67,18 @@ export const ResultRow = memo(function ResultRow({
         }}
       >
         <div className="result-main">
-          {candidate ? (
-            <span className="result-tags">
-              <RowTags candidate={candidate} context={context} />
-            </span>
-          ) : null}
           <div className="result-person">
             <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
               <span className="result-name">
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
+                {/* Over the person's top right when wide; at the end of the name's line beside a chat. */}
+                {candidate ? (
+                  <span className="result-tags">
+                    <RowTags candidate={candidate} context={context} />
+                  </span>
+                ) : null}
                 <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
               </span>
               <span className="result-place">
