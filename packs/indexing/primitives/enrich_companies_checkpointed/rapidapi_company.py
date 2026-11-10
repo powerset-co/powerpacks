@@ -21,6 +21,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
 
+from packs.shared.endpoints import gateway_url
 from packs.shared.linkedin_api import LinkedInApiConfig, MISSING_LINKEDIN_KEY, POWERSET_HOST
 from packs.shared.rate_limiter import StartRateLimiter
 
@@ -115,6 +116,13 @@ def _write_cache(company_id: str, data: dict[str, Any], cache_dir: str | Path | 
     p.write_text(json.dumps(data, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
 
+def _connect(host: str, timeout: int) -> http.client.HTTPConnection:
+    """HTTPS, except to a plain-http POWERPACKS_GATEWAY_URL such as a local mock."""
+    if host == POWERSET_HOST and gateway_url().startswith("http://"):
+        return http.client.HTTPConnection(host, timeout=timeout)
+    return http.client.HTTPSConnection(host, timeout=timeout)
+
+
 def fetch_company_details(
     company_id: str,
     *,
@@ -148,7 +156,7 @@ def fetch_company_details(
     request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
-        conn = http.client.HTTPSConnection(request_host, timeout=timeout)
+        conn = _connect(request_host, timeout)
         retry_after: float | None = None
         try:
             conn.request("GET", f"{config.path_prefix}/get-company-details-by-id?id={company_id}", headers=headers)
@@ -273,7 +281,7 @@ def fetch_company_details_by_slug(
     request_host = config.host if config.provider == "rapidapi" else host
     last_error: dict[str, Any] = {"error": "no fetch attempts made"}
     for attempt in range(max_attempts):
-        conn = http.client.HTTPSConnection(request_host, timeout=timeout)
+        conn = _connect(request_host, timeout)
         retry_after: float | None = None
         try:
             conn.request("GET", f"{config.path_prefix}/get-company-details?username={urllib.parse.quote(slug)}", headers=headers)

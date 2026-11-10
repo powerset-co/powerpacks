@@ -11,8 +11,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_env_file
+from packs.shared.endpoints import gateway_url
 
-GATEWAY = "https://proxy.powerset.dev"
 MAX_BATCH_SIZE = 100
 MAX_BODY_BYTES = 256 * 1024
 
@@ -43,7 +43,7 @@ def post_profile_images(handler: BaseHTTPRequestHandler, parsed: urllib.parse.Pa
         return True
 
     request = urllib.request.Request(
-        f"{GATEWAY}/profile-image/sign/batch",
+        f"{gateway_url()}/profile-image/sign/batch",
         data=json.dumps({"urls": urls}).encode(),
         headers={"x-powerset-key": key, "Content-Type": "application/json"},
         method="POST",
@@ -62,7 +62,7 @@ def post_profile_images(handler: BaseHTTPRequestHandler, parsed: urllib.parse.Pa
         _respond(handler, HTTPStatus.BAD_GATEWAY)
         return True
 
-    _respond(handler, HTTPStatus.OK, body=json.dumps({"paths": paths}).encode())
+    _respond(handler, HTTPStatus.OK, body=json.dumps({"paths": paths, "gateway": gateway_url()}).encode())
     return True
 
 

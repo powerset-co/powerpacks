@@ -82,7 +82,7 @@ from packs.search.primitives.llm_rerank_candidates import capability_contract  #
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 
 
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
+DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
 DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))

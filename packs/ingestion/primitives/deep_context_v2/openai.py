@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI, RateLimitError
 
 from packs.indexing.lib.llm_config import FLEX_SERVICE_TIER, STANDARD_SERVICE_TIER
+from packs.shared.endpoints import openai_base_url
 from packs.indexing.lib.openai_responses import parse_json_response, reasoning_effort, responses_kwargs
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 
@@ -63,7 +64,7 @@ class OpenAIResponsesCaller:
         # The SDK retries transient statuses and honors Retry-After.
         self.client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_BASE_URL") or None,
+            base_url=openai_base_url(),
             timeout=config.timeout,
             max_retries=config.max_retries,
         )

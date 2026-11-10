@@ -31,6 +31,7 @@ from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_st
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, load_families
 from packs.ingestion.primitives.deep_context_v2.enrich.pre_match import PreMatch, enters, pre_match_families
 from packs.powerset.primitives.auth import auth
+from packs.shared.endpoints import gateway_url
 from packs.ingestion.primitives.deep_context_v2.node import Node
 from packs.ingestion.primitives.deep_context_v2.openai import load_env
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
@@ -47,7 +48,7 @@ PARALLEL_PROCESSOR = "core2x"
 PARALLEL_PRICE_PER_RUN_USD = 0.05   # core2x, per completed person
 # Parallel is reached through the vendor gateway: the Powerset key is the caller, the gateway holds
 # the Parallel key and the caller's dollar budget (vendor-gateway /vendor/parallel).
-PARALLEL_BASE_URL = "https://proxy.powerset.dev/vendor/parallel"
+PARALLEL_BASE_URL = f"{gateway_url()}/vendor/parallel"
 PARALLEL_BETA_HEADER = "search-extract-2025-10-10,field-basis-2025-11-25"
 PARALLEL_BATCH_SIZE = 500           # runs per add_runs call
 # Parallel reserves a batch's credit when its runs are added and answers 402 when the balance cannot

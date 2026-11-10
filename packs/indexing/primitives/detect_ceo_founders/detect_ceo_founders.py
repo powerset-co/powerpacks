@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv  # noqa: E402
 from openai import AsyncOpenAI  # noqa: E402
 from packs.indexing.lib.io import read_jsonl, write_json  # noqa: E402
+from packs.shared.endpoints import openai_base_url  # noqa: E402
 
 CEO_CTO_RE = re.compile(
     r"\bCEO\b|\bCTO\b|\bchief\s+executive\b|\bchief\s+technology\b",
@@ -184,7 +185,7 @@ async def classify_batch(
 ) -> dict[str, Any]:
     client = AsyncOpenAI(
         api_key=os.getenv("OPENAI_API_KEY", ""),
-        base_url=os.getenv("POWERPACKS_OPENAI_BASE", "https://api.openai.com/v1"),
+        base_url=openai_base_url(),
     )
     now = now_iso()
     semaphore = asyncio.Semaphore(max(1, concurrency))

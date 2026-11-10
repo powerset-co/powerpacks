@@ -34,6 +34,7 @@ from packs.indexing.lib.llm_config import (
     openai_price_multiplier,
     openai_service_tier,
 )
+from packs.shared.endpoints import openai_base_url
 
 # Reasoning calls over a person's messages produce a compact structured object,
 # but high effort burns reasoning tokens (which count against this cap) — keep it
@@ -160,5 +161,5 @@ def estimate_cost_usd(input_tokens: int, output_tokens: int, model: str = DEFAUL
 def make_async_client(*, timeout: int = 120) -> AsyncOpenAI:
     """AsyncOpenAI client with retries disabled (callers own retry/backoff)."""
     api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL") or None
+    base_url = openai_base_url()
     return AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=0)

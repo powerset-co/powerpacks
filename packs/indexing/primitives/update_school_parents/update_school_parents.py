@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 import turbopuffer  # noqa: E402
 from openai import OpenAI  # noqa: E402
+from packs.shared.endpoints import openai_base_url  # noqa: E402
 
 from packs.indexing.lib.llm_config import CHAT_MODEL_PRICES_PER_1K_USD, DEFAULT_IDENTITY_MODEL, api_call_kwargs  # noqa: E402
 from packs.indexing.lib.school_parents import (  # noqa: E402
@@ -97,7 +98,7 @@ def review_with_llm(rows: dict[str, dict[str, Any]], counts: dict[str, int], mod
     unreviewed.sort(key=lambda row: -counts.get(row["id"], 0))
     unreviewed = unreviewed[:limit] if limit else unreviewed
     batches = [unreviewed[i : i + BATCH_SIZE] for i in range(0, len(unreviewed), BATCH_SIZE)]
-    client = OpenAI()
+    client = OpenAI(base_url=openai_base_url())
     failed = 0
     spent = 0.0
     with ThreadPoolExecutor(max_workers=8) as pool:

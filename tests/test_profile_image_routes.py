@@ -77,7 +77,7 @@ class ProfileImageRoutesTests(unittest.TestCase):
         urls = [IMAGE_URL, "https://example.com/not-linkedin"]
         status, headers, body = self._post({"urls": urls})
         self.assertEqual(status, HTTPStatus.OK)
-        self.assertEqual(json.loads(body), {"paths": [SIGNED_PATH, None]})
+        self.assertEqual(json.loads(body), {"paths": [SIGNED_PATH, None], "gateway": "https://proxy.powerset.dev"})
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertNotIn("synthetic-service-key", str(headers) + body.decode())
         self.gateway.assert_called_once()
@@ -142,7 +142,7 @@ class ProfileImageRoutesTests(unittest.TestCase):
             self._serve(persistent_handler(Path(root)))
             status, _, body = self._post({"urls": [IMAGE_URL, "invalid"]})
         self.assertEqual(status, HTTPStatus.OK)
-        self.assertEqual(json.loads(body), {"paths": [SIGNED_PATH, None]})
+        self.assertEqual(json.loads(body), {"paths": [SIGNED_PATH, None], "gateway": "https://proxy.powerset.dev"})
         self.gateway.assert_called_once()
 
 

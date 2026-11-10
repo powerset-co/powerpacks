@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const photo = (id: number) => `https://media.licdn.com/dms/image/synthetic-${String(id)}`
-const result = (...paths: (string | null)[]) => new Response(JSON.stringify({ paths }))
+const result = (...paths: (string | null)[]) =>
+  new Response(JSON.stringify({ paths, gateway: "https://proxy.powerset.dev" }))
 
 beforeEach(() => {
   vi.resetModules()

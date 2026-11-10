@@ -1,6 +1,6 @@
 """Shared OpenAI client construction for search primitives.
 
-One place that interprets OPENAI_API_BASE, so every primitive resolves the same
+One place that interprets the OpenAI base URL (see packs/shared/endpoints.py), so every primitive resolves the same
 base URL whether or not the configured value carries the /v1 suffix the SDK
 needs. Same normalization as llm_filter_candidates/llm_rerank_candidates'
 openai_base_url; without it, a custom OPENAI_API_BASE like
@@ -33,16 +33,21 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+import sys
+
 import openai
 
-DEFAULT_API_BASE = "https://api.openai.com"
+if str(Path(__file__).resolve().parents[4]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from packs.shared import endpoints  # noqa: E402
+
 HOOKED_METHODS = ("chat.completions.create", "embeddings.create", "responses.create")
 DEFAULT_USAGE_LOG = Path(__file__).resolve().parents[4] / ".powerpacks" / "usage" / "usage.jsonl"
 
 
 def openai_base_url(api_base: str | None = None) -> str:
-    """Resolve explicit arg > OPENAI_API_BASE env > default, always /v1-suffixed."""
-    base = (api_base or os.environ.get("OPENAI_API_BASE") or DEFAULT_API_BASE).rstrip("/")
+    """Resolve explicit arg > packs.shared.endpoints.openai_base_url(), always /v1-suffixed."""
+    base = (api_base or endpoints.openai_base_url()).rstrip("/")
     return base if base.endswith("/v1") else f"{base}/v1"
 
 

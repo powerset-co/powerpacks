@@ -30,7 +30,7 @@ from typing import Any
 
 DEFAULT_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-4o-mini")
 DEFAULT_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT")
-DEFAULT_API_BASE = os.environ.get("OPENAI_API_BASE", "https://api.openai.com")
+DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 
 
 def now_iso() -> str:
