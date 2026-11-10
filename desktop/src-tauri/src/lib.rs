@@ -265,7 +265,11 @@ async fn codex_call(
     method: String,
     params: Value,
 ) -> Result<Value, String> {
-    if !codex::PAGE_METHODS.contains(&method.as_str()) {
+    let pipeline = method == "thread/shellCommand"
+        && params["command"]
+            .as_str()
+            .is_some_and(codex::is_pipeline_command);
+    if !pipeline && !codex::PAGE_METHODS.contains(&method.as_str()) {
         return Err(format!("{method} is not available to the page."));
     }
     codex

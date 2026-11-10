@@ -1,6 +1,7 @@
 """Pin the Searches JSON routes and their TypeScript dataclass fields.
 
 Changelog:
+  2026-11-09: the chat card's edits save as <run>/card-edits.json under .powerpacks/search.
   2026-09-26: pin nullability, the group and pin-decision vocabularies, and the payloads.
   2026-09-26: cover catalog-only reads, one run, errors, and client fields.
 """
@@ -147,3 +148,50 @@ class SearchJsonContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardEditsTest(unittest.TestCase):
+    """POST /searches/api/card-edits writes a chat prepare's edits beside it, nowhere else."""
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        data = Path(temp.name)
+        self.run_dir = data / "search" / "ab12-vp-finance"
+        self.run_dir.mkdir(parents=True)
+        api = search_api(search_routes(data / "deep-search", base="/searches"), mock.Mock(), threading.Lock())
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                if not api.post(self, urllib.parse.urlparse(self.path)):
+                    _send(self, b"not found", "text/plain", status=404)
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler, bind_and_activate=False)
+        self.addCleanup(self.server.server_close)
+
+    def post(self, request: object) -> int:
+        data = json.dumps(request).encode()
+        client, server = socket.socketpair()
+        with client, server:
+            client.sendall(b"POST /searches/api/card-edits HTTP/1.0\r\nHost: localhost\r\n"
+                           + f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
+            self.server.RequestHandlerClass(server, ("localhost", 0), self.server)
+            server.shutdown(socket.SHUT_WR)
+            response = b""
+            while chunk := client.recv(65536):
+                response += chunk
+        return int(response.split(b" ", 2)[1])
+
+    def test_saves_the_edits_in_the_run_folder(self) -> None:
+        edits = {"filters": {"metro_areas": ["New York"], "company_names": None}}
+        self.assertEqual(self.post({"run": "ab12-vp-finance", "edits": edits}), 200)
+        self.assertEqual(json.loads((self.run_dir / "card-edits.json").read_text()), edits)
+
+    def test_refuses_other_folders(self) -> None:
+        for run in ("", "missing", "../search", "ab12-vp-finance/../..", "."):
+            self.assertEqual(self.post({"run": run, "edits": {"filters": {}}}), 400, run)
+        self.assertEqual(self.post({"run": "ab12-vp-finance", "edits": "nope"}), 400)
+        self.assertFalse((self.run_dir / "card-edits.json").exists())

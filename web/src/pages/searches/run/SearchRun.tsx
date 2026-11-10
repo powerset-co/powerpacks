@@ -1,4 +1,6 @@
-import { useMemo, type ReactNode } from "react"
+import { useMemo, useState, type ReactNode } from "react"
+
+import { Fold } from "@/components/shared"
 
 import { isComplete } from "@/lib/searches/copy"
 import type { ResultSection, Results } from "@/lib/searches/ranking"
@@ -63,9 +65,21 @@ export function SearchRun(props: SearchRunProps) {
   const running = status !== undefined && status !== "failed" && !isComplete(status)
   const ranking = running && !search.jd_text
   const waiting = ranking || (running && items.length === 0 && !filtered)
+  // Shut by default: the title already says what was searched, so the people start near the top.
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const only = search.ponds.length === 1 ? search.ponds[0] : undefined
+  const foldable =
+    only !== undefined &&
+    (only.query !== search.title || only.traits.length > 0 || Object.keys(only.filters).length > 0)
   return (
     <div className="search-run" data-search-run>
-      <RunHeader search={search} status={props.status} people={props.people} actions={props.headerActions} />
+      <RunHeader
+        search={search}
+        status={props.status}
+        people={props.people}
+        actions={props.headerActions}
+        filters={foldable ? { open: filtersOpen, onToggle: setFiltersOpen } : undefined}
+      />
       {search.ponds.length > 1 ? (
         <PondChain
           ponds={search.ponds}
@@ -73,7 +87,11 @@ export function SearchRun(props: SearchRunProps) {
           onSelect={mode === "ponds" ? props.onPond : props.onPondOnly}
         />
       ) : (
-        search.ponds.map((pond) => <SearchFilters key={pond.pond_n} title={search.title} pond={pond} />)
+        search.ponds.map((pond) => (
+          <Fold key={pond.pond_n} open={filtersOpen}>
+            <SearchFilters title={search.title} pond={pond} />
+          </Fold>
+        ))
       )}
       <div className="run-toolbar" data-run-toolbar>
         {props.toolbar}

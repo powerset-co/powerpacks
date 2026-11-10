@@ -47,7 +47,7 @@ import {
   previewTitle,
   scalar,
 } from "@/lib/agent/searchFields"
-import { send, useAgent } from "@/lib/agent/store"
+import { runCommand, send, useAgent } from "@/lib/agent/store"
 import { useSearchScope } from "@/lib/agent/useSearchScope"
 import { body } from "@/lib/api/http"
 import { titleCase } from "@/lib/people/copy"
@@ -168,8 +168,19 @@ function clean(values: Values): Values {
  * as an edit and traits sent as a new search. Nothing is joined or split, so a name with a comma
  * stays one name.
  */
-function modifyMessage(search: PreparedSearch, query: string, values: Values, traits: SearchTrait[]): string {
-  const body: { query?: string; filters: Record<string, FilterValue | null>; traits?: SearchTrait[] } = {
+interface CardEdits {
+  query?: string
+  filters: Record<string, FilterValue | null>
+  traits?: SearchTrait[]
+}
+
+function modifyEdits(
+  search: PreparedSearch,
+  query: string,
+  values: Values,
+  traits: SearchTrait[],
+): CardEdits {
+  const body: CardEdits = {
     filters: {},
   }
   if (query.trim() !== search.query) body.query = query.trim()
@@ -180,14 +191,50 @@ function modifyMessage(search: PreparedSearch, query: string, values: Values, tr
   const values_ = (list: SearchTrait[]) => list.map((trait) => trait.value)
   const newSearch =
     body.query !== undefined || JSON.stringify(values_(traits)) !== JSON.stringify(values_(search.traits))
-  if (newSearch) return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
+  if (newSearch) return body
   const prepared = preparedValues(search)
   const sent = clean(values)
   for (const key of new Set([...prepared.keys(), ...sent.keys()])) {
     const next = sent.get(key) ?? null
     if (JSON.stringify(next) !== JSON.stringify(prepared.get(key) ?? null)) body.filters[key] = next
   }
-  return `Modify, then execute:\n${JSON.stringify(body, null, 1)}`
+  return body
+}
+
+/** A changed query or trait value: a new prepare, which only the agent can restate. */
+function isNewSearch(search: PreparedSearch, edits: CardEdits): boolean {
+  const values = (list: SearchTrait[]) => JSON.stringify(list.map((trait) => trait.value))
+  return (
+    edits.query !== undefined ||
+    (edits.traits !== undefined && values(edits.traits) !== values(search.traits))
+  )
+}
+
+/** The prepare's own run command, with the saved edits when there are any; null when it printed none. */
+function runLine(search: PreparedSearch, edited: boolean): string | null {
+  if (search.executeCommand === null || search.runDir === null || search.runDir.includes("'")) return null
+  return edited
+    ? `${search.executeCommand} --edits-json '${search.runDir}/card-edits.json'`
+    : search.executeCommand
+}
+
+/** The edits as the message carries them when the card cannot save them to the search's folder. */
+function modifyMessage(edits: CardEdits, run: boolean): string {
+  return `${run ? "Modify, then execute" : "Modify"}:\n${JSON.stringify(edits, null, 1)}`
+}
+
+/** Saves the edits as `<run>/card-edits.json`, so the chat says only that they were made. */
+async function saveEdits(run: string, edits: CardEdits): Promise<boolean> {
+  try {
+    const response = await fetch("/searches/api/card-edits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run, edits }),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -1000,17 +1047,39 @@ export function SearchCard({ search, actions }: SearchCardProps) {
     return next
   }
 
-  function submit(message: string) {
+  /**
+   * Run Search starts the prepared run on the chat straight away, with the edits saved beside it;
+   * a new query or trait, a blocked card's changes, or a failed save go to the agent instead.
+   */
+  function submit(run: boolean) {
     setValues(clean(valuesWithDrafts()))
     setDrafts({})
     setTraits(traitsWithTyped())
     setNewTrait("")
     setSubmitted(true)
-    void send(message)
+    const direct = run && !(dirty && isNewSearch(search, edits)) ? runLine(search, dirty) : null
+    // A run the app refuses (a command it does not allow) goes to the agent as before.
+    const runOr = (line: string, fallback: string) =>
+      runCommand(line).then((started) => (started ? undefined : send(fallback)))
+    if (!dirty) {
+      void (direct === null ? send("execute") : runOr(direct, "execute"))
+      return
+    }
+    const message = modifyMessage(edits, run)
+    if (search.run === null) {
+      void send(message)
+      return
+    }
+    void saveEdits(search.run, edits).then((ok) => {
+      if (!ok) return send(message)
+      const short = run ? "Run the search with my edits" : "Update the search with my edits"
+      return direct === null ? send(short) : runOr(direct, short)
+    })
   }
 
-  const edited = modifyMessage(search, query, valuesWithDrafts(), traitsWithTyped())
-  const dirty = edited !== modifyMessage(search, search.query, prepared, search.traits)
+  const edits = modifyEdits(search, query, valuesWithDrafts(), traitsWithTyped())
+  const dirty =
+    JSON.stringify(edits) !== JSON.stringify(modifyEdits(search, search.query, prepared, search.traits))
 
   function reset() {
     setQuery(search.query)
@@ -1182,12 +1251,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
             Edit Filters
           </Button>
           {search.blockers.length === 0 ? (
-            <Button
-              variant="primary"
-              size="lg"
-              className="flex-1"
-              onClick={() => submit(dirty ? edited : "execute")}
-            >
+            <Button variant="primary" size="lg" className="flex-1" onClick={() => submit(true)}>
               Run Search
             </Button>
           ) : (
@@ -1195,7 +1259,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
               variant="primary"
               size="lg"
               className="flex-1"
-              onClick={() => submit(edited.replace("Modify, then execute:", "Modify:"))}
+              onClick={() => submit(false)}
               disabled={!dirty}
             >
               Send changes
