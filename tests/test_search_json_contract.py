@@ -26,6 +26,7 @@ from packs.search.primitives.deep_search.results_web import model
 from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.search.primitives.deep_search.results_web import server as results_server
 from packs.search.primitives.deep_search.results_web.server import _send, search_routes
+from packs.search.primitives.deep_search.results_web.snapshot import export_snapshot, validate_snapshot
 from test_deep_search_catalog import _write_run
 
 TYPES = Path(__file__).resolve().parents[1] / "web/src/types/searches.ts"
@@ -106,6 +107,8 @@ class SearchJsonContractTest(unittest.TestCase):
         self.assertNotIn("queries", payload["search"])
         self.assertEqual(self.get("/searches/api/search.json?run_id=missing"),
                          (404, {"error": "unknown search: missing"}))
+        self.assertEqual(self.get("/searches/api/search.json?run_id=missing&step=s1"),
+                         (404, {"error": "unknown search: missing"}))
         self.assertEqual(self.get("/searches/api/search.json"),
                          (400, {"error": "run_id is required"}))
         self.assertFalse(self.api.get(mock.Mock(), urllib.parse.urlparse("/searches/tags")))
@@ -123,8 +126,6 @@ class SearchJsonContractTest(unittest.TestCase):
                          (404, {"error": "unknown step: s1"}))
 
     def test_step_rows_and_snapshot(self) -> None:
-        from packs.search.primitives.deep_search.results_web.snapshot import export_snapshot, validate_snapshot
-
         original = self.root / "original.jsonl"
         refined = self.root / "refined.jsonl"
         original.write_text(json.dumps({"person_id": "jordan", "name": "Jordan Bravo", "final_score": 0.8}) + "\n"
@@ -144,7 +145,9 @@ class SearchJsonContractTest(unittest.TestCase):
                               ("&step=s2", ["casey"]),
                               ("", ["casey"])):
             with self.subTest(query=query):
-                status, payload = self.get("/searches/api/search.json?run_id=quick" + query)
+                with mock.patch.object(self.api.routes, "one", wraps=self.api.routes.one) as one:
+                    status, payload = self.get("/searches/api/search.json?run_id=quick" + query)
+                self.assertEqual(one.call_count, 0 if query else 1)
                 self.assertEqual(status, 200)
                 search = payload["search"]
                 self.assertEqual([row["person_id"] for row in search["candidates"]], people)

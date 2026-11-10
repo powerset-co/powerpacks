@@ -402,7 +402,7 @@ For narrowing or re-ordering the people already found, run
 `rerank --run-dir <the chat's run under .powerpacks/search> --criteria '<the user's words>'`
 in the background, using the `search_network_pipeline.py` command below, then reply with one line.
 For “undo” or “go back to …”, run `rerank --run-dir … --use <step>`.
-Choose the step from the run's results.json `steps` by matching the user's words to
+Choose the step from `steps` in `.powerpacks/deep-search/<run_id>/results.json` by matching the user's words to
 `criteria`; the original search is s1. Never show step ids to the user.
 New retrieval terms (a new place, company, or “also include”) need a new `prepare`.
 

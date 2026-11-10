@@ -4,6 +4,7 @@
 `SearchResult.queries` and `Candidate.suggested_pin` are not emitted.
 
 Changelog:
+  2026-11-09: /api/search.json?step= reads the requested step without changing the saved current step.
   2026-11-09: /card-edits saves a chat search card's edits beside its prepare, so the chat shows none of the JSON.
   2026-10-08: the ask routes work out who to ask from the local sets and send agent messages (ask_set.py).
   2026-10-08: /api/ask/preview, /api/ask/status and the ask send for the broadcast button.
@@ -57,16 +58,18 @@ class SearchApi:
         if not run_id:
             _send_json(handler, {"error": "run_id is required"}, status=HTTPStatus.BAD_REQUEST)
             return True
-        search = self.routes.one(run_id)
+        step = (urllib.parse.parse_qs(parsed.query).get("step") or [None])[0]
+        if step is not None:
+            try:
+                search = load_search(self.routes.results_root, run_id, step=step)
+            except ValueError as error:
+                _send_json(handler, {"error": str(error)}, status=HTTPStatus.NOT_FOUND)
+                return True
+        else:
+            search = self.routes.one(run_id)
         if search is None:
             _send_json(handler, {"error": f"unknown search: {run_id}"}, status=HTTPStatus.NOT_FOUND)
             return True
-        step = (urllib.parse.parse_qs(parsed.query).get("step") or [None])[0]
-        if step is not None:
-            if not any(item.id == step for item in search.steps):
-                _send_json(handler, {"error": f"unknown step: {step}"}, status=HTTPStatus.NOT_FOUND)
-                return True
-            search = load_search(self.routes.results_root, run_id, step=step)
         _send_json(handler, {"search": asdict(search), "ratings": {"rubric": RUBRIC, "legacy": LEGACY_SCORES}})
         return True
 
