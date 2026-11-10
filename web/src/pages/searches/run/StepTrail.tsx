@@ -73,7 +73,7 @@ const RERANK = "search_network_pipeline.py rerank"
 /**
  * The trail beside a chat (the desktop app): going back runs on the chat, and both wait while the
  * run or a turn is running. The run is read again when a rerank command finishes and when a turn
- * ends; the catalog's poll can't tell one finished step from the next.
+ * ends, or when the catalog card leaves running after a background command.
  */
 export function ChatStepTrail({ search, status }: { search: SearchResult; status: string | undefined }) {
   const agent = useAgent()
@@ -84,13 +84,18 @@ export function ChatStepTrail({ search, status }: { search: SearchResult; status
   ).length
   const seen = useRef(reranked)
   const wasRunning = useRef(agent.running)
+  const previousStatus = useRef(status)
   useEffect(() => {
-    const refresh = reranked > seen.current || (wasRunning.current && !agent.running)
+    const refresh =
+      reranked > seen.current ||
+      (wasRunning.current && !agent.running) ||
+      (previousStatus.current === "running" && status !== "running")
     seen.current = reranked
     wasRunning.current = agent.running
+    previousStatus.current = status
     // A step never changes once saved, so only the run itself is read again.
     if (refresh) void client.invalidateQueries({ queryKey: searchRunKey(runId), exact: true })
-  }, [client, runId, reranked, agent.running])
+  }, [client, runId, reranked, agent.running, status])
   return (
     <StepTrail
       search={search}

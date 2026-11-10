@@ -593,11 +593,13 @@ describe("RunView, a refined run", () => {
       retry: vi.fn(() => Promise.resolve()),
       signIn: () => Promise.resolve(),
     }
-    render(
+    const view = (status: string) => (
       <QueryClientProvider client={client}>
         <Harness feedback={feedback} onToast={vi.fn()} status={status} />
-      </QueryClientProvider>,
+      </QueryClientProvider>
     )
+    const { rerender } = render(view(status))
+    return (status: string) => rerender(view(status))
   }
 
   const trail = () => within(screen.getByRole("navigation", { name: "Refinements" }))
@@ -686,6 +688,20 @@ describe("RunView, a refined run", () => {
     const before = reads.filter((url) => !url.includes("&step=")).length
     setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: false })
     await waitFor(() => expect(reads.filter((url) => !url.includes("&step=")).length).toBe(before + 1))
+  })
+
+  it("reads the run once when its card finishes, but not when it stays completed", async () => {
+    const rerenderStatus = renderStepped("running")
+    await waitFor(() => expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1))
+    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(0)
+    rerenderStatus("completed")
+    await waitFor(() => expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1))
+    await act(async () => {
+      rerenderStatus("completed")
+      await Promise.resolve()
+    })
+    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1)
+    expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
   })
 
   it("holds going back while the run or a turn is running", () => {
