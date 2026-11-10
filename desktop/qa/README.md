@@ -68,9 +68,10 @@ from `.powerpacks/deep-context-baseline.sqlite` when the root has one. A plain b
 desktop bridge, so chat (`search-set-picker`), sign-ins and links the app hands to the browser
 are checked only in the native run; a link that leaves the page is recorded the same way.
 
-The page server for `--root` runs the same background work as the app (teammate asks, daily
-refresh, error reports) with the root's `.env`, and failure pictures and messages show the
-store's people. In a cloud thread or CI, use a root with synthetic people and no `.env`.
+The page server runs signed out: it reads the Powerset sign-in from a missing file in the root,
+never `~/.powerpacks/credentials.json`, so its background work can't reach Powerset as you. The
+scenarios need nothing from `.env`. Failure pictures and messages show the store's people, so in a
+cloud thread or CI use a root with synthetic people.
 
 ## Add a scenario
 

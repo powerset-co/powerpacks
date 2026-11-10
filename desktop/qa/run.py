@@ -83,7 +83,9 @@ def browser(args: argparse.Namespace):
         port = probe.getsockname()[1]
     log = (args.out / "server.log").open("w")
     server = subprocess.Popen(["uv", "run", "--project", str(root), "python", "-m", "packs.shared.web.server",
-                               "serve", "--port", str(port)], cwd=root, stdout=log, stderr=log)
+                               "serve", "--port", str(port)], cwd=root, stdout=log, stderr=log,
+                              # Signed out: never the sign-in in ~/.powerpacks, so background work can't reach Powerset.
+                              env=os.environ | {"POWERPACKS_CREDENTIALS_PATH": str(root / ".powerpacks/qa-signed-out.json")})
     deadline = time.time() + 600  # the first run makes the copy's .venv
     while time.time() < deadline:
         try:
