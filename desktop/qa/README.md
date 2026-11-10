@@ -49,7 +49,7 @@ launch on a fresh box downloads the browser and makes a `.venv` (a few minutes).
 
 The root needs `.powerpacks/desktop/skip-setup` (launch opens the app, not setup) and a People
 store. Scenarios keep, skip, rename and delete, so it is always a copy. Today's is a copy of
-Jake's store (6,343 people, realized), the size where the People page lagged.
+a large real store (about 6k people, realized), the size where the People page lagged.
 
 The chat's set picker scenario needs ChatGPT signed in on the QA box's app (Accounts → Connect
 ChatGPT, once).
