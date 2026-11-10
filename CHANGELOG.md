@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.56.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.1...powerpacks-v3.56.2) (2026-11-07)
+
+
+### Performance Improvements
+
+* **deep-context:** collect reads WhatsApp contacts and groups once per run ([#1118](https://github.com/powerset-co/powerpacks/issues/1118)) ([a90b01f](https://github.com/powerset-co/powerpacks/commit/a90b01fc126ed2473d9645c8906f206f19592d39))
+
 ## [3.56.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.0...powerpacks-v3.56.1) (2026-11-06)
 
 

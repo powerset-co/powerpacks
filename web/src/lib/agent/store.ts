@@ -10,6 +10,7 @@ import {
   onApproval,
   onCodexExit,
   openThread,
+  runShellCommand,
   startThread,
   startTurn,
 } from "@/lib/api/codex"
@@ -206,6 +207,18 @@ export async function send(message: string): Promise<void> {
     await startTurn(threadId, text, state.fullAccess, { model: state.model, effort: state.effort })
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
+  }
+}
+
+/** A search pipeline command run on the open chat straight away, with no model turn; false when it did not start. */
+export async function runCommand(command: string): Promise<boolean> {
+  wire()
+  if (state.threadId === null) return false
+  try {
+    await runShellCommand(state.threadId, command)
+    return true
+  } catch {
+    return false
   }
 }
 

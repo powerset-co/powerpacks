@@ -147,6 +147,7 @@ class LocalDuckDBNamespace:
 class LocalDuckDBSearchStore:
     NAMESPACE_TABLES = {
         "people": "local_people_positions",
+        "profiles": "local_person_profiles",
         "summaries": "local_summaries",
         "company_signals": "local_company_signals",
         "education": "local_people_education",
@@ -564,16 +565,34 @@ class LocalDuckDBSearchStore:
         )
         return f"({where_sql}) and ({semijoin})", [*params, *profile_params]
 
+    def _projection_sql(self, columns: dict[str, str], include_attributes: list[str] | None) -> str:
+        if include_attributes is None:
+            return "*"
+        fields = {"id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"}
+        for field in include_attributes:
+            fields.add(field)
+            fields.update(self.FIELD_ALIASES.get(field, []))
+        return ", ".join(self._quote_ident(field) for field in columns if field in fields)
+
+    def query_rows_sql(self, logical_name: str, sql: str, params: list[Any], *, filters: Any, include_attributes: list[str]) -> list[dict[str, Any]]:
+        """Run a ranked SELECT over the filtered namespace CTE, projecting its rows."""
+        table = self._table_for_namespace(logical_name)
+        columns = self._table_columns(table)
+        where, filter_params = self._compile_filter_sql(filters, columns)
+        projection = self._projection_sql(columns, include_attributes)
+        result = self.conn.execute(
+            f"WITH filtered AS (SELECT * FROM {self._quote_ident(table)} WHERE {where}), "
+            f"results AS ({sql}) SELECT {projection} FROM results",
+            [*filter_params, *params],
+        )
+        fields = [column[0] for column in result.description]
+        return [self._project_dict(self._normalize_row(dict(zip(fields, row))), include_attributes)
+                for row in result.fetchall()]
+
     def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False, include_attributes: list[str] | None = None) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)
         columns = self._table_columns(table)
-        projection = "*"
-        if include_attributes is not None:
-            fields = {"id", "company_urn", "position_id", "person_id", "canonical_education_id", "base_id"}
-            for field in include_attributes:
-                fields.add(field)
-                fields.update(self.FIELD_ALIASES.get(field, []))
-            projection = ", ".join(self._quote_ident(field) for field in columns if field in fields)
+        projection = self._projection_sql(columns, include_attributes)
         if logical_name == "people":
             where_sql, params = self._compile_people_where_sql(filters, columns)
             sql = f"select {projection} from {self._quote_ident(table)} as _pp_role where {where_sql}"
@@ -635,10 +654,20 @@ class LocalDuckDBSearchStore:
             rows = self._vector_rank_sql(logical_name, filters, str(rank_by[0]), rank_by[2], top_k)
             return LocalQueryResponse([self._project_row_object(row, include_attributes) for row in rows])
 
-        rows = self._filtered_rows(logical_name, filters)
+        bm25 = isinstance(rank_by, (list, tuple)) and len(rank_by) >= 3 and str(rank_by[1]) == "BM25"
+        rows = self._filtered_rows_sql(logical_name, filters, include_attributes=[str(rank_by[0])] if bm25 else None)
         ranked = self._rank_rows(logical_name, rows, rank_by)
         if top_k and top_k > 0:
             ranked = ranked[:top_k]
+        if bm25 and ranked:
+            columns = self._table_columns(self._table_for_namespace(logical_name))
+            id_field = self._row_id_order_sql(columns).strip('"')
+            selected = self._filtered_rows_sql(
+                logical_name, (id_field, "In", [self._row_id(row) for row in ranked]),
+                include_attributes=include_attributes,
+            )
+            by_id = {self._row_id(row): row for row in selected}
+            ranked = [self._with_score(by_id[self._row_id(row)], row["score"]) for row in ranked]
         return LocalQueryResponse([self._project_row_object(row, include_attributes) for row in ranked])
 
     def _with_score(self, row: dict[str, Any], score: float) -> dict[str, Any]:

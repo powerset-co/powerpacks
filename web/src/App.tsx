@@ -10,6 +10,7 @@ import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
 import { TeamPage } from "./pages/team/TeamPage"
 import { AgentPage } from "@/pages/agent/AgentPage"
+import { CompaniesPage } from "@/pages/companies/CompaniesPage"
 import { InstallPage } from "@/pages/install/InstallPage"
 import { LogbookReader } from "@/pages/people/logbook/LogbookReader"
 import { OnboardingPage } from "@/pages/onboarding/OnboardingPage"
@@ -81,6 +82,7 @@ export function App() {
               <Route index element={null} />
               <Route path="logbook" element={<LogbookReader />} />
             </Route>
+            <Route path="/companies" element={<CompaniesPage />} />
             <Route path="/searches" element={<SearchesPage />}>
               <Route index element={null} />
               <Route path="run" element={null} />

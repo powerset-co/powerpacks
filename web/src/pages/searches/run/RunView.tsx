@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useCallback, useMemo, useState } from "react"
 
 import type { ToastMessage } from "@/components/shared"
+import { isDesktop } from "@/lib/desktop"
 import { useFeatures } from "@/lib/features"
 import { exportScoreOf, queuedScores, withScore } from "@/lib/searches/feedback"
 import { filterRows, keptRows, labelsShown, NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
@@ -12,11 +13,12 @@ import { BroadcastDialog } from "../dialogs/BroadcastDialog"
 import { FeedbackStatus } from "../dialogs/FeedbackStatus"
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
-import { searchRunKey } from "../hooks/useSearchRun"
+import { searchRunKey, useParentScores } from "../hooks/useSearchRun"
 import { useSearchTags } from "../hooks/useSearchTags"
 import { ResultsToolbar } from "../toolbar/ResultsToolbar"
 import type { RowContext } from "./RowActions"
 import { SearchRun } from "./SearchRun"
+import { ChatStepTrail, StepTrail } from "./StepTrail"
 
 interface RunViewProps {
   payload: SearchRunPayload
@@ -86,17 +88,19 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
     [queryClient, runId],
   )
 
+  const parentScores = useParentScores(search)
   const rowContext = useMemo<RowContext>(
     () => ({
       runId,
       rubric: ratings.rubric,
       tags,
       queued,
+      parentScores,
       submit: feedback.submit,
       onSaved: saved,
       onToast,
     }),
-    [runId, ratings.rubric, tags, queued, feedback.submit, saved, onToast],
+    [runId, ratings.rubric, tags, queued, parentScores, feedback.submit, saved, onToast],
   )
 
   return (
@@ -140,6 +144,13 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
             onToast={onToast}
           />
         </>
+      }
+      trail={
+        isDesktop() ? (
+          <ChatStepTrail search={search} status={status} />
+        ) : (
+          <StepTrail search={search} onGoBack={null} disabled />
+        )
       }
       rowContext={rowContext}
     />

@@ -19,6 +19,7 @@ import search_backend_mode
 _EXPLICIT_LOCAL_SEARCH_DB: str | None = None
 LOCAL_BACKEND_TABLES = {
     "people": "local_people_positions",
+    "profiles": "local_person_profiles",
     "summaries": "local_summaries",
     "company_signals": "local_company_signals",
     "education": "local_people_education",

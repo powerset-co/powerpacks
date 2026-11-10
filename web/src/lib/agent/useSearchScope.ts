@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query"
 
 import { fetchSearchScope } from "@/lib/api/searches"
+import type { ChatScope, SearchScope, SearchSet } from "@/types/searches"
 
 export const SEARCH_SCOPE_KEY = ["search-scope"] as const
 
@@ -13,4 +14,17 @@ export function useSearchScope() {
     queryFn: ({ signal }) => fetchSearchScope(signal),
     retry: false,
   })
+}
+
+/** The sets on offer. The local index already holds your own network, so with one on this Mac
+ *  the cloud copy of it is not offered. */
+export function offeredSets({ sets, local_db }: SearchScope): SearchSet[] {
+  return local_db ? sets.filter((set) => !(set.is_personal && set.owned)) : sets
+}
+
+/** Where a search starts with nothing picked: the local index, else the largest set. */
+export function defaultScope(scope: SearchScope): ChatScope | null {
+  if (scope.local_db) return { local_db: scope.local_db }
+  const largest = offeredSets(scope)[0]
+  return largest ? { set_id: largest.set_id } : null
 }

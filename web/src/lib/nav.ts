@@ -2,7 +2,8 @@
 
 import { isDesktop } from "@/lib/desktop"
 
-export type PageKey = "agent" | "searches" | "people" | "accounts" | "sets" | "team" | "tasks" | "settings"
+export type PageKey =
+  "agent" | "searches" | "people" | "companies" | "accounts" | "sets" | "team" | "tasks" | "settings"
 
 export interface Page {
   key: PageKey
@@ -16,6 +17,7 @@ export const HOME: Page = { key: "people", label: "People", href: "/people" }
 const BROWSER_PAGES: readonly Page[] = [
   { key: "searches", label: "Searches", href: "/searches" },
   HOME,
+  { key: "companies", label: "Companies", href: "/companies" },
   { key: "accounts", label: "Accounts", href: "/accounts" },
   { key: "sets", label: "Sets", href: "/sets" },
   { key: "tasks", label: "Scheduled tasks", href: "/tasks" },

@@ -317,13 +317,17 @@ For both local and Powerset previews:
 
 - `execute`: run the returned `execute_command` exactly in the background and read
   its output as it arrives.
+- `Run the search with my edits` means the card saved the user's edits as
+  `<run>/card-edits.json`, where `<run>` is the preview's `--output-dir`: read that file and treat
+  it as a `Modify, then execute:` reply below. `Update the search with my edits` is the same from
+  a blocked card: treat it as a `Modify:` reply. Never rewrite the saved file.
 - A reply starting `Modify, then execute:` is followed by one JSON object with any of
   `query` (a string), `filters` (an object: `role_search_filters` keys with their JSON values as
   the payload holds them, `null` to remove a key) and `traits` (the whole list of
   `{value, temporal, meaning}`). The card sends only what the user changed against the preview
   it showed: a key in `filters` is an edit, `traits` is present only when the traits changed,
   and `query` only when the query changed. Save the object exactly as printed, never re-parsed,
-  to `<run>/card-edits.json`, where `<run>` is the preview's `--output-dir`:
+  to `<run>/card-edits.json`:
 
   ```bash
   cat > <run>/card-edits.json <<'EOF'
@@ -392,6 +396,21 @@ uv run --env-file .env --project . python packs/search/primitives/search_feedbac
 `needs_auth` is normal; keep the local log and do not request login. Concrete
 person-data errors still use `$feedback`.
 
+## Refine a finished search
+
+For narrowing or re-ordering the people already found, run
+`rerank --run-dir .powerpacks/search/<run_id> --criteria '<the user's words>'`
+in the background, using the `search_network_pipeline.py` command below, then reply with one line.
+Use the `<run_id>` named in the chat's “About the search saved in .powerpacks/deep-search/<run_id>”
+line: the same id; only the parent folder differs.
+For “undo” or “go back to …”, run `rerank --run-dir … --use <step>`.
+Choose the step from `steps` in `.powerpacks/deep-search/<run_id>/results.json` by matching the user's words to
+`criteria`; the original search is s1. Never show step ids to the user.
+New retrieval terms (a new place, company, or “also include”) need a new `prepare`.
+
+Use the standard command prefix:
+`uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py`.
+
 ## Execution Rules
 
 - Do not run the search before the user answers "Search prepared. Execute or modify?"; never
@@ -401,8 +420,7 @@ person-data errors still use `$feedback`.
 - Do not use sub-agents for ordinary single-query searches except the local
   SQL assistance described above.
 - Do not write new retrieval scripts during a search run.
-- For refinements after execution, create a new search with the updated query
-  or constraints. Before execution, edits go through `--edits-json` as described above.
+- Before execution, edits go through `--edits-json` as described above.
 - Every Python command runs as `uv run --env-file .env --project . python …`; the system
   `python3` has none of the project's packages.
 - Do not mention skip-rerank, alternate execution modes, internal ledgers, or
