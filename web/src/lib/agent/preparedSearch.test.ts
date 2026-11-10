@@ -122,7 +122,7 @@ it("reads a refinement's verb, what changed and its count from what rerank print
       step("s2", "s1", "built training infra at scale", "rerank"),
     ),
   )
-  expect(ranked && [stepVerb(ranked), ranked.criteria, stepCount(ranked), ranked.runId]).toEqual([
+  expect(ranked && [stepVerb(ranked), ranked.criteria, stepCount(ranked), ranked.run_id]).toEqual([
     "Re-ranked",
     "built training infra at scale",
     "64 people",

@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { searchRunKey } from "@/pages/searches/hooks/useSearchRun"
 import { goBackCommand } from "@/pages/searches/run/steps"
-import { CARDS, RUN_ID, STEPPED_RUN } from "@/testing/searches-fixture"
+import { CARDS, QUICK_RUN, RUN_ID, STEPPED_RUN } from "@/testing/searches-fixture"
 import type { Entry } from "@/types/agent"
 import type { SearchRunPayload } from "@/types/searches"
 
@@ -40,18 +40,21 @@ function command(id: string, line: string, printed: Record<string, unknown>): En
   }
 }
 
-const PREPARE = command("c1", `${PIPELINE} prepare --output-dir .powerpacks/search/${RUN_ID}`, {
-  query: "technical recruiters in Austin",
-  status: "preview_ready",
-  payload_json: `.powerpacks/search/${RUN_ID}/payload.json`,
-  preview: { filters: { metro_areas: ["Austin Metropolitan Area"] } },
-})
+function prepare(id: string, run: string): Entry {
+  return command(id, `${PIPELINE} prepare --output-dir .powerpacks/search/${run}`, {
+    query: "technical recruiters in Austin",
+    status: "preview_ready",
+    payload_json: `.powerpacks/search/${run}/payload.json`,
+    preview: { filters: { metro_areas: ["Austin Metropolitan Area"] } },
+  })
+}
+const PREPARE = prepare("c1", RUN_ID)
 const RAN = command("c2", `${PIPELINE} execute`, { status: "completed", summary: { rows: 2 } })
 
-function rerank(id: string, flag: string, step: Record<string, unknown>): Entry {
-  return command(id, `${PIPELINE} rerank --run-dir '.powerpacks/search/${RUN_ID}' ${flag}`, {
+function rerank(id: string, flag: string, step: Record<string, unknown>, run = RUN_ID): Entry {
+  return command(id, `${PIPELINE} rerank --run-dir '.powerpacks/search/${run}' ${flag}`, {
     status: "completed",
-    step: { run_id: RUN_ID, cost_usd: 0.0064, ...step },
+    step: { run_id: run, cost_usd: 0.0064, ...step },
   })
 }
 
@@ -79,9 +82,15 @@ const BACK = rerank("c5", "--use 's1'", {
   shown: 2,
 })
 
-function renderWith(entries: Entry[], run: SearchRunPayload, running = false) {
+function renderWith(
+  entries: Entry[],
+  run: SearchRunPayload,
+  running = false,
+  others: SearchRunPayload[] = [],
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(searchRunKey(RUN_ID), run)
+  for (const other of others) client.setQueryData(searchRunKey(other.search.run_id), other)
   client.setQueryData(["searches", "catalog"], CARDS)
   render(
     <QueryClientProvider client={client}>
@@ -144,4 +153,46 @@ it("shows a go-back as one line, with no card and no command", () => {
   expect(search.textContent).toContain("Showing now")
   for (const card of cards())
     expect(within(card).getByRole("button", { name: "Go back to this" })).toBeTruthy()
+})
+
+it("gives each search card in the chat its own run's way back, and none to a run without steps", async () => {
+  const OTHER = "riley-role"
+  const other = { ...STEPPED_RUN, search: { ...STEPPED_RUN.search, run_id: OTHER, current_step: "s2" } }
+  const unrefined = { ...QUICK_RUN, search: { ...QUICK_RUN.search, run_id: "morgan-role" } }
+  const otherStep = rerank(
+    "c8",
+    "--criteria 'built training infra at scale'",
+    {
+      id: "s2",
+      parent: "s1",
+      criteria: "built training infra at scale",
+      query_type: "rerank",
+      shown: 2,
+      scored: 2,
+    },
+    OTHER,
+  )
+  renderWith(
+    [
+      PREPARE,
+      RAN,
+      S2,
+      S3,
+      prepare("c6", OTHER),
+      command("c7", `${PIPELINE} execute`, { status: "completed" }),
+      otherStep,
+      prepare("c9", "morgan-role"),
+    ],
+    STEPPED_RUN,
+    false,
+    [other, unrefined],
+  )
+  const [first, second, third] = screen.getAllByRole("region", { name: "Search" })
+  if (!first || !second || !third) throw new Error("Expected three search cards")
+  fireEvent.click(within(first).getByRole("button", { name: "Go back to this" }))
+  fireEvent.click(within(second).getByRole("button", { name: "Go back to this" }))
+  expect(within(third).queryByRole("button", { name: "Go back to this" })).toBeNull()
+  expect(third.textContent).not.toContain("Showing now")
+  await Promise.resolve()
+  expect(store.runCommand.mock.calls).toEqual([[goBackCommand(RUN_ID, "s1")], [goBackCommand(OTHER, "s1")]])
 })

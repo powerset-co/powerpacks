@@ -7,7 +7,7 @@
 
 import { isRecord } from "@/lib/utils"
 import type { Entry } from "@/types/agent"
-import type { FilterValue } from "@/types/searches"
+import type { FilterValue, SearchStep } from "@/types/searches"
 
 const PRIMITIVE = "search_network_pipeline"
 
@@ -140,17 +140,6 @@ const RERANK = /search_network_pipeline\.py['"]?\s+rerank\b/
 const RUN_DIR = /--run-dir\s+\S*?\.powerpacks\/search\/([A-Za-z0-9._-]+)/
 const USE = /\s--use\s+[^\w\s]*(\w+)/
 
-/** A step `rerank --criteria` made, as it printed it. */
-export interface RefineStep {
-  runId: string
-  id: string
-  parent: string | null
-  criteria: string | null
-  queryType: string | null
-  shown: number
-  scored: number | null
-}
-
 /** The step a `rerank --use` command went back to; the command's output is not a card. */
 export interface WentBack {
   runId: string
@@ -165,37 +154,42 @@ export function wentBack(entry: Entry): WentBack | null {
   return runId && stepId ? { runId, stepId } : null
 }
 
-/** The step a finished `rerank --criteria` printed, or null for any other command or output still arriving. */
-export function refineStep(entry: Entry): RefineStep | null {
+/**
+ * The step a finished `rerank --criteria` printed (a saved step, without its time, and its run), or
+ * null for any other command or output still arriving.
+ */
+export function refineStep(entry: Entry): (Omit<SearchStep, "created_at"> & { run_id: string }) | null {
   if (wentBack(entry) !== null) return null
   const step = printed(entry)?.step
   if (
     !isRecord(step) ||
     typeof step.run_id !== "string" ||
     typeof step.id !== "string" ||
-    typeof step.shown !== "number"
+    typeof step.shown !== "number" ||
+    typeof step.cost_usd !== "number"
   )
     return null
   return {
-    runId: step.run_id,
+    run_id: step.run_id,
     id: step.id,
     parent: typeof step.parent === "string" ? step.parent : null,
     criteria: typeof step.criteria === "string" ? step.criteria : null,
-    queryType: typeof step.query_type === "string" ? step.query_type : null,
+    query_type: typeof step.query_type === "string" ? step.query_type : null,
     shown: step.shown,
     scored: typeof step.scored === "number" ? step.scored : null,
+    cost_usd: step.cost_usd,
   }
 }
 
 /** The card's verb: the search itself, a narrowing (filter) or a new order. */
-export function stepVerb(step: RefineStep): string {
+export function stepVerb(step: Omit<SearchStep, "created_at">): string {
   if (step.parent === null) return "Searched"
-  return step.queryType === "filter" ? "Narrowed" : "Re-ranked"
+  return step.query_type === "filter" ? "Narrowed" : "Re-ranked"
 }
 
 /** "N people", or "N of M people" for a filter step: those kept of those scored. */
-export function stepCount(step: RefineStep): string {
-  return step.queryType === "filter" && step.scored !== null
+export function stepCount(step: Omit<SearchStep, "created_at">): string {
+  return step.query_type === "filter" && step.scored !== null
     ? `${step.shown} of ${step.scored} people`
     : `${step.shown} people`
 }

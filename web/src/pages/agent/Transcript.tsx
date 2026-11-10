@@ -10,7 +10,6 @@ import {
   stepVerb,
   wentBack,
   type PreparedSearch,
-  type RefineStep,
   type WentBack,
 } from "@/lib/agent/preparedSearch"
 import { cn } from "@/lib/utils"
@@ -18,6 +17,7 @@ import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { useSearchRun } from "@/pages/searches/hooks/useSearchRun"
 import { goBack, stepLabel } from "@/pages/searches/run/steps"
 import type { Entry, ItemStatus } from "@/types/agent"
+import type { SearchStep } from "@/types/searches"
 
 import { CopyButton } from "./CopyButton"
 import { CheckIcon, CrossIcon, FileIcon, SparkIcon, TerminalIcon } from "./icons"
@@ -29,7 +29,7 @@ type Turn =
   | { kind: "say"; entry: Exclude<Entry, WorkEntry> }
   | { kind: "work"; id: string; entries: WorkEntry[] }
   | { kind: "search"; id: string; search: PreparedSearch }
-  | { kind: "step"; id: string; step: RefineStep }
+  | { kind: "step"; id: string; step: Omit<SearchStep, "created_at"> & { run_id: string } }
   | { kind: "back"; id: string; back: WentBack }
 
 function isWork(entry: Entry): entry is WorkEntry {
@@ -250,8 +250,14 @@ function StepAction({ runId, stepId, running }: { runId: string; stepId: string;
 }
 
 /** One refinement: what it did, to what, and how many people it kept. */
-function StepCard({ step, running }: { step: RefineStep; running: boolean }) {
-  const run = useSearchRun(step.runId).data?.search
+function StepCard({
+  step,
+  running,
+}: {
+  step: Omit<SearchStep, "created_at"> & { run_id: string }
+  running: boolean
+}) {
+  const run = useSearchRun(step.run_id).data?.search
   const current = run?.current_step === step.id
   return (
     <section aria-label="Refinement" className={cn(STEP_CARD, current ? "border-primary" : "border-line")}>
@@ -261,7 +267,7 @@ function StepCard({ step, running }: { step: RefineStep; running: boolean }) {
         <span className="min-w-0">{step.criteria ?? run?.title}</span>
         <span className="text-muted-foreground">{stepCount(step)}</span>
       </p>
-      <StepAction runId={step.runId} stepId={step.id} running={running} />
+      <StepAction runId={step.run_id} stepId={step.id} running={running} />
     </section>
   )
 }
@@ -288,17 +294,9 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
     .slice(newest ? turns.indexOf(newest) + 1 : turns.length)
     .some((turn) => turn.kind === "work" && turn.entries.some(ranSearch))
   const asking = !running && !ranSince
-  // The run refined in this chat: its search card can go back to the search itself.
-  const refined =
-    turns
-      .flatMap((turn) =>
-        turn.kind === "step" ? [turn.step.runId] : turn.kind === "back" ? [turn.back.runId] : [],
-      )
-      .at(-1) ?? null
+  // A search card goes back to its own run's search, once that run has saved steps.
   const searchAction = (search: PreparedSearch): ReactNode =>
-    refined !== null && search.run === refined ? (
-      <StepAction runId={refined} stepId="s1" running={running} />
-    ) : null
+    search.run !== null ? <StepAction runId={search.run} stepId="s1" running={running} /> : null
   return (
     <>
       {turns.map((turn) => {
