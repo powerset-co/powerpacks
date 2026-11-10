@@ -347,7 +347,7 @@ async def company_rows_for_names(
 
 def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None, store: LocalDuckDBSearchStore,
                           offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES) -> list[dict[str, Any]]:
-    """Match directory tiers, then order by distinct local people and name.
+    """Match directory tiers, then order by distinct local people, company headcount and name.
 
     An empty name matches every company (tier 1). top_k None returns every match from `offset`;
     `include_attributes=[]` returns only ids (a cheap count of the matches)."""
@@ -356,8 +356,8 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None
         "companies",
         r"""WITH ranked AS (
             SELECT filtered.*, CASE
-                WHEN lower(company_name) = q OR lower(website_domain) = q
-                    OR split_part(lower(website_domain), '.', 1) = q THEN 0
+                WHEN q <> '' AND (lower(company_name) = q OR lower(website_domain) = q
+                    OR split_part(lower(website_domain), '.', 1) = q) THEN 0
                 WHEN starts_with(lower(company_name), q) OR starts_with(lower(website_domain), q) THEN 1
                 WHEN regexp_matches(lower(company_name), word_prefix) THEN 2
                 WHEN jaro_winkler_similarity(lower(company_name), q) >= 0.94
@@ -371,7 +371,7 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None
             FROM local_people_positions GROUP BY company_id
         ) people ON people.company_id = ranked.id
         WHERE tier < 4
-        ORDER BY tier, coalesce(people_count, 0) DESC, company_name, id
+        ORDER BY tier, coalesce(people_count, 0) DESC, headcount DESC NULLS LAST, company_name, id
         LIMIT ? OFFSET ?""",
         [query, r"(^|\W)" + re.escape(query), top_k, offset],
         filters=filters, include_attributes=include_attributes,

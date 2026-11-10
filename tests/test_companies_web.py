@@ -86,6 +86,17 @@ def test_no_name_lists_every_company_with_the_true_total(local_index, name):
     assert [row['id'] for row in first[:2]] == ['stripe', 'atlas']
 
 
+
+def test_no_name_orders_by_people_then_headcount(local_index):
+    # A blank domain is no match for an empty name; it used to put these rows first.
+    with duckdb.connect(str(local_index)) as conn:
+        conn.execute("""INSERT INTO local_companies (id, company_name, website_domain, headcount) VALUES
+            ('blank', 'Blank Domain', '', 5000), ('big', 'Zeta Defense', 'zeta.example', 90000)""")
+        conn.execute("""INSERT INTO local_people_positions (id, person_id, company_id) VALUES
+            ('x1', 'x', 'blank'), ('z1', 'z', 'big')""")
+    rows = companies.search({'scope': 'local'})['companies']
+    assert [row['id'] for row in rows] == ['stripe', 'big', 'blank', 'atlas', 'stripe-copy', 'domain']
+
 @pytest.mark.parametrize(('query', 'minimum', 'expected'), [
     ('Stripe', 75, ['stripe']), ('mapping', 0, ['atlas']),
     ('Stri', 75, ['stripe']), ('strpie', 75, ['stripe']),
