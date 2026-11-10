@@ -87,8 +87,9 @@ interface RowFlagProps {
   context: RowContext
 }
 
-// A plain run's rows take no score: the feedback flag sits where Score would, shown on the
-// row's hover (or while focused), and sends a note about the person.
+// A plain run's rows take no score: the feedback flag sits after the tag editor and the pin,
+// styled like the pin, shown on the row's hover (or while focused), and sends a note about the
+// person.
 export function RowFlag({ candidate, context }: RowFlagProps) {
   return (
     <SearchFeedbackDialog
@@ -97,7 +98,7 @@ export function RowFlag({ candidate, context }: RowFlagProps) {
       candidate={candidate}
       submit={context.submit}
       onToast={context.onToast}
-      className="min-h-7 min-w-7 opacity-0 focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[open=true]/row:opacity-100"
+      className="size-7 min-h-0 min-w-0 shrink-0 border-0 bg-transparent p-0 text-muted-foreground opacity-0 hover:bg-secondary hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 group-data-[open=true]/row:opacity-100"
     />
   )
 }
