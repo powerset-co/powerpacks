@@ -23,6 +23,7 @@
     {"name": "sector_types", "type": "text[]/jsonb", "required": true},
     {"name": "founded_year", "type": "integer", "required": true},
     {"name": "location", "type": "text/jsonb", "required": true},
-    {"name": "li_company_id", "type": "text", "required": true}
+    {"name": "li_company_id", "type": "text", "required": true},
+    {"name": "logo_url", "type": "text", "required": true}
   ]
 }
