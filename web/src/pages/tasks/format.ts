@@ -40,16 +40,6 @@ export function startOfDay(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
 }
 
-export function stamp(value: string): string {
-  return new Date(value).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  })
-}
-
 export function trigger(run: RefreshRun): string {
   if (run.trigger === "manual") return "Manual"
   return run.missed_days ? `Scheduled · caught up ${run.missed_days + 1} days` : "Scheduled"
