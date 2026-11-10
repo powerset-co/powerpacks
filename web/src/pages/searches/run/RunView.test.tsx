@@ -2,13 +2,50 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import type * as AgentStore from "@/lib/agent/store"
+import { EMPTY_AGENT, type AgentState } from "@/lib/agent/store"
 import type { FeedbackOutcome } from "@/lib/searches/feedback"
-import { QUICK_RUN, RANKED_NAMES, RUN, RUN_ID } from "@/testing/searches-fixture"
+import { QUICK_RUN, RANKED_NAMES, RUN, RUN_ID, STEPPED_PARENT, STEPPED_RUN } from "@/testing/searches-fixture"
+import type { Entry } from "@/types/agent"
 import type { FeedbackRecord, SearchRunPayload, Tagged } from "@/types/searches"
 
 import type { Feedback } from "../hooks/useFeedback"
 import { searchRunKey, useSearchRun } from "../hooks/useSearchRun"
 import { RunView } from "./RunView"
+import { goBackCommand } from "./steps"
+
+// The open chat, as the desktop app's trail reads it; only the steps tests set window.__TAURI__.
+const chat = vi.hoisted(() => {
+  const shown: { state: AgentState | null } = { state: null }
+  return Object.assign(shown, {
+    listeners: new Set<() => void>(),
+    runCommand: vi.fn<(command: string) => Promise<boolean>>(),
+    send: vi.fn<(message: string) => Promise<void>>(),
+  })
+})
+vi.mock("@/lib/agent/store", async (actual) => {
+  const { useSyncExternalStore } = await import("react")
+  const store = await actual<typeof AgentStore>()
+  return {
+    ...store,
+    useAgent: () =>
+      useSyncExternalStore(
+        (listener) => {
+          chat.listeners.add(listener)
+          return () => chat.listeners.delete(listener)
+        },
+        () => chat.state ?? store.EMPTY_AGENT,
+      ),
+    runCommand: chat.runCommand,
+    send: chat.send,
+  }
+})
+function setChat(state: AgentState) {
+  act(() => {
+    chat.state = state
+    for (const listener of chat.listeners) listener()
+  })
+}
 
 // jsdom has no layout, Web Animations, matchMedia or ResizeObserver; the virtualizer reads
 // offset sizes. Reduced motion: presence mounts and unmounts at once.
@@ -520,5 +557,173 @@ describe("RunView", () => {
     fireEvent.keyDown(document, { key: "Escape" })
     key("s")
     expect(screen.getByRole("dialog", { name: "Score Riley Foxtrot" })).toBeTruthy()
+  })
+})
+
+describe("RunView, a refined run", () => {
+  const TITLE = "technical recruiters in Austin"
+  let reads: string[] = []
+
+  beforeEach(() => {
+    reads = []
+    chat.state = { ...EMPTY_AGENT, threadId: "thread-1" }
+    chat.runCommand.mockReset().mockResolvedValue(true)
+    chat.send.mockReset().mockResolvedValue(undefined)
+    vi.stubGlobal("__TAURI__", {})
+    // search.json answers the current step, or the step asked for; tags answer none.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/api/search.json")) {
+          reads.push(url)
+          const payload = url.includes("&step=s2") ? STEPPED_PARENT : STEPPED_RUN
+          return Promise.resolve(new Response(JSON.stringify(payload)))
+        }
+        return Promise.resolve(new Response(JSON.stringify({ tagged: null })))
+      }),
+    )
+  })
+
+  function renderStepped(status = "completed") {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+    client.setQueryData(searchRunKey(RUN_ID), STEPPED_RUN)
+    const feedback: Feedback = {
+      ...NOT_STOPPED,
+      submit: vi.fn(() => Promise.resolve<FeedbackOutcome>("sent")),
+      retry: vi.fn(() => Promise.resolve()),
+      signIn: () => Promise.resolve(),
+    }
+    const view = (status: string) => (
+      <QueryClientProvider client={client}>
+        <Harness feedback={feedback} onToast={vi.fn()} status={status} />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view(status))
+    return (status: string) => rerender(view(status))
+  }
+
+  const trail = () => within(screen.getByRole("navigation", { name: "Refinements" }))
+  const tagTexts = () =>
+    [...document.querySelectorAll<HTMLElement>("[data-step-tag]")].map((tag) => tag.textContent)
+
+  it("shows the search and each refinement under the title, the last with ✕, beside the fold", () => {
+    renderStepped()
+    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "only still at a startup✕"])
+    expect(screen.getByRole("navigation", { name: "Refinements" }).textContent).toBe(
+      `${TITLE}+built training infra at scale+only still at a startup✕`,
+    )
+    // Earlier tags are buttons; the last is a tag with its ✕ back to the one before.
+    expect(trail().getByRole("button", { name: TITLE })).toBeTruthy()
+    expect(trail().getByRole("button", { name: "built training infra at scale" })).toBeTruthy()
+    expect(trail().queryByRole("button", { name: /only still at a startup/ })).toBeNull()
+    expect(
+      trail().getByRole("button", { name: "Go back to built training infra at scale" }).textContent,
+    ).toBe("✕")
+    expect(document.querySelector(".run-trail-tag.only")?.textContent).toBe("only still at a startup✕")
+    // Under the title row, outside the fold, which still opens the traits and filters.
+    const head = document.querySelector("[data-run-head]")
+    expect(head?.querySelector(".run-head-title + [data-step-trail]")).toBeTruthy()
+    const region = screen.getByRole("region", { name: "Search filters" })
+    expect(region.closest("[data-open]")?.getAttribute("data-open")).toBe("false")
+    fireEvent.click(screen.getByRole("button", { name: "Show traits and filters" }))
+    expect(region.closest("[data-open]")?.getAttribute("data-open")).toBe("true")
+    expect(screen.getByRole("navigation", { name: "Refinements" })).toBeTruthy()
+  })
+
+  it("shows plain tags where there is no chat (the browser's Searches page)", () => {
+    vi.stubGlobal("__TAURI__", undefined)
+    renderStepped()
+    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "only still at a startup"])
+    expect(trail().queryByRole("button")).toBeNull()
+  })
+
+  it("shows no trail for a run without steps", () => {
+    renderRun(null, NOT_STOPPED, QUICK_RUN)
+    expect(screen.queryByRole("navigation", { name: "Refinements" })).toBeNull()
+  })
+
+  it("goes back by a tag and by ✕ on the chat, with no model turn, and reads the run when it finishes", async () => {
+    renderStepped()
+    fireEvent.click(trail().getByRole("button", { name: TITLE }))
+    expect(chat.runCommand).toHaveBeenCalledTimes(1)
+    expect(chat.runCommand).toHaveBeenLastCalledWith(goBackCommand(RUN_ID, "s1"))
+    expect(goBackCommand(RUN_ID, "s1")).toBe(
+      "uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py rerank --run-dir '.powerpacks/search/jordan-role' --use 's1'",
+    )
+    fireEvent.click(trail().getByRole("button", { name: "Go back to built training infra at scale" }))
+    expect(chat.runCommand).toHaveBeenCalledTimes(2)
+    expect(chat.runCommand).toHaveBeenLastCalledWith(goBackCommand(RUN_ID, "s2"))
+    await waitFor(() => expect(chat.runCommand).toHaveBeenCalledTimes(2))
+    expect(chat.send).not.toHaveBeenCalled()
+
+    // The command's item finishing reads the run once (the parent step stays cached).
+    const before = reads.filter((url) => !url.includes("&step=")).length
+    const command: Entry = {
+      kind: "command",
+      id: "cmd-1",
+      command: goBackCommand(RUN_ID, "s2"),
+      status: "running",
+      exitCode: null,
+      output: "",
+      durationMs: null,
+    }
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1", entries: [command] })
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1", entries: [{ ...command, status: "done", exitCode: 0 }] })
+    await waitFor(() => expect(reads.filter((url) => !url.includes("&step=")).length).toBe(before + 1))
+    expect(reads.at(-1)).toBe("/searches/api/search.json?run_id=jordan-role")
+  })
+
+  it("asks in chat when there is no chat to run it on", async () => {
+    chat.runCommand.mockResolvedValue(false)
+    renderStepped()
+    fireEvent.click(trail().getByRole("button", { name: "built training infra at scale" }))
+    expect(chat.runCommand).toHaveBeenCalledWith(goBackCommand(RUN_ID, "s2"))
+    await waitFor(() => expect(chat.send).toHaveBeenCalledWith("Go back to built training infra at scale"))
+    expect(chat.send).toHaveBeenCalledTimes(1)
+  })
+
+  it("reads the run again when a turn ends", async () => {
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: true })
+    renderStepped()
+    const before = reads.filter((url) => !url.includes("&step=")).length
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: false })
+    await waitFor(() => expect(reads.filter((url) => !url.includes("&step=")).length).toBe(before + 1))
+  })
+
+  it("reads the run once when its card finishes, but not when it stays completed", async () => {
+    const rerenderStatus = renderStepped("running")
+    await waitFor(() => expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1))
+    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(0)
+    rerenderStatus("completed")
+    await waitFor(() => expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1))
+    await act(async () => {
+      rerenderStatus("completed")
+      await Promise.resolve()
+    })
+    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1)
+    expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
+  })
+
+  it("holds going back while the run or a turn is running", () => {
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: true })
+    renderStepped()
+    for (const button of trail().getAllByRole("button")) expect(button).toHaveProperty("disabled", true)
+    cleanup()
+    setChat({ ...EMPTY_AGENT, threadId: "thread-1" })
+    renderStepped("running")
+    expect(screen.getByRole("navigation", { name: "Refinements" })).toBeTruthy()
+    for (const button of trail().getAllByRole("button")) expect(button).toHaveProperty("disabled", true)
+  })
+
+  it("shows each score's change against the step before; a person new to this step shows none", async () => {
+    renderStepped()
+    await waitFor(() => expect(row("p-jordan").getByText("▲ 10")).toBeTruthy())
+    expect(row("p-morgan").getByText("▼ 10")).toBeTruthy()
+    const scoreCell = (personId: string) =>
+      document.querySelector(`[data-person-id='${personId}'] .result-score`)?.textContent
+    expect(scoreCell("p-jordan")).toBe("90%▲ 10")
+    expect(scoreCell("p-morgan")).toBe("60%▼ 10")
+    expect(scoreCell("p-casey")).toBe("55%")
+    expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
   })
 })

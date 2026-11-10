@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 
 import type { Entry } from "@/types/agent"
 
-import { preparedSearch, ranSearch } from "./preparedSearch"
+import { preparedSearch, ranSearch, refineStep, stepCount, stepVerb, wentBack } from "./preparedSearch"
 
 // The agent may run the primitive inside a script: the card comes from what it printed.
 function prepared(printed: Record<string, unknown>): Entry {
@@ -94,4 +94,66 @@ it("names the prepare's folder under .powerpacks/search, where the card saves it
     "ab12-vp",
   )
   expect(search("/tmp/engine/run/expand_search_request.json")).toBeNull()
+})
+
+const RERANK =
+  "uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py rerank --run-dir '.powerpacks/search/ml-infra'"
+
+function reranked(command: string, step: Record<string, unknown>): Entry {
+  return {
+    kind: "command",
+    id: "r1",
+    command,
+    status: "done",
+    exitCode: 0,
+    output: `scoring 120 people\n${JSON.stringify({ primitive: "search_network_pipeline", status: "completed", step }, null, 2)}\n`,
+    durationMs: 8000,
+  }
+}
+
+function step(id: string, parent: string | null, criteria: string | null, query_type: string | null) {
+  return { run_id: "ml-infra", id, parent, criteria, query_type, shown: 64, scored: 120, cost_usd: 0.01 }
+}
+
+it("reads a refinement's verb, what changed and its count from what rerank printed", () => {
+  const ranked = refineStep(
+    reranked(
+      `${RERANK} --criteria 'built training infra at scale'`,
+      step("s2", "s1", "built training infra at scale", "rerank"),
+    ),
+  )
+  expect(ranked && [stepVerb(ranked), ranked.criteria, stepCount(ranked), ranked.run_id]).toEqual([
+    "Re-ranked",
+    "built training infra at scale",
+    "64 people",
+    "ml-infra",
+  ])
+  const both = refineStep(
+    reranked(`${RERANK} --criteria 'prefer ML'`, step("s2", "s1", "prefer ML", "filter_and_rank")),
+  )
+  expect(both && stepVerb(both)).toBe("Re-ranked")
+  const narrowed = refineStep(
+    reranked(`${RERANK} --criteria 'only startups'`, step("s3", "s2", "still at a startup", "filter")),
+  )
+  expect(narrowed && [stepVerb(narrowed), stepCount(narrowed)]).toEqual(["Narrowed", "64 of 120 people"])
+  const searched = refineStep(reranked(`${RERANK} --criteria 'x'`, step("s1", null, null, null)))
+  expect(searched && stepVerb(searched)).toBe("Searched")
+  // A refinement is not the search's own result, and no card is made of it.
+  const entry = reranked(`${RERANK} --criteria 'x'`, step("s2", "s1", "x", "rerank"))
+  expect(ranSearch(entry)).toBe(false)
+  expect(preparedSearch(entry)).toBeNull()
+})
+
+it("knows a go-back by its command: its printed step is not a refinement", () => {
+  const back = reranked(`${RERANK} --use 's1'`, step("s1", null, null, null))
+  expect(wentBack(back)).toEqual({ runId: "ml-infra", stepId: "s1" })
+  expect(refineStep(back)).toBeNull()
+  // The agent's own run of it, inside the shell wrapper's quoting.
+  const wrapped = `/bin/zsh -lc '${RERANK.replaceAll("'", `'"'"'`)} --use '"'"'s2'"'"''`
+  expect(wentBack(reranked(wrapped, step("s2", "s1", "x", "rerank")))).toEqual({
+    runId: "ml-infra",
+    stepId: "s2",
+  })
+  expect(wentBack(reranked(`${RERANK} --criteria 'x'`, step("s2", "s1", "x", "rerank")))).toBeNull()
+  expect(wentBack(prepared({ status: "completed", summary: { rows: 207 } }))).toBeNull()
 })

@@ -5,6 +5,8 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
+  2026-11-09: SearchResult exposes `steps` and `current_step`; `load_search(step=)` reads
+      that step's rows while keeping the saved current step.
   2026-11-09: quick runs carry `steps` and `current_step`; `record_quick_search`
       writes s1 and `select_quick_step` repoints the readers at the current step.
   2026-11-03: positions carry the company's `logo_url` and candidates their `headline`, so the
@@ -20,7 +22,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -315,6 +317,18 @@ class CandidateGroup:
 
 
 @dataclass(frozen=True)
+class SearchStep:
+    id: str
+    parent: str | None
+    criteria: str | None
+    query_type: str | None
+    shown: int
+    scored: int | None
+    cost_usd: float
+    created_at: str
+
+
+@dataclass(frozen=True)
 class SearchResult:
     run_id: str
     title: str
@@ -328,6 +342,8 @@ class SearchResult:
     team: tuple[TeamMember, ...] = ()
     team_fetched_at: str = ""
     team_status: str = ""
+    steps: tuple[SearchStep, ...] = ()
+    current_step: str | None = None
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -693,6 +709,9 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         groups=groups,
         jd_text=jd_path.read_text(encoding="utf-8").strip() if jd_path.is_file() else "",
         candidates=tuple(candidates.values()),
+        steps=tuple(SearchStep(**{key: value for key, value in step.items() if key != "jsonl"})
+                    for step in payload.get("steps", [])),
+        current_step=payload.get("current_step"),
         team=tuple(TeamMember(**row) for row in team.get("members", [])),
         team_fetched_at=team.get("fetched_at", ""),
         team_status=str(status.get("reason") or
@@ -726,17 +745,24 @@ def _searches(root: Path, payloads: dict[str, dict[str, Any]]) -> tuple[SearchRe
     return tuple(sorted(searches, key=lambda search: (search.created_at, search.run_id), reverse=True))
 
 
-def load_search(root: Path, run_id: str) -> SearchResult | None:
+def load_search(root: Path, run_id: str, step: str | None = None) -> SearchResult | None:
     """One run's search, with the runs its summary references loaded alongside."""
     payload = _payload(root / run_id / "results.json")
     if payload is None or not isinstance(payload.get("summary"), dict):
         return None
+    current_step = payload.get("current_step")
+    if step is not None:
+        selected = next((item for item in payload.get("steps", []) if item["id"] == step), None)
+        if selected is None:
+            raise ValueError(f"unknown step: {step}")
+        select_quick_step(payload, selected)
     payloads = {run_id: payload}
     for other in sorted(_referenced_runs(payload) - {run_id}):
         referenced = _payload(root / other / "results.json")
         if referenced is not None:
             payloads[other] = referenced
-    return next(search for search in _searches(root, payloads) if search.run_id == run_id)
+    search = next(search for search in _searches(root, payloads) if search.run_id == run_id)
+    return replace(search, current_step=current_step)
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:

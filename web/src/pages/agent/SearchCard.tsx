@@ -93,6 +93,8 @@ interface SearchCardProps {
   search: PreparedSearch
   // Editing and Run Search: the newest card's, while the agent waits for an answer.
   actions: boolean
+  // A refined run's search: "Showing now", or a button going back to it.
+  step?: ReactNode
 }
 
 // The cloud app's badge: a filled pill, its remove × after the name.
@@ -1001,7 +1003,7 @@ function fieldOf(key: string): Field | undefined {
  * card sends its changes without running. A card that no longer asks shows the search as it was
  * prepared, folded under its query until opened.
  */
-export function SearchCard({ search, actions }: SearchCardProps) {
+export function SearchCard({ search, actions, step }: SearchCardProps) {
   const [query, setQuery] = useState(search.query)
   const [values, setValues] = useState<Values>(() => preparedValues(search))
   const [traits, setTraits] = useState(search.traits)
@@ -1157,6 +1159,7 @@ export function SearchCard({ search, actions }: SearchCardProps) {
           )}
         </div>
         <ScopePill />
+        {step}
         {!actions && (
           <button
             type="button"
