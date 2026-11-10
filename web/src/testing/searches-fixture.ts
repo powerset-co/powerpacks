@@ -11,6 +11,7 @@ import type {
   Ratings,
   SearchCard,
   SearchRunPayload,
+  SearchStep,
 } from "@/types/searches"
 
 export const RUN_ID = "jordan-role"
@@ -304,6 +305,8 @@ export const RUN: SearchRunPayload = {
     ],
     team_fetched_at: "2026-09-20T00:00:00Z",
     team_status: "",
+    steps: [],
+    current_step: null,
   },
   ratings: RATINGS,
 }
@@ -337,9 +340,60 @@ export const QUICK_RUN: SearchRunPayload = {
     team: [],
     team_fetched_at: "",
     team_status: "",
+    steps: [],
+    current_step: null,
   },
   ratings: RATINGS,
 }
+
+const STEPS: SearchStep[] = [
+  step("s1", null, null, null, 2),
+  step("s2", "s1", "built training infra at scale", "rerank", 2),
+  step("s3", "s2", "still at a startup", "filter", 2),
+]
+
+function step(
+  id: string,
+  parent: string | null,
+  criteria: string | null,
+  query_type: string | null,
+  shown: number,
+): SearchStep {
+  return {
+    id,
+    parent,
+    criteria,
+    query_type,
+    shown,
+    scored: shown,
+    cost_usd: 0,
+    created_at: "2026-10-16T09:00:00Z",
+  }
+}
+
+/** The quick search refined twice, showing `current`: its pond holds that step's rows. */
+function steppedRun(current: string, rows: PondCandidate[]): SearchRunPayload {
+  return {
+    ...QUICK_RUN,
+    search: {
+      ...QUICK_RUN.search,
+      ponds: QUICK_RUN.search.ponds.map((pond) => ({ ...pond, candidates: rows })),
+      steps: STEPS,
+      current_step: current,
+    },
+  }
+}
+
+// s3 (narrowed) after s2 (re-ranked): Jordan rose 10 points, Morgan fell 10, Casey has no s2 row.
+export const STEPPED_RUN = steppedRun("s3", [
+  { ...JORDAN, final_score: 0.9 },
+  { ...MORGAN, final_score: 0.6 },
+  { ...CASEY, final_score: 0.55 },
+])
+export const STEPPED_PARENT = steppedRun("s3", [
+  { ...JORDAN, final_score: 0.8 },
+  { ...MORGAN, final_score: 0.7 },
+])
 
 // The documented order: qualification scores first, then ratings; overall, then the screen score.
 export const RANKED_NAMES = [

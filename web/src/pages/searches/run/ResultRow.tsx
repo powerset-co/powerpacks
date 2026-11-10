@@ -1,7 +1,7 @@
 import { memo, type MouseEvent } from "react"
 
 import { CompanyLogo, ProxiedLinkedinAvatar } from "@/components/shared"
-import { currentRole, shownHeadline } from "@/lib/searches/person"
+import { currentRole } from "@/lib/searches/person"
 import type { ResultRow as Result } from "@/lib/searches/ranking"
 
 import { TraitList } from "./Evidence"
@@ -31,8 +31,8 @@ function onControl(event: MouseEvent<HTMLElement>): boolean {
 }
 
 /**
- * One person: who they are on the left (name, current role · company from their positions,
- * headline, location, sources), their company's logo on the avatar, the tags and pin over
+ * One person: who they are on the left (name and sources, then current role · company from their
+ * positions · location; the headline is the drawer's), the tags and pin over
  * them; the scores and reasoning on the right. A ranked (job description) run puts Score over
  * the reasoning; a plain run puts the feedback flag there. A click on the row opens them in the
  * drawer, or closes it when they are open. `group/row` shows the row's controls on hover.
@@ -48,7 +48,6 @@ export const ResultRow = memo(function ResultRow({
 }: ResultRowProps) {
   const { row, candidate } = result
   const role = currentRole(row)
-  const headline = shownHeadline(row, role)
   return (
     <div
       className="result-row group/row"
@@ -76,14 +75,15 @@ export const ResultRow = memo(function ResultRow({
           <div className="result-person">
             <ProxiedLinkedinAvatar name={row.name} size={40} src={row.avatar_url || undefined} />
             <span className="result-who">
-              <span className="flex items-center gap-1.5">
+              <span className="result-name">
                 <b>{row.name}</b>
                 <LinkedInLink row={row} />
+                <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
               </span>
-              <RoleLine title={role.title} company={role.company} logo={role.logo} />
-              {headline ? <span className="result-headline">{headline}</span> : null}
-              {row.location ? <small className="result-location">{row.location}</small> : null}
-              <NetworkSources attribution={candidate?.network_attribution ?? null} name={row.name} />
+              <span className="result-place">
+                <RoleLine title={role.title} company={role.company} />
+                {row.location ? <small className="result-location">{row.location}</small> : null}
+              </span>
             </span>
           </div>
         </div>
@@ -97,16 +97,16 @@ export const ResultRow = memo(function ResultRow({
               )}
             </span>
           ) : null}
-          <Score result={result} ranked={ranked} labels={labels} />
+          <Score result={result} ranked={ranked} labels={labels} parentScores={context.parentScores} />
         </div>
       </div>
     </div>
   )
 })
 
-// Current role · company, with the company's logo (or its letter) just before its name;
-// whichever is known, else a plain note.
-export function RoleLine({ title, company, logo }: { title: string; company: string; logo: string }) {
+// Current role · company, whichever is known, else a plain note. The drawer passes `logo` to
+// show the company's logo just before its name; the list rows leave it out.
+export function RoleLine({ title, company, logo }: { title: string; company: string; logo?: string }) {
   if (!title && !company) return <span className="result-title result-unknown">Current role unknown</span>
   return (
     <span className="result-title">
@@ -114,7 +114,7 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
       {title && company ? <span className="result-at">·</span> : null}
       {company ? (
         <span className="result-company">
-          <CompanyLogo company={company} src={logo || undefined} size={14} />
+          {logo !== undefined ? <CompanyLogo company={company} src={logo || undefined} size={14} /> : null}
           <span>{company}</span>
         </span>
       ) : null}
@@ -127,10 +127,20 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
 // the cloud app's row shows: each trait's share with its name and reason, nothing else. The
 // pond's own 0–1 only orders the list, and the overall reasoning is the drawer's.
-function Score({ result, ranked, labels }: { result: Result; ranked: boolean; labels: boolean }) {
+interface ScoreProps {
+  result: Result
+  ranked: boolean
+  labels: boolean
+  parentScores: RowContext["parentScores"]
+}
+
+function Score({ result, ranked, labels, parentScores }: ScoreProps) {
   if (!ranked) {
     return (
       <div className="result-overall">
+        {parentScores ? (
+          <ScoreCell result={result} ranked={false} parentScore={parentScores.get(result.row.person_id)} />
+        ) : null}
         <div className="result-reason">
           <TraitList traits={result.row.traits} />
         </div>

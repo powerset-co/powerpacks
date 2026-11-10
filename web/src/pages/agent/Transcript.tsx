@@ -1,7 +1,23 @@
+import type { ReactNode } from "react"
+
 import { Spinner } from "@/components/shared"
-import { preparedSearch, ranSearch, type PreparedSearch } from "@/lib/agent/preparedSearch"
+import { Button } from "@/components/ui/button"
+import {
+  preparedSearch,
+  ranSearch,
+  refineStep,
+  stepCount,
+  stepVerb,
+  wentBack,
+  type PreparedSearch,
+  type WentBack,
+} from "@/lib/agent/preparedSearch"
 import { cn } from "@/lib/utils"
+import { useCatalog } from "@/pages/searches/hooks/useCatalog"
+import { useSearchRun } from "@/pages/searches/hooks/useSearchRun"
+import { goBack, stepLabel } from "@/pages/searches/run/steps"
 import type { Entry, ItemStatus } from "@/types/agent"
+import type { SearchStep } from "@/types/searches"
 
 import { CopyButton } from "./CopyButton"
 import { CheckIcon, CrossIcon, FileIcon, SparkIcon, TerminalIcon } from "./icons"
@@ -13,6 +29,8 @@ type Turn =
   | { kind: "say"; entry: Exclude<Entry, WorkEntry> }
   | { kind: "work"; id: string; entries: WorkEntry[] }
   | { kind: "search"; id: string; search: PreparedSearch }
+  | { kind: "step"; id: string; step: Omit<SearchStep, "created_at"> & { run_id: string } }
+  | { kind: "back"; id: string; back: WentBack }
 
 function isWork(entry: Entry): entry is WorkEntry {
   return (
@@ -22,14 +40,19 @@ function isWork(entry: Entry): entry is WorkEntry {
 
 /**
  * Consecutive work (commands, edits, tools, thinking) folds into one panel between messages. A
- * command that prepared a search is a search card in its place, between the panels around it.
+ * command that prepared a search is a search card in its place, between the panels around it; a
+ * finished refinement is a step card, and going back to a step is one line.
  */
 function group(entries: Entry[]): Turn[] {
   const out: Turn[] = []
   for (const entry of entries) {
     const last = out.at(-1)
     const search = preparedSearch(entry)
+    const step = refineStep(entry)
+    const back = wentBack(entry)
     if (search) out.push({ kind: "search", id: entry.id, search })
+    else if (step) out.push({ kind: "step", id: entry.id, step })
+    else if (back) out.push({ kind: "back", id: entry.id, back })
     else if (!isWork(entry)) out.push({ kind: "say", entry })
     else if (last?.kind === "work") last.entries.push(entry)
     else out.push({ kind: "work", id: entry.id, entries: [entry] })
@@ -160,17 +183,30 @@ function WorkRow({ entry }: { entry: WorkEntry }) {
 // Its row borrows from the gap below so messages keep their spacing.
 const COPY = "mt-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
 
+/**
+ * The search card's edits reach the agent as `Modify, then execute:` (or a blocked card's
+ * `Modify:`) and a JSON object; the card above already shows them, so the bubble says what was
+ * asked instead of printing the JSON.
+ */
+function userText(text: string): string {
+  if (text.startsWith("Modify, then execute:\n")) return "Run the search with my edits"
+  if (text.startsWith("Modify:\n")) return "Update the search with my edits"
+  return text
+}
+
 function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   switch (entry.kind) {
-    case "user":
+    case "user": {
+      const text = userText(entry.text)
       return (
         <div className="rise-in group -mb-4 flex flex-col text-[15px] leading-[1.65]">
           <div className="max-w-[82%] self-end whitespace-pre-wrap rounded-[var(--radius-l)] rounded-br-[var(--radius-s)] border border-line bg-surface-2 px-3.5 py-2.5">
-            {entry.text}
+            {text}
           </div>
-          <CopyButton text={entry.text} className={cn(COPY, "self-end")} />
+          <CopyButton text={text} className={cn(COPY, "self-end")} />
         </div>
       )
+    }
     case "agent":
       return (
         <div className="rise-in group -mb-4 flex flex-col text-[15px]">
@@ -187,6 +223,67 @@ function Say({ entry }: { entry: Exclude<Entry, WorkEntry> }) {
   }
 }
 
+const STEP_CARD =
+  "rise-in flex min-w-0 items-center gap-2.5 rounded-[var(--radius-m)] border bg-card py-2 pl-3 pr-2.5 text-[13px]"
+
+/**
+ * The right edge of a step's card: "Showing now" on the step the results show, else a button that
+ * goes back to it, waiting while the run or a turn is running.
+ */
+function StepAction({ runId, stepId, running }: { runId: string; stepId: string; running: boolean }) {
+  const run = useSearchRun(runId).data?.search
+  const status = useCatalog().data?.find((card) => card.run_id === runId)?.status
+  const step = run?.steps.find((saved) => saved.id === stepId)
+  if (!run || !step) return null
+  if (run.current_step === stepId)
+    return <span className="shrink-0 px-1 text-xs font-semibold text-primary">Showing now</span>
+  return (
+    <Button
+      size="sm"
+      className="shrink-0"
+      disabled={running || status === "running"}
+      onClick={() => goBack(run, step)}
+    >
+      Go back to this
+    </Button>
+  )
+}
+
+/** One refinement: what it did, to what, and how many people it kept. */
+function StepCard({
+  step,
+  running,
+}: {
+  step: Omit<SearchStep, "created_at"> & { run_id: string }
+  running: boolean
+}) {
+  const run = useSearchRun(step.run_id).data?.search
+  const current = run?.current_step === step.id
+  return (
+    <section aria-label="Refinement" className={cn(STEP_CARD, current ? "border-primary" : "border-line")}>
+      <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-ok" />
+      <p className="m-0 flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <b className="font-semibold">{stepVerb(step)}</b>
+        <span className="min-w-0">{step.criteria ?? run?.title}</span>
+        <span className="text-muted-foreground">{stepCount(step)}</span>
+      </p>
+      <StepAction runId={step.run_id} stepId={step.id} running={running} />
+    </section>
+  )
+}
+
+/** A `rerank --use` in the chat: where the results went back to, never the command. */
+function WentBackLine({ back }: { back: WentBack }) {
+  const run = useSearchRun(back.runId).data?.search
+  const step = run?.steps.find((saved) => saved.id === back.stepId)
+  if (!run || !step) return null
+  return (
+    <p className="m-0 flex items-center gap-2 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line">
+      Went back to {stepLabel(run.title, step)}
+    </p>
+  )
+}
+
 export function Transcript({ entries, running }: { entries: Entry[]; running: boolean }) {
   const turns = group(entries)
   // Only the newest search card asks Execute or Modify, while the agent waits and until the
@@ -197,12 +294,24 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
     .slice(newest ? turns.indexOf(newest) + 1 : turns.length)
     .some((turn) => turn.kind === "work" && turn.entries.some(ranSearch))
   const asking = !running && !ranSince
+  // A search card goes back to its own run's search, once that run has saved steps.
+  const searchAction = (search: PreparedSearch): ReactNode =>
+    search.run !== null ? <StepAction runId={search.run} stepId="s1" running={running} /> : null
   return (
     <>
       {turns.map((turn) => {
         if (turn.kind === "say") return <Say key={turn.entry.id} entry={turn.entry} />
         if (turn.kind === "search")
-          return <SearchCard key={turn.id} search={turn.search} actions={asking && turn === newest} />
+          return (
+            <SearchCard
+              key={turn.id}
+              search={turn.search}
+              actions={asking && turn === newest}
+              step={searchAction(turn.search)}
+            />
+          )
+        if (turn.kind === "step") return <StepCard key={turn.id} step={turn.step} running={running} />
+        if (turn.kind === "back") return <WentBackLine key={turn.id} back={turn.back} />
         return (
           // Folded to one line until the reader asks for the commands behind it.
           <details key={turn.id} className="rise-in group/work">

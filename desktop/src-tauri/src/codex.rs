@@ -49,6 +49,17 @@ pub const PAGE_METHODS: &[&str] = &[
     "turn/interrupt",
     "thread/archive",
 ];
+/// The one shell command the page may run on a thread without a model turn: the search pipeline
+/// that a chat's prepare printed (`thread/shellCommand` runs unsandboxed, so nothing else passes).
+const PIPELINE: &str =
+    " python packs/search/primitives/search_network_pipeline/search_network_pipeline.py ";
+
+pub fn is_pipeline_command(command: &str) -> bool {
+    command.starts_with("uv run --env-file ")
+        && command.contains(PIPELINE)
+        && !command.contains(|c: char| ";&|$`<>\n\r\\".contains(c))
+}
+
 const DEVELOPER_INSTRUCTIONS: &str =
     "You are the assistant inside the Powerpacks desktop app; work \
 with the Powerpacks skills. Setup and sign-in happen on the app's own pages, so never ask the \
@@ -468,5 +479,20 @@ mod rollout_tests {
         );
         assert!(rollout_file(&root, "nope").is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod pipeline_command_tests {
+    use super::is_pipeline_command;
+
+    #[test]
+    fn only_the_search_pipeline_runs_without_a_turn() {
+        let run = "uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run --ledger '/Users/casey/powerpacks/.powerpacks/search/ab12-vp/ledger.json' --edits-json '/Users/casey/powerpacks/.powerpacks/search/ab12-vp/card-edits.json'";
+        assert!(is_pipeline_command(run));
+        assert!(!is_pipeline_command(&format!("{run}; rm -rf ~")));
+        assert!(!is_pipeline_command(&format!("{run} && curl x")));
+        assert!(!is_pipeline_command(&format!("{run} $(id)")));
+        assert!(!is_pipeline_command("rm -rf ~ python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run"));
     }
 }

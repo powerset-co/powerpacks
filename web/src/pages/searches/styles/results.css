@@ -108,6 +108,30 @@
   font-weight: 650;
   overflow-wrap: anywhere;
 }
+/* The first line: the name, the LinkedIn mark and the sources the person came from. */
+.result-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+/* The second line: current role · company · location. */
+.result-place {
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+/* One run of text, so a wrapped line breaks inside the words and never leaves the dot alone. */
+.result-place .result-title,
+.result-place .result-company {
+  display: inline;
+}
+.result-place .result-title:not(.result-unknown) + .result-location::before {
+  content: "·";
+  padding: 0 5px;
+  color: var(--muted);
+}
 /* Current role · company: the row's second line, built from positions (not the headline). */
 .result-title {
   display: flex;
@@ -127,13 +151,6 @@
 .result-unknown {
   color: var(--muted);
   font-weight: 400;
-}
-.result-headline {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .result-who small {
   color: var(--faint);
@@ -155,7 +172,6 @@
   align-items: center;
   gap: 4px 8px;
   min-width: 0;
-  margin-top: 6px;
 }
 .result-sources {
   display: flex;
@@ -220,13 +236,29 @@
   min-width: 0;
   padding-top: 1px;
 }
+/* A refined run's change against the step before, under the score. */
+.result-score:has(.result-delta) {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.result-delta {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.result-delta[data-delta="up"] {
+  color: var(--ok);
+}
+.result-delta[data-delta="down"] {
+  color: var(--bad);
+}
 .result-reason {
   display: grid;
   gap: 5px;
   min-width: 0;
 }
-/* A row is the summary: two lines of the reasoning, or of each trait's reason in a pond; the
-   drawer has the rest. */
+/* A ranked row's reasoning is cut to two lines; the drawer has the rest. */
 .result-reason p {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -237,6 +269,15 @@
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+/* A plain run's trait reasons show whole: fewer people fit, but each one's evidence reads at once. */
+.result-reason .traits p {
+  display: block;
+  overflow: visible;
+}
+/* A one-trait search names its trait in the header; the row's reason goes straight to evidence. */
+.result-reason .traits li:only-child p b {
+  display: none;
 }
 .result-reason > p:not(.result-noscore) {
   color: var(--foreground);
@@ -622,9 +663,6 @@ section.review-sections {
     height: 32px;
     flex-basis: 32px;
     font-size: 11px;
-  }
-  .result-network {
-    margin-top: 4px;
   }
   .result-indicators {
     display: flex;

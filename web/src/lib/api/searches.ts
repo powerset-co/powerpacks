@@ -13,8 +13,14 @@ export async function fetchCatalog(signal?: AbortSignal): Promise<CatalogPayload
   return body<CatalogPayload>(response)
 }
 
-export async function fetchSearchRun(runId: string, signal?: AbortSignal): Promise<SearchRunPayload> {
-  const response = await fetch(`${API}/api/search.json?run_id=${encodeURIComponent(runId)}`, { signal })
+/** The run as it shows now, or one of its steps (`s1`, …) when `step` is given. */
+export async function fetchSearchRun(
+  runId: string,
+  signal?: AbortSignal,
+  step?: string,
+): Promise<SearchRunPayload> {
+  const at = step === undefined ? "" : `&step=${encodeURIComponent(step)}`
+  const response = await fetch(`${API}/api/search.json?run_id=${encodeURIComponent(runId)}${at}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't load search.")
   return body<SearchRunPayload>(response)
 }

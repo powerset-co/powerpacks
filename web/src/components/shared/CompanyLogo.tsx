@@ -11,26 +11,20 @@ interface CompanyLogoProps {
 }
 
 const SIZE_CLASS = {
-  14: "size-[14px] rounded-[4px] text-[8px]",
-  24: "size-6 rounded-md text-[11px]",
+  14: "size-[14px] rounded-[4px]",
+  24: "size-6 rounded-md",
 } as const
 
-/** A company's logo on a rounded square, over the company's first letter until it loads (or
- *  when there is none). */
+/** A company's logo on a rounded square. Without one (or until it loads) the square stays
+ *  empty: no letter or stand-in that could pass for a real logo. */
 export function CompanyLogo({ company, src, size, className }: CompanyLogoProps) {
-  const letter = company.trim().charAt(0).toUpperCase()
   return (
     <span
-      className={cn(
-        "relative grid shrink-0 place-items-center overflow-hidden bg-line-strong font-extrabold leading-none text-foreground",
-        SIZE_CLASS[size],
-        className,
-      )}
+      className={cn("relative shrink-0 overflow-hidden bg-line-strong", SIZE_CLASS[size], className)}
       title={company}
-      data-company-logo={src ? "image" : "letter"}
+      data-company-logo={src ? "image" : "empty"}
     >
       {src ? <ProxiedImage key={src} src={src} /> : null}
-      <span aria-hidden="true">{letter}</span>
     </span>
   )
 }

@@ -8,6 +8,7 @@ nothing (#1002), Keep/Skip and delete taking seconds (#901, #902), a set pick th
 
 from __future__ import annotations
 
+import json
 import time
 
 from app import App, Failed
@@ -172,6 +173,37 @@ def search_set_picker(app: App) -> None:
     app.wait_for({"text": pick.split("·")[0].strip()}, CLICK, f"the picker shows {pick!r}")
 
 
+REFINED = "ML infra engineers · Bay Area"  # the root's quick search, refined twice in its chat
+GO_BACK = 15000  # `rerank --use` on the chat: uv starts and copies a saved step; no model turn
+REFINE = 120000  # a chat turn that runs `rerank --criteria` (the model picks it, then scores)
+TAGS = "[...document.querySelectorAll('[data-step-trail] [data-step-tag]')].map((tag) => tag.innerText.replace('✕', '').trim())"
+ROW_IDS = "[...document.querySelectorAll('.result-row')].map((row) => row.dataset.personId + ':' + (row.querySelector('.result-score')?.innerText ?? ''))"
+
+
+def search_refine(app: App) -> None:
+    """A refined search shows its tags; the first tag goes back to the search (the rows and the tags
+    change), and a message refines what shows (a new tag, new rows). Needs the root's refined search
+    linked to its chat and ChatGPT signed in; the second step spends model tokens."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    app.wait_for(f"{TAGS}.length >= 2", PAGE, "the refined search shows its tags")
+    tags, rows = app.js(TAGS), app.js(ROW_IDS)
+    if tags[0] != REFINED:
+        raise Failed(f"the first tag is {tags[0]!r}, not the search's title")
+    app.click({"css": "[data-step-trail] button[data-step-tag]"})
+    app.wait_for(f"{TAGS}.length === 1 && {TAGS}[0] === {json.dumps(REFINED)}", GO_BACK,
+                 "going back leaves only the search's tag")
+    if app.js(ROW_IDS) == rows:
+        raise Failed("went back to the search, but the rows and scores are the same")
+    rows = app.js(ROW_IDS)
+    app.click({"css": "#agent-message"})
+    app.type("prefer people who mentor junior engineers")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{TAGS}.length === 2 && /mentor/i.test({TAGS}[1])", REFINE, "the refinement adds its tag")
+    if app.js(ROW_IDS) == rows:
+        raise Failed("the refinement added its tag, but the rows and scores are the same")
+
+
 def refresh_toggle(app: App) -> None:
     """Scheduled tasks' daily switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
@@ -200,5 +232,6 @@ SCENARIOS = {
     "people-tab": people_tab,
     "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
+    "search-refine": search_refine,
     "refresh-toggle": refresh_toggle,
 }

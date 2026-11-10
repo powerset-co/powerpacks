@@ -163,6 +163,11 @@ export async function startTurn(
   })
 }
 
+/** Runs the search pipeline on the thread without a model turn; the chat shows it as a command. */
+export async function runShellCommand(threadId: string, command: string): Promise<void> {
+  await call("thread/shellCommand", { threadId, command })
+}
+
 export async function interruptTurn(threadId: string, turnId: string): Promise<void> {
   await call("turn/interrupt", { threadId, turnId })
 }
