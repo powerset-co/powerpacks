@@ -267,7 +267,7 @@ def resolve_company_contexts(
     resolved: dict[str, dict[str, Any]] = {}
     stats = {"cache_hits": 0, "cache_misses": 0, "live_lookups": 0,
              "unresolved": 0, "cost_usd": 0.0}
-    key = api_key if api_key is not None else rapidapi._api_key()  # noqa: SLF001
+    key = rapidapi.LinkedInApiConfig.resolve(api_key).api_key
     for ref_key, ref in unique.items():
         response = _cached(ref, directory, index)
         source = "cache"
