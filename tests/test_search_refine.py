@@ -41,7 +41,10 @@ class RefineTest(unittest.TestCase):
         self.jsonl.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         self.profiles = self.run / "profiles.jsonl"
         self.profiles.write_text("".join(json.dumps(dict(person_id=pid, name=f"Jordan Example {n}", inferred_age=30 + n,
-            positions=[dict(position_title="Engineer", company_name="Example Labs", is_current=True, seniority_band="senior")],
+            years_of_experience=n * 2.5, summary="Builds search" if n < 4 else None,
+            positions=[dict(position_title="Engineer", company_name="Example Labs", is_current=True, seniority_band="Senior",
+                            company_stage="SERIES_B", company_sector_types=["AI_ML"]),
+                       dict(position_title="Founder" if n == 7 else "Intern", company_name="Side Co", is_current=n == 7)],
             education=[dict(school_name="Stanford University" if n % 2 else "Example College")],
             trait_scores={"engineer": {"score": 0.8}})) + "\n"
             for n, pid in enumerate(self.ids)))
@@ -329,6 +332,17 @@ class RefineTest(unittest.TestCase):
                  "SELECT person_id FROM positions WHERE is_current AND seniority_band = 'senior' "
                  "AND person_id IN (SELECT person_id FROM trait_scores WHERE trait_name = 'engineer' AND score >= .5)")
         self.assertEqual(self.payload()["steps"][-1]["shown"], 5)
+        self.cli("--use", "s1")
+        # The cloud prompt's spellings match: enums are lower-cased, all_current_titles joins every current
+        # position, total_years_experience and summary are there, and a `reasoning` column rides on the row.
+        self.cli("--criteria", "series B, no founders, 5+ years", "--sql",
+                 "SELECT DISTINCT c.person_id, ROUND(c.total_years_experience, 1) || ' years exp' AS reasoning "
+                 "FROM candidates c JOIN positions p USING (person_id) WHERE p.company_stage = 'series_b' "
+                 "AND list_contains(p.company_sector_types, 'ai_ml') AND c.all_current_titles NOT ILIKE '%founder%' "
+                 "AND c.total_years_experience >= 5 AND c.summary IS NOT NULL ORDER BY c.person_id")
+        self.assertEqual([(row["person_id"], row["overall_reasoning"]) for row in self.step_rows()],
+                         [(self.ids[2], "5.0 years exp"), (self.ids[3], "7.5 years exp")])
+        self.assertEqual(self.payload()["steps"][-1]["query_type"], "filter")
         before = self.snapshot()
         for sql in ("SELECT nope FROM candidates", "SELECT count(*) FROM candidates"):
             _, proc = self.cli("--criteria", "broken", "--sql", sql, expected=1)
