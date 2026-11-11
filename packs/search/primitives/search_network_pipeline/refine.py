@@ -27,11 +27,15 @@ MIN_INITIAL_SCORE = 0.3
 BATCH_SIZE = 2
 # Cloud api_v2/search/agent_rerank.py:367,430 caps concurrent batches at 200.
 MAX_CONCURRENT_BATCHES = 200
-# The tables a `--sql` query sees: the cloud QueryEngine's four, from the local hydrated profile.
+# The tables a `--sql` query sees: the cloud QueryEngine's four (api_v2/agents/tools/query_engine.py),
+# same column names, from the local hydrated profile. Enum-like text is lower-cased as the cloud does,
+# so the cloud prompt's values ('series_b', 'c-suite', 'venture_backed_startup') match here too.
 TABLES = {
-    "candidates": {"person_id": "VARCHAR", "name": "VARCHAR", "headline": "VARCHAR", "location": "VARCHAR",
-                   "inferred_age": "INTEGER", "inferred_birth_year": "INTEGER", "years_of_experience": "DOUBLE",
-                   "total_interactions": "INTEGER", "tech_skills": "VARCHAR[]", "base_score": "DOUBLE"},
+    "candidates": {"person_id": "VARCHAR", "name": "VARCHAR", "headline": "VARCHAR", "summary": "VARCHAR",
+                   "location": "VARCHAR", "all_current_titles": "VARCHAR", "linkedin_followers": "INTEGER",
+                   "linkedin_connections": "INTEGER", "x_twitter_followers": "INTEGER", "total_interactions": "INTEGER",
+                   "inferred_age": "INTEGER", "inferred_birth_year": "INTEGER", "total_years_experience": "DOUBLE",
+                   "tech_skills": "VARCHAR[]", "base_score": "DOUBLE"},
     "positions": {"person_id": "VARCHAR", "position_index": "INTEGER", "is_matched": "BOOLEAN", "is_current": "BOOLEAN",
                   "position_title": "VARCHAR", "company_name": "VARCHAR", "company_domain": "VARCHAR",
                   "seniority_band": "VARCHAR", "role_track": "VARCHAR", "company_headcount": "INTEGER",
@@ -42,6 +46,8 @@ TABLES = {
                   "start_year": "INTEGER", "end_year": "INTEGER", "graduation_year": "INTEGER"},
     "trait_scores": {"person_id": "VARCHAR", "trait_name": "VARCHAR", "score": "DOUBLE"},
 }
+LOWER = ("seniority_band", "company_stage", "role_track")
+LOWER_LISTS = ("company_sector_types", "company_entity_types")
 
 
 def _decoded(value, default):
@@ -92,16 +98,27 @@ def _score_batch(client, model, batch, query, criteria, summary):
     return scores, query_type
 
 
+def _lower(value):
+    return str(value).strip().lower() if value else None
+
+
 def _table_rows(inputs):
     """The four tables' rows, one profile at a time."""
     rows = {name: [] for name in TABLES}
     for profile in inputs:
         pid = profile["person_id"]
-        rows["candidates"].append({**{key: profile.get(key) for key in TABLES["candidates"]}, "person_id": pid})
+        positions = profile.get("positions") or []
+        current = [" at ".join(str(part) for part in (position.get("position_title"), position.get("company_name")) if part)
+                   for position in positions if position.get("is_current")]
+        rows["candidates"].append({**{key: profile.get(key) for key in TABLES["candidates"]}, "person_id": pid,
+                                   "all_current_titles": " | ".join(title for title in current if title) or None,
+                                   "total_years_experience": profile.get("years_of_experience")})
         matched = set(profile.get("matched_position_indexes") or [])
-        for index, position in enumerate(profile.get("positions") or []):
-            rows["positions"].append({**{key: position.get(key) for key in TABLES["positions"]},
-                                      "person_id": pid, "position_index": index, "is_matched": index in matched})
+        for index, position in enumerate(positions):
+            row = {key: position.get(key) for key in TABLES["positions"]}
+            row.update({key: _lower(row[key]) for key in LOWER})
+            row.update({key: [_lower(item) for item in row[key] or []] for key in LOWER_LISTS})
+            rows["positions"].append({**row, "person_id": pid, "position_index": index, "is_matched": index in matched})
         for school in profile.get("education") or []:
             rows["education"].append({**{key: school.get(key) for key in TABLES["education"]}, "person_id": pid})
         for trait, value in (profile.get("trait_scores") or {}).items():
@@ -111,8 +128,9 @@ def _table_rows(inputs):
     return rows
 
 
-def _sql_person_ids(inputs, sql):
-    """The person_ids a SQL query returns, in its order, from the four tables built in memory."""
+def _sql_rows(inputs, sql):
+    """person_id -> reasoning (the query's `reasoning` column, or None) for the rows a SQL query
+    returns, in its order, from the four tables built in memory."""
     with tempfile.TemporaryDirectory() as raw, duckdb.connect() as conn:
         for name, rows in _table_rows(inputs).items():
             path = Path(raw) / f"{name}.jsonl"
@@ -123,8 +141,11 @@ def _sql_person_ids(inputs, sql):
         columns = [column[0] for column in result.description]
         if "person_id" not in columns:
             raise ValueError("the query must return person_id")
-        at = columns.index("person_id")
-        return list(dict.fromkeys(row[at] for row in result.fetchall()))
+        at, why = columns.index("person_id"), columns.index("reasoning") if "reasoning" in columns else None
+        ordered = {}
+        for row in result.fetchall():
+            ordered.setdefault(row[at], row[why] if why is not None else None)
+        return ordered
 
 
 def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str], sql: str | None = None):
@@ -166,8 +187,10 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
         step_id = f"s{len(steps) + 1}"
         jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
         if sql is not None:
-            order = {pid: index for index, pid in enumerate(_sql_person_ids(inputs, sql))}
-            kept = sorted((row for row in rows if row["person_id"] in order), key=lambda row: order[row["person_id"]])
+            found = _sql_rows(inputs, sql)
+            order = {pid: index for index, pid in enumerate(found)}
+            kept = sorted((dict(row, overall_reasoning=found[row["person_id"]]) if found[row["person_id"]] else row
+                           for row in rows if row["person_id"] in found), key=lambda row: order[row["person_id"]])
             jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
             step = dict(id=step_id, parent=parent, criteria=criteria, sql=sql,
                         query_type="sort" if len(kept) == len(rows) else "filter", shown=len(kept),
