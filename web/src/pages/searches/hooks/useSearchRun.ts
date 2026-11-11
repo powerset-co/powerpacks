@@ -21,7 +21,7 @@ export function useSearchRun(runId: string | null) {
 }
 
 /** Each person's score on the step the showing one came from, read once and kept under the run's key;
- *  empty for the search itself (or while it loads), null for a run without steps. */
+ *  null on the original search, empty while the parent step loads. */
 export function useParentScores(search: SearchResult): ReadonlyMap<string, number> | null {
   const parent = search.steps.find((step) => step.id === search.current_step)?.parent ?? null
   const run = useQuery({
@@ -32,12 +32,12 @@ export function useParentScores(search: SearchResult): ReadonlyMap<string, numbe
     staleTime: Infinity,
   })
   return useMemo(() => {
-    if (search.steps.length === 0) return null
+    if (parent === null) return null
     const scores = new Map<string, number>()
-    if (parent === null || !run.data) return scores
+    if (!run.data) return scores
     for (const pond of run.data.search.ponds)
       for (const row of pond.candidates)
         if (!scores.has(row.person_id)) scores.set(row.person_id, row.final_score)
     return scores
-  }, [search.steps.length, parent, run.data])
+  }, [parent, run.data])
 }
