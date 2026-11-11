@@ -33,9 +33,9 @@ export function SetsPage() {
   const [naming, setNaming] = useState(false)
 
   return (
-    <Page
-      title={SETS.title}
-      actions={
+    <Page title={SETS.title}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{SETS.lead}</p>
         <div className="flex items-center gap-2">
           <Select
             aria-label={SETS.choose}
@@ -51,9 +51,7 @@ export function SetsPage() {
             {SETS.newSet}
           </Button>
         </div>
-      }
-    >
-      <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{SETS.lead}</p>
+      </div>
       {naming ? (
         <NewSet
           onCancel={() => setNaming(false)}
