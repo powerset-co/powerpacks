@@ -6,14 +6,10 @@ import {
   SelectLabel,
   SelectTrigger,
 } from "@/components/ui/select"
-import { offeredSets, useSearchScope } from "@/lib/agent/useSearchScope"
+import { offeredSets, setName, useSearchScope } from "@/lib/agent/useSearchScope"
 import type { ChatScope, SearchSet } from "@/types/searches"
 
 const LOCAL = "local"
-
-function name(set: SearchSet): string {
-  return set.is_personal && set.owned ? "Personal network" : set.name
-}
 
 function people(set: SearchSet): string {
   return ` · ${set.person_count.toLocaleString()}`
@@ -54,7 +50,7 @@ export function ScopePicker({
   const selected = valueOf(value)
   // Looked up among all sets, so a chat pinned to one no longer offered still shows its name.
   const picked = all.find(({ set_id }) => set_id === selected)
-  const shown = selected === LOCAL ? "Local index" : picked ? name(picked) : placeholder
+  const shown = selected === LOCAL ? "Local index" : picked ? setName(picked) : placeholder
   const choose = (next: string) => {
     if (next === LOCAL) {
       if (local_db) onChange({ local_db })
@@ -75,7 +71,7 @@ export function ScopePicker({
             <SelectLabel>Powerset</SelectLabel>
             {sets.map((set) => (
               <SelectItem key={set.set_id} value={set.set_id}>
-                {name(set) + people(set)}
+                {setName(set) + people(set)}
               </SelectItem>
             ))}
           </SelectGroup>

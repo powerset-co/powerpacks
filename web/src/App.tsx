@@ -1,10 +1,9 @@
 import { Fragment, useEffect } from "react"
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom"
 
-import { DebugMenu, EmptyState, ErrorBoundary, Sidebar } from "@/components/shared"
+import { DebugMenu, ErrorBoundary, Sidebar } from "@/components/shared"
 import { BrokenPage } from "@/components/shared/DebugMenu"
 import { routeExternalLinks } from "@/lib/externalLinks"
-import { useFeatureSettings } from "@/lib/features"
 import { isDesktop } from "@/lib/desktop"
 import { CodexAccountProvider } from "@/lib/agent/CodexAccountProvider"
 import { HOME, pageAt } from "@/lib/nav"
@@ -47,7 +46,6 @@ function Shell() {
 // review flow at / stands outside the shell: it is the user's entry point, with its own top
 // bar. Any other client-side path lands on HOME.
 export function App() {
-  const features = useFeatureSettings()
   // The desktop app has no browser bar to leave the review by: there it keeps the side nav.
   const desktop = isDesktop()
   const AccountProvider = desktop ? CodexAccountProvider : Fragment
@@ -87,18 +85,7 @@ export function App() {
               <Route index element={null} />
               <Route path="run" element={null} />
             </Route>
-            <Route
-              path="/sets"
-              element={
-                features.isPending ? (
-                  <EmptyState>Loading…</EmptyState>
-                ) : features.data?.sets ? (
-                  <SetsPage />
-                ) : (
-                  <Navigate to={HOME.href} replace />
-                )
-              }
-            />
+            <Route path="/sets" element={<SetsPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/team" element={<TeamPage />} />
             <Route path="/tasks" element={<RefreshPage />} />
