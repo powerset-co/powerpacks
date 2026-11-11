@@ -22,6 +22,11 @@ export function offeredSets({ sets, local_db }: SearchScope): SearchSet[] {
   return local_db ? sets.filter((set) => !(set.is_personal && set.owned)) : sets
 }
 
+/** A set's name as the picker and the Sets page show it. */
+export function setName(set: SearchSet): string {
+  return set.is_personal && set.owned ? "Personal network" : set.name
+}
+
 /** Where a search starts with nothing picked: the local index, else the largest set. */
 export function defaultScope(scope: SearchScope): ChatScope | null {
   if (scope.local_db) return { local_db: scope.local_db }

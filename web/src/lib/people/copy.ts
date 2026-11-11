@@ -202,50 +202,29 @@ export function sharedToast(count: number): string {
   return `Shared ${plural(count, "person")}.`
 }
 
-/** The Sets page (pages/sets). */
-/** Heartbeats come every 30 s; three missed and the member reads as last seen. */
+/** The Sets page (pages/sets), and a member's relay presence for the Team page. Heartbeats come every 30 s; three missed and the member reads as last seen. */
 const CONNECTED_SECONDS = 90
 const SETS_CONNECTED = "Connected"
 
 export const SETS = {
   title: "Sets",
-  lead: "Members see each other's shared networks.",
+  lead: "Manage your network sets and invite collaborators",
+  noDescription: "No description",
+  uniqueContacts: (count: number) => `${count.toLocaleString()} unique contacts`,
+  userHead: "User",
+  contactsHead: "Contacts",
+  joinedHead: "Joined",
   choose: "Choose a set",
-  personalNote: "Your shared network, on this machine.",
-  sharedWith: "Your sets",
-  none: "Create one, or accept an invite from a teammate.",
   noneTitle: "No sets yet",
   loading: "Loading sets…",
-  cancel: "Cancel",
-  leave: "Leave set",
-  confirmLeave: (name: string) => `Leave “${name}”? Its owner is told.`,
-  youOwn: "You own this set",
-  youJoined: "You joined this set",
-  memberHead: "Member",
+  localIndex: "Local index",
+  thisMac: "This Mac",
+  localNote: "Your own network, searched on this Mac.",
   roleHead: "Role",
-  statusHead: "Status",
-  sharesHead: "Shares",
-  neverSeen: "Not seen yet",
-  newSet: "New set",
-  namePlaceholder: "Set name",
-  create: "Create",
-  delete: "Delete set",
-  keep: "Keep",
-  signInNeeded: "Sign in to Powerset to see your sets.",
-  signIn: "Sign in",
-  members: (count: number) => plural(count, "member"),
-  people: (count: number) => plural(count, "person"),
-  confirmDelete: (name: string) => `Delete “${name}” for everyone in it?`,
-  invites: "Invites",
-  invitedYou: (from: string, email: string) =>
-    email ? `${from} (${email}) invited you` : `${from} invited you`,
-  accept: "Accept",
-  decline: "Decline",
   invite: "Invite",
-  invitePlaceholder: "Invite by email",
-  invited: "Invited",
-  connected: SETS_CONNECTED,
-  declined: "Declined",
+  inviteLink: "Send them this link:",
+  members: (count: number) => plural(count, "member"),
+  neverSeen: "Not seen yet",
   seen: (value: string, now: number = Date.now()) => {
     const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))
     if (seconds < CONNECTED_SECONDS) return SETS_CONNECTED

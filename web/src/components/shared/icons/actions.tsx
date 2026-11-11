@@ -54,6 +54,16 @@ export function CopyIcon(props: IconProps) {
   )
 }
 
+/** A link: two chain loops. */
+export function LinkIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </svg>
+  )
+}
+
 /** A done mark, for a copy that landed. */
 export function CheckIcon(props: IconProps) {
   return (

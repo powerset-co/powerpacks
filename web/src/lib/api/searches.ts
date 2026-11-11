@@ -2,7 +2,14 @@
 
 import { body, failure } from "@/lib/api/http"
 import { refusal } from "@/lib/api/sets"
-import type { CatalogPayload, SearchRunPayload, SearchScope, Tagged, TagsPayload } from "@/types/searches"
+import type {
+  CatalogPayload,
+  SearchRunPayload,
+  SearchScope,
+  SetDetail,
+  Tagged,
+  TagsPayload,
+} from "@/types/searches"
 
 const API = "/searches"
 const SCOPE = "/api/search/scope"
@@ -106,6 +113,24 @@ export async function sendAsk(runId: string, question: string): Promise<{ status
   })
   if (!response.ok) throw await refusal(response, "Couldn't send the ask.")
   return body(response)
+}
+
+/** One Powerset set and its members, as the Powerset API shows it. */
+export async function fetchSetDetail(setId: string): Promise<SetDetail> {
+  const response = await fetch(`/api/search/set?set_id=${encodeURIComponent(setId)}`)
+  if (!response.ok) throw await failure(response, "Couldn't load this set.")
+  return body<SetDetail>(response)
+}
+
+/** A new invite link to a set you own, to send to whoever should join. */
+export async function inviteToSet(setId: string): Promise<{ invite_url: string }> {
+  const response = await fetch("/api/search/set/invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ set_id: setId }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't send the invite.")
+  return body<{ invite_url: string }>(response)
 }
 
 /** Where chat can search: the signed-in user's Powerset sets, and this Mac's local index if any. */
