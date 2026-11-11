@@ -5,7 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type * as AgentStore from "@/lib/agent/store"
 import { EMPTY_AGENT, type AgentState } from "@/lib/agent/store"
 import type { FeedbackOutcome } from "@/lib/searches/feedback"
-import { QUICK_RUN, RANKED_NAMES, RUN, RUN_ID, STEPPED_PARENT, STEPPED_RUN } from "@/testing/searches-fixture"
+import {
+  ORIGINAL_STEP_RUN,
+  QUICK_RUN,
+  RANKED_NAMES,
+  RUN,
+  RUN_ID,
+  STEPPED_PARENT,
+  STEPPED_RUN,
+} from "@/testing/searches-fixture"
 import type { Entry } from "@/types/agent"
 import type { FeedbackRecord, SearchRunPayload, Tagged } from "@/types/searches"
 
@@ -223,6 +231,15 @@ describe("RunView", () => {
       within(drawer() ?? document.body).getByText("Backend depth:").parentElement?.textContent,
     ).toContain("Built the API layer.")
     expect(within(drawer() ?? document.body).getByText("90%")).toBeTruthy()
+  })
+
+  it("shows the traits alone on the original step, no pond score and no reasoning", () => {
+    renderRun(null, NOT_STOPPED, ORIGINAL_STEP_RUN)
+    const jordan = row("p-jordan")
+    expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["90%"])
+    expect(document.querySelector("[data-person-id='p-jordan'] .result-score")).toBeNull()
+    expect(jordan.queryByText("Leads the current reliability platform.")).toBeNull()
+    expect(jordan.getByText("Backend depth:")).toBeTruthy()
   })
 
   it("gives a plain run's rows the feedback flag, no Score, no Labels and no review bar", () => {
@@ -725,5 +742,8 @@ describe("RunView, a refined run", () => {
     expect(scoreCell("p-morgan")).toBe("60%▼ 10")
     expect(scoreCell("p-casey")).toBe("55%")
     expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
+    // A refined step's row carries the refine's reasoning for the person, not the traits.
+    expect(row("p-jordan").getByText("Leads the current reliability platform.")).toBeTruthy()
+    expect(row("p-jordan").queryByText("Backend depth:")).toBeNull()
   })
 })

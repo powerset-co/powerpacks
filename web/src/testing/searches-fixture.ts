@@ -391,6 +391,8 @@ export const STEPPED_RUN = steppedRun("s3", [
   { ...MORGAN, final_score: 0.6 },
   { ...CASEY, final_score: 0.55 },
 ])
+/** The same quick search on its original step: every saved quick search has at least s1. */
+export const ORIGINAL_STEP_RUN = steppedRun("s1", [JORDAN, MORGAN])
 export const STEPPED_PARENT = steppedRun("s3", [
   { ...JORDAN, final_score: 0.8 },
   { ...MORGAN, final_score: 0.7 },

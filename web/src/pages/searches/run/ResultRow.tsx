@@ -123,8 +123,9 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
 // rendering.py _overall_indicator. A ranked row shows the one score the list is ranked by (the
 // judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
-// the cloud app's row shows: each trait's share with its name and reason, nothing else. The
-// pond's own 0–1 only orders the list, and the overall reasoning is the drawer's.
+// the cloud app's row shows: each trait's share with its name and reason, nothing else; the
+// pond's own 0–1 only orders the list. A refined step's row shows that step's score with its
+// change from the step before, and the refine's own reasoning for the person.
 interface ScoreProps {
   result: Result
   ranked: boolean
@@ -137,11 +138,15 @@ function Score({ result, ranked, labels, parentScores }: ScoreProps) {
     return (
       <div className="result-overall">
         {parentScores ? (
-          <ScoreCell result={result} ranked={false} parentScore={parentScores.get(result.row.person_id)} />
-        ) : null}
-        <div className="result-reason">
-          <TraitList traits={result.row.traits} />
-        </div>
+          <>
+            <ScoreCell result={result} ranked={false} parentScore={parentScores.get(result.row.person_id)} />
+            <div className="result-reason">{result.reason ? <p>{result.reason}</p> : null}</div>
+          </>
+        ) : (
+          <div className="result-reason">
+            <TraitList traits={result.row.traits} />
+          </div>
+        )}
       </div>
     )
   }
