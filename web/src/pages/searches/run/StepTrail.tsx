@@ -18,7 +18,7 @@ interface StepTrailProps {
 /**
  * How the results got here: the search, then each refinement up to the one showing, `+` between.
  * An earlier tag goes back to its step; the ✕ on the last goes back to the one before it. A filter
- * step is dashed and reads "only …". A run without steps shows none.
+ * step is dashed. A run without steps shows none.
  */
 export function StepTrail({ search, onGoBack, disabled }: StepTrailProps) {
   const trail = stepTrail(search)

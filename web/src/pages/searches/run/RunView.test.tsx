@@ -623,18 +623,18 @@ describe("RunView, a refined run", () => {
 
   it("shows the search and each refinement under the title, the last with ✕, beside the fold", () => {
     renderStepped()
-    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "only still at a startup✕"])
+    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "still at a startup✕"])
     expect(screen.getByRole("navigation", { name: "Refinements" }).textContent).toBe(
-      `${TITLE}+built training infra at scale+only still at a startup✕`,
+      `${TITLE}+built training infra at scale+still at a startup✕`,
     )
     // Earlier tags are buttons; the last is a tag with its ✕ back to the one before.
     expect(trail().getByRole("button", { name: TITLE })).toBeTruthy()
     expect(trail().getByRole("button", { name: "built training infra at scale" })).toBeTruthy()
-    expect(trail().queryByRole("button", { name: /only still at a startup/ })).toBeNull()
+    expect(trail().queryByRole("button", { name: /still at a startup/ })).toBeNull()
     expect(
       trail().getByRole("button", { name: "Go back to built training infra at scale" }).textContent,
     ).toBe("✕")
-    expect(document.querySelector(".run-trail-tag.only")?.textContent).toBe("only still at a startup✕")
+    expect(document.querySelector(".run-trail-tag.only")?.textContent).toBe("still at a startup✕")
     // Under the title row, outside the fold, which still opens the traits and filters.
     const head = document.querySelector("[data-run-head]")
     expect(head?.querySelector(".run-head-title + [data-step-trail]")).toBeTruthy()
@@ -648,7 +648,7 @@ describe("RunView, a refined run", () => {
   it("shows plain tags where there is no chat (the browser's Searches page)", () => {
     vi.stubGlobal("__TAURI__", undefined)
     renderStepped()
-    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "only still at a startup"])
+    expect(tagTexts()).toEqual([TITLE, "built training infra at scale", "still at a startup"])
     expect(trail().queryByRole("button")).toBeNull()
   })
 

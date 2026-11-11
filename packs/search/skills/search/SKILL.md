@@ -400,8 +400,9 @@ person-data errors still use `$feedback`.
 
 Narrowing, re-ordering or re-scoring the people already found is `refine.md`: a hard criterion
 (age, place, school, company, title, seniority, stage, dates, counts) is free SQL over the rows
-showing, `rerank --criteria '<the user's words>' --sql '<SELECT>'`; a qualitative one is the judge,
-`rerank --criteria '<the user's words>'`. Load `refine.md` before either; it has the tables, the
+showing, `rerank --criteria '<label>' --sql '<SELECT>'`; a qualitative one is the judge,
+`rerank --criteria '<label>'`. The label names the people kept in a few words ("people under 40",
+"Stanford grads"), never the user's sentence. Load `refine.md` before either; it has the tables, the
 values as the data spells them, and the examples.
 
 ## Execution Rules
