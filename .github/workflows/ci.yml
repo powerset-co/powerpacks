@@ -58,6 +58,9 @@ jobs:
         run: bin/setup-python
       - name: Lint baseline
         run: scripts/lint-powerpacks
+      # The relay test talks to a local NATS with JetStream; without one it skips itself.
+      - name: Local NATS with JetStream
+        run: docker run -d --rm -p 4222:4222 nats:2.10 -js
       - name: Offline unit tests
         run: scripts/test-powerpacks
 
