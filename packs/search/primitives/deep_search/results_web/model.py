@@ -839,7 +839,7 @@ def update_catalog_pins(root: Path, run_id: str, tagged: dict[str, Any]) -> None
 
 
 def original_quick_step(payload: dict[str, Any]) -> dict[str, Any]:
-    return {"id": "s1", "parent": None, "criteria": None, "query_type": None,
+    return {"id": "s1", "parent": None, "criteria": None, "sql": None, "query_type": None,
             "shown": payload["summary"]["pond_chain"][0]["result_count"], "scored": None,
             "jsonl": payload["iterations"][0]["arm"]["artifacts"]["jsonl"],
             "cost_usd": 0, "created_at": payload["created_at"]}

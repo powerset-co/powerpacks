@@ -135,7 +135,7 @@ class SearchJsonContractTest(unittest.TestCase):
                                  created_at="2026-11-09", jsonl=str(original), profiles_path="", status="completed")
         path = self.root / "quick/results.json"
         saved = json.loads(path.read_text())
-        saved["steps"].append(dict(id="s2", parent="s1", criteria="only startup people", query_type="filter",
+        saved["steps"].append(dict(id="s2", parent="s1", criteria="only startup people", sql=None, query_type="filter",
                                    shown=1, scored=2, cost_usd=0.01, created_at="2026-11-09", jsonl=str(refined)))
         model.select_quick_step(saved, saved["steps"][1])
         path.write_text(json.dumps(saved))
