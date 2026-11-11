@@ -708,3 +708,24 @@ section.review-sections {
     order: 1;
   }
 }
+
+/* Very compact (a chat beside a narrow pane): three rows, name, then role, then the sources. */
+@container run (max-width: 560px) {
+  .result-who {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 6px;
+  }
+  .result-name {
+    display: contents;
+  }
+  .result-place {
+    order: 1;
+    flex-basis: 100%;
+  }
+  .result-who .result-name > .result-network {
+    order: 2;
+    margin: 3px 0 0;
+  }
+}
