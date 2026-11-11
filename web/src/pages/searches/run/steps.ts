@@ -25,10 +25,10 @@ export function isFilter(step: SearchStep): boolean {
   return step.query_type === "filter"
 }
 
-/** What a step is called on screen: the search's title for s1, "only …" for a filter, else the criteria. */
+/** What a step is called on screen: the search's title for s1, else the step's criteria, which the
+ *  agent writes as the name of the people kept ("people under 40"). */
 export function stepLabel(title: string, step: SearchStep): string {
-  if (step.criteria === null) return title
-  return isFilter(step) ? `only ${step.criteria}` : step.criteria
+  return step.criteria ?? title
 }
 
 // Shell-style: an apostrophe becomes '"'"'.
