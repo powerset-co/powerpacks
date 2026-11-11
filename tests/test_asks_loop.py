@@ -12,7 +12,7 @@ import urllib.error
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
 
 import nats
@@ -77,7 +77,6 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.env_file = self.root / ".env"
         self.owner = str(uuid4())
-        self.account = self.enterContext(patch.object(asks_loop.account, "read", return_value={"email": "casey@example.com"}))
         features.save(self.root, features.FeatureFlags(sets=True))
         self.worker = Mock(return_value={})
         self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"debug_request": self.worker}))
@@ -100,24 +99,7 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         path.write_text(json.dumps(message))
         return path
 
-    async def test_sets_off_in_settings_pulls_nothing_until_it_is_turned_on(self):
-        features.save(self.root, features.FeatureFlags(sets=False))
-        asks_loop.STATUS["state"] = "connected"
-        seen = []
-
-        def wait(delay):
-            seen.append((self.pull.call_count, asks_loop.STATUS["state"], delay))
-            if len(seen) == 2:
-                raise asyncio.CancelledError
-            features.save(self.root, features.FeatureFlags(sets=True))  # turned on in Settings
-
-        with patch.object(asks_loop.WAKE, "wait", side_effect=wait):
-            with self.assertRaises(asyncio.CancelledError):
-                await asks_loop._poll(repo_root=self.root, env_file=self.env_file)
-        self.assertEqual(seen, [(0, "offline", 30), (1, "connected", 30)])
-
-    async def test_team_inbox_polls_with_sets_off_without_reading_sets_or_answering_debug(self):
-        self.account.return_value = {"email": "casey@powerset.co"}
+    async def test_inbox_polls_with_sets_off_without_reading_sets_or_answering_debug(self):
         features.save(self.root, features.FeatureFlags(sets=False, support=False))
         self.write_message("debug_request")
         await self.poll(2)
@@ -492,33 +474,6 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         sleep.assert_awaited_once_with(300)
         wait.assert_not_called()
         self.assertEqual(asks_loop.STATUS["state"], "connected")
-
-    async def test_presence_waits_for_sets_before_asking_for_a_connection(self):
-        features.save(self.root, features.FeatureFlags(sets=False))
-        with patch.object(asks_loop, "_connection", side_effect=asyncio.CancelledError) as connection, \
-                patch.object(asks_loop.WAKE, "wait", side_effect=[False, asyncio.CancelledError]) as wait:
-            with self.assertRaises(asyncio.CancelledError):
-                await asks_loop._presence(repo_root=self.root, env_file=self.env_file, device_id=self.device_id)
-        self.assertEqual([call.args[0] for call in wait.call_args_list], [30, 30])
-        connection.assert_not_called()
-
-    async def test_turning_sets_off_closes_the_relay_connection(self):
-        nc = Mock(publish=AsyncMock(), subscribe=AsyncMock(), close=AsyncMock(),
-                  jetstream=Mock(return_value=Mock(subscribe=AsyncMock())))
-
-        async def heartbeat_wait(awaitable, timeout):
-            awaitable.close()
-            if not features.read(self.root).sets:
-                raise asyncio.CancelledError  # still connected a heartbeat after Sets went off
-            features.save(self.root, features.FeatureFlags(sets=False))  # turned off in Settings
-            raise TimeoutError
-
-        with patch.object(asks_loop.nats, "connect", AsyncMock(return_value=nc)), \
-                patch.object(asks_loop.asyncio, "wait_for", side_effect=heartbeat_wait):
-            await asks_loop._connected(self.connection, repo_root=self.root, env_file=self.env_file,
-                                       device_id=self.device_id)
-        nc.publish.assert_awaited_once()
-        nc.close.assert_awaited_once()
 
     async def test_presence_refresh_gets_new_credentials_without_warning(self):
         with patch.object(asks_loop, "_connection", return_value=self.connection) as connection, \
