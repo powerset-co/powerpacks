@@ -18,9 +18,8 @@ export interface RowContext {
   rubric: Ratings["rubric"]
   tags: SearchTags
   queued: ReadonlyMap<string, QueuedScore>
-  // A refined run's scores on the step before the one showing, by person (empty on the search
-  // itself); null for a run without steps. Its rows show their score with the change.
-  parentScores: ReadonlyMap<string, number> | null
+  // The step showing is a refinement: its rows show the step's score and reasoning, not the traits.
+  refined: boolean
   submit: Feedback["submit"]
   onSaved: (record: FeedbackRecord) => void
   onToast: (toast: ToastMessage) => void
