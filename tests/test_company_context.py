@@ -113,6 +113,19 @@ class CompanyContextTests(unittest.TestCase):
 
         self.assertEqual(ref["slug"], "")
 
+    def test_live_lookup_without_an_explicit_key_uses_the_signed_in_gateway_token(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, \
+                mock.patch("packs.shared.linkedin_api.auth.gateway_token", return_value="gateway-token"), \
+                mock.patch.object(company_context.rapidapi, "fetch_company_details_by_slug",
+                                  return_value={"data": {"name": "Lovable", "universalName": "lovable",
+                                                         "website": "https://lovable.dev"}}) as fetch:
+            contexts, stats = company_context.resolve_company_contexts(
+                [{"name": "Lovable", "slug": "lovable", "company_id": ""}], cache_dir=Path(raw))
+
+        self.assertEqual(fetch.call_args.kwargs["api_key"], "gateway-token")
+        self.assertEqual(stats["live_lookups"], 1)
+        self.assertEqual(contexts[0]["name"], "Lovable")
+
     def test_known_domain_rejects_same_name_company_on_another_domain(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             cache = Path(raw)
