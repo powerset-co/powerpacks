@@ -345,13 +345,23 @@ async def company_rows_for_names(
     return rows
 
 
+# The directory's orders within a match tier: `sort` picks the leading column, `direction` its way.
+DIRECTORY_ORDERS = {
+    "people": "coalesce(people_count, 0) {d}, headcount {d} NULLS LAST, company_name, id",
+    "headcount": "headcount {d} NULLS LAST, coalesce(people_count, 0) {d}, company_name, id",
+    "name": "company_name {d}, id",
+}
+
+
 def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None, store: LocalDuckDBSearchStore,
-                          offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES) -> list[dict[str, Any]]:
-    """Match directory tiers, then order by distinct local people, company headcount and name.
+                          offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES,
+                          sort: str = "people", direction: str = "desc") -> list[dict[str, Any]]:
+    """Match directory tiers, then order by `sort` (distinct local people, company headcount or name).
 
     An empty name matches every company (tier 1). top_k None returns every match from `offset`;
     `include_attributes=[]` returns only ids (a cheap count of the matches)."""
     query = name.strip().lower()
+    order = DIRECTORY_ORDERS[sort].format(d={"asc": "ASC", "desc": "DESC"}[direction])
     return store.query_rows_sql(
         "companies",
         r"""WITH ranked AS (
@@ -371,7 +381,7 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None
             FROM local_people_positions GROUP BY company_id
         ) people ON people.company_id = ranked.id
         WHERE tier < 4
-        ORDER BY tier, coalesce(people_count, 0) DESC, headcount DESC NULLS LAST, company_name, id
+        ORDER BY tier, """ + order + r"""
         LIMIT ? OFFSET ?""",
         [query, r"(^|\W)" + re.escape(query), top_k, offset],
         filters=filters, include_attributes=include_attributes,

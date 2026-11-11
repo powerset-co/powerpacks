@@ -5,10 +5,15 @@
 /** "local", or a Powerset set id. */
 export type CompanyScope = string
 
+/** The list's order: most local people, biggest headcount, or name. */
+export type CompanySort = "people" | "headcount" | "name"
+
 export interface CompanySearchRequest {
   scope: CompanyScope
   id?: string
   name?: string
+  sort?: CompanySort
+  dir?: "asc" | "desc"
   include_people?: boolean
   position_type: "current" | "all"
   people_limit?: number

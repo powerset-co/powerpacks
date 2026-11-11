@@ -97,10 +97,12 @@ function setup() {
   return { fetch, requests }
 }
 
-const listRequest = (scope: string, name: string) => ({
+const listRequest = (scope: string, name: string, sort = "people", dir = "desc") => ({
   scope,
   name,
   position_type: "all",
+  sort,
+  dir,
   limit: 100,
   offset: 0,
 })
@@ -124,6 +126,20 @@ it("asks for the typed name once typing settles", async () => {
   })
   expect(requests()).toEqual([listRequest("local", "")])
   await waitFor(() => expect(requests()).toContainEqual(listRequest("local", "strpie")))
+})
+
+it("a header click sorts the list by it, a second click flips it", async () => {
+  const { requests } = setup()
+  const results = await screen.findByRole("region", { name: "Companies" })
+  const headcount = within(results).getByRole("columnheader", { name: "Headcount" })
+  expect(within(results).getByRole("columnheader", { name: "People" }).getAttribute("aria-sort")).toBe("descending")
+  fireEvent.click(within(headcount).getByRole("button"))
+  await waitFor(() => expect(requests()).toContainEqual(listRequest("local", "", "headcount", "desc")))
+  expect(headcount.getAttribute("aria-sort")).toBe("descending")
+  fireEvent.click(within(headcount).getByRole("button"))
+  await waitFor(() => expect(requests()).toContainEqual(listRequest("local", "", "headcount", "asc")))
+  fireEvent.click(within(within(results).getByRole("columnheader", { name: "Company Name" })).getByRole("button"))
+  await waitFor(() => expect(requests()).toContainEqual(listRequest("local", "", "name", "asc")))
 })
 
 it("reloads the list for a new scope", async () => {
