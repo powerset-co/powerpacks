@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
-import { fetchSearchScope, fetchSetDetail, inviteToSet } from "@/lib/api/searches"
+import { createSet, deleteSet, fetchSearchScope, fetchSetDetail, inviteToSet } from "@/lib/api/searches"
 import { open, options } from "@/testing/select"
 import { SetsPage } from "./SetsPage"
 
@@ -11,6 +11,8 @@ vi.mock("@/lib/api/searches", () => ({
   fetchSearchScope: vi.fn(),
   fetchSetDetail: vi.fn(),
   inviteToSet: vi.fn(),
+  createSet: vi.fn(),
+  deleteSet: vi.fn(),
 }))
 afterEach(() => {
   cleanup()
@@ -48,7 +50,6 @@ it("shows a picked set's people, members and their shares", async () => {
   vi.mocked(fetchSetDetail).mockResolvedValue({
     id: "t-1",
     name: "Team",
-    description: null,
     role: "member",
     member_count: 2,
     person_count: 40795,
@@ -76,7 +77,6 @@ it("shows a picked set's people, members and their shares", async () => {
   expect(fetchSetDetail).toHaveBeenCalledWith("t-1")
   expect(screen.getByText("40,795 unique contacts")).toBeTruthy()
   expect(screen.getByText("2 members")).toBeTruthy()
-  expect(screen.getByText("No description")).toBeTruthy()
   expect(screen.getByText("bo@x.co")).toBeTruthy()
   expect(screen.getByText("300")).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull()
@@ -86,7 +86,6 @@ it("gives the owner an invite link to copy", async () => {
   vi.mocked(fetchSetDetail).mockResolvedValue({
     id: "t-1",
     name: "Team",
-    description: null,
     role: "owner",
     member_count: 1,
     person_count: 300,
@@ -106,4 +105,31 @@ it("gives the owner an invite link to copy", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Invite" }))
   expect(await screen.findByText("https://app.powerset.co/sets/invite/tok")).toBeTruthy()
   expect(inviteToSet).toHaveBeenCalledWith("t-1")
+})
+
+it("makes a new set from its name and asks again for your sets", async () => {
+  vi.mocked(createSet).mockResolvedValue({ id: "n-1" })
+  setup("/sets")
+  fireEvent.click(await screen.findByRole("button", { name: "New Set" }))
+  fireEvent.change(screen.getByLabelText("Set name"), { target: { value: "Friends" } })
+  fireEvent.click(screen.getByRole("button", { name: "Create" }))
+  await vi.waitFor(() => expect(fetchSearchScope).toHaveBeenCalledTimes(2))
+  expect(createSet).toHaveBeenCalledWith("Friends")
+})
+
+it("deletes a set you own after you confirm", async () => {
+  vi.mocked(fetchSetDetail).mockResolvedValue({
+    id: "t-1",
+    name: "Team",
+    role: "owner",
+    member_count: 1,
+    person_count: 300,
+    members: [],
+  })
+  vi.mocked(deleteSet).mockResolvedValue()
+  setup("/sets?set=t-1")
+  fireEvent.click(await screen.findByRole("button", { name: "Delete set" }))
+  expect(deleteSet).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button", { name: "Delete set" }))
+  await vi.waitFor(() => expect(deleteSet).toHaveBeenCalledWith("t-1"))
 })
