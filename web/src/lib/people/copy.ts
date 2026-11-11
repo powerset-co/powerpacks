@@ -202,11 +202,26 @@ export function sharedToast(count: number): string {
   return `Shared ${plural(count, "person")}.`
 }
 
-/** A member's relay presence, for the Team page. Heartbeats come every 30 s; three missed and the member reads as last seen. */
+/** The Sets page (pages/sets), and a member's relay presence for the Team page. Heartbeats come every 30 s; three missed and the member reads as last seen. */
 const CONNECTED_SECONDS = 90
 const SETS_CONNECTED = "Connected"
 
 export const SETS = {
+  title: "Sets",
+  lead: "Members see each other's shared networks.",
+  choose: "Choose a set",
+  noneTitle: "No sets yet",
+  loading: "Loading sets…",
+  localIndex: "Local index",
+  thisMac: "This Mac",
+  localNote: "Your own network, searched on this Mac.",
+  youOwn: "You own this set",
+  youJoined: "You joined this set",
+  memberHead: "Member",
+  roleHead: "Role",
+  sharesHead: "Shares",
+  members: (count: number) => plural(count, "member"),
+  people: (count: number) => plural(count, "person"),
   neverSeen: "Not seen yet",
   seen: (value: string, now: number = Date.now()) => {
     const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000))

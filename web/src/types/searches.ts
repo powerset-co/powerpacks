@@ -302,5 +302,26 @@ export interface SearchScope {
   local_db: string | null
 }
 
+/** One member of a Powerset set (GET /v2/sets/{id}). */
+export interface SetMember {
+  user_id: string
+  role: string
+  name: string | null
+  email: string | null
+  /** People this member brings to the set. */
+  person_count: number
+}
+
+/** One Powerset set with its members, for the Sets page. */
+export interface SetDetail {
+  id: string
+  name: string
+  /** Your role in it. */
+  role: string
+  member_count: number
+  person_count: number
+  members: SetMember[]
+}
+
 /** Where one chat searches, pinned at its first message: a set, or this Mac's local index. */
 export type ChatScope = { set_id: string } | { local_db: string }

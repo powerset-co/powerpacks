@@ -61,3 +61,10 @@ class SearchScopeTests(unittest.TestCase):
     def test_postgres_failure_answers_with_an_error(self) -> None:
         self.fetch_member_sets.side_effect = RuntimeError("pooler down")
         self.assertEqual(self.request(), (HTTPStatus.BAD_GATEWAY, {"error": "pooler down"}))
+
+    def test_one_set_comes_from_the_powerset_api(self) -> None:
+        detail = {"id": "t-1", "name": "Powerset", "role": "member", "members": []}
+        with patch("packs.shared.web.search_scope.set_detail", return_value=detail) as read:
+            with urllib.request.urlopen(self.url.replace("/scope", "/set?set_id=t-1"), timeout=5) as response:
+                self.assertEqual(json.loads(response.read()), detail)
+        read.assert_called_with(self.root, "t-1")

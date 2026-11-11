@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-11: GET /api/search/set?set_id=: one set and its members from the Powerset API (search_scope.py).
 - 2026-11-03: run the native daily refresh's clock (refresh/daily.py) with the server.
 - 2026-11-02: mount the full server at start, so the first People open after launch does not wait ~1 s for its imports.
 - 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
@@ -339,6 +340,15 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     self._json(search_scope.read(root))
                 except Exception as error:
                     logging.getLogger(__name__).exception("Reading search scope failed")
+                    self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+                return
+            if parsed.path == "/api/search/set":
+                _load_project_packages(root)
+                set_id = urllib.parse.parse_qs(parsed.query).get("set_id", [""])[0]
+                try:
+                    self._json(search_scope.set_detail(root, set_id))
+                except Exception as error:
+                    logging.getLogger(__name__).exception("Reading set %s failed", set_id)
                     self._json({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
                 return
             if parsed.path == "/api/status":
