@@ -107,7 +107,7 @@ describe("pondSections", () => {
 })
 
 describe("pondRows", () => {
-  it("orders one pond by its own score", () => {
+  it("keeps the saved order, whatever the scores say (a sort step orders by age, not score)", () => {
     const pond = search.ponds[0]
     if (!pond) throw new Error("fixture has no ponds")
     const scored = {
@@ -117,11 +117,8 @@ describe("pondRows", () => {
         final_score: [0.2, 0.9, 0.5, 0.7][index] ?? 0,
       })),
     }
-    expect(pondRows(search, scored).map((result) => result.row.name)).toEqual([
-      "Casey Delta",
-      "Riley Foxtrot",
-      "Morgan Echo",
-      "Jordan Bravo",
-    ])
+    expect(pondRows(search, scored).map((result) => result.row.name)).toEqual(
+      pond.candidates.map((row) => row.name),
+    )
   })
 })

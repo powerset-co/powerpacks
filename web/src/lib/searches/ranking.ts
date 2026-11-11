@@ -148,10 +148,11 @@ export function rankResults(search: SearchResult): Results {
   return { mode: "ranked", sections: [rankedSection(screened, byId, null, 0)] }
 }
 
-/** rendering.py _pond_table: one pond's people by their pond score, reasoning beside it. */
+/** One pond's people in the order they were saved: the search writes them by pond score, a refine
+ *  step by its own order (a sort step's, or the judge's new scores). The page never re-sorts them. */
 export function pondRows(search: SearchResult, pond: Pond): ResultRow[] {
   const byId = candidatesById(search)
-  return descending(pond.candidates, (row) => [row.final_score]).map((row) => ({
+  return pond.candidates.map((row) => ({
     key: `${pond.run_id}:${pond.pond_n}:${row.person_id}`,
     row,
     candidate: byId.get(row.person_id),
