@@ -238,6 +238,7 @@ describe("RunView", () => {
     expect(jordan.getAllByText(/%$/).map((badge) => badge.textContent)).toEqual(["90%"])
     expect(document.querySelector("[data-person-id='p-jordan'] .result-score")).toBeNull()
     expect(jordan.queryByText("Leads the current reliability platform.")).toBeNull()
+    expect(jordan.queryByText("Rerank Insight")).toBeNull()
     expect(jordan.getByText("Backend depth:")).toBeTruthy()
   })
 
@@ -728,15 +729,16 @@ describe("RunView, a refined run", () => {
     for (const button of trail().getAllByRole("button")) expect(button).toHaveProperty("disabled", true)
   })
 
-  it("shows each refined row's score and the refine's reasoning, not the traits", () => {
+  it("shows each refined row's score, the refine's insight over the traits", () => {
     renderStepped()
     const scoreCell = (personId: string) =>
       document.querySelector(`[data-person-id='${personId}'] .result-score`)?.textContent
     expect(scoreCell("p-jordan")).toBe("90%")
     expect(scoreCell("p-morgan")).toBe("60%")
     expect(scoreCell("p-casey")).toBe("55%")
+    expect(row("p-jordan").getByText("Rerank Insight")).toBeTruthy()
     expect(row("p-jordan").getByText("Leads the current reliability platform.")).toBeTruthy()
-    expect(row("p-jordan").queryByText("Backend depth:")).toBeNull()
+    expect(row("p-jordan").getByText("Backend depth:")).toBeTruthy()
     // No other step is read for the rows.
     expect(reads.filter((url) => url.includes("&step="))).toHaveLength(0)
   })
