@@ -655,10 +655,10 @@ section.review-sections {
     padding-top: 0;
   }
   /* The name's line: name and LinkedIn on the left; the tags, pin and sources at the right end.
-     The name keeps its line (ellipsis only past 60%); busy sources clip at the row's edge, and
-     their popovers hold the full list. */
+     The name keeps its line (ellipsis only past 60%); sources with no room there take a second
+     line, still at the right end. */
   .result-name {
-    flex-wrap: nowrap;
+    justify-content: flex-end;
   }
   .result-name > b {
     flex: 0 0 auto;
@@ -679,15 +679,10 @@ section.review-sections {
   }
   .result-name > .result-network {
     flex-shrink: 1;
-    flex-wrap: nowrap;
     margin-left: auto;
-    overflow: hidden;
   }
   .result-name > .result-tags + .result-network {
     margin-left: 0;
-  }
-  .result-name .result-sources {
-    flex-wrap: nowrap;
   }
   .result-name .result-network > *,
   .result-name .result-sources > * {
