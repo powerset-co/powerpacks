@@ -13,7 +13,7 @@ import { BroadcastDialog } from "../dialogs/BroadcastDialog"
 import { FeedbackStatus } from "../dialogs/FeedbackStatus"
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
-import { searchRunKey, useParentScores } from "../hooks/useSearchRun"
+import { searchRunKey } from "../hooks/useSearchRun"
 import { useSearchTags } from "../hooks/useSearchTags"
 import { ResultsToolbar } from "../toolbar/ResultsToolbar"
 import type { RowContext } from "./RowActions"
@@ -88,19 +88,19 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
     [queryClient, runId],
   )
 
-  const parentScores = useParentScores(search)
+  const refined = (search.steps.find((step) => step.id === search.current_step)?.parent ?? null) !== null
   const rowContext = useMemo<RowContext>(
     () => ({
       runId,
       rubric: ratings.rubric,
       tags,
       queued,
-      parentScores,
+      refined,
       submit: feedback.submit,
       onSaved: saved,
       onToast,
     }),
-    [runId, ratings.rubric, tags, queued, parentScores, feedback.submit, saved, onToast],
+    [runId, ratings.rubric, tags, queued, refined, feedback.submit, saved, onToast],
   )
 
   return (

@@ -95,7 +95,7 @@ export const ResultRow = memo(function ResultRow({
               <RowScore result={result} candidate={candidate} context={context} />
             </span>
           ) : null}
-          <Score result={result} ranked={ranked} labels={labels} parentScores={context.parentScores} />
+          <Score result={result} ranked={ranked} labels={labels} refined={context.refined} />
         </div>
       </div>
     </div>
@@ -124,22 +124,22 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
 // judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
 // the cloud app's row shows: each trait's share with its name and reason, nothing else; the
-// pond's own 0–1 only orders the list. A refined step's row shows that step's score with its
-// change from the step before, and the refine's own reasoning for the person.
+// pond's own 0–1 only orders the list. A refined step's row shows that step's score and the
+// refine's own reasoning for the person.
 interface ScoreProps {
   result: Result
   ranked: boolean
   labels: boolean
-  parentScores: RowContext["parentScores"]
+  refined: boolean
 }
 
-function Score({ result, ranked, labels, parentScores }: ScoreProps) {
+function Score({ result, ranked, labels, refined }: ScoreProps) {
   if (!ranked) {
     return (
       <div className="result-overall">
-        {parentScores ? (
+        {refined ? (
           <>
-            <ScoreCell result={result} ranked={false} parentScore={parentScores.get(result.row.person_id)} />
+            <ScoreCell result={result} ranked={false} />
             <div className="result-reason">{result.reason ? <p>{result.reason}</p> : null}</div>
           </>
         ) : (

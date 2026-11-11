@@ -385,7 +385,7 @@ function steppedRun(current: string, rows: PondCandidate[]): SearchRunPayload {
   }
 }
 
-// s3 (narrowed) after s2 (re-ranked): Jordan rose 10 points, Morgan fell 10, Casey has no s2 row.
+// s3 (narrowed) after s2 (re-ranked).
 export const STEPPED_RUN = steppedRun("s3", [
   { ...JORDAN, final_score: 0.9 },
   { ...MORGAN, final_score: 0.6 },
@@ -393,10 +393,6 @@ export const STEPPED_RUN = steppedRun("s3", [
 ])
 /** The same quick search on its original step: every saved quick search has at least s1. */
 export const ORIGINAL_STEP_RUN = steppedRun("s1", [JORDAN, MORGAN])
-export const STEPPED_PARENT = steppedRun("s3", [
-  { ...JORDAN, final_score: 0.8 },
-  { ...MORGAN, final_score: 0.7 },
-])
 
 // The documented order: qualification scores first, then ratings; overall, then the screen score.
 export const RANKED_NAMES = [

@@ -11,7 +11,6 @@ import {
   RANKED_NAMES,
   RUN,
   RUN_ID,
-  STEPPED_PARENT,
   STEPPED_RUN,
 } from "@/testing/searches-fixture"
 import type { Entry } from "@/types/agent"
@@ -587,14 +586,13 @@ describe("RunView, a refined run", () => {
     chat.runCommand.mockReset().mockResolvedValue(true)
     chat.send.mockReset().mockResolvedValue(undefined)
     vi.stubGlobal("__TAURI__", {})
-    // search.json answers the current step, or the step asked for; tags answer none.
+    // search.json answers the current step; tags answer none.
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
         if (url.includes("/api/search.json")) {
           reads.push(url)
-          const payload = url.includes("&step=s2") ? STEPPED_PARENT : STEPPED_RUN
-          return Promise.resolve(new Response(JSON.stringify(payload)))
+          return Promise.resolve(new Response(JSON.stringify(STEPPED_RUN)))
         }
         return Promise.resolve(new Response(JSON.stringify({ tagged: null })))
       }),
@@ -673,7 +671,7 @@ describe("RunView, a refined run", () => {
     await waitFor(() => expect(chat.runCommand).toHaveBeenCalledTimes(2))
     expect(chat.send).not.toHaveBeenCalled()
 
-    // The command's item finishing reads the run once (the parent step stays cached).
+    // The command's item finishing reads the run once.
     const before = reads.filter((url) => !url.includes("&step=")).length
     const command: Entry = {
       kind: "command",
@@ -709,16 +707,14 @@ describe("RunView, a refined run", () => {
 
   it("reads the run once when its card finishes, but not when it stays completed", async () => {
     const rerenderStatus = renderStepped("running")
-    await waitFor(() => expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1))
-    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(0)
+    expect(reads).toHaveLength(0)
     rerenderStatus("completed")
-    await waitFor(() => expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1))
+    await waitFor(() => expect(reads).toHaveLength(1))
     await act(async () => {
       rerenderStatus("completed")
       await Promise.resolve()
     })
-    expect(reads.filter((url) => !url.includes("&step="))).toHaveLength(1)
-    expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
+    expect(reads).toHaveLength(1)
   })
 
   it("holds going back while the run or a turn is running", () => {
@@ -732,18 +728,16 @@ describe("RunView, a refined run", () => {
     for (const button of trail().getAllByRole("button")) expect(button).toHaveProperty("disabled", true)
   })
 
-  it("shows each score's change against the step before; a person new to this step shows none", async () => {
+  it("shows each refined row's score and the refine's reasoning, not the traits", () => {
     renderStepped()
-    await waitFor(() => expect(row("p-jordan").getByText("▲ 10")).toBeTruthy())
-    expect(row("p-morgan").getByText("▼ 10")).toBeTruthy()
     const scoreCell = (personId: string) =>
       document.querySelector(`[data-person-id='${personId}'] .result-score`)?.textContent
-    expect(scoreCell("p-jordan")).toBe("90%▲ 10")
-    expect(scoreCell("p-morgan")).toBe("60%▼ 10")
+    expect(scoreCell("p-jordan")).toBe("90%")
+    expect(scoreCell("p-morgan")).toBe("60%")
     expect(scoreCell("p-casey")).toBe("55%")
-    expect(reads.filter((url) => url.endsWith("&step=s2"))).toHaveLength(1)
-    // A refined step's row carries the refine's reasoning for the person, not the traits.
     expect(row("p-jordan").getByText("Leads the current reliability platform.")).toBeTruthy()
     expect(row("p-jordan").queryByText("Backend depth:")).toBeNull()
+    // No other step is read for the rows.
+    expect(reads.filter((url) => url.includes("&step="))).toHaveLength(0)
   })
 })
