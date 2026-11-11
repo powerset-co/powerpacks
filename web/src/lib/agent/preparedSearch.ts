@@ -174,6 +174,7 @@ export function refineStep(entry: Entry): (Omit<SearchStep, "created_at"> & { ru
     id: step.id,
     parent: typeof step.parent === "string" ? step.parent : null,
     criteria: typeof step.criteria === "string" ? step.criteria : null,
+    sql: typeof step.sql === "string" ? step.sql : null,
     query_type: typeof step.query_type === "string" ? step.query_type : null,
     shown: step.shown,
     scored: typeof step.scored === "number" ? step.scored : null,

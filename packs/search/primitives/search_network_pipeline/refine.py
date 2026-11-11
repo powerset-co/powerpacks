@@ -209,7 +209,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                             prices = load_prices()
                             costs = [row_cost_usd(json.loads(line), prices) or 0 for line in handle if line.strip()]
                     jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
-                    step = dict(id=step_id, parent=parent, criteria=criteria, query_type=query_type, shown=len(kept),
+                    step = dict(id=step_id, parent=parent, criteria=criteria, sql=None, query_type=query_type, shown=len(kept),
                                 scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=sum(costs), created_at=now_iso())
                     steps.append(step)
                 except BaseException:
