@@ -339,7 +339,8 @@ async def company_rows_for_names(
     store = local_backend.local_store()
     try:
         for name in names:
-            rows.extend(await asyncio.to_thread(name_directory_lookup, name, filters, top_k=top_k, store=store))
+            found, _ = await asyncio.to_thread(name_directory_lookup, name, filters, top_k=top_k, store=store)
+            rows.extend(found)
     finally:
         store.conn.close()
     return rows
@@ -347,45 +348,53 @@ async def company_rows_for_names(
 
 # The directory's orders within a match tier: `sort` picks the leading column, `direction` its way.
 DIRECTORY_ORDERS = {
-    "people": "coalesce(people_count, 0) {d}, headcount {d} NULLS LAST, company_name, id",
-    "headcount": "headcount {d} NULLS LAST, coalesce(people_count, 0) {d}, company_name, id",
+    "people": "people_count {d}, headcount {d} NULLS LAST, company_name, id",
+    "headcount": "headcount {d} NULLS LAST, people_count {d}, company_name, id",
     "name": "company_name {d}, id",
 }
 
 
 def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None, store: LocalDuckDBSearchStore,
                           offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES,
-                          sort: str = "people", direction: str = "desc") -> list[dict[str, Any]]:
+                          sort: str = "people", direction: str = "desc") -> tuple[list[dict[str, Any]], int]:
     """Match directory tiers, then order by `sort` (distinct local people, company headcount or name).
 
-    An empty name matches every company (tier 1). top_k None returns every match from `offset`;
-    `include_attributes=[]` returns only ids (a cheap count of the matches)."""
+    Two narrow reads: the tiers and the order run over ids, names, domains and headcounts alone,
+    with `total` counting every match, and the page's attributes come by id afterwards; the
+    vectors and long text never leave disk for the rows not shown. An empty name matches every
+    company (tier 1). top_k None returns every match from `offset`. Returns the page and the total."""
     query = name.strip().lower()
     order = DIRECTORY_ORDERS[sort].format(d={"asc": "ASC", "desc": "DESC"}[direction])
-    return store.query_rows_sql(
+    page = store.query_rows_sql(
         "companies",
-        r"""WITH ranked AS (
-            SELECT filtered.*, CASE
-                WHEN q <> '' AND (lower(company_name) = q OR lower(website_domain) = q
-                    OR split_part(lower(website_domain), '.', 1) = q) THEN 0
-                WHEN starts_with(lower(company_name), q) OR starts_with(lower(website_domain), q) THEN 1
-                WHEN regexp_matches(lower(company_name), word_prefix) THEN 2
-                WHEN jaro_winkler_similarity(lower(company_name), q) >= 0.94
-                    OR jaro_winkler_similarity(split_part(lower(website_domain), '.', 1), q) >= 0.94 THEN 3
-                ELSE 4 END AS tier
-            FROM filtered CROSS JOIN (SELECT ? AS q, ? AS word_prefix)
-        )
-        SELECT ranked.* FROM ranked
-        LEFT JOIN (
+        r"""WITH people AS (
             SELECT company_id, count(DISTINCT person_id) AS people_count
             FROM local_people_positions GROUP BY company_id
-        ) people ON people.company_id = ranked.id
-        WHERE tier < 4
+        ), ranked AS (
+            SELECT filtered.*, coalesce(people.people_count, 0) AS people_count, CASE
+                WHEN ? <> '' AND (lower(company_name) = ? OR lower(website_domain) = ?
+                    OR split_part(lower(website_domain), '.', 1) = ?) THEN 0
+                WHEN starts_with(lower(company_name), ?) OR starts_with(lower(website_domain), ?) THEN 1
+                WHEN regexp_matches(lower(company_name), ?) THEN 2
+                WHEN jaro_winkler_similarity(lower(company_name), ?) >= 0.94
+                    OR jaro_winkler_similarity(split_part(lower(website_domain), '.', 1), ?) >= 0.94 THEN 3
+                ELSE 4 END AS tier
+            FROM filtered
+            LEFT JOIN people ON people.company_id = filtered.id
+        )
+        SELECT *, count(*) OVER () AS total FROM ranked WHERE tier < 4
         ORDER BY tier, """ + order + r"""
         LIMIT ? OFFSET ?""",
-        [query, r"(^|\W)" + re.escape(query), top_k, offset],
-        filters=filters, include_attributes=include_attributes,
+        # The query and the pattern bind as constants, each where it is used: a CROSS JOIN'd value is a
+        # column, and a regex given as a column is compiled again for every row (120 ms at 50k).
+        [*[query] * 6, r"(^|\W)" + re.escape(query), query, query, top_k, offset],
+        filters=filters, include_attributes=["company_name", "headcount", "website_domain"], carry=("total",),
     )
+    if not page:
+        return [], 0
+    ids = [row["id"] for row in page]
+    by_id = {row["id"]: row for row in store.filter_only_rows_for_namespace("companies", ("id", "In", ids), include_attributes)}
+    return [by_id[company_id] for company_id in ids], int(page[0]["total"])
 
 
 def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
