@@ -241,6 +241,29 @@
   gap: 5px;
   min-width: 0;
 }
+/* The cloud app's Rerank Insight card: the refine's reasoning for the person, over the traits. */
+.result-insight {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+  border-radius: var(--radius-m);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.result-insight-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary);
+}
+.result-reason .result-insight p {
+  display: block;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--foreground);
+}
 /* A ranked row's reasoning is cut to two lines; the drawer has the rest. */
 .result-reason p {
   display: -webkit-box;
