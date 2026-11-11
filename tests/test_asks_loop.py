@@ -433,6 +433,8 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
             await js.stream_info("asks")
         except NotFoundError:
             await js.add_stream(name="asks", subjects=["set.>", "op.>"])
+        except (nats.errors.NoRespondersError, nats.errors.TimeoutError):
+            self.skipTest("Local NATS has no JetStream (start it with -js)")
         presence = await nc.subscribe(self.subjects["presence"])
         await nc.flush()
         first_pull, next_pull = threading.Event(), threading.Event()
