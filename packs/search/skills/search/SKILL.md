@@ -398,9 +398,26 @@ person-data errors still use `$feedback`.
 
 ## Refine a finished search
 
-For narrowing or re-ordering the people already found, run
-`rerank --run-dir .powerpacks/search/<run_id> --criteria '<the user's words>'`
-in the background, using the `search_network_pipeline.py` command below, then reply with one line.
+Two tools narrow or re-order the people already found, both through
+`rerank --run-dir .powerpacks/search/<run_id>` with the `search_network_pipeline.py` command below,
+run in the background, then reply with one line.
+
+- A hard criterion (age, place, school, company, title, seniority, dates, tenure, headcount, stage,
+  followers, interactions) is SQL: `--criteria '<the user's words>' --sql '<DuckDB SELECT>'`.
+  Free and exact. The query runs over the rows showing and returns `person_id`; the rows it returns
+  stay, in its order. Tables: `candidates` (person_id, name, headline, location, inferred_age,
+  inferred_birth_year, years_of_experience, total_interactions, tech_skills[], base_score),
+  `positions` (person_id, position_index, is_matched, is_current, position_title, company_name,
+  company_domain, seniority_band, role_track, company_headcount, company_funding_total, company_stage,
+  company_sector_types[], company_entity_types[], investor_names[], location, start_date, end_date,
+  tenure_years), `education` (person_id, school_name, degree, field_of_study, start_year, end_year,
+  graduation_year), `trait_scores` (person_id, trait_name, score). `inferred_age` is the person's
+  age: "under 35" is `SELECT person_id FROM candidates WHERE inferred_age < 35`. Use ILIKE for
+  text, `list_contains()` for lists. A SQL error comes back as the failed command's error; fix the
+  query and run it again.
+- A qualitative criterion ("strongest AI background", "most relevant startup experience",
+  "best fit for a VP role") is the judge: `--criteria '<the user's words>'` alone. It costs money
+  and reads every profile, so never use it for a criterion SQL can answer.
 Use the `<run_id>` named in the chat's “About the search saved in .powerpacks/deep-search/<run_id>”
 line: the same id; only the parent folder differs.
 For “undo” or “go back to …”, run `rerank --run-dir … --use <step>`.

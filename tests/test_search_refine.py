@@ -40,8 +40,10 @@ class RefineTest(unittest.TestCase):
         self.jsonl = self.run / "query_results.jsonl"
         self.jsonl.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         self.profiles = self.run / "profiles.jsonl"
-        self.profiles.write_text("".join(json.dumps(dict(person_id=pid, name=f"Jordan Example {n}",
-            positions=[dict(position_title="Engineer", company_name="Example Labs", is_current=True)])) + "\n"
+        self.profiles.write_text("".join(json.dumps(dict(person_id=pid, name=f"Jordan Example {n}", inferred_age=30 + n,
+            positions=[dict(position_title="Engineer", company_name="Example Labs", is_current=True, seniority_band="senior")],
+            education=[dict(school_name="Stanford University" if n % 2 else "Example College")],
+            trait_scores={"engineer": {"score": 0.8}})) + "\n"
             for n, pid in enumerate(self.ids)))
         self.state = self.run / "task.json"
         self.state.write_text(json.dumps({"steps": [{"id": "hydrate_people", "output": {"profiles_path": str(self.profiles)}}]}))
@@ -305,6 +307,34 @@ class RefineTest(unittest.TestCase):
         self.assertIn("Engineer 8 (past, matched)", xml)
         self.assertNotIn("Engineer 4 (past)", xml)
         self.assertEqual(cohort_summary([profile]), 'Total candidates: 1, unique matched titles: 1\n- "Engineer 8" at Example Labs (1 person)')
+
+    def test_sql_filters_sorts_and_fails_without_the_judge(self):
+        output, _ = self.cli("--criteria", "under 35", "--sql", "SELECT person_id FROM candidates WHERE inferred_age < 35")
+        self.assertEqual(output["step"], {"run_id": "fixture", "id": "s2", "parent": "s1", "criteria": "under 35",
+                                          "query_type": "filter", "shown": 5, "scored": 8, "cost_usd": 0})
+        self.assertEqual([row["person_id"] for row in self.step_rows()], self.ids[:5])
+        self.assertEqual([row["final_score"] for row in self.step_rows()], [.9, .6, .35, .7, .8])
+        self.assertEqual(self.payload()["steps"][-1]["sql"], "SELECT person_id FROM candidates WHERE inferred_age < 35")
+        self.assertEqual(load_search(self.root, "fixture").steps[-1].sql, "SELECT person_id FROM candidates WHERE inferred_age < 35")
+        self.assertEqual(len(load_search(self.root, "fixture", step="s1").candidates), 8)
+        self.assertEqual(self.requests, [])
+        self.cli("--criteria", "stanford first", "--sql",
+                 "SELECT c.person_id FROM candidates c LEFT JOIN education e USING (person_id) "
+                 "ORDER BY e.school_name ILIKE '%stanford%' DESC, c.base_score DESC")
+        self.assertEqual(self.payload()["steps"][-1]["query_type"], "sort")
+        self.assertEqual(self.payload()["steps"][-1]["parent"], "s2")
+        self.assertEqual([row["person_id"] for row in self.step_rows()],
+                         [self.ids[3], self.ids[1], self.ids[0], self.ids[4], self.ids[2]])
+        self.cli("--criteria", "senior engineers", "--sql",
+                 "SELECT person_id FROM positions WHERE is_current AND seniority_band = 'senior' "
+                 "AND person_id IN (SELECT person_id FROM trait_scores WHERE trait_name = 'engineer' AND score >= .5)")
+        self.assertEqual(self.payload()["steps"][-1]["shown"], 5)
+        before = self.snapshot()
+        for sql in ("SELECT nope FROM candidates", "SELECT count(*) FROM candidates"):
+            _, proc = self.cli("--criteria", "broken", "--sql", sql, expected=1)
+            self.assertIn("nope" if "nope" in sql else "person_id", json.loads(proc.stdout)["error"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.requests, [])
 
 
 if __name__ == "__main__":
