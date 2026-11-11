@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.57.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.2...powerpacks-v3.57.0) (2026-11-11)
+
+
+### Features
+
+* **chat:** Run Search runs the search itself; card edits stay out of the chat ([#1129](https://github.com/powerset-co/powerpacks/issues/1129)) ([da03ec5](https://github.com/powerset-co/powerpacks/commit/da03ec5a42cc13c6ca5d1f5b4f5901c88df11e95))
+* **companies:** Companies page in the app, local index or a Powerset set ([#1133](https://github.com/powerset-co/powerpacks/issues/1133)) ([88a8409](https://github.com/powerset-co/powerpacks/commit/88a8409328d2f5356538b2180d0c48f922800514))
+* configurable gateway and OpenAI base URLs for local mocks ([#1128](https://github.com/powerset-co/powerpacks/issues/1128)) ([4c73588](https://github.com/powerset-co/powerpacks/commit/4c73588c32756e2f0c1ba8d801102c8382d2bfe4))
+* **people:** default the People list to warmest first ([#1140](https://github.com/powerset-co/powerpacks/issues/1140)) ([c1a08e9](https://github.com/powerset-co/powerpacks/commit/c1a08e90f53e5f230a2c53eccf2ad41e98c411a7))
+* **search:** refine a finished search in chat: step cards, tag trail, go back ([#1135](https://github.com/powerset-co/powerpacks/issues/1135)) ([eff6a03](https://github.com/powerset-co/powerpacks/commit/eff6a036232b4d8f626b0ffa536b12a6d633697d))
+* **search:** refine steps on a quick search (pipeline + run record) ([#1132](https://github.com/powerset-co/powerpacks/issues/1132)) ([c304d73](https://github.com/powerset-co/powerpacks/commit/c304d73ff3c26911301896bb981546fc0abde476))
+* **search:** roomier result rows; the search's filters fold under its title ([#1134](https://github.com/powerset-co/powerpacks/issues/1134)) ([0f8fb1e](https://github.com/powerset-co/powerpacks/commit/0f8fb1e4adef0733671bcb23cfe872d693b6757e))
+* **search:** row sources at the name line's right end; feedback flag after the tag + and pin ([#1138](https://github.com/powerset-co/powerpacks/issues/1138)) ([7cb40fc](https://github.com/powerset-co/powerpacks/commit/7cb40fc8dda3e7763eb48da865b68aeae1db3a20))
+
+
+### Bug Fixes
+
+* **companies:** local list shows LinkedIn companies, most people first, then size ([#1139](https://github.com/powerset-co/powerpacks/issues/1139)) ([f2f09ee](https://github.com/powerset-co/powerpacks/commit/f2f09ee39020d09a9a98e9601ae6b93461b70b50))
+* **relay:** poll the inbox and announce presence for every signed-in install ([#1142](https://github.com/powerset-co/powerpacks/issues/1142)) ([712ba96](https://github.com/powerset-co/powerpacks/commit/712ba96662bfbbb4a4a1e512873ece25e72db888))
+* **search:** busy row sources wrap to a second line beside the chat instead of clipping ([#1141](https://github.com/powerset-co/powerpacks/issues/1141)) ([6299bee](https://github.com/powerset-co/powerpacks/commit/6299beed383e2d48b2d186bfad77df8bcededd87))
+* **search:** deep search no longer dies resolving the hiring company's context ([#1144](https://github.com/powerset-co/powerpacks/issues/1144)) ([0abd257](https://github.com/powerset-co/powerpacks/commit/0abd257f5b4f40bcd9bfb9e8befa6475f2ce5c76))
+* **search:** no company logos in result rows; a missing logo is an empty square ([#1130](https://github.com/powerset-co/powerpacks/issues/1130)) ([ba19030](https://github.com/powerset-co/powerpacks/commit/ba19030146a87a767de1ace88f85af0186efa7d0))
+* **search:** Powerset-set people searches no longer fail on company logos ([#1136](https://github.com/powerset-co/powerpacks/issues/1136)) ([6d74cf3](https://github.com/powerset-co/powerpacks/commit/6d74cf3dc7a5e40c6eea8068b6ac4bf3bd93c70d))
+* **tasks:** show run duration on hover, drop the repeated detail line ([#1126](https://github.com/powerset-co/powerpacks/issues/1126)) ([d8713e3](https://github.com/powerset-co/powerpacks/commit/d8713e3a62b3e9a8c9ae760a94ab62191da06e32))
+
 ## [3.56.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.1...powerpacks-v3.56.2) (2026-11-07)
 
 
