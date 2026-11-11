@@ -318,7 +318,6 @@ export interface SetMember {
 export interface SetDetail {
   id: string
   name: string
-  description: string | null
   /** Your role in it. */
   role: string
   member_count: number

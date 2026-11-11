@@ -6,7 +6,8 @@ signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no 
 none.
 
 Changelog:
-  2026-11-11: set_detail() and invite(): one set's members, and an invite link to it, through the Powerset API.
+  2026-11-11: set_detail(), invite(), create_set(), delete_set(): the Sets page's reads and writes through
+      the Powerset API.
   2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
   2026-10-27: no choice in .env defaults to the local index, not the largest set: a new install
       searches its own network first.
@@ -44,17 +45,19 @@ def read(root: Path) -> dict[str, Any]:
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 
 
-def _api(root: Path, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One call to the Powerset API as the signed-in user: GET, or POST with a JSON body."""
+def _api(root: Path, path: str, body: dict[str, Any] | None = None, method: str | None = None) -> dict[str, Any]:
+    """One call to the Powerset API as the signed-in user: GET, or POST with a JSON body; {} for a
+    reply with no body (a DELETE's 204)."""
     env_file = root / ".env"
     request = urllib.request.Request(
         pull_runtime_keys.api_base(env_file) + path,
         data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": f"Bearer {pull_runtime_keys.bearer_token(env_file)}",
                  "Content-Type": "application/json"},
+        method=method,
     )
     with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read())
+        return json.loads(response.read() or b"{}")
 
 
 def set_detail(root: Path, set_id: str) -> dict[str, Any]:
@@ -67,3 +70,13 @@ def invite(root: Path, set_id: str) -> dict[str, Any]:
     """A new invite link to a set you own (POST /v2/sets/{id}/invites), with the API's defaults:
     one use, 72 hours."""
     return _api(root, "/v2/sets/" + urllib.parse.quote(set_id) + "/invites", {})
+
+
+def create_set(root: Path, name: str) -> dict[str, Any]:
+    """A new set you own (POST /v2/sets), with you as its one member."""
+    return _api(root, "/v2/sets", {"name": name})
+
+
+def delete_set(root: Path, set_id: str) -> dict[str, Any]:
+    """Delete a set you own (DELETE /v2/sets/{id}; the API keeps the row, inactive)."""
+    return _api(root, "/v2/sets/" + urllib.parse.quote(set_id), method="DELETE")

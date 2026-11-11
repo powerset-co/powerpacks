@@ -64,6 +64,15 @@ export function LinkIcon(props: IconProps) {
   )
 }
 
+/** Delete: a bin. */
+export function TrashIcon(props: IconProps) {
+  return (
+    <svg {...STROKED} {...props}>
+      <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
+    </svg>
+  )
+}
+
 /** A done mark, for a copy that landed. */
 export function CheckIcon(props: IconProps) {
   return (

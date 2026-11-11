@@ -77,3 +77,13 @@ class SearchScopeTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 self.assertEqual(json.loads(response.read()), sent)
         invite.assert_called_with(self.root, "t-1")
+
+    def test_a_new_set_and_a_delete_go_to_the_powerset_api(self) -> None:
+        for path, target, body, args in (("/sets", "create_set", {"name": "Team"}, ("Team",)),
+                                         ("/set/delete", "delete_set", {"set_id": "t-1"}, ("t-1",))):
+            with patch(f"packs.shared.web.search_scope.{target}", return_value={}) as call:
+                request = urllib.request.Request(self.url.replace("/scope", path), method="POST",
+                                                 data=json.dumps(body).encode())
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.status, HTTPStatus.OK)
+            call.assert_called_with(self.root, *args)

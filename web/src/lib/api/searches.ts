@@ -122,6 +122,27 @@ export async function fetchSetDetail(setId: string): Promise<SetDetail> {
   return body<SetDetail>(response)
 }
 
+/** A new set you own, with you as its one member. */
+export async function createSet(name: string): Promise<{ id: string }> {
+  const response = await fetch("/api/search/sets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't create the set.")
+  return body<{ id: string }>(response)
+}
+
+/** Deletes a set you own, for everyone in it. */
+export async function deleteSet(setId: string): Promise<void> {
+  const response = await fetch("/api/search/set/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ set_id: setId }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't delete the set.")
+}
+
 /** A new invite link to a set you own, to send to whoever should join. */
 export async function inviteToSet(setId: string): Promise<{ invite_url: string }> {
   const response = await fetch("/api/search/set/invite", {
