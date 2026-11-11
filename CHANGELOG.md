@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.58.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.58.0...powerpacks-v3.58.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **searches:** a refine step is named by its label alone; the agent writes "people under 40", not the user's sentence ([#1156](https://github.com/powerset-co/powerpacks/issues/1156)) ([f5809ef](https://github.com/powerset-co/powerpacks/commit/f5809ef9208ad56236539bf630df94e22d916a3d))
+
 ## [3.58.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.57.0...powerpacks-v3.58.0) (2026-11-11)
 
 
