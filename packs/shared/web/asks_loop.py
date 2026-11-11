@@ -1,6 +1,7 @@
 """Poll the inbox, answer Powerset support and set debug requests, and announce set presence.
 
 Changelog:
+- 2026-11-10: the inbox poll and presence run for every signed-in install; Sets only gates answering set asks.
 - 2026-10-17: Powerset accounts poll and handle support independently of Sets; support runs serially.
 - 2026-10-12: poll the authenticated HTTP inbox independently of NATS presence.
 - 2026-10-08: add the local NATS loop with durable task delivery.
@@ -36,7 +37,7 @@ from packs.ingestion.primitives.share.web.sets import Sets
 from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.shared.web import account, features, support
+from packs.shared.web import features, support
 
 HEARTBEAT_SECONDS = 30
 REFRESH_SECONDS = 20 * 3600
@@ -114,11 +115,6 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
     while True:
         WAKE.clear()
         delay = HEARTBEAT_SECONDS
-        flags = features.read(repo_root)
-        if not flags.sets and not account.is_team(account.read(repo_root)["email"]):
-            STATUS["state"] = "offline"
-            await asyncio.to_thread(WAKE.wait, delay)
-            continue
         try:
             await asyncio.to_thread(agent_inbox.pull, repo_root=repo_root, env_file=env_file)
         except (SystemExit, Exception) as exc:
@@ -136,7 +132,7 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
             STATUS["state"] = "connected"
             backoff = 1
             try:
-                if flags.sets:
+                if features.read(repo_root).sets:
                     await asyncio.to_thread(_answer_pending, repo_root=repo_root, env_file=env_file)
             except (SystemExit, Exception) as exc:
                 _LOG.warning("Inbox debug checks: %s", type(exc).__name__)
@@ -180,7 +176,7 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
     async def watch() -> None:
         connected_at = time.monotonic()
         while not closed.is_set():
-            if time.monotonic() - connected_at >= REFRESH_SECONDS or not features.read(repo_root).sets:
+            if time.monotonic() - connected_at >= REFRESH_SECONDS:
                 return
             await nc.publish(subjects["presence"], json.dumps({
                 "kind": "heartbeat", "operator_id": subjects["tasks"].split(".")[-1],
@@ -204,9 +200,6 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
 async def _presence(*, repo_root: Path, env_file: Path, device_id: str) -> None:
     backoff = 1
     while True:
-        if not features.read(repo_root).sets:  # turning Sets on in Settings wakes this
-            await asyncio.to_thread(WAKE.wait, HEARTBEAT_SECONDS)
-            continue
         started = time.monotonic()
         try:
             connection = await asyncio.to_thread(_connection, env_file)
