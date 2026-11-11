@@ -363,6 +363,7 @@ function step(
     id,
     parent,
     criteria,
+    sql: null,
     query_type,
     shown,
     scored: shown,

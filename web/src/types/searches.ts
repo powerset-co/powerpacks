@@ -222,6 +222,7 @@ export interface SearchStep {
   scored: number | null
   cost_usd: number
   created_at: string
+  sql: string | null
 }
 
 export interface SearchResult {
