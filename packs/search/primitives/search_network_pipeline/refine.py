@@ -1,4 +1,9 @@
-"""Score the current quick-search rows and append or select a saved step."""
+"""Narrow, sort or score the current quick-search rows and append or select a saved step.
+
+Two tools, the cloud agent's split (api_v2/agents/react_tools.py query_results / score_results):
+a hard criterion (age, place, school, company, seniority, dates, counts) is SQL over the rows
+showing, free and exact; a qualitative one is the OpenAI judge.
+"""
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -6,6 +11,9 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
+
+import duckdb
 
 from packs.indexing.lib.io import write_json
 from packs.search.primitives.deep_search.results_web.model import original_quick_step, select_quick_step
@@ -19,6 +27,21 @@ MIN_INITIAL_SCORE = 0.3
 BATCH_SIZE = 2
 # Cloud api_v2/search/agent_rerank.py:367,430 caps concurrent batches at 200.
 MAX_CONCURRENT_BATCHES = 200
+# The tables a `--sql` query sees: the cloud QueryEngine's four, from the local hydrated profile.
+TABLES = {
+    "candidates": {"person_id": "VARCHAR", "name": "VARCHAR", "headline": "VARCHAR", "location": "VARCHAR",
+                   "inferred_age": "INTEGER", "inferred_birth_year": "INTEGER", "years_of_experience": "DOUBLE",
+                   "total_interactions": "INTEGER", "tech_skills": "VARCHAR[]", "base_score": "DOUBLE"},
+    "positions": {"person_id": "VARCHAR", "position_index": "INTEGER", "is_matched": "BOOLEAN", "is_current": "BOOLEAN",
+                  "position_title": "VARCHAR", "company_name": "VARCHAR", "company_domain": "VARCHAR",
+                  "seniority_band": "VARCHAR", "role_track": "VARCHAR", "company_headcount": "INTEGER",
+                  "company_funding_total": "DOUBLE", "company_stage": "VARCHAR", "company_sector_types": "VARCHAR[]",
+                  "company_entity_types": "VARCHAR[]", "investor_names": "VARCHAR[]", "location": "VARCHAR",
+                  "start_date": "VARCHAR", "end_date": "VARCHAR", "tenure_years": "DOUBLE"},
+    "education": {"person_id": "VARCHAR", "school_name": "VARCHAR", "degree": "VARCHAR", "field_of_study": "VARCHAR",
+                  "start_year": "INTEGER", "end_year": "INTEGER", "graduation_year": "INTEGER"},
+    "trait_scores": {"person_id": "VARCHAR", "trait_name": "VARCHAR", "score": "DOUBLE"},
+}
 
 
 def _decoded(value, default):
@@ -69,7 +92,42 @@ def _score_batch(client, model, batch, query, criteria, summary):
     return scores, query_type
 
 
-def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str]):
+def _table_rows(inputs):
+    """The four tables' rows, one profile at a time."""
+    rows = {name: [] for name in TABLES}
+    for profile in inputs:
+        pid = profile["person_id"]
+        rows["candidates"].append({**{key: profile.get(key) for key in TABLES["candidates"]}, "person_id": pid})
+        matched = set(profile.get("matched_position_indexes") or [])
+        for index, position in enumerate(profile.get("positions") or []):
+            rows["positions"].append({**{key: position.get(key) for key in TABLES["positions"]},
+                                      "person_id": pid, "position_index": index, "is_matched": index in matched})
+        for school in profile.get("education") or []:
+            rows["education"].append({**{key: school.get(key) for key in TABLES["education"]}, "person_id": pid})
+        for trait, value in (profile.get("trait_scores") or {}).items():
+            score = value.get("score") if isinstance(value, dict) else value
+            if isinstance(score, (int, float)):
+                rows["trait_scores"].append({"person_id": pid, "trait_name": trait, "score": score})
+    return rows
+
+
+def _sql_person_ids(inputs, sql):
+    """The person_ids a SQL query returns, in its order, from the four tables built in memory."""
+    with tempfile.TemporaryDirectory() as raw, duckdb.connect() as conn:
+        for name, rows in _table_rows(inputs).items():
+            path = Path(raw) / f"{name}.jsonl"
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            conn.execute(f"CREATE TABLE {name} AS SELECT * FROM read_json(?, format='newline_delimited', columns=?)",
+                         [str(path), TABLES[name]])
+        result = conn.execute(sql)
+        columns = [column[0] for column in result.description]
+        if "person_id" not in columns:
+            raise ValueError("the query must return person_id")
+        at = columns.index("person_id")
+        return list(dict.fromkeys(row[at] for row in result.fetchall()))
+
+
+def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str], sql: str | None = None):
     run_dir = run_dir.expanduser().resolve()
     if run_dir.parent.name != "search" or run_dir.parent.parent.name != ".powerpacks":
         raise ValueError("rerank requires a quick run under .powerpacks/search/")
@@ -96,7 +154,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
             raise ValueError("quick run has no hydrated profiles")
         current = next(step for step in steps if step["id"] == parent)
         rows = read_jsonl(project / current["jsonl"])
-        if parent == "s1":
+        if parent == "s1" and sql is None:
             rows = [row for row in rows if float(row["final_score"]) >= MIN_INITIAL_SCORE and not _has_zero_trait_score(row.get("trait_scores"))]
         inputs = []
         for row in rows:
@@ -105,9 +163,19 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                 profile[key] = _decoded(row.get(key), default)
             profile["trait_scores"] = profile["trait_scores"].get("trait_scores", profile["trait_scores"])
             inputs.append(profile)
+        step_id = f"s{len(steps) + 1}"
+        jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
+        if sql is not None:
+            order = {pid: index for index, pid in enumerate(_sql_person_ids(inputs, sql))}
+            kept = sorted((row for row in rows if row["person_id"] in order), key=lambda row: order[row["person_id"]])
+            jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
+            step = dict(id=step_id, parent=parent, criteria=criteria, sql=sql,
+                        query_type="sort" if len(kept) == len(rows) else "filter", shown=len(kept),
+                        scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=0, created_at=now_iso())
+            steps.append(step)
+            return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
         if not env.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY is required")
-        step_id = f"s{len(steps) + 1}"
         usage_path = Path(env.get("POWERPACKS_USAGE_LOG") or run_dir / f"refine.{step_id}.usage.jsonl")
         offset = usage_path.stat().st_size if usage_path.exists() else 0
         # The shared client captures the chosen log path when it is constructed.
@@ -140,7 +208,6 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                             handle.seek(offset)
                             prices = load_prices()
                             costs = [row_cost_usd(json.loads(line), prices) or 0 for line in handle if line.strip()]
-                    jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
                     jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
                     step = dict(id=step_id, parent=parent, criteria=criteria, query_type=query_type, shown=len(kept),
                                 scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=sum(costs), created_at=now_iso())
@@ -154,6 +221,10 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                 os.environ.pop("POWERPACKS_USAGE_LOG", None)
             else:
                 os.environ["POWERPACKS_USAGE_LOG"] = previous_log
+    return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
+
+
+def _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use):
     payload["steps"] = steps
     select_quick_step(payload, step)
     write_json(result_path, payload)

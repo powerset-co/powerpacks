@@ -326,6 +326,7 @@ class SearchStep:
     scored: int | None
     cost_usd: float
     created_at: str
+    sql: str | None = None
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-11-10: `rerank --sql` is the second tool: a hard criterion is DuckDB SQL over the rows showing
+        (candidates, positions, education, trait_scores), free; the judge stays for qualitative ones.
     2026-11-09: `rerank --criteria` scores the rows showing with the cloud refine
         prompt and saves a step; `--use <step>` goes back to an earlier step.
     2026-11-06: the Luna screen (Decisions API) replaces Jev as the default JD judge and,
@@ -1351,7 +1353,7 @@ def cmd_status(args):
 def cmd_rerank(args):
     try:
         emit(rerank(Path(args.run_dir), criteria=args.criteria, use=args.use, model=args.model,
-                    env=_run_env(env_file=args.env_file)))
+                    env=_run_env(env_file=args.env_file), sql=args.sql))
         return 0
     except Exception as error:
         emit({"primitive": "search_network_pipeline", "status": "failed", "error": str(error)})
@@ -1444,6 +1446,7 @@ def build_parser() -> argparse.ArgumentParser:
     action=r.add_mutually_exclusive_group(required=True)
     action.add_argument("--criteria")
     action.add_argument("--use")
+    r.add_argument("--sql", help="A hard criterion as DuckDB SQL over the rows showing (tables candidates, positions, education, trait_scores; return person_id): keeps the rows it returns, in its order, free; --criteria is then the user's words for the step")
     r.add_argument("--model", default="gpt-5.1")
     r.add_argument("--env-file", default=".env")
     r.set_defaults(func=cmd_rerank)
