@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.58.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.57.0...powerpacks-v3.58.0) (2026-11-11)
+
+
+### Features
+
+* **app:** New Set and delete on the Sets page, through the Powerset API ([#1151](https://github.com/powerset-co/powerpacks/issues/1151)) ([18d4816](https://github.com/powerset-co/powerpacks/commit/18d4816afbf333aaaed3b0ceb7234512c6eddb1c))
+* **app:** Sets page is back: the local index and your Powerset sets ([#1146](https://github.com/powerset-co/powerpacks/issues/1146)) ([6f39171](https://github.com/powerset-co/powerpacks/commit/6f3917104139fc0374ab0451bbbf8f2dc710b8ec))
+* **search:** a hard refine criterion is SQL over the rows showing, the judge only for qualitative ones ([#1147](https://github.com/powerset-co/powerpacks/issues/1147)) ([a5cf413](https://github.com/powerset-co/powerpacks/commit/a5cf413913561c48aa0ed5f1f4fd99f35aa3a5b9))
+* **search:** the refine SQL tables match the cloud's; refine.md carries the cloud's routing and examples ([#1150](https://github.com/powerset-co/powerpacks/issues/1150)) ([1380c39](https://github.com/powerset-co/powerpacks/commit/1380c3931876742f0f5e4c2a0e0feb4af3072a65))
+
+
+### Bug Fixes
+
+* **searches:** no score change arrows on a refined step, and no read of the step before ([#1155](https://github.com/powerset-co/powerpacks/issues/1155)) ([2de6c83](https://github.com/powerset-co/powerpacks/commit/2de6c83e3e558c8320dc9d9ee982eff6eb36a01d))
+* **searches:** pond score and reasoning only on a refined step, traits on the original ([#1154](https://github.com/powerset-co/powerpacks/issues/1154)) ([7b77a06](https://github.com/powerset-co/powerpacks/commit/7b77a0687315ad8cddd65527521b3beeab996087))
+* **search:** every refine step record carries sql, the client type and fixtures agree ([#1149](https://github.com/powerset-co/powerpacks/issues/1149)) ([f6b5b81](https://github.com/powerset-co/powerpacks/commit/f6b5b812269cd1d531392682835113bed19bea54))
+* **sets:** the set selector and New Set sit on the subtitle row, the title row is the title alone ([#1152](https://github.com/powerset-co/powerpacks/issues/1152)) ([07b5cd3](https://github.com/powerset-co/powerpacks/commit/07b5cd34ebc2c05e2868b90904adc8b840bbf721))
+* **ui:** Warmth stays on People, LinkedIn mark after the name, Companies list sorts ([#1153](https://github.com/powerset-co/powerpacks/issues/1153)) ([da0ee9e](https://github.com/powerset-co/powerpacks/commit/da0ee9ea0181d45863ceb5bda720cb00540239d9))
+
 ## [3.57.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.56.2...powerpacks-v3.57.0) (2026-11-11)
 
 
