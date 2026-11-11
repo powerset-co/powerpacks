@@ -6,7 +6,7 @@ signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no 
 none.
 
 Changelog:
-  2026-11-11: set(): one set's members from the Powerset API, for the Sets page.
+  2026-11-11: set_detail() and invite(): one set's members, and invites to it, through the Powerset API.
   2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
   2026-10-27: no choice in .env defaults to the local index, not the largest set: a new install
       searches its own network first.
@@ -44,13 +44,26 @@ def read(root: Path) -> dict[str, Any]:
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 
 
-def set_detail(root: Path, set_id: str) -> dict[str, Any]:
-    """One set as the Powerset API shows it (GET /v2/sets/{id}): its counts, your role, and its
-    members with their role and how many people each brings."""
+def _api(root: Path, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One call to the Powerset API as the signed-in user: GET, or POST with a JSON body."""
     env_file = root / ".env"
     request = urllib.request.Request(
-        pull_runtime_keys.api_base(env_file) + "/v2/sets/" + urllib.parse.quote(set_id),
-        headers={"Authorization": f"Bearer {pull_runtime_keys.bearer_token(env_file)}"},
+        pull_runtime_keys.api_base(env_file) + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {pull_runtime_keys.bearer_token(env_file)}",
+                 "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read())
+
+
+def set_detail(root: Path, set_id: str) -> dict[str, Any]:
+    """One set as the Powerset API shows it (GET /v2/sets/{id}): its counts, your role, and its
+    members with their role and how many people each brings."""
+    return _api(root, "/v2/sets/" + urllib.parse.quote(set_id))
+
+
+def invite(root: Path, set_id: str, email: str) -> dict[str, Any]:
+    """Invite an email to a set you own (POST /v2/sets/{id}/invites): Powerset emails them the
+    invite link, which this answers with too."""
+    return _api(root, "/v2/sets/" + urllib.parse.quote(set_id) + "/invites", {"invited_email": email})

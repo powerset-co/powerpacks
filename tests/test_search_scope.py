@@ -68,3 +68,12 @@ class SearchScopeTests(unittest.TestCase):
             with urllib.request.urlopen(self.url.replace("/scope", "/set?set_id=t-1"), timeout=5) as response:
                 self.assertEqual(json.loads(response.read()), detail)
         read.assert_called_with(self.root, "t-1")
+
+    def test_an_invite_goes_to_the_powerset_api(self) -> None:
+        sent = {"invite_url": "https://app.powerset.co/sets/invite/tok"}
+        with patch("packs.shared.web.search_scope.invite", return_value=sent) as invite:
+            request = urllib.request.Request(self.url.replace("/scope", "/set/invite"), method="POST",
+                                             data=json.dumps({"set_id": "t-1", "email": "bo@x.co"}).encode())
+            with urllib.request.urlopen(request, timeout=5) as response:
+                self.assertEqual(json.loads(response.read()), sent)
+        invite.assert_called_with(self.root, "t-1", "bo@x.co")

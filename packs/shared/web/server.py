@@ -10,7 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
-- 2026-11-11: GET /api/search/set?set_id=: one set and its members from the Powerset API (search_scope.py).
+- 2026-11-11: GET /api/search/set?set_id= and POST /api/search/set/invite: one set, its members and invites, through the Powerset API (search_scope.py).
 - 2026-11-03: run the native daily refresh's clock (refresh/daily.py) with the server.
 - 2026-11-02: mount the full server at start, so the first People open after launch does not wait ~1 s for its imports.
 - 2026-10-17: start the inbox daemon with the server, independently of mounted routes.
@@ -366,7 +366,8 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             parsed = urllib.parse.urlparse(self.path)
             if self._team(parsed):
                 return
-            if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope", "/api/settings/providers"):
+            if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope", "/api/search/set/invite",
+                               "/api/settings/providers"):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
                     self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)
@@ -389,6 +390,20 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                                                         support=features.read(root).support)
                     self._json(features.save(root, flags))
                 except ValueError as error:
+                    self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/search/set/invite":
+                _load_project_packages(root)
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 < length <= MAX_FEATURE_REQUEST_BYTES:
+                        raise ValueError("invalid request size")
+                    body = json.loads(self.rfile.read(length))
+                    self._json(search_scope.invite(root, str(body["set_id"]), str(body["email"])))
+                except urllib.error.HTTPError as error:
+                    self._json({"error": json.loads(error.read() or b"{}").get("detail") or str(error)},
+                               HTTPStatus.BAD_GATEWAY)
+                except (ValueError, KeyError) as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/settings/providers":

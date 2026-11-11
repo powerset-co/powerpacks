@@ -122,6 +122,17 @@ export async function fetchSetDetail(setId: string): Promise<SetDetail> {
   return body<SetDetail>(response)
 }
 
+/** Invites an email to a set you own; Powerset emails them the link this answers with. */
+export async function inviteToSet(setId: string, email: string): Promise<{ invite_url: string }> {
+  const response = await fetch("/api/search/set/invite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ set_id: setId, email }),
+  })
+  if (!response.ok) throw await failure(response, "Couldn't send the invite.")
+  return body<{ invite_url: string }>(response)
+}
+
 /** Where chat can search: the signed-in user's Powerset sets, and this Mac's local index if any. */
 export async function fetchSearchScope(signal?: AbortSignal): Promise<SearchScope> {
   const response = await fetch(SCOPE, { signal })

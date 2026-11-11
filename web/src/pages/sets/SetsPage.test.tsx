@@ -1,13 +1,17 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, expect, it, vi } from "vitest"
 
-import { fetchSearchScope, fetchSetDetail } from "@/lib/api/searches"
+import { fetchSearchScope, fetchSetDetail, inviteToSet } from "@/lib/api/searches"
 import { open, options } from "@/testing/select"
 import { SetsPage } from "./SetsPage"
 
-vi.mock("@/lib/api/searches", () => ({ fetchSearchScope: vi.fn(), fetchSetDetail: vi.fn() }))
+vi.mock("@/lib/api/searches", () => ({
+  fetchSearchScope: vi.fn(),
+  fetchSetDetail: vi.fn(),
+  inviteToSet: vi.fn(),
+}))
 afterEach(() => {
   cleanup()
   vi.resetAllMocks()
@@ -60,4 +64,23 @@ it("shows a picked set's people, members and their shares", async () => {
   expect(screen.getByText("You joined this set")).toBeTruthy()
   expect(screen.getByText("bo@x.co")).toBeTruthy()
   expect(screen.getByText("300 people")).toBeTruthy()
+  expect(screen.queryByLabelText("Invite by email")).toBeNull()
+})
+
+it("lets the owner invite by email and shows the link Powerset sends", async () => {
+  vi.mocked(fetchSetDetail).mockResolvedValue({
+    id: "t-1",
+    name: "Team",
+    role: "owner",
+    member_count: 1,
+    person_count: 300,
+    members: [{ user_id: "auth0|a", role: "owner", name: "Ada", email: "ada@x.co", person_count: 300 }],
+  })
+  vi.mocked(inviteToSet).mockResolvedValue({ invite_url: "https://app.powerset.co/sets/invite/tok" })
+  setup("/sets?set=t-1")
+  const field = await screen.findByLabelText("Invite by email")
+  fireEvent.change(field, { target: { value: "bo@x.co" } })
+  fireEvent.click(screen.getByRole("button", { name: "Invite" }))
+  expect(await screen.findByText(/sets\/invite\/tok/)).toBeTruthy()
+  expect(inviteToSet).toHaveBeenCalledWith("t-1", "bo@x.co")
 })

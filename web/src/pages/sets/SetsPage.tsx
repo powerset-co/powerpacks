@@ -1,18 +1,20 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
+import { useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 
 import { initials, Page, Select } from "@/components/shared"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { offeredSets, setName, useSearchScope } from "@/lib/agent/useSearchScope"
-import { fetchSetDetail } from "@/lib/api/searches"
+import { fetchSetDetail, inviteToSet } from "@/lib/api/searches"
 import { errorText } from "@/lib/api/http"
 import { SETS } from "@/lib/people/copy"
 
 const LOCAL = "local"
 
 // Laid out as the old Sets page was: a set picker in the head, then the chosen set's card with its
-// people, members and your role. The picker offers what Search in offers: this Mac's local index,
+// people, members and your role, and for a set you own an invite box. The picker offers what Search in offers: this Mac's local index,
 // then your Powerset sets without the cloud copy of your own network.
 export function SetsPage() {
   const scope = useSearchScope()
@@ -85,6 +87,11 @@ function SetCard({ setId }: { setId: string }) {
           </span>
         </div>
       </div>
+      {set.role === "owner" ? (
+        <div className="border-b border-line px-5 py-3">
+          <InviteForm setId={set.id} />
+        </div>
+      ) : null}
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr className="text-left text-[11px] uppercase tracking-[.08em] text-faint">
@@ -108,6 +115,43 @@ function SetCard({ setId }: { setId: string }) {
         </tbody>
       </table>
     </section>
+  )
+}
+
+function InviteForm({ setId }: { setId: string }) {
+  const [email, setEmail] = useState("")
+  const invite = useMutation({ mutationFn: (to: string) => inviteToSet(setId, to) })
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (email.includes("@")) invite.mutate(email.trim(), { onSuccess: () => setEmail("") })
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <form onSubmit={submit} className="flex max-w-[420px] items-center gap-2">
+        <input
+          type="email"
+          value={email}
+          placeholder={SETS.invitePlaceholder}
+          aria-label={SETS.invitePlaceholder}
+          onChange={(event) => setEmail(event.target.value)}
+          className="h-8 min-w-0 flex-1 rounded-[var(--radius-s)] border border-line-strong bg-background px-2.5 text-[13px] text-foreground"
+        />
+        <Button
+          variant="primary"
+          type="submit"
+          className="h-8"
+          disabled={invite.isPending || !email.includes("@")}
+        >
+          {SETS.invite}
+        </Button>
+      </form>
+      {invite.error ? <p className="m-0 text-[13px] text-bad">{errorText(invite.error)}</p> : null}
+      {invite.data ? (
+        <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">
+          {SETS.invited(invite.variables)} {invite.data.invite_url}
+        </p>
+      ) : null}
+    </div>
   )
 }
 
