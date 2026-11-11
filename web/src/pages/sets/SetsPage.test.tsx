@@ -64,10 +64,10 @@ it("shows a picked set's people, members and their shares", async () => {
   expect(screen.getByText("You joined this set")).toBeTruthy()
   expect(screen.getByText("bo@x.co")).toBeTruthy()
   expect(screen.getByText("300 people")).toBeTruthy()
-  expect(screen.queryByLabelText("Invite by email")).toBeNull()
+  expect(screen.queryByRole("button", { name: "Invite" })).toBeNull()
 })
 
-it("lets the owner invite by email and shows the link Powerset sends", async () => {
+it("gives the owner an invite link to copy", async () => {
   vi.mocked(fetchSetDetail).mockResolvedValue({
     id: "t-1",
     name: "Team",
@@ -78,9 +78,7 @@ it("lets the owner invite by email and shows the link Powerset sends", async () 
   })
   vi.mocked(inviteToSet).mockResolvedValue({ invite_url: "https://app.powerset.co/sets/invite/tok" })
   setup("/sets?set=t-1")
-  const field = await screen.findByLabelText("Invite by email")
-  fireEvent.change(field, { target: { value: "bo@x.co" } })
-  fireEvent.click(screen.getByRole("button", { name: "Invite" }))
-  expect(await screen.findByText(/sets\/invite\/tok/)).toBeTruthy()
-  expect(inviteToSet).toHaveBeenCalledWith("t-1", "bo@x.co")
+  fireEvent.click(await screen.findByRole("button", { name: "Invite" }))
+  expect(await screen.findByText("https://app.powerset.co/sets/invite/tok")).toBeTruthy()
+  expect(inviteToSet).toHaveBeenCalledWith("t-1")
 })

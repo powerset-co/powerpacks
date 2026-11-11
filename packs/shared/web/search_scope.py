@@ -6,7 +6,7 @@ signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no 
 none.
 
 Changelog:
-  2026-11-11: set_detail() and invite(): one set's members, and invites to it, through the Powerset API.
+  2026-11-11: set_detail() and invite(): one set's members, and an invite link to it, through the Powerset API.
   2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
   2026-10-27: no choice in .env defaults to the local index, not the largest set: a new install
       searches its own network first.
@@ -63,7 +63,7 @@ def set_detail(root: Path, set_id: str) -> dict[str, Any]:
     return _api(root, "/v2/sets/" + urllib.parse.quote(set_id))
 
 
-def invite(root: Path, set_id: str, email: str) -> dict[str, Any]:
-    """Invite an email to a set you own (POST /v2/sets/{id}/invites): Powerset emails them the
-    invite link, which this answers with too."""
-    return _api(root, "/v2/sets/" + urllib.parse.quote(set_id) + "/invites", {"invited_email": email})
+def invite(root: Path, set_id: str) -> dict[str, Any]:
+    """A new invite link to a set you own (POST /v2/sets/{id}/invites), with the API's defaults:
+    one use, 72 hours."""
+    return _api(root, "/v2/sets/" + urllib.parse.quote(set_id) + "/invites", {})

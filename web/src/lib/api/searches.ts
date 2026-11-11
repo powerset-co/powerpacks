@@ -122,12 +122,12 @@ export async function fetchSetDetail(setId: string): Promise<SetDetail> {
   return body<SetDetail>(response)
 }
 
-/** Invites an email to a set you own; Powerset emails them the link this answers with. */
-export async function inviteToSet(setId: string, email: string): Promise<{ invite_url: string }> {
+/** A new invite link to a set you own, to send to whoever should join. */
+export async function inviteToSet(setId: string): Promise<{ invite_url: string }> {
   const response = await fetch("/api/search/set/invite", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ set_id: setId, email }),
+    body: JSON.stringify({ set_id: setId }),
   })
   if (!response.ok) throw await failure(response, "Couldn't send the invite.")
   return body<{ invite_url: string }>(response)
