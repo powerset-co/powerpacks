@@ -204,17 +204,17 @@
 @container people (max-width: 1060px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 92px;
+    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 124px 96px 84px;
   }
-  .grid-head .c-warmth,
-  .row .c-warmth {
+  .grid-head .c-last,
+  .row .c-last {
     display: none;
   }
 }
 @container people (max-width: 940px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 96px 92px;
+    grid-template-columns: 36px minmax(220px, 1.6fr) 128px 96px 84px;
   }
   .grid-head .c-rel,
   .row .c-rel {
@@ -224,7 +224,7 @@
 @container people (max-width: 800px) {
   .grid-head,
   .row {
-    grid-template-columns: 36px minmax(180px, 1fr) 96px 92px;
+    grid-template-columns: 36px minmax(180px, 1fr) 96px 84px;
   }
   .grid-head .c-sources,
   .row .c-sources {
