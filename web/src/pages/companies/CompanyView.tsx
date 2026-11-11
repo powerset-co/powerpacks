@@ -140,9 +140,9 @@ export function CompanyView({
               items={filtered}
               getKey={(person) => `${person.id}:${person.position_title}`}
               cells={(person) => [
-                <span key="name" className="break-words">
-                  <LinkedInLink row={{ name: person.name, linkedin_url: profile(person) }} />
+                <span key="name" className="break-words [&_.result-linkedin]:ml-1.5 [&_.result-linkedin]:mr-0">
                   {person.name}
+                  <LinkedInLink row={{ name: person.name, linkedin_url: profile(person) }} />
                 </span>,
                 person.position_title || "—",
                 tenure(person.tenure_years),

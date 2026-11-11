@@ -101,6 +101,17 @@ def test_no_name_orders_by_people_then_headcount(local_index):
     rows = companies.search({'scope': 'local'})['companies']
     assert [row['id'] for row in rows] == ['stripe', 'big', 'blank', 'atlas', 'stripe-copy', 'domain']
 
+
+@pytest.mark.parametrize(('sort', 'direction', 'expected'), [
+    ('headcount', 'asc', ['domain', 'atlas', 'stripe-copy', 'stripe']),
+    ('headcount', 'desc', ['stripe', 'stripe-copy', 'atlas', 'domain']),
+    ('name', 'asc', ['atlas', 'domain', 'stripe', 'stripe-copy']),
+    ('people', 'asc', ['domain', 'stripe-copy', 'atlas', 'stripe']),
+])
+def test_no_name_sorts_by_the_asked_column(local_index, sort, direction, expected):
+    rows = companies.search({'scope': 'local', 'sort': sort, 'dir': direction})['companies']
+    assert [row['id'] for row in rows] == expected
+
 @pytest.mark.parametrize(('query', 'minimum', 'expected'), [
     ('Stripe', 75, ['stripe']), ('mapping', 0, ['atlas']),
     ('Stri', 75, ['stripe']), ('strpie', 75, ['stripe']),

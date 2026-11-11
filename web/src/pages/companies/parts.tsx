@@ -1,6 +1,6 @@
 import type { ReactNode } from "react"
 
-import { VirtualRows } from "@/components/shared"
+import { SortHeader, type SortDirection, VirtualRows } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -48,6 +48,9 @@ export interface Column {
   label: string
   /** The header's and cells' class: alignment, or hidden when narrow. */
   className?: string
+  /** A sortable column: its current direction and the click. */
+  sort?: SortDirection
+  onSort?: () => void
 }
 
 const ROW_ESTIMATE = 44
@@ -81,11 +84,21 @@ export function PageTable<T>({
           grid,
         )}
       >
-        {columns.map((column) => (
-          <span key={column.label} role="columnheader" className={column.className}>
-            {column.label}
-          </span>
-        ))}
+        {columns.map((column) =>
+          column.onSort ? (
+            <SortHeader
+              key={column.label}
+              label={column.label}
+              sort={column.sort ?? "none"}
+              onSort={column.onSort}
+              className={column.className}
+            />
+          ) : (
+            <span key={column.label} role="columnheader" className={column.className}>
+              {column.label}
+            </span>
+          ),
+        )}
       </div>
       <VirtualRows
         items={items}

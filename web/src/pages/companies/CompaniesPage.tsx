@@ -9,7 +9,8 @@ import { defaultScope, useSearchScope } from "@/lib/agent/useSearchScope"
 import { searchCompanies } from "@/lib/api/companies"
 import { errorText } from "@/lib/api/http"
 import { must } from "@/lib/must"
-import type { Company, CompanyScope, CompanySearchResponse } from "@/types/companies"
+import type { SortDirection } from "@/components/shared"
+import type { Company, CompanyScope, CompanySearchResponse, CompanySort } from "@/types/companies"
 import type { ChatScope } from "@/types/searches"
 
 import { CompanyView } from "./CompanyView"
@@ -22,6 +23,24 @@ const TYPING_MS = 200
 
 function scopeOf(scope: ChatScope): CompanyScope {
   return "set_id" in scope ? scope.set_id : "local"
+}
+
+interface Sort {
+  key: CompanySort
+  dir: "asc" | "desc"
+}
+
+// The list opens most people first; a header click sorts by it, a second click flips it.
+const DEFAULT_SORT: Sort = { key: "people", dir: "desc" }
+
+function nextSort(sort: Sort, key: CompanySort): Sort {
+  if (sort.key === key) return { key, dir: sort.dir === "desc" ? "asc" : "desc" }
+  return { key, dir: key === "name" ? "asc" : "desc" }
+}
+
+function direction(sort: Sort, key: CompanySort): SortDirection {
+  if (sort.key !== key) return "none"
+  return sort.dir === "asc" ? "ascending" : "descending"
 }
 
 /** A company opened from the list, with the scope and positions the list was loaded with. */
@@ -40,8 +59,13 @@ export function CompaniesPage() {
   const [text, setText] = useState("")
   const [name, setName] = useState("")
   const [allPositions, setAllPositions] = useState(true)
+  const [sort, setSort] = useState<Sort>(DEFAULT_SORT)
   const [page, setPage] = useState(0)
   const [opened, setOpened] = useState<Opened | null>(null)
+  const sortBy = (key: CompanySort) => {
+    setSort(nextSort(sort, key))
+    setPage(0)
+  }
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -52,12 +76,14 @@ export function CompaniesPage() {
   }, [text])
 
   const list = useQuery({
-    queryKey: ["companies", scope && scopeOf(scope), name, allPositions, page],
+    queryKey: ["companies", scope && scopeOf(scope), name, allPositions, sort, page],
     queryFn: () =>
       searchCompanies({
         scope: scopeOf(must(scope)),
         name,
         position_type: allPositions ? "all" : "current",
+        sort: sort.key,
+        dir: sort.dir,
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
       }),
@@ -121,6 +147,8 @@ export function CompaniesPage() {
           response={list.data}
           // A list still loading for a new scope or name is not opened from.
           stale={list.isPlaceholderData}
+          sort={sort}
+          onSort={sortBy}
           onPage={setPage}
           onOpen={(company) => setOpened({ company, scope: scopeOf(must(scope)), allPositions })}
         />
@@ -134,12 +162,16 @@ function Results({
   name,
   response,
   stale,
+  sort,
+  onSort,
   onPage,
   onOpen,
 }: {
   name: string
   response: CompanySearchResponse
   stale: boolean
+  sort: Sort
+  onSort: (key: CompanySort) => void
   onPage: (page: number) => void
   onOpen: (company: Company) => void
 }) {
@@ -150,10 +182,20 @@ function Results({
         <PageTable
           label="Companies"
           columns={[
-            { label: "Company Name" },
+            { label: "Company Name", sort: direction(sort, "name"), onSort: () => onSort("name") },
             { label: "Location", className: `text-muted-foreground ${WIDE_ONLY}` },
-            { label: "Headcount", className: `text-right tabular-nums ${WIDE_ONLY}` },
-            { label: "People", className: "text-right tabular-nums" },
+            {
+              label: "Headcount",
+              className: `text-right tabular-nums ${WIDE_ONLY}`,
+              sort: direction(sort, "headcount"),
+              onSort: () => onSort("headcount"),
+            },
+            {
+              label: "People",
+              className: "text-right tabular-nums",
+              sort: direction(sort, "people"),
+              onSort: () => onSort("people"),
+            },
           ]}
           grid="grid-cols-[minmax(0,1.6fr)_minmax(0,1.4fr)_96px_72px] max-[680px]:grid-cols-[minmax(0,1fr)_64px]"
           rowClassName="relative hover:bg-secondary"

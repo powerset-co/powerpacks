@@ -31,6 +31,8 @@ class _SearchRequest(BaseModel):
     scope: str = Field(min_length=1)
     id: str | None = None
     name: str | None = None
+    sort: Literal['people', 'headcount', 'name'] = 'people'
+    dir: Literal['asc', 'desc'] = 'desc'
     include_people: bool = False
     position_type: Literal['current', 'all'] = 'current'
     people_limit: int = Field(default=10, ge=1, le=2000)
@@ -133,7 +135,8 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
         name = request.name or ''
         listed = ('linkedin_url', 'Gt', '')
         total = len(resolver.name_directory_lookup(name, listed, top_k=None, store=store, include_attributes=[]))
-        rows = resolver.name_directory_lookup(name, listed, top_k=request.limit, offset=request.offset, store=store)
+        rows = resolver.name_directory_lookup(name, listed, top_k=request.limit, offset=request.offset, store=store,
+                                              sort=request.sort, direction=request.dir)
     company_ids = [row['id'] for row in rows]
     groups = defaultdict(lambda: defaultdict(list))
     profiles = {}
