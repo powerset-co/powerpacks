@@ -8,13 +8,14 @@ require the local backend dependency to be importable at module import time.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 K_RRF = 60
@@ -252,19 +253,21 @@ class LocalDuckDBSearchStore:
                 return table
         return None
 
+    @functools.cached_property
     def _person_profile_can_constrain_positions(self) -> bool:
+        """Whether the profile table's ids link to positions, read once per store. Two equi-joins: the
+        one OR-join this used to run was a nested loop that took seconds on 800k positions."""
         profile_table = self._person_profile_table()
         if not profile_table or not self._table_exists("local_people_positions"):
             return False
+        profiles = self._quote_ident(profile_table)
         try:
             row = self.conn.execute(
                 f"""
-                select count(*)
-                from {self._quote_ident(profile_table)} p
-                join local_people_positions r
-                  on cast(p.person_id as varchar) = cast(r.person_id as varchar)
-                  or cast(p.person_id as varchar) = cast(r.base_id as varchar)
-                limit 1
+                select exists (select 1 from {profiles} p join local_people_positions r
+                               on cast(p.person_id as varchar) = cast(r.person_id as varchar))
+                    or exists (select 1 from {profiles} p join local_people_positions r
+                               on cast(p.person_id as varchar) = cast(r.base_id as varchar))
                 """
             ).fetchone()
             return bool(row and row[0])
@@ -542,8 +545,11 @@ class LocalDuckDBSearchStore:
         effective_filters = filters
         person_filters = None
         profile_table = self._person_profile_table()
-        if profile_table and self._person_profile_can_constrain_positions():
+        if profile_table:
             person_filters, effective_filters = self._split_person_role_filters(filters, columns)
+            # Only a person clause needs the profile link; a plain positions filter never pays for the probe.
+            if person_filters is not None and not self._person_profile_can_constrain_positions:
+                person_filters, effective_filters = None, filters
         where_sql, params = self._compile_filter_sql(effective_filters, columns)
         if person_filters is None or not profile_table:
             return where_sql, params
@@ -574,20 +580,28 @@ class LocalDuckDBSearchStore:
             fields.update(self.FIELD_ALIASES.get(field, []))
         return ", ".join(self._quote_ident(field) for field in columns if field in fields)
 
-    def query_rows_sql(self, logical_name: str, sql: str, params: list[Any], *, filters: Any, include_attributes: list[str]) -> list[dict[str, Any]]:
-        """Run a ranked SELECT over the filtered namespace CTE, projecting its rows."""
+    def query_rows_sql(self, logical_name: str, sql: str, params: list[Any], *, filters: Any, include_attributes: list[str],
+                       carry: Sequence[str] = ()) -> list[dict[str, Any]]:
+        """Run a ranked SELECT over the filtered namespace CTE, projecting its rows. `filtered` carries the
+        ids and the attributes asked for, inlined, so the SELECT ranks narrow rows and the vectors stay
+        on disk; `carry` names columns the SELECT adds beyond the table's (a window count) that ride
+        along on every row."""
         table = self._table_for_namespace(logical_name)
         columns = self._table_columns(table)
         where, filter_params = self._compile_filter_sql(filters, columns)
         projection = self._projection_sql(columns, include_attributes)
+        selected = ", ".join([projection, *(self._quote_ident(name) for name in carry)])
         result = self.conn.execute(
-            f"WITH filtered AS (SELECT * FROM {self._quote_ident(table)} WHERE {where}), "
-            f"results AS ({sql}) SELECT {projection} FROM results",
+            f"WITH filtered AS NOT MATERIALIZED (SELECT {projection} FROM {self._quote_ident(table)} WHERE {where}), "
+            f"results AS ({sql}) SELECT {selected} FROM results",
             [*filter_params, *params],
         )
         fields = [column[0] for column in result.description]
-        return [self._project_dict(self._normalize_row(dict(zip(fields, row))), include_attributes)
-                for row in result.fetchall()]
+        rows = []
+        for raw in result.fetchall():
+            row = self._normalize_row(dict(zip(fields, raw)))
+            rows.append(dict(self._project_dict(row, include_attributes), **{name: row[name] for name in carry}))
+        return rows
 
     def _filtered_rows_sql(self, logical_name: str, filters: Any, *, limit: int = 0, order_by_id: bool = False, include_attributes: list[str] | None = None) -> list[dict[str, Any]]:
         table = self._table_for_namespace(logical_name)

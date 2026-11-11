@@ -129,14 +129,12 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
         )
         total = len(rows)
     else:
-        # No name lists every company, most local people first. The page is cut in SQL and the
-        # total counts every match by id, so a long list costs one page of rows. Only companies
-        # with a LinkedIn page are listed; a typed-in name without one is not a company to open.
-        name = request.name or ''
+        # No name lists every company, most local people first. One query cuts the page and counts
+        # every match, so a long list costs one page of rows. Only companies with a LinkedIn page
+        # are listed; a typed-in name without one is not a company to open.
         listed = ('linkedin_url', 'Gt', '')
-        total = len(resolver.name_directory_lookup(name, listed, top_k=None, store=store, include_attributes=[]))
-        rows = resolver.name_directory_lookup(name, listed, top_k=request.limit, offset=request.offset, store=store,
-                                              sort=request.sort, direction=request.dir)
+        rows, total = resolver.name_directory_lookup(request.name or '', listed, top_k=request.limit, offset=request.offset,
+                                                     store=store, sort=request.sort, direction=request.dir)
     company_ids = [row['id'] for row in rows]
     groups = defaultdict(lambda: defaultdict(list))
     profiles = {}
