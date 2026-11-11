@@ -310,12 +310,14 @@ export interface SetMember {
   email: string | null
   /** People this member brings to the set. */
   person_count: number
+  joined_at: string
 }
 
 /** One Powerset set with its members, for the Sets page. */
 export interface SetDetail {
   id: string
   name: string
+  description: string | null
   /** Your role in it. */
   role: string
   member_count: number

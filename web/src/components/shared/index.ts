@@ -24,6 +24,7 @@ export {
   FlagIcon,
   HiveIcon,
   ImportIcon,
+  LinkIcon,
   PinIcon,
   PlusIcon,
   RefreshIcon,

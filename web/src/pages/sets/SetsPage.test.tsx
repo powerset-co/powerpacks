@@ -48,22 +48,37 @@ it("shows a picked set's people, members and their shares", async () => {
   vi.mocked(fetchSetDetail).mockResolvedValue({
     id: "t-1",
     name: "Team",
+    description: null,
     role: "member",
     member_count: 2,
     person_count: 40795,
     members: [
-      { user_id: "auth0|a", role: "owner", name: "Ada", email: "ada@x.co", person_count: 300 },
-      { user_id: "auth0|b", role: "member", name: null, email: "bo@x.co", person_count: 1 },
+      {
+        user_id: "auth0|a",
+        role: "owner",
+        name: "Ada",
+        email: "ada@x.co",
+        person_count: 300,
+        joined_at: "2026-11-11T00:00:00Z",
+      },
+      {
+        user_id: "auth0|b",
+        role: "member",
+        name: null,
+        email: "bo@x.co",
+        person_count: 1,
+        joined_at: "2026-11-11T00:00:00Z",
+      },
     ],
   })
   setup("/sets?set=t-1")
   expect(await screen.findByText("Ada")).toBeTruthy()
   expect(fetchSetDetail).toHaveBeenCalledWith("t-1")
-  expect(screen.getByText("40,795 people")).toBeTruthy()
+  expect(screen.getByText("40,795 unique contacts")).toBeTruthy()
   expect(screen.getByText("2 members")).toBeTruthy()
-  expect(screen.getByText("You joined this set")).toBeTruthy()
+  expect(screen.getByText("No description")).toBeTruthy()
   expect(screen.getByText("bo@x.co")).toBeTruthy()
-  expect(screen.getByText("300 people")).toBeTruthy()
+  expect(screen.getByText("300")).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull()
 })
 
@@ -71,10 +86,20 @@ it("gives the owner an invite link to copy", async () => {
   vi.mocked(fetchSetDetail).mockResolvedValue({
     id: "t-1",
     name: "Team",
+    description: null,
     role: "owner",
     member_count: 1,
     person_count: 300,
-    members: [{ user_id: "auth0|a", role: "owner", name: "Ada", email: "ada@x.co", person_count: 300 }],
+    members: [
+      {
+        user_id: "auth0|a",
+        role: "owner",
+        name: "Ada",
+        email: "ada@x.co",
+        person_count: 300,
+        joined_at: "2026-11-11T00:00:00Z",
+      },
+    ],
   })
   vi.mocked(inviteToSet).mockResolvedValue({ invite_url: "https://app.powerset.co/sets/invite/tok" })
   setup("/sets?set=t-1")
