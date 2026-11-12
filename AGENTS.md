@@ -67,7 +67,7 @@ Paths below are relative to the installed checkout.
 | Build the local search index | `packs/indexing/skills/build-local-search-index/SKILL.md` |
 | Raw conversation archive | `packs/ingestion/skills/logbook/SKILL.md` |
 | Reset derived pipeline state | `packs/ingestion/skills/clean-slate/SKILL.md` |
-| Sales Navigator leads | `packs/sales-nav/skills/sales-nav-search/SKILL.md` |
+| Sales Navigator leads, mutual connections with a person | `packs/sales-nav/skills/sales-nav-search/SKILL.md` |
 | Apollo outbound | `packs/apollo/skills/build-outbound/SKILL.md` |
 | Send requested product feedback | `packs/powerset/skills/feedback/SKILL.md` |
 
