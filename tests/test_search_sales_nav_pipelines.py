@@ -323,27 +323,97 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         self.assertIs(approve.func, search.cmd_approve)
 
 class SalesNavPipelineTests(unittest.TestCase):
-    def test_sales_block_tool_call_contract(self):
+    def test_sales_backend_is_cloud_with_a_set_and_local_without(self):
+        self.assertEqual(sales.backend_of({"artifacts": {}}), "local")
+        self.assertEqual(sales.backend_of({"artifacts": {"set_id": ""}}), "local")
+        self.assertEqual(sales.backend_of({"artifacts": {"set_id": "set-123"}}), "cloud")
+
+    def test_sales_local_search_maps_args_and_answers_in_the_api_shape(self):
+        lead = {"first_name": "Ada", "last_name": "L", "title": "CTO", "company_name": "Stripe", "location": "SF",
+                "member_id": 74438553, "profile_id": "ACwAAA", "degree": 2, "total_mutual_count": 3,
+                "mutual_member_ids": [1, 2, 3], "mutual_intro_text": "You both know Sam", "profile_picture_url": None}
+        with mock.patch.object(sales.li, "sales_nav_searches", return_value=[{"total": 430, "leads": [lead], "requests_today": 7, "day_cap": 100}]) as searches, \
+             mock.patch.object(sales, "local_title_ids", return_value=[{"id": 8, "text": "Chief Technology Officer"}]):
+            out, = sales.local_searches([{"company_ids": [2135371], "company_names": {"2135371": "Stripe"}, "title": "CTO",
+                                          "seniority_ids": ["310"], "past_company_ids": [1], "count": 25, "start_offset": 0}])
+        namespace = searches.call_args.args[0][0]
+        self.assertEqual((namespace.company_id, namespace.company_name, namespace.title_id, namespace.title_name, namespace.seniority),
+                         ([2135371], ["Stripe"], [8], ["Chief Technology Officer"], ["310"]))
+        row = out["leads"][0]
+        self.assertEqual((row["name"], row["company"], row["mutual_count"], row["mutual_member_ids"], row["intro_text"]),
+                         ("Ada L", "Stripe", 3, [1, 2, 3], "You both know Sam"))
+        self.assertEqual((out["total_count"], out["has_more"], out["next_start_offset"], out["unsupported_filters"], out["backend"]),
+                         (430, True, 1, ["past_company_ids"], "local"))
+
+    def test_sales_search_plan_appends_new_ids_to_an_existing_run(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lp = Path(tmp) / "pipeline.json"
+            root = Path(tmp)
+            lp = root / "pipeline.json"
             ledger = sales.load(lp)
-            rc = sales.block_tool_call(
-                lp,
-                ledger,
-                "sales_nav_search",
-                {"set_id": "set_123"},
-                str(Path(tmp) / "response.json"),
-                "python continue",
-                "Call tool",
-            )
+            ledger["artifacts"].update({"set_id": "set-1", "conversation_id": "conv-1"})
+            state = root / "state.json"
+            sales.write_json(state, {"counts": {"leads": 0}})
+            plan_a = root / "a.json"
+            plan_a.write_text(json.dumps({"queries": [{"id": "company_only", "args": {"company_ids": [1]}}]}))
+            args = SimpleNamespace(search_plan_json=str(plan_a), search_args_json=None, set_id=None, conversation_id=None, count=25)
+            first = sales.search_plan(args, lp, ledger, state)
+            plan_b = root / "b.json"
+            plan_b.write_text(json.dumps({"queries": [{"id": "company_only", "args": {"company_ids": [1]}},
+                                                      {"id": "cxo", "args": {"company_ids": [1], "seniority_ids": ["310", "320"]}}]}))
+            args.search_plan_json = str(plan_b)
+            second = sales.search_plan(args, lp, ledger, state)
+            again = sales.search_plan(SimpleNamespace(search_plan_json=None, search_args_json=None, set_id=None, conversation_id=None, count=25), lp, ledger, state)
+        self.assertEqual([item["id"] for item in first], ["company_only"])
+        self.assertEqual([item["id"] for item in second], ["company_only", "cxo"])
+        self.assertEqual(again, second)
+        self.assertEqual(second[1]["args"]["set_id"], "set-1")
+
+    def test_sales_run_searches_calls_the_backend_once_and_records_a_summary_per_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lp = root / "pipeline.json"
+            ledger = sales.load(lp)
+            ledger["artifacts"].update({"set_id": "set-1", "conversation_id": "conv-1"})
+            state = root / "state.json"
+            sales.write_json(state, {"counts": {"leads": 0}})
+            plan = root / "plan.json"
+            plan.write_text(json.dumps({"queries": [
+                {"id": "pool", "label": "company only", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}}},
+                {"id": "cxo", "label": "executives", "args": {"company_ids": [2135371], "seniority_ids": ["310"]}},
+            ]}))
+            args = SimpleNamespace(search_plan_json=str(plan), search_args_json=None, set_id=None, conversation_id=None, count=25)
+            leads = [{"name": "Ada L", "title": "CTO", "company": "Stripe", "mutual_count": 2, "member_id": 1}]
+            answers = [{"leads": leads, "total_count": 180, "max_total_count": 180, "has_more": True, "next_start_offset": 50},
+                       {"leads": [], "total_count": 0, "max_total_count": 0, "has_more": False, "next_start_offset": None,
+                        "refinement_hint": "try keywords"}]
+            with mock.patch.object(sales, "cloud_searches", return_value=answers) as cloud, \
+                 mock.patch.object(sales, "ingest_page", side_effect=[{"leads_ingested": 1, "lead_count": 1}, {"leads_ingested": 0, "lead_count": 1}]):
+                sales.run_searches(args, lp, ledger, state)
             saved = sales.read_json(lp)
-        self.assertEqual(rc, 30)
-        block = saved["current_block"]
-        self.assertEqual(block["status"], "blocked_tool_call")
-        self.assertEqual(block["tool_server"], "powerset-search")
-        self.assertEqual(block["tool_name"], "sales_nav_search")
-        self.assertEqual(block["tool_args"]["set_id"], "set_123")
-        self.assertIn("save_response_to", block)
+            pages = sorted(path.name for path in (root / "pages").iterdir())
+        self.assertEqual(cloud.call_count, 1)
+        self.assertEqual([a["set_id"] for a in cloud.call_args.args[0]], ["set-1", "set-1"])
+        self.assertEqual(pages, ["sales-nav-search-000.response.json", "sales-nav-search-001.response.json"])
+        summaries = sales.search_summaries(saved)
+        self.assertEqual([s["label"] for s in summaries], ["company only", "executives"])
+        self.assertEqual(summaries[0]["filters_description"], "company=Stripe")
+        self.assertEqual((summaries[0]["total_count"], summaries[0]["new_leads"], summaries[0]["lead_summaries"][0]["name"]), (180, 1, "Ada L"))
+        self.assertEqual((summaries[1]["filters_description"], summaries[1]["refinement_hint"]), ("company=2135371; seniority=CXO", "try keywords"))
+
+    def test_sales_local_run_skips_enrich_and_member_urls_with_a_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lp = root / "pipeline.json"
+            ledger = sales.load(lp)
+            state = root / "state.json"
+            sales.write_json(state, {})
+            args = SimpleNamespace(skip_enrich=False, enrich_limit=10, skip_mutual_url_resolution=False, mutual_url_limit=10, resolve_mutuals_external=False)
+            with mock.patch.object(sales, "cloud_call") as cloud:
+                sales.enrich_profiles(args, lp, ledger, state)
+                sales.resolve_mutual_urls(args, lp, ledger, state)
+        cloud.assert_not_called()
+        self.assertIn("local session", ledger["steps"]["enrich_profiles"]["summary"]["reason"])
+        self.assertIn("local session", ledger["steps"]["resolve_mutual_urls"]["summary"]["reason"])
 
     def test_sales_ledger_path_uses_state_when_present(self):
         args = SimpleNamespace(ledger=None, state="/tmp/run/state.json", run_id=None, query=None)
@@ -378,10 +448,10 @@ class SalesNavPipelineTests(unittest.TestCase):
         self.assertEqual(plan[2]["args"]["keywords"], "Acme")
         self.assertEqual(plan[0]["args"]["set_id"], "set-123")
         self.assertEqual(plan[0]["args"]["conversation_id"], "conv-123")
-        self.assertTrue(plan[0]["args"]["persist_artifact"])
+        self.assertNotIn("persist_artifact", plan[0]["args"])
         self.assertNotIn("label", plan[1]["args"])
 
-    def test_sales_member_ids_for_enrichment_filters_current_artifact(self):
+    def test_sales_member_ids_for_enrichment_skips_enriched_and_orders_by_mutuals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             leads = root / "leads.jsonl"
@@ -394,14 +464,15 @@ class SalesNavPipelineTests(unittest.TestCase):
             leads.write_text("".join(json.dumps(row) + "\n" for row in rows))
             state = root / "state.json"
             sales.write_json(state, {"files": {"leads_jsonl": str(leads)}})
-            self.assertEqual(sales.member_ids_for_enrichment(state, artifact_id="art-a", limit=10), [2, 1])
+            self.assertEqual(sales.member_ids_for_enrichment(state, limit=10), [3, 2, 1])
+            self.assertEqual(sales.member_ids_for_enrichment(state, limit=2), [3, 2])
 
     def test_sales_mutual_attribution_uses_repo_env_without_cli_arg(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ledger_path = root / "pipeline.json"
             state = root / "state.json"
-            sales.write_json(ledger_path, {})
+            sales.write_json(ledger_path, {"artifacts": {"set_id": "set-123"}})
             sales.write_json(state, {"set_id": "set-123"})
             args = SimpleNamespace(
                 force=False,

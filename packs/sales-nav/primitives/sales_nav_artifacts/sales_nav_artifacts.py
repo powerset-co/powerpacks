@@ -621,7 +621,7 @@ def main() -> None:
 
     init = sub.add_parser("init")
     init.add_argument("--query", required=True)
-    init.add_argument("--set-id", required=True)
+    init.add_argument("--set-id", default="")
     init.add_argument("--conversation-id", required=True)
     init.add_argument("--run-id")
     init.add_argument("--out-dir")

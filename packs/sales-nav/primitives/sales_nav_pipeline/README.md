@@ -1,79 +1,84 @@
 # sales_nav_pipeline
 
-Resumable orchestrator for Sales Nav MCP tool calls plus local file handoffs.
+Created: 2026-11-11 (rewritten; the first version dates from the MCP relay days)
 
-The script does **not** call MCP tools itself. It initializes/continues the local
-run, emits `blocked_tool_call` JSON telling the harness/agent which MCP tool to
-call, where to save the response, and which command to run next. The harness
-should execute the tool through its native MCP layer, write the JSON response to
-`save_response_to`, then run `continue_command`.
+Change log:
+- 2026-11-11: The pipeline makes its own calls. No `blocked_tool_call`, no `get_artifact`, no
+  MCP. Backend by set: with a set it calls the Powerset API's `/v2/sales-nav` routes (every
+  seat in the set, merged); without one it searches through this Mac's LinkedIn session.
+  Plan files append queries to a run; the output carries a summary per query.
 
-## Normal run
+Resumable Sales Navigator run: search plan → `leads.jsonl` → enrich → mutual URLs →
+`leads.csv` / `mutuals.csv` → optional LLM scoring (approval-gated, the only stop).
+
+## Which backend
+
+| | set present (`--set-id` or `POWERPACKS_DEFAULT_SET_ID`) | no set |
+| --- | --- | --- |
+| search | Powerset API, every Sales Nav seat in the set, merged by member id | your own LinkedIn session, your seat only |
+| resolve names → ids | Powerset API | Sales Nav typeahead through your session |
+| profile enrichment | Powerset API (RapidAPI, about one lookup per lead) | not done, step records the reason |
+| mutual member ids → URLs | Powerset API cache layers (free unless `--resolve-mutuals-external`) | not done |
+| team attribution | yes | not done |
+| cost | Powerset's | 100 LinkedIn requests a day; a run costs one plus one per query (plus one per text title) |
+
+The chat's Search-in picker already puts the set into `POWERPACKS_DEFAULT_SET_ID`, so a chat
+scoped to a set runs cloud and a local-only chat runs local without a flag.
+
+## Run
 
 ```bash
+# names → ids, through whichever backend the set says
+python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py resolve --company Stripe --title CTO
+
 python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
-  --query "VPs at Brookfield" \
-  --set-id <set_id> \
-  --search-plan-json .powerpacks/sales-nav/search-plan.json
+  --query "CTOs at Stripe" \
+  --search-plan-json .powerpacks/sales-nav/runs/<run>/search_plan.json
 ```
 
-`--search-args-json` still works for a single search. Prefer
-`--search-plan-json` for robust searches that need multiple passes.
+The output is `status: completed` with `searches`, one entry per query:
+
+```json
+{"id": "cxo", "label": "company + executives", "filters_description": "company=Stripe; seniority=CXO,Owner / Partner",
+ "total_count": 61, "results_returned": 25, "new_leads": 19, "lead_count_after": 44, "has_more": true, "next_start_offset": 25,
+ "lead_summaries": [{"name": "…", "title": "…", "company": "…", "mutual_count": 3, "location": "…", "linkedin_url": ""}],
+ "refinement_hint": null, "unsupported_filters": []}
+```
+
+Read them. If the titles are wrong for the ask or the pool is thin, write a second plan file
+with new query ids and run `continue --ledger <ledger> --search-plan-json <file>`: the ids not
+seen before are added and run, the rest are kept. Everything dedupes into one `leads.jsonl`.
 
 ## Search plan shape
 
 ```json
 {
-  "score_criteria": "investment/endowment team",
+  "score_criteria": "current C-level operators at Stripe; score 0 for VPs, directors, advisors, past-only",
   "queries": [
-    {
-      "id": "finance",
-      "label": "parent company + finance function",
-      "args": {"company_ids": [163348], "function_ids": ["10"]}
-    },
-    {
-      "id": "company_only",
-      "label": "parent company-only fallback",
-      "args": {"company_ids": [163348]}
-    },
-    {
-      "id": "past_company",
-      "label": "past-company alumni fallback",
-      "args": {"past_company_ids": [163348], "past_company_names": {"163348": "Dartmouth College"}}
-    },
-    {
-      "id": "keyword_last",
-      "label": "keyword fallback",
-      "args": {"keywords": "Dartmouth College"}
-    }
+    {"id": "pool", "label": "company only", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}}},
+    {"id": "cxo", "label": "company + executives", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}, "seniority_ids": ["310", "320"]}},
+    {"id": "cto", "label": "exact title", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}, "title_ids": [{"id": 8, "text": "Chief Technology Officer"}]}}
   ]
 }
 ```
 
-Put structured current-company, relaxed structured, and past-company searches
-before any keyword-only fallback. Use keyword-only search last.
+`args` take what `/v2/sales-nav/search` takes: `company_ids`, `company_names`, `past_company_ids`,
+`past_company_names`, `seniority_ids`, `function_ids`, `geography_ids`, `geography_names`,
+`headcount_ids`, `industry_id`, `title`, `title_ids`, `keywords`, `count`, `start_offset`. The local
+session honours all but `past_company_ids`, `headcount_ids` and `industry_id`, and says so in
+`unsupported_filters`. Cloud queries run four at a time; local queries run in one browser pass.
 
-For every query the runner:
-
-1. blocks for `sales_nav_search` with `persist_artifact=true`
-2. blocks for `get_artifact(include_content=true)` and ingests full content
-3. blocks for `enrich_extended_profiles` for currently loaded unenriched leads
-4. reloads/ingests the enriched artifact
-5. after all searches, resolves pending mutual member IDs through
-   `sales_nav_resolve_member_ids` and exports `leads.csv` / `mutuals.csv`
-
-Qualitative scoring is approval-gated:
+## Scoring
 
 ```bash
-python ... continue --ledger <ledger> --criteria "real estate exposure"
+python ... continue --ledger <ledger> --criteria "real estate exposure"      # asks (blocked_approval)
 python ... approve llm --ledger <ledger> --approval-id <id> --confirm
 python ... continue --ledger <ledger> --criteria "real estate exposure"
 ```
 
-Useful flags:
+## Flags
 
-- `--skip-enrich` — skip `enrich_extended_profiles`
-- `--enrich-limit N` — max lead profiles to enrich per search artifact
-- `--skip-mutual-url-resolution` — skip local mutual URL resolution
-- `--resolve-mutuals-external` — allow paid external URL resolution; default is
-  cache-only/free layers
+- `--skip-enrich`, `--enrich-limit N` (default 100, most mutuals first)
+- `--skip-mutual-url-resolution`, `--mutual-url-limit N`, `--resolve-mutuals-external` (paid)
+- `--discover-mutuals`, `--discover-stagger`, `--discover-max-leads` (team attribution, cloud only)
+- `--count` per page (25 is LinkedIn's cap), `--force` to redo export and scoring

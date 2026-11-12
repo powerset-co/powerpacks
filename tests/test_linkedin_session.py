@@ -145,8 +145,19 @@ class SalesNavTests(unittest.TestCase):
                          seniority=None, function=["8"], keywords="engineer", start=0, count=10)
         out = ls.sales_nav("search", args, folder=folder, profile_dir=profile, runner=browser)
         self.assertEqual((out["total"], out["count"], out["leads"][0]["member_id"], out["requests_today"]), (430, 1, 74438553, 1))
-        self.assertEqual(browser.plans, [["lead search"]])
+        self.assertEqual(browser.plans, [["lead search 0"]])
         self.assertIn("(type:FUNCTION,values:List((id:8,text:Engineering,selectionType:INCLUDED)))", out["filters"][2])
+
+    @with_folder
+    def test_several_searches_share_one_browser_run(self, folder, profile):
+        browser = FakeBrowser(lambda r: {"status": 200, "text": json.dumps({"paging": {"total": 7}, "elements": []})})
+        base = dict(degree="2nd", company_id=[2135371], company_name=["Stripe"], title_id=None, title_name=None, region_id=None,
+                    region_name=None, seniority=None, function=None, keywords=None, start=0, count=25)
+        out = ls.sales_nav_searches([Namespace(**base), Namespace(**{**base, "seniority": ["310", "320"]})], folder=folder, profile_dir=profile, runner=browser)
+        self.assertEqual(browser.plans, [["lead search 0", "lead search 1"]])
+        self.assertEqual([o["total"] for o in out], [7, 7])
+        self.assertIn("SENIORITY_LEVEL", out[1]["filters"][2])
+        self.assertEqual(out[1]["requests_today"], 2)
 
     def test_cli_reports_a_spent_budget_as_failed(self):
         with tempfile.TemporaryDirectory() as raw:
