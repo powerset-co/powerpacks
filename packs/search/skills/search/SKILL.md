@@ -373,6 +373,15 @@ Keep execution quiet except for these milestones from `run`:
 - Outside the app: say `Run artifacts: <artifact-dir>` and show the top 10 ranked rows from the
   run's `csv` artifact as a Markdown table (rank, name, title/company, location, LinkedIn URL).
 
+## Beyond the network
+
+The network is searched first, always. When a search that names a company or a role at a
+company finds fewer than five people, or the user asks for more ("who else", "outside my
+network", "2nd degree", "warm intros"), the next step is the Sales Navigator search,
+`packs/sales-nav/skills/sales-nav-search/SKILL.md`, in the same chat: it finds people the user
+does not know yet, with mutual connection counts, through the chat's set or the user's own
+LinkedIn. Say in one line that these are outside the network.
+
 ## User edit & feedback capture
 
 Query, filter and trait edits made through the card are logged by the pipeline (`--edits-json`
