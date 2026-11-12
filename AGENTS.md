@@ -55,7 +55,7 @@ Paths below are relative to the installed checkout.
 | Health check or unclear installation/setup failure | `packs/powerset/skills/powerpacks-doctor/SKILL.md` |
 | Update Powerpacks | `packs/powerset/skills/update-powerpacks/SKILL.md` |
 | Repair installation or data paths | `packs/powerset/skills/fix-powerpacks/SKILL.md` |
-| People discovery, job description, shortlist, shared-network search | `packs/search/skills/search/SKILL.md` |
+| People in the user's network by company, role, place or job description ("who do I know at Stripe", "who can introduce me to people at Stripe", "fintech CTOs I know", a pasted JD), shortlist, shared-network search | `packs/search/skills/search/SKILL.md` |
 | Company search | `packs/search/skills/search-company/SKILL.md` |
 | Local relational or aggregate search | `packs/search/skills/search-sql/SKILL.md` |
 | Import Gmail contacts | `packs/ingestion/skills/import-gmail/SKILL.md` |
@@ -67,9 +67,12 @@ Paths below are relative to the installed checkout.
 | Build the local search index | `packs/indexing/skills/build-local-search-index/SKILL.md` |
 | Raw conversation archive | `packs/ingestion/skills/logbook/SKILL.md` |
 | Reset derived pipeline state | `packs/ingestion/skills/clean-slate/SKILL.md` |
-| Sales Navigator leads, mutual connections with a person | `packs/sales-nav/skills/sales-nav-search/SKILL.md` |
+| People the user does not know yet, when the query says so ("Sales Navigator", "LinkedIn leads", "outside my network", "2nd degree", "who else"); mutual connections with a named person | `packs/sales-nav/skills/sales-nav-search/SKILL.md` |
 | Apollo outbound | `packs/apollo/skills/build-outbound/SKILL.md` |
 | Send requested product feedback | `packs/powerset/skills/feedback/SKILL.md` |
+
+The query decides. A company or role by itself is a network search; the search skill
+moves on to Sales Navigator when the network comes up short.
 
 ## Setup and recovery
 

@@ -12,10 +12,10 @@ Change log:
   agent's query playbooks (network-search-api react_graph.py) move here, since the agent reading
   this file is now the one deciding what to search next.
 
-Use this skill when the user asks for `/sales-nav-search <query>`, "find LinkedIn leads at
-<company>", "who do we know at <company>", "CTOs at <company>", "warm intros to <role> at
-<company>", or any discovery of people by company, role, seniority, function or place that
-goes beyond the user's own contacts.
+Use this skill when the query asks for people the user does not know yet: `/sales-nav-search
+<query>`, "find LinkedIn leads at <company>", "CTOs at <company> outside my network", "who else",
+"2nd degree", or when the search skill hands off after the network came up short. "Who do I
+know at <company>" is a network search, not this.
 
 For mutual connections with one named person, see "One person" at the end.
 
