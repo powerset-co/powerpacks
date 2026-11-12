@@ -33,5 +33,10 @@
   "id": "resolve-mutuals-to-urls",
   "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
   "expected_behavior": "With a set, the pipeline resolves mutual member ids to LinkedIn URLs itself through the cache layers (free) as part of the run; the agent reads exports/mutuals.csv. It must not request paid external resolution unless the user asks, and must not use profile enrichment for a URL lookup."
+ },
+ {
+  "id": "network-first-then-sales-nav",
+  "query": "Who do we know at Stripe? (The people search just found 2.)",
+  "expected_behavior": "The network was searched first and came back thin, so the next step is the Sales Navigator search for Stripe in the same chat, presented as people outside the network with mutual counts. It must not re-run the internal search, must not have gone to Sales Nav before the internal search, and must not ask the user which to use."
  }
 ]
