@@ -2,22 +2,22 @@
  {
   "id": "vps-at-stripe",
   "query": "Find VPs of engineering at Stripe.",
-  "expected_behavior": "Happy path: resolve 'Stripe' to an org id via sales_nav_resolve first, then run sales_nav_search with server-side artifact persistence enabled and a conversation id, default lead count around 25, scoped to the resolved set. It must not run the search without artifact persistence and must not skip company resolution by passing the raw name."
+  "expected_behavior": "Happy path: resolve 'Stripe' to an org id with the pipeline's resolve command first, then run a plan (company + VP seniority 300, company + resolved title ids) through the pipeline, default 25 per page. It must not pass the raw company name as a title or keyword, and must not install or call an MCP."
  },
  {
   "id": "narrow-by-geography-after-search",
   "query": "I just ran a sales nav search for 'staff engineers at Anthropic' and got back 187 leads. Narrow it to just the Bay Area.",
-  "expected_behavior": "Refining filters means a NEW sales_nav_search with geography filters added, producing a new artifact id. It must not try to filter the existing artifact via get_artifact \u2014 pagination and filtering are different operations."
+  "expected_behavior": "Refining filters is a new query: continue the run with a plan file whose new id adds company + geography_ids (Bay Area 90000084). It must not filter the loaded leads by hand and must not start an unrelated run."
  },
  {
   "id": "page-back-through-existing",
-  "query": "Show me the next 25 leads from artifact_id art_abc123.",
-  "expected_behavior": "Pagination of an existing result set goes through get_artifact with the given artifact id and offset/limit. It must not run a new sales_nav_search or re-resolve companies just to page."
+  "query": "Show me the next 25 leads from the Stripe run we just did.",
+  "expected_behavior": "Paging is the same query with start_offset set to its next_start_offset, added to the run as a new plan id and continued. It must not re-resolve the company or start a new run."
  },
  {
-  "id": "missing-mcp",
-  "query": "Find VPs at Stripe. (Note: my powerset-search MCP is not installed yet.)",
-  "expected_behavior": "With the MCP missing, the plan routes the user through Powerset setup / MCP install first and stops there. It must not pretend to call sales_nav_search or fabricate results without the tool."
+  "id": "no-set-local-session",
+  "query": "Find VPs at Stripe. (This chat has no set selected.)",
+  "expected_behavior": "Without POWERPACKS_DEFAULT_SET_ID the pipeline searches through the user's own LinkedIn session. The plan runs as usual, the output says backend local, and enrichment and mutual URL steps record that they were skipped. The agent must not ask the user which backend, must not install an MCP, and must mention that results are the user's own 2nd degree."
  },
  {
   "id": "qualitative-refinement-existing-run",
@@ -27,11 +27,11 @@
  {
   "id": "endowment-multi-query-orchestrator",
   "query": "Who is on the investment team or an investor in Dartmouth endowment?",
-  "expected_behavior": "Robust-recall path through the orchestrator: resolve Dartmouth to the parent organization, build a multi-query search plan (finance/investment function filters, company-only, and past-company variants) executed via the sales-nav pipeline orchestrator, then enrich lead artifacts and resolve member ids, with lead scoring at the end. A single keyword-only Sales Nav query, or a hand-rolled MCP call chain that bypasses the orchestrator, fails this case."
+  "expected_behavior": "Robust-recall path: resolve Dartmouth to the parent organization, build a plan (parent + finance function 10, one or two parent + investment keyword queries, past-company variant last) run through the pipeline, read the per-query summaries, then score with strict criteria that give 0 to trustees, accounting, faculty and generic staff. A single keyword-only query, or stopping because generic parent staff loaded, fails this case."
  },
  {
   "id": "resolve-mutuals-to-urls",
   "query": "Lead 12345 has mutual_member_ids [67890, 11111, 22222] from a previous search. Show me their LinkedIn URLs.",
-  "expected_behavior": "Cheap URL resolution: resolve the member ids to LinkedIn URLs via the member-id resolution tool and ingest the resulting URLs. It must NOT use the extended-profile enrichment path (paid per-id API calls) for a simple URL lookup."
+  "expected_behavior": "With a set, the pipeline resolves mutual member ids to LinkedIn URLs itself through the cache layers (free) as part of the run; the agent reads exports/mutuals.csv. It must not request paid external resolution unless the user asks, and must not use profile enrichment for a URL lookup."
  }
 ]

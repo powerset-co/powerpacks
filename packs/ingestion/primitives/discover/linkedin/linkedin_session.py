@@ -365,19 +365,8 @@ def parse_typeahead(kind: str, answer: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def sales_nav(action: str, args: argparse.Namespace, *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE,
-              runner=run_streaming_command) -> dict[str, Any]:
-    usage_path = folder / USAGE.name
-    # Every Sales Navigator batch opens its home page once (session_browser.js), so it costs two.
-    if budget(2, usage_path) < 2:
-        raise RuntimeError(f"today's LinkedIn budget of {DAY_CAP} requests is spent")
-    if action in ("companies", "titles"):
-        kind = "COMPANY_WITH_LIST" if action == "companies" else "TITLE"
-        answer, = run_plan([{"name": f"typeahead {action}", "url": typeahead_url(kind, args.query)}], profile_dir=profile_dir, usage_path=usage_path, runner=runner)
-        if answer["status"] != 200:
-            raise RuntimeError(f"Sales Navigator typeahead answered HTTP {answer['status']}")
-        return {"primitive": "linkedin_session", "command": f"sales-nav {action}", "query": args.query,
-                "matches": parse_typeahead(kind, answer), "requests_today": spent_today(usage_path), "day_cap": DAY_CAP}
+def search_url_for(args: argparse.Namespace) -> tuple[str, list[str]]:
+    """The salesApiLeadSearch URL for one `sales-nav search` argument set, and its filters."""
     filters = [relationship_filter(DEGREES[args.degree])]
     if args.company_id:
         filters.append(company_filter(list(zip(args.company_id, (args.company_name or []) + [""] * len(args.company_id)))))
@@ -389,15 +378,45 @@ def sales_nav(action: str, args: argparse.Namespace, *, folder: Path = FOLDER, p
         filters.append(enum_filter("SENIORITY_LEVEL", SENIORITY_LEVELS, args.seniority))
     if args.function:
         filters.append(enum_filter("FUNCTION", FUNCTIONS, args.function))
-    url = lead_search_url(filters, start=args.start, count=args.count, keywords=args.keywords)
-    answer, = run_plan([{"name": "lead search", "url": url}], profile_dir=profile_dir, usage_path=usage_path, runner=runner)
+    return lead_search_url(filters, start=args.start, count=args.count, keywords=args.keywords), filters
+
+
+def sales_nav_searches(searches: list[argparse.Namespace], *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE,
+                       runner=run_streaming_command) -> list[dict[str, Any]]:
+    """Several lead searches in one browser run: the home page once, then one request each."""
+    usage_path = folder / USAGE.name
+    if budget(len(searches) + 1, usage_path) < len(searches) + 1:
+        raise RuntimeError(f"today's LinkedIn budget of {DAY_CAP} requests is spent")
+    urls = [search_url_for(args) for args in searches]
+    answers = run_plan([{"name": f"lead search {i}", "url": url} for i, (url, _) in enumerate(urls)],
+                       profile_dir=profile_dir, usage_path=usage_path, runner=runner)
+    results = []
+    for args, (url, filters), answer in zip(searches, urls, answers):
+        if answer["status"] != 200:
+            raise RuntimeError(f"Sales Navigator search answered HTTP {answer['status']}: {answer['text'][:200]}")
+        payload = json.loads(answer["text"])
+        leads = [parse_lead(element) for element in payload.get("elements") or []]
+        results.append({"primitive": "linkedin_session", "command": "sales-nav search",
+                        "total": int((payload.get("paging") or {}).get("total") or 0),
+                        "start": args.start, "count": len(leads), "leads": leads, "filters": filters, "keywords": args.keywords,
+                        "requests_today": spent_today(usage_path), "day_cap": DAY_CAP})
+    return results
+
+
+def sales_nav(action: str, args: argparse.Namespace, *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE,
+              runner=run_streaming_command) -> dict[str, Any]:
+    if action == "search":
+        return sales_nav_searches([args], folder=folder, profile_dir=profile_dir, runner=runner)[0]
+    usage_path = folder / USAGE.name
+    # Every Sales Navigator batch opens its home page once (session_browser.js), so it costs two.
+    if budget(2, usage_path) < 2:
+        raise RuntimeError(f"today's LinkedIn budget of {DAY_CAP} requests is spent")
+    kind = "COMPANY_WITH_LIST" if action == "companies" else "TITLE"
+    answer, = run_plan([{"name": f"typeahead {action}", "url": typeahead_url(kind, args.query)}], profile_dir=profile_dir, usage_path=usage_path, runner=runner)
     if answer["status"] != 200:
-        raise RuntimeError(f"Sales Navigator search answered HTTP {answer['status']}: {answer['text'][:200]}")
-    payload = json.loads(answer["text"])
-    leads = [parse_lead(element) for element in payload.get("elements") or []]
-    return {"primitive": "linkedin_session", "command": "sales-nav search", "total": int((payload.get("paging") or {}).get("total") or 0),
-            "start": args.start, "count": len(leads), "leads": leads, "filters": filters, "keywords": args.keywords,
-            "requests_today": spent_today(usage_path), "day_cap": DAY_CAP}
+        raise RuntimeError(f"Sales Navigator typeahead answered HTTP {answer['status']}")
+    return {"primitive": "linkedin_session", "command": f"sales-nav {action}", "query": args.query,
+            "matches": parse_typeahead(kind, answer), "requests_today": spent_today(usage_path), "day_cap": DAY_CAP}
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

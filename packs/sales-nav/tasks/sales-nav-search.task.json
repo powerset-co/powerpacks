@@ -1,104 +1,42 @@
 {
   "task": "sales_nav_search",
   "version": 1,
-  "description": "Run a Sales Navigator search through the powerset-search MCP, with server-side artifact persistence, resumable multi-query plans, lead enrichment, local mutual URL resolution, file handoffs, and paginated retrieval.",
+  "description": "Run a Sales Navigator search: resolve filters, run a multi-query plan through the Powerset API (set) or the user's own LinkedIn session (no set), ingest, enrich and resolve mutual URLs (cloud), export, optional scoring.",
   "default_constraints": {
-    "requires_powerset_auth": true,
-    "requires_powerset_mcp": true,
-    "set_id_required": true,
-    "persist_artifact_default": true,
-    "page_size_max": 25
+    "requires_powerset_auth_when_set": true,
+    "requires_powerset_mcp": false,
+    "set_id_required": false,
+    "page_size_max": 25,
+    "local_requests_per_day": 100
   },
   "preflight": [
     {
       "id": "ensure_powerset_login",
       "kind": "skill",
       "skill": "powerset",
-      "if_missing": ["powerpacks_powerset_token"]
-    },
-    {
-      "id": "ensure_mcp_installed",
-      "kind": "primitive",
-      "pack": "powerset",
-      "primitive": "mcp_install",
-      "command": "install",
-      "args": {"host": "all"}
-    },
-    {
-      "id": "ensure_mcp_healthy",
-      "kind": "primitive",
-      "pack": "powerset",
-      "primitive": "doctor",
-      "command": "run",
-      "checks": ["mcp_powerset_search"]
+      "when": "POWERPACKS_DEFAULT_SET_ID or --set-id is present",
+      "if_missing": [
+        "powerpacks_powerset_token"
+      ]
     }
   ],
   "steps": [
     {
       "id": "resolve_filters",
-      "kind": "mcp_tool",
-      "tool": "sales_nav_resolve",
+      "kind": "primitive",
+      "pack": "sales-nav",
+      "primitive": "sales_nav_pipeline",
+      "command": "resolve",
       "optional": true,
       "when": "user provides company names or human-readable titles instead of LinkedIn IDs"
     },
     {
-      "id": "init_local_artifacts",
-      "kind": "primitive",
-      "pack": "sales-nav",
-      "primitive": "sales_nav_artifacts",
-      "command": "init"
-    },
-    {
       "id": "run_search_plan",
-      "kind": "orchestrator",
+      "kind": "primitive",
       "pack": "sales-nav",
       "primitive": "sales_nav_pipeline",
       "command": "run",
-      "description": "Normal path: create a one-or-more-query search_plan.json, then follow blocked_tool_call responses until completion. Structured fallbacks come before keyword-only fallback: current company, relaxed structured filters, past_company_ids, then keywords last. The orchestrator calls sales_nav_search, get_artifact, enrich_extended_profiles, sales_nav_resolve_member_ids, export, and optional scoring in order."
-    },
-    {
-      "id": "run_search",
-      "kind": "mcp_tool",
-      "tool": "sales_nav_search",
-      "defaults": {
-        "persist_artifact": true,
-        "count": 25
-      },
-      "loop": {
-        "while": "explicit_plan_requests_next_page_or_user_asks",
-        "next_arg": "start_offset",
-        "next_arg_from": "result.next_start_offset"
-      }
-    },
-    {
-      "id": "ingest_page",
-      "kind": "primitive",
-      "pack": "sales-nav",
-      "primitive": "sales_nav_artifacts",
-      "command": "ingest-page",
-      "after": ["run_search", "retrieve_artifact"]
-    },
-    {
-      "id": "retrieve_artifact",
-      "kind": "mcp_tool",
-      "tool": "get_artifact",
-      "optional": true,
-      "defaults": {"include_content": true},
-      "when": "user wants to page back through a previously persisted result set or after search/enrichment to ingest full lead content"
-    },
-    {
-      "id": "enrich_visible_profiles",
-      "kind": "mcp_tool",
-      "tool": "enrich_extended_profiles",
-      "optional": true,
-      "when": "visible Sales Nav leads should be enriched with full profile data"
-    },
-    {
-      "id": "resolve_mutual_urls",
-      "kind": "mcp_tool",
-      "tool": "sales_nav_resolve_member_ids",
-      "optional": true,
-      "when": "local mutuals.jsonl has mutual_member_ids without mutual_linkedin_url; orchestrator runs this cache-only by default"
+      "description": "Write search_plan.json (structured queries first, keywords last), run, read the per-query summaries in the output, and continue with a second plan file whose new ids add the queries the results call for. The pipeline ingests, enriches and resolves mutual URLs (cloud) and exports by itself."
     },
     {
       "id": "score_local_leads",
@@ -112,7 +50,6 @@
   "outputs": {
     "primary": "leads.csv",
     "secondary": "mutuals.csv",
-    "persistent": "artifact_id",
     "local_state": ".powerpacks/sales-nav/runs/<run>/state.json"
   }
 }
