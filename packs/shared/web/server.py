@@ -36,6 +36,7 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -423,8 +424,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                         self._json(search_scope.invite(root, str(body["set_id"])))
                 except urllib.error.HTTPError as error:
                     self._json({"error": _api_error(error)}, HTTPStatus.BAD_GATEWAY)
-                except urllib.error.URLError as error:
-                    self._json({"error": str(error.reason)}, HTTPStatus.BAD_GATEWAY)
+                except (OSError, http.client.HTTPException) as error:  # unreachable, timed out or hung up
+                    self._json({"error": str(getattr(error, "reason", error)) or type(error).__name__},
+                               HTTPStatus.BAD_GATEWAY)
                 except (ValueError, KeyError) as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
                 return

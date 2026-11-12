@@ -1,5 +1,6 @@
 """The chat's search picker and Sets page: the user's Powerset sets from the Powerset API and the local index."""
 
+import http.client
 import io
 import json
 import tempfile
@@ -101,8 +102,10 @@ class SearchScopeTests(unittest.TestCase):
             urllib.error.HTTPError("u", 403, "Forbidden", {}, io.BytesIO(b'{"detail": "Only owners"}')),
             urllib.error.HTTPError("u", 502, "Bad Gateway", {}, io.BytesIO(b"<html>upstream down</html>")),
             urllib.error.URLError(ConnectionRefusedError("refused")),
+            http.client.RemoteDisconnected("Remote end closed connection without response"),
         )
-        for refusal, reason in zip(refusals, ("Only owners", "<html>upstream down</html>", "refused")):
+        reasons = ("Only owners", "<html>upstream down</html>", "refused", "Remote end closed connection without response")
+        for refusal, reason in zip(refusals, reasons):
             with patch("packs.shared.web.search_scope.create_set", side_effect=refusal):
                 request = urllib.request.Request(self.url.replace("/scope", "/sets"), method="POST",
                                                  data=json.dumps({"name": "Team"}).encode())

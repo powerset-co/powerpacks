@@ -113,7 +113,8 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
 
 
 def credentials_subject(credentials_path: Path | None = None) -> str | None:
-    path = credentials_path or Path.home() / ".powerpacks" / "credentials.json"
+    # Where auth.py keeps them: POWERPACKS_CREDENTIALS_PATH when set.
+    path = credentials_path or Path(os.environ.get("POWERPACKS_CREDENTIALS_PATH") or Path.home() / ".powerpacks" / "credentials.json")
     if not path.exists():
         return None
     try:
