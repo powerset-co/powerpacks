@@ -126,8 +126,8 @@ export function RoleLine({ title, company, logo }: { title: string; company: str
 // judges' 1–5) with the reasoning beside it and the judges' labels under it; a person without an
 // overall shows what happened instead ("Not judged"), never a zero. A plain run's row shows what
 // the cloud app's row shows: each trait's share with its name and reason, nothing else; the
-// pond's own 0–1 only orders the list. A refined step's row shows that step's score, then, as the
-// cloud app's Indicators column stacks them, the refine's insight for the person over the traits.
+// pond's own 0–1 only orders the list. A refined step's row stacks, as the cloud app's Indicators
+// column does, the refine's insight for the person over the traits; its score only orders the list.
 interface ScoreProps {
   result: Result
   ranked: boolean
@@ -139,7 +139,6 @@ function Score({ result, ranked, labels, refined }: ScoreProps) {
   if (!ranked) {
     return (
       <div className="result-overall">
-        {refined ? <ScoreCell result={result} ranked={false} /> : null}
         <div className="result-reason">
           {refined && result.reason ? (
             <div className="result-insight">

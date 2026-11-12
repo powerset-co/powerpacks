@@ -216,15 +216,11 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                         scored = [future.result() for future in futures]
                     votes = Counter(query_type for _, query_type in scored)
                     query_type = votes.most_common(1)[0][0] if votes else "rerank"
-                    parents = {row["person_id"]: row for row in rows}
-                    kept = []
-                    for scores, _ in scored:
-                        for pid, score, reasoning in scores:
-                            row = parents[pid]
-                            final = (float(row["final_score"]) if score >= MIN_RERANK_SCORE else 0) if query_type == "filter" else score
-                            if final >= MIN_RERANK_SCORE:
-                                kept.append(dict(row, final_score=final, overall_reasoning=reasoning))
-                    kept.sort(key=lambda row: row["final_score"], reverse=True)
+                    # A qualitative refine only keeps or drops: the kept rows keep their trait score
+                    # and the order they had. Only a SQL sort reorders.
+                    judged = {pid: (score, reasoning) for scores, _ in scored for pid, score, reasoning in scores}
+                    kept = [dict(row, overall_reasoning=judged[row["person_id"]][1]) for row in rows
+                            if row["person_id"] in judged and judged[row["person_id"]][0] >= MIN_RERANK_SCORE]
                     costs = []
                     if usage_path.exists():
                         with usage_path.open("rb") as handle:

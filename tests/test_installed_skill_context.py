@@ -80,7 +80,7 @@ class InstalledSkillContextTests(unittest.TestCase):
                     (checkout / script).chmod(0o755)
             skills = [path for path in (ROOT / "packs").rglob("SKILL.md")
                       if "resolve_powerpacks_root() {" in path.read_text()]
-            self.assertGreaterEqual(len(skills), 7)
+            self.assertGreaterEqual(len(skills), 6)
             for skill in skills:
                 with self.subTest(skill=str(skill.relative_to(ROOT))):
                     resolver = skill.read_text().split("resolve_powerpacks_root() {", 1)[1].split("\n}", 1)[0]

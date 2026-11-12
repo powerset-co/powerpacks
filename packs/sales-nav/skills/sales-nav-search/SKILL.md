@@ -1,529 +1,196 @@
 ---
 name: sales-nav-search
-description: Run a Sales Navigator search through the Powerset Search MCP. Resolves company / title filters to LinkedIn IDs, runs a paginated lead search with server-side artifact persistence on by default, and offers paginated retrieval via get_artifact.
+description: Find people in the extended network with LinkedIn Sales Navigator. Through the Powerset API when the chat has a set (every teammate's seat, merged), through the user's own LinkedIn session when it does not. Resolve ids, run a plan of a few structured queries, read each query's summary, add queries when the pool is wrong or thin, score with strict criteria.
 ---
 
 # Sales Nav Search
 
-Use this skill when the user asks for `/sales-nav-search <query>`,
-"find LinkedIn leads at <company>", "show me sales nav results for <title>",
-or any other Sales Navigator search request scoped to the user's set.
+Created: 2026-11-11 (rewritten; the MCP relay version dates from 2026-03)
 
-The skill is in its own pack (`packs/sales-nav`) but **depends on
-`packs/powerset`** for Auth0 login and MCP install. If those aren't ready,
-route the user to `$powerset setup` first.
+Change log:
+- 2026-11-11: No MCP. The pipeline calls Sales Navigator itself, cloud or local by set. The cloud
+  agent's query playbooks (network-search-api react_graph.py) move here, since the agent reading
+  this file is now the one deciding what to search next.
 
-It calls these MCP tools served by the remote `powerset-search` MCP configured in
-`POWERPACKS_MCP_URL`:
+Use this skill when the user asks for `/sales-nav-search <query>`, "find LinkedIn leads at
+<company>", "who do we know at <company>", "CTOs at <company>", "warm intros to <role> at
+<company>", or any discovery of people by company, role, seniority, function or place that
+goes beyond the user's own contacts.
 
-- `sales_nav_resolve` — turn company names + titles into LinkedIn
-  `company_ids` / canonical title strings
-- `sales_nav_search` — paginated lead search scoped to the user's set;
-  with `conversation_id` + `persist_artifact: true` the server writes a
-  Supabase artifact row and returns an `artifact_id`
-- `get_artifact` — paginated retrieval of a persisted artifact
-- `enrich_extended_profiles` — enrich selected lead member IDs with profile
-  fields, then persist them back to the latest Sales Nav artifact
-- `sales_nav_resolve_member_ids` — resolve mutual member IDs to LinkedIn URLs
-  through cache/free layers by default
+For mutual connections with one named person, see "One person" at the end.
 
-The skill itself does not call HTTP — Claude Code / Codex invoke the MCP
-tools directly once `mcp_install` (in `packs/powerset`) has registered the
-server.
+## How it runs
 
-## Local, with your own LinkedIn session (no MCP, no Unipile)
-
-`packs/ingestion/primitives/discover/linkedin/linkedin_session.py` runs Sales Navigator and
-mutual-connection lookups inside the LinkedIn Chrome profile Powerpacks signed in to (the
-same one the connections read uses), from this Mac, as the user. Use it when the user asks
-for Sales Nav results or mutual counts and the Powerset MCP is not set up, or asks for
-"local" explicitly. Every request counts against one budget of 100 a day
-(`.powerpacks/network-import/discover/linkedin/usage.json`); the answer carries
-`requests_today`. Do not loop over pages or people to get around it: LinkedIn restricts
-accounts that fetch too much. A `signed_out` failure means the user signs in again through
-the LinkedIn connections read; a `slow_down` failure means stop for the day.
-
-```
-uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav companies "<name>"
-uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav titles "<title>"
-uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav search \
-  --degree 2nd --company-id <id> --company-name "<name>" [--title-id <id> --title-name "<title>"] \
-  [--seniority 310] [--function 8] [--keywords "<words>"] [--start 25] [--count 25]
-uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py mutuals <linkedin url> [...up to 25]
-```
-
-`companies` and `titles` answer the ids the search filters need (a Sales Nav search costs two
-requests: its home page once, then the search). `search` returns a page of up to 25 leads in the
-cloud's lead shape (`member_id`, `profile_id`, `title`, `company_name`, `degree`,
-`total_mutual_count`, `mutual_member_ids`), so `sales_nav_artifacts.py` and the scorer read it
-unchanged. `mutuals` answers how many of the user's connections each person shares and the
-first ten of them by name and URL, one request per person (two the first time, for the profile
-id), skipping the user's own connections, and keeps answers 30 days in `mutuals.json`.
-
-## Hard rules
-
-- This skill **requires** the `powerset-search` MCP. If it is not
-  registered, route the user through `$powerset setup` →
-  `mcp_install install --host all`.
-- Every Sales Nav call is **scoped to a `set_id`**. The MCP server enforces
-  the set context. Pass the one the user specifies. If the user does not
-  specify one, resolve the default with
-  `packs/search/primitives/resolve_set_operators/resolve_set_operators.py`
-  so it can inherit `POWERPACKS_DEFAULT_SET_ID` / `POWERSET_DEFAULT_SET_ID`, or
-  fall back to the logged-in operator's active personal set. Do not invent or
-  guess `set_id`s.
-- **Default to `persist_artifact: true` on every `sales_nav_search` call.**
-  Persistence is cheap and lets the user (or the agent in a later turn) page
-  large result sets via `get_artifact`. Only pass `persist_artifact: false`
-  when the user explicitly asks for an ephemeral search.
-- Persistence requires a `conversation_id`. See the conversation_id playbook
-  below — without one, persistence is silently skipped server-side and you
-  only get the inline `leads` list back.
-- Lead profiles can include LinkedIn URLs and contact metadata. Treat them
-  as sensitive: keep them in local `.powerpacks/` handoff files and present only
-  compact summaries in chat unless the user asks for details.
-- Do not pass accumulated lead/mutual payloads through chat or command args.
-  Save each MCP page response to a small JSON file, then run
-  `sales_nav_artifacts ingest-page --response <path>` so later steps pass only
-  paths/state.
-- **Default to the orchestrator.** For normal runs, do not hand-compose a long
-  MCP/tool sequence in chat. Create a search args/plan JSON, run
-  `sales_nav_pipeline`, execute only the `blocked_tool_call` it emits, save the
-  response to the requested path, then continue until completed or blocked.
-  Use primitives directly only for narrow debugging or power-user requested
-  edits.
-- For clear, unambiguous searches, do not ask approval/clarifying questions.
-  Resolve filters, build a one-or-more-query search plan, let the orchestrator
-  search, ingest full artifact content, enrich the visible leads, resolve mutual
-  URLs locally, export CSVs, and present a compact summary. Ask only when a
-  filter is genuinely ambiguous (for example multiple plausible "Cisco"
-  companies) or when the user asks to page/enrich far beyond the visible result
-  set.
-- Start a fresh Sales Nav search for each search request. Do not scan, discover,
-  reuse, resume, or refine from previous `.powerpacks/sales-nav`, artifact,
-  `artifact_id`, CSV, JSONL, manifest, or state files. You may use artifacts
-  created by the current run for ingestion, enrichment, pagination, and export.
-- Do not auto-page endlessly. It is OK for the orchestrator search plan to
-  include deliberate same-turn fallback queries/pages for robustness (for
-  example strict role + company-only fallback), but otherwise surface
-  `has_more` / `next_start_offset` and ask before loading more.
-- Keep fallback searches structured before falling back to free text. If an
-  exact current-company query returns 0, retry with the same org ID in
-  `past_company_ids` before using `keywords`. Keywords are the last fallback.
-
-## Prereqs
-
-Run every command below from the Powerpacks checkout, like the other skills:
+One primitive does the work, from the Powerpacks checkout:
 
 ```bash
-resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
-    [[ -n "$candidate" && -x "$candidate/install.sh" && -d "$candidate/packs" ]] || continue
-    echo "$candidate"; return 0
-  done
-  return 1
-}
-REPO="$(resolve_powerpacks_root)" || { echo "Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2; exit 1; }
-cd "$REPO"
+PIPE="uv run --project . python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py"
 ```
 
-Run this once. It starts Auth0 login if credentials are missing or expired,
-then installs the MCP into the chosen host:
+Which LinkedIn it talks to is decided by the set, nothing else:
 
-```bash
-./install-powerset-mcp.sh --host all
-```
+| | the chat has a set (`POWERPACKS_DEFAULT_SET_ID`, from the Search-in picker, or `--set-id`) | no set (local-only chat) |
+| --- | --- | --- |
+| who searches | the Powerset API, every Sales Nav seat in the set, merged | the user's own LinkedIn session on this Mac |
+| 2nd degree of | the whole team | the user |
+| needs | Powerset sign-in (`$powerset login`); the token refreshes itself | the LinkedIn Chrome profile the connections import signed in to |
+| enrichment, mutual URLs, team attribution | yes | no; the step says so in its summary |
+| cost | Powerset's | 100 LinkedIn requests a day: one per run plus one per query, two per `resolve` name |
 
-If on Codex, rerun MCP install when the Auth0 token needs to be refreshed.
-The installer writes a fresh `Authorization` header into `~/.codex/config.toml`:
+Never ask the user which. A `failed` answer naming `budget` means the local day is spent: say so
+and stop. A `signed_out` answer means the user signs in again through the LinkedIn connections
+import. A cloud answer with `reconnect_required` means a teammate's Sales Nav seat needs
+reconnecting in the web app: say which, and go on with the rest.
 
-```bash
-./install-powerset-mcp.sh --host codex
-```
+Leads are sensitive. Keep them in the run folder (`.powerpacks/sales-nav/runs/<run>/`), show
+compact summaries in chat, and never paste lead payloads into commands.
 
-## conversation_id playbook
+## The loop
 
-`conversation_id` is a Supabase `conversations.id`. The MCP server uses it
-to scope artifact reads/writes to a specific conversation. Three ways to
-get one:
+1. **Resolve names to ids.** Companies and titles are filtered by LinkedIn id, not text:
 
-1. **From search.powerset.dev** — copy the conversation id from the URL
-   when the user has an open chat.
-2. **REST API** — `POST /v2/conversations` with the user's bearer token
-   returns `{ "id": "..." }`.
-3. **Per-skill ephemeral session** — generate a UUID4 the first time you
-   need one in the current skill invocation and reuse it for follow-ups
-   in the same turn. The artifact rows still persist in Supabase keyed by
-   that id; they just won't be linked to a webapp conversation.
+   ```bash
+   $PIPE resolve --company "Stripe" --title "Chief Technology Officer"
+   ```
 
-Always pass the same `conversation_id` to subsequent `sales_nav_search`
-calls and the matching `get_artifact` call.
+   Take the first match (`recommended: true`) and go; do not ask the user to pick between a
+   parent and its subsidiaries. Mention alternatives in one clause at the end ("searched Stripe;
+   also found Stripe Partners"). If nothing resolves, retry once in the same turn with two or
+   three variants (strip possessives, try the acronym or spaced form, for a university add "<school>
+   Investment Office"), then use the parent institution. Never put an unresolved company name
+   in `title` or `keywords` as a substitute.
 
-## Fast path runner
+2. **Write a plan** of one to four structured queries (shape below), the playbook for the ask
+   deciding which. Structured filters first; `keywords` last and rarely.
 
-Prefer the resumable Sales Nav orchestrator for normal runs:
+3. **Run it.**
 
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py run \
-  --query "<user query>" \
-  --set-id "<set_id>" \
-  --search-plan-json .powerpacks/sales-nav/<run>/search_plan.json
-```
+   ```bash
+   $PIPE run --query "<the user's ask>" --run-id <slug> --search-plan-json .powerpacks/sales-nav/runs/<slug>/plan.json
+   ```
 
-For a single simple pass, `--search-args-json` is still accepted. Prefer
-`--search-plan-json` because robust Sales Nav recall often needs multiple
-queries.
+   The output is `status: completed` with `searches`: per query, `filters_description` (what it
+   asked for, in words), `total_count`, `new_leads`, `lead_count_after`, `has_more`, the first ten
+   `lead_summaries` (name, title, company, mutual count), `refinement_hint` from the cloud, and
+   `unsupported_filters` from the local session.
 
-The runner owns local state for the current invocation and exits with
-`status: blocked_tool_call` whenever the harness should call a `powerset-search`
-MCP tool. The block includes the `tool_name`, `tool_args`, `save_response_to`,
-and `continue_command`. The harness/agent should call the MCP tool natively,
-write the JSON response to the specified path, then run the continue command.
-Local ingest, lead enrichment, mutual URL resolution, export, scoring approvals,
-and the ledger are handled by the runner.
+4. **Read the summaries like a reviewer.** Do the titles and companies match the ask? Is the pool
+   thin (under five) or wrong (right company, wrong level)? If so, write a second plan file with
+   new query ids and continue; the ids already run are kept, the new ones run, everything dedupes
+   into one `leads.jsonl`:
 
-For follow-up qualitative search criteria, run a new Sales Nav search. Only pass
-`--criteria` when the user explicitly asks to score or analyze the current run's
-loaded leads rather than search again.
+   ```bash
+   $PIPE continue --ledger .powerpacks/sales-nav/runs/<slug>/pipeline.json --search-plan-json .../plan2.json
+   ```
 
-Search plan shape:
+   Stop at about five queries per ask. After that, answer from what loaded or say the search did
+   not find enough good matches.
+
+5. **Score when the ask is qualitative** (C-suite, "investment side", "fintech background",
+   "most senior"). Title filters are brittle; the scorer reads whole profiles. It costs money and
+   asks once:
+
+   ```bash
+   $PIPE continue --ledger <ledger> --criteria "<strict criteria>"       # answers blocked_approval
+   $PIPE approve llm --ledger <ledger> --approval-id <id> --confirm
+   $PIPE continue --ledger <ledger> --criteria "<strict criteria>"
+   ```
+
+   Write criteria that exclude, not prefer: "current C-level operators at Stripe (CEO, CFO, CTO,
+   COO, Chief X Officer, President as top officer); score 0 for VPs, directors, heads, advisors,
+   board-only, past-only, and similar-name companies". The scorer drops at 0 and cuts at 0.3;
+   "deprioritize" leaves borderline people in.
+
+6. **Present.** Lead with how many were found and how many have mutual connections, then the top
+   leads: name, title, company, location, mutual count, LinkedIn URL when there is one (local
+   leads have none; say "N mutuals" and the name). Point at `exports/leads.csv` and
+   `exports/mutuals.csv`. If a query has `has_more`, say so and ask before paging; paging is the
+   same query with `start_offset` set to its `next_start_offset`, as a new plan id.
+
+## Plan shape
 
 ```json
 {
-  "score_criteria": "investment/endowment team",
+  "score_criteria": "optional: strict criteria, scored after the searches (asks for approval)",
   "queries": [
-    {"id": "finance", "label": "parent company + finance", "args": {"company_ids": [163348], "function_ids": ["10"]}},
-    {"id": "company_only", "label": "parent company only", "args": {"company_ids": [163348]}}
+    {"id": "pool", "label": "company only", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}}},
+    {"id": "cxo", "label": "company + executives", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}, "seniority_ids": ["310", "320"]}},
+    {"id": "cto", "label": "exact title", "args": {"company_ids": [2135371], "company_names": {"2135371": "Stripe"}, "title_ids": [{"id": 153, "text": "Chief Technology Officer"}]}}
   ]
 }
 ```
 
-The MCP `sales_nav_search` schema accepts current-company IDs via
-`company_ids`, past-company IDs via `past_company_ids`, optional display-name
-maps for both, and text filters. Keep unrelated agent-only annotations in plan
-metadata; the orchestrator strips unsupported fields from tool args.
+`args`: `company_ids` + `company_names` (always pass the names), `past_company_ids` +
+`past_company_names`, `seniority_ids`, `function_ids`, `geography_ids` + `geography_names`,
+`headcount_ids`, `industry_id`, `title_ids` (from resolve; `title` text also works and is resolved
+for you), `keywords`, `count` (25 max), `start_offset`. The local session cannot do
+`past_company_ids`, `headcount_ids` or `industry_id` and reports them in `unsupported_filters`.
 
-## Local file handoff
+Seniority: 100 In Training, 110 Entry, 120 Senior, 130 Strategic, 200 Manager, 210 Senior Manager,
+220 Director, 300 VP, 310 CXO, 320 Owner/Partner. Leaders = 220,300,310,320; executives = 310,320.
+Function: 1 Accounting, 4 Business Dev, 6 Consulting, 8 Engineering, 9 Entrepreneurship, 10 Finance,
+12 HR, 13 IT, 14 Legal, 15 Marketing, 18 Operations, 19 Product, 24 Research, 25 Sales, 26 Support.
+Headcount: B 1-10, C 11-50, D 51-200, E 201-500, F 501-1000, G 1001-5000, H 5001-10000, I 10000+.
+Geography: 90000084 SF Bay Area, 90000070 NYC, 90000049 LA, 90000091 Seattle, 90000012 Boston,
+90000013 Chicago, 90000003 Austin, 90009496 London, 103644278 US, 102257491 UK, 100506914 Europe.
 
-Normally `sales_nav_pipeline` performs these local handoffs. Use the primitives
-below directly only when debugging a failed block in the current run or honoring
-a power-user request to operate at the primitive level.
+## Playbooks
 
-Use `packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py` as
-the durable local store for each skill invocation. It normalizes MCP page output
-into these files:
+LinkedIn's filters are literal and its title facets miss compound titles ("Co-Founder & CTO"), so
+the pool comes from structure and the precision from scoring.
 
-- `leads.jsonl` — internal handoff, one row per lead with `member_id`,
-  `profile_id`, `source_account_ids`, `operators`, `mutual_member_ids`,
-  `total_interactions` when present, `linkedin_url`, title/company/location,
-  enriched profile fields (`summary`, `experiences`, `education`, `enriched`)
-  when available, artifact/source metadata, and seen counts.
-- `mutuals.jsonl` — internal handoff, one row per lead↔mutual edge with
-  `lead_member_id`, `mutual_member_id`, mutual LinkedIn URL if resolved,
-  `total_interactions` when present, operator/source metadata, and
-  artifact/source metadata.
-- `member_urls.json` — `member_id -> LinkedIn URL` results from
-  `sales_nav_resolve_member_ids`.
-- `manifest.json` / `state.json` — paths, counts, artifact ids, pages.
-- `exports/leads.csv` and `exports/mutuals.csv` — final user-facing CSVs written
-  only when you run `export`.
+- **People at a company** ("who works at Brookfield"): company only. If 0, the same org id as
+  `past_company_ids` (cloud). If still 0, `keywords` = the resolved company name, once.
+- **Exact C-suite at a company**: company only first. Read `max_total_count`: under about 200,
+  page the same query until `has_more` is false or about 200 leads loaded, then score once with the
+  strict C-level criteria above. At or above 200, do not sweep: company + `seniority_ids`
+  `["310","320"]`, then company + `keywords` for the acronyms the ask names (CEO, CTO, CFO, COO),
+  then exact `title_ids` only for a named role, accumulate, score. Founder, Owner or Partner counts
+  only with an explicit current C-level operating role at that company.
+- **Broad executives / leadership**: company + `["310","320"]`. If that loads five or more, stop
+  searching and score for current executive leadership; score 0 for non-executive directors,
+  managers, advisors, past-only. Company only when fewer than five.
+- **Exact title** (CEO, "Head of Sales", "VP Product"): company + `title_ids` first. If it misses
+  or looks too literal, the nearest structure in the same turn: company + the matching
+  `seniority_ids`, company + `function_ids`, or both. Score the pool against the title before
+  saying none.
+- **Role or department** (engineering, sales, finance, recruiting): company + `function_ids`.
+  A named role inside it adds company + `title_ids`; a named level adds company + function +
+  seniority as a third query. Score against the original ask. Company only is the last query,
+  not the first.
+- **Investment side of an institution** ("Dartmouth endowment", "the investment team at X"): use an
+  explicit investment office or company if one resolved. If only the parent did, the parent's
+  generic staff are context, not success, however many load: (a) parent + `function_ids` `["10"]`,
+  (b) if those are admin or accounting rather than investing, one or two parent + `keywords`
+  searches from the user's own words (investment, investor, portfolio, endowment), (c) past
+  company + the keyword only as a last resort (it finds alumni). Then score with criteria that give
+  0 to trustees, board-only, grants, accounting, faculty, real estate operations and generic
+  advisors.
+- **A specific person by name**: `keywords` = the name (the one everyday use of keywords), company
+  if known.
 
-Initialize once per search:
+`keywords` is never the discovery mechanism: it misses everyone whose profile lacks the exact
+word. Criteria you would be tempted to put there ("in the Payments division", "working on
+agents") go to the scorer instead.
 
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py init \
-  --query "<user query>" \
-  --set-id "<set_id>" \
-  --conversation-id "<conversation_id>"
-```
+Ask the user only when a filter is genuinely ambiguous (several unrelated "Cisco" companies with
+no obvious match) or before paging far past the first results. Do not ask between the steps
+above, and do not reuse or resume an older run to answer a new ask: each ask is its own run.
 
-Do not ingest compact MCP preview rows when full artifact content is available.
-After each MCP `sales_nav_search`, save the response for audit, then immediately
-call `get_artifact(include_content=true)` for the returned `artifact_id`, save
-that full artifact response, and ingest with `--prefer-content`:
+## One person
 
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-page \
-  --state .powerpacks/sales-nav/runs/<run>/state.json \
-  --response .powerpacks/sales-nav/runs/<run>/pages/artifact-full-000.json \
-  --prefer-content
-```
-
-When the user asks for mutual LinkedIn URLs, first get pending IDs from the
-local file store:
-
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py pending-mutual-ids \
-  --state .powerpacks/sales-nav/runs/<run>/state.json --limit 100
-```
-
-Pass those IDs to MCP `sales_nav_resolve_member_ids`, save the MCP response,
-then merge it:
-
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py ingest-member-urls \
-  --state .powerpacks/sales-nav/runs/<run>/state.json \
-  --response .powerpacks/sales-nav/runs/<run>/member_urls.response.json
-```
-
-After `enrich_extended_profiles`, call `get_artifact(include_content=true)` again
-and ingest with `--prefer-content` so `leads.jsonl` contains the full enriched
-profile fields (`summary`, `experiences`, `education`).
-
-For final files:
+Mutual connections with one named person, local, through the user's own session, up to 25 URLs
+a call (one request per person, cached 30 days, the person's profile is never viewed):
 
 ```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py export \
-  --state .powerpacks/sales-nav/runs/<run>/state.json
+uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py mutuals https://www.linkedin.com/in/<slug>
 ```
 
-Do not use local lookup to answer search/refinement requests. The lookup
-primitive is only for explicit inspection of the current run's local files, not
-for deciding whether to avoid a new Sales Nav search:
+The answer is each person's shared-connection count and the first ten shared connections by
+name and URL. Counts against the same 100 a day.
 
-```bash
-uv run --project . python packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py lookup \
-  --state .powerpacks/sales-nav/runs/<run>/state.json --query "<name/company/title>"
-```
+## What this skill does not do
 
-For explicit current-run analysis requests (for example "score these current
-results for real estate exposure"), use the scoring primitive instead of
-grepping manually. For search/refinement requests, run a new Sales Nav search:
-
-```bash
-uv run --project . python packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py \
-  --state .powerpacks/sales-nav/runs/<run>/state.json \
-  --criteria "real estate exposure" \
-  --threshold 0.7
-```
-
-It fans out over `leads.jsonl`, includes joined mutual context, writes only
-matching leads to `scores/<criteria>/matches.jsonl`, and writes the user-facing
-`matches.csv`. Non-matches are not written unless `--dump-debug` is passed.
-
-## Manual workflow / debugging reference
-
-The normal workflow is the orchestrator loop above. The lower-level sequence
-below documents what the orchestrator is doing and is useful when a block fails
-or a power user wants to call primitives directly.
-
-### Step 0 — Confirm prereqs
-
-```bash
-uv run --project . python packs/powerset/primitives/mcp_install/mcp_install.py status --host all
-```
-
-If `installed: false` for the host the user is on, route to
-`$powerset setup` first.
-
-### Step 0b — Resolve set scope
-
-If the user provided a `set_id`, use it. Otherwise run:
-
-```bash
-uv run --project . python packs/search/primitives/resolve_set_operators/resolve_set_operators.py \
-  --env-file .env
-```
-
-Use the returned `set_id` in Sales Nav MCP calls. The returned
-`operator_ids` are useful for parity with local TurboPuffer searches, but the
-Sales Nav MCP is still scoped by `set_id`.
-
-### Step 1 — Decide whether to resolve filters
-
-If the user gave you free-text companies or titles, call
-`sales_nav_resolve` first to convert them into stable IDs / canonical
-strings. If there is a single obvious recommended company/title match, proceed
-without asking. Ask the user only when multiple plausible matches are genuinely
-ambiguous (for example many unrelated "Cisco" entities and no exact/obvious
-match):
-
-```text
-Tool: sales_nav_resolve
-Args: {
-  "set_id": "<the user's set>",
-  "companies": ["Stripe", "Ramp"],
-  "titles": ["staff engineer", "principal engineer"]
-}
-```
-
-If the user already gave you a `company_id` or `function_id`, skip this
-and go straight to step 2.
-
-Resolution robustness:
-
-- LinkedIn company URLs should be passed directly to `sales_nav_resolve`; the
-  server can resolve vanity slugs such as `linkedin.com/company/genies-inc`.
-- Endowment / investment office / foundation phrases often name a team rather
-  than a LinkedIn company. Resolve the parent institution too. Example:
-  `"Dartmouth endowment"` should be tried with `"Dartmouth"` /
-  `"Dartmouth College"`, then the search plan should use the parent org ID plus
-  finance/investment keywords and a parent company-only fallback.
-- If the first resolve call returns no company matches, do not stop. Retry once
-  in the same turn with cleaned parent/name variants before telling the user it
-  cannot be resolved.
-- If a current-company search returns 0 for a resolved org, keep the same org
-  ID and run a past-company query next. Only use keyword fallback after the
-  structured current/past company paths are empty or unavailable.
-
-Mode defaults:
-
-- "who works at Brookfield" / "who's in my extended network at Cisco" → company
-  search. Resolve company, search it, ingest full artifact content, enrich the
-  visible page, export.
-- "who works at Brookfield in the finance department" → same company search plus
-  finance intent. Use reliable Sales Nav filters if known (`function_ids`), and
-  also pass targeted `keywords`/`title` when helpful. If the first query is too
-  sparse, retry once or twice by relaxing the weakest text filter while keeping
-  the company/set fixed.
-- "show me people with real estate exposure" after a Sales Nav run → run a new
-  Sales Nav search with the updated criteria. Do not scan previous `leads.jsonl`
-  or local artifacts for refinement.
-
-### Step 2 — Run the search (always with persistence)
-
-Initialize the local file store before the MCP call if you have not already.
-
-```text
-Tool: sales_nav_search
-Args: {
-  "set_id":         "<the user's set>",
-  "conversation_id":"<UUID — see conversation_id playbook>",
-  "persist_artifact": true,
-  "company_ids":    [...],         // from sales_nav_resolve
-  "company_names":  {"<org_id>": "<display name>"},
-  "past_company_ids": [...],       // alumni / worked-at searches
-  "past_company_names": {"<org_id>": "<display name>"},
-  "title":          "staff engineer",
-  "function_ids":   [...],
-  "seniority_ids":  [...],
-  "geography_ids":  [...],
-  "headcount_ids":  [...],
-  "keywords":       "distributed systems",
-  "count":          25,            // max 25 per page
-  "start_offset":   0
-}
-```
-
-Response shape (with persistence):
-
-```jsonc
-{
-  "artifact_id": "...",
-  "artifact": { /* metadata */ },
-  "total_count": 1342,
-  "max_total_count": 2500,
-  "results_returned": 25,
-  "has_more": true,
-  "next_start_offset": 25,
-  "filters_used": { /* what the server actually filtered on */ },
-  "reconnect_required": false,
-  "leads": [
-    {
-      "name": "...",
-      "headline": "...",
-      "linkedin_url": "...",
-      "company": "...",
-      "location": "...",
-      "mutual_count": 3,
-      "mutual_member_ids": ["...", "..."]
-    }
-  ]
-}
-```
-
-`reconnect_required: true` means the user's Unipile/LinkedIn session
-needs upstream re-auth; tell the user and stop. Do not retry.
-
-Save the MCP response for audit, but ingest the full artifact content: call
-`get_artifact` with `include_content: true`, save that response, then run
-`sales_nav_artifacts ingest-page --prefer-content` on it. The primitive records
-`artifact_id`, lead rows, mutual edges, and source/operator metadata in local
-handoff files.
-
-Then enrich the visible leads by default:
-
-```text
-Tool: enrich_extended_profiles
-Args: {
-  "conversation_id": "<same conversation_id>",
-  "member_ids": [<member_ids from this visible page>],
-  "set_id": "<same set_id>"
-}
-```
-
-After enrichment, call `get_artifact(include_content=true)` again and ingest
-with `--prefer-content`. This is what puts full profile data (`summary`,
-`experiences`, `education`) into `leads.jsonl`.
-
-Every follow-up retrieval (next page, mutual lookup, re-display) should use the
-local state path plus `get_artifact` / `sales_nav_resolve_member_ids` as needed.
-
-### Step 3 — Present the first page
-
-- Lead with `total_count`, `results_returned`, and any non-zero `mutual`
-  counts.
-- For each lead present `name`, `headline`, `company`, `location`,
-  `mutual_count`, and `linkedin_url`.
-- Mention `artifact_id` to the user (they may want to reference it across
-  turns / sessions).
-- If `has_more`, ask if they want page N+1 — do **not** auto-fetch.
-
-### Step 4 — Paginate via get_artifact
-
-Subsequent pages of the same result set should go through
-`get_artifact`, not a fresh `sales_nav_search`. Save each page response and
-append it to the same local files with `sales_nav_artifacts ingest-page`:
-
-```text
-Tool: get_artifact
-Args: {
-  "artifact_id":     "<from step 2>",
-  "offset":          25,
-  "limit":           25,
-  "include_content": true    // prefer full accumulated lead shape for local files
-}
-```
-
-This avoids re-running an expensive Sales Nav fetch and keeps the
-filters/result-set stable across pages. For each retrieved page, prefer
-`include_content=true` + `ingest-page --prefer-content` so local files keep the
-full accumulated lead shape. The local primitive dedupes by `member_id` and
-appends new lead↔mutual edges to `mutuals.jsonl`.
-
-### Step 5 — Refining filters
-
-Refining upstream Sales Nav filters is a **new search**, not pagination. Re-call
-`sales_nav_search` with the new args, the same `conversation_id`, and
-`persist_artifact: true`. You'll get back a new `artifact_id`. Tell the
-user the artifact id changed.
-
-Refining over already-loaded people is a **new Sales Nav search**. For
-questions like "which of these have real estate exposure", "who is in NYC", or
-"show the Brookfield VPs with mutuals", do not scan local state first. Re-call
-`sales_nav_search` with the updated filters and `persist_artifact: true`.
-
-| User says | What changes |
-| --- | --- |
-| "next page" | `get_artifact` with `offset += 25` |
-| "narrow to NYC" | new `sales_nav_search` with `geography_ids` |
-| "only senior+ folks" | new `sales_nav_search` with `seniority_ids` |
-| "filter to mid-stage companies" | new `sales_nav_search` with `headcount_ids` |
-| "show me their mutual" | use current-run `mutual_member_ids`; do not scan prior artifacts |
-
-### Step 6 — Resuming a previous search
-
-Do not resume previous searches. If the user references a prior `artifact_id`
-while asking for search results, run a new search instead. Only call
-`get_artifact` for an old artifact when the user explicitly asks to inspect that
-artifact rather than run a search.
-
-## What this skill does NOT do
-
-- It does not write leads to your local `contacts.csv`. Lead → contact
-  promotion is a separate (future) `import-sales-nav-leads` skill, likely
-  also under `packs/sales-nav`.
-- It does not promote leads into the Powerset main set. That UI affordance
-  is on the web app today.
-- It does not run a sequence of pages on its own. Pagination is always
-  user-confirmed and goes through `get_artifact`.
+- It does not write leads into contacts. Lead to contact promotion is a separate, future skill.
+- It does not promote leads into a Powerset set; that is the web app's job.
+- It does not page on its own. More pages are the user's call, one query id each.

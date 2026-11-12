@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Resumable Sales Nav local/tool-call handoff orchestrator.
+"""Resumable Sales Navigator run: search plan → leads on disk → enrich → mutual URLs → export → score.
 
-The orchestrator owns local run state and exits with explicit
-``blocked_tool_call`` instructions for the harness/agent. The harness calls the
-named MCP tool through its native tool layer, saves the JSON response to
-``save_response_to``, then reruns the provided continue command.
+The pipeline makes its own calls. With a set (``--set-id`` or ``POWERPACKS_DEFAULT_SET_ID``,
+the chat's Search-in scope) it calls the Powerset API, which searches every Sales Nav seat in
+the set and merges. Without a set it searches through the user's own LinkedIn session on this
+Mac (packs/ingestion/primitives/discover/linkedin/linkedin_session.py): one seat, no profile
+enrichment, no mutual URL lookup, 100 requests a day.
 
-Normal runs now support a multi-query search plan. Each search is persisted,
-ingested from full artifact content, enriched, re-ingested, and finally mutual
-member IDs are resolved into local URLs before export/scoring.
+A run is a search plan of one or more queries (``--search-plan-json``). Running again with a
+new plan file appends the queries whose ids are new, so an agent can look at the per-query
+summaries in the output, decide the results are wrong or thin, and add three more. Every
+query's leads land in the run's ``leads.jsonl`` deduped by member id; the output's
+``searches`` list says, per query, what it asked for, how many it found and the top ten.
+
+The only stop is the paid LLM scoring approval (``blocked_approval``).
 """
 
 from __future__ import annotations
@@ -22,54 +27,44 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(ROOT))
+
+from packs.ingestion.primitives.discover.linkedin import linkedin_session as li  # noqa: E402
+from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token  # noqa: E402
+
 DEFAULT_BASE = Path(".powerpacks/sales-nav/runs")
 PIPELINE_REL = Path("packs/sales-nav/primitives/sales_nav_pipeline/sales_nav_pipeline.py")
 ARTIFACTS_REL = Path("packs/sales-nav/primitives/sales_nav_artifacts/sales_nav_artifacts.py")
 SCORER_REL = Path("packs/sales-nav/primitives/score_sales_nav_leads/score_sales_nav_leads.py")
+ATTRIBUTION_REL = Path("packs/sales-nav/primitives/enrich_mutual_attribution/enrich_mutual_attribution.py")
 DEFAULT_COUNT = 25
 DEFAULT_ENRICH_LIMIT = int(os.environ.get("POWERPACKS_SALES_NAV_ENRICH_LIMIT", "100"))
 DEFAULT_MUTUAL_URL_LIMIT = int(os.environ.get("POWERPACKS_SALES_NAV_MUTUAL_URL_LIMIT", "100"))
+CLOUD_WORKERS = 4
+SUMMARY_LEADS = 10
 
-# Keep MCP args aligned with mcp_server.server:mcp_sales_nav_search.
-SALES_NAV_SEARCH_ARGS = {
-    "set_id",
-    "company_ids",
-    "company_names",
-    "past_company_ids",
-    "past_company_names",
-    "seniority_ids",
-    "function_ids",
-    "geography_ids",
-    "headcount_ids",
-    "title",
-    "keywords",
-    "count",
-    "start_offset",
-    "conversation_id",
-    "persist_artifact",
+# The search arguments the Powerset API's /v2/sales-nav/search takes; the local session
+# takes the same names and reports the ones it cannot honour.
+SEARCH_ARGS = {
+    "company_ids", "company_names", "past_company_ids", "past_company_names",
+    "seniority_ids", "function_ids", "geography_ids", "geography_names", "headcount_ids",
+    "industry_id", "title", "title_ids", "keywords", "count", "start_offset",
 }
 PLAN_METADATA_KEYS = {
-    "id",
-    "label",
-    "name",
-    "description",
-    "reason",
-    "notes",
-    "args",
-    "search_args",
-    "tool_args",
-    "queries",
-    "searches",
-    "steps",
-    "criteria",
-    "score_criteria",
+    "id", "label", "name", "description", "reason", "notes", "args", "search_args", "tool_args",
+    "queries", "searches", "steps", "criteria", "score_criteria",
 }
+LOCAL_UNSUPPORTED = ("past_company_ids", "headcount_ids", "industry_id")
 
 
 def now() -> str:
@@ -163,6 +158,8 @@ def approval_id(kind: str, payload: dict[str, Any]) -> str:
     return f"{kind}_{digest}"
 
 
+# ── Ledger ─────────────────────────────────────────────────────────────────────
+
 def ledger_path(args: argparse.Namespace) -> Path:
     if args.ledger:
         return Path(args.ledger)
@@ -207,65 +204,6 @@ def approved(ledger: dict[str, Any], aid: str) -> bool:
     return bool(ledger.get("approvals", {}).get(aid, {}).get("confirmed"))
 
 
-def pipeline_continue_command(ledger: Path, response_path: str | None = None, extra: list[str] | None = None) -> str:
-    parts = [sys.executable, str(PIPELINE_REL), "continue", "--ledger", str(ledger)]
-    if response_path:
-        parts.extend(["--response", response_path])
-    if extra:
-        parts.extend(extra)
-    return " ".join(shlex.quote(part) for part in parts)
-
-
-def block_tool_call(
-    ledger_path_: Path,
-    ledger: dict[str, Any],
-    *legacy_args: Any,
-    step: str | None = None,
-    tool_name: str | None = None,
-    tool_args: dict[str, Any] | None = None,
-    save_response_to: str | None = None,
-    message: str | None = None,
-    plan_index: int | None = None,
-    artifact_id: str | None = None,
-) -> int:
-    # Backward-compatible positional form used by older tests/callers:
-    # block_tool_call(lp, ledger, tool, args, save_to, next_cmd, msg)
-    legacy_continue_command: str | None = None
-    if legacy_args:
-        if len(legacy_args) != 5:
-            raise TypeError("legacy block_tool_call expects 5 positional args")
-        legacy_tool, legacy_payload, legacy_save_to, legacy_next_cmd, legacy_message = legacy_args
-        tool_name = tool_name or str(legacy_tool)
-        tool_args = tool_args or dict(legacy_payload or {})
-        save_response_to = save_response_to or str(legacy_save_to)
-        legacy_continue_command = str(legacy_next_cmd)
-        message = message or str(legacy_message)
-        step = step or str(tool_name)
-    if not step or not tool_name or tool_args is None or not save_response_to:
-        raise TypeError("block_tool_call requires step, tool_name, tool_args, and save_response_to")
-    message = message or f"Call {tool_name}, save the JSON response, then continue."
-    block = {
-        "primitive": "sales_nav_pipeline",
-        "status": "blocked_tool_call",
-        "message": message,
-        "tool_server": "powerset-search",
-        "tool_name": tool_name,
-        "tool_args": tool_args,
-        "save_response_to": save_response_to,
-        "continue_command": legacy_continue_command or pipeline_continue_command(ledger_path_, save_response_to),
-        "ledger": str(ledger_path_),
-        "step": step,
-    }
-    if plan_index is not None:
-        block["plan_index"] = plan_index
-    if artifact_id:
-        block["artifact_id"] = artifact_id
-    ledger["current_block"] = block
-    mark(ledger_path_, ledger, step, "blocked_tool_call", summary=block)
-    emit(block)
-    return 30
-
-
 def block_approval(path: Path, ledger: dict[str, Any], kind: str, payload: dict[str, Any], message: str, next_cmd: str) -> int:
     aid = approval_id(kind, payload)
     block = {
@@ -284,6 +222,134 @@ def block_approval(path: Path, ledger: dict[str, Any], kind: str, payload: dict[
     return 20
 
 
+def set_id_of(ledger: dict[str, Any]) -> str:
+    return str((ledger.get("artifacts") or {}).get("set_id") or "")
+
+
+def backend_of(ledger: dict[str, Any]) -> str:
+    """'cloud' with a set (the Powerset API, every seat in the set), 'local' without (this Mac's session)."""
+    return "cloud" if set_id_of(ledger) else "local"
+
+
+# ── Cloud: the Powerset API ─────────────────────────────────────────────────────
+
+def cloud_call(route: str, body: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_base()}/v2/sales-nav{route}",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Authorization": f"Bearer {bearer_token()}", "Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:300].decode(errors="replace")
+        raise RuntimeError(f"Powerset API {route} answered HTTP {exc.code}: {detail}") from exc
+
+
+def cloud_searches(plan_args: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    with ThreadPoolExecutor(max_workers=CLOUD_WORKERS) as pool:
+        return list(pool.map(lambda args: cloud_call("/search", args), plan_args))
+
+
+# ── Local: the user's own LinkedIn session ──────────────────────────────────────
+
+def local_namespace(args: dict[str, Any], title_ids: list[dict[str, Any]]) -> SimpleNamespace:
+    company_ids = [int(c) for c in args.get("company_ids") or []]
+    names = {str(k): v for k, v in (args.get("company_names") or {}).items()}
+    return SimpleNamespace(
+        degree="2nd",
+        company_id=company_ids or None,
+        company_name=[names.get(str(c), "") for c in company_ids] or None,
+        title_id=[int(t["id"]) for t in title_ids] or None,
+        title_name=[str(t.get("text") or "") for t in title_ids] or None,
+        region_id=list(args.get("geography_ids") or []) or None,
+        region_name=list(args.get("geography_names") or []) or None,
+        seniority=[str(s) for s in args.get("seniority_ids") or []] or None,
+        function=[str(f) for f in args.get("function_ids") or []] or None,
+        keywords=args.get("keywords") or None,
+        start=int(args.get("start_offset") or 0),
+        count=int(args.get("count") or DEFAULT_COUNT),
+    )
+
+
+def lead_row(lead: dict[str, Any]) -> dict[str, Any]:
+    """A local SalesNavLead dict in the shape the API's search returns (its _ingest_lead)."""
+    mutual_ids = list(lead.get("mutual_member_ids") or [])
+    return {
+        "name": f"{lead.get('first_name') or ''} {lead.get('last_name') or ''}".strip(),
+        "title": lead.get("title") or "",
+        "company": lead.get("company_name") or "",
+        "location": lead.get("location") or "",
+        "member_id": lead.get("member_id"),
+        "profile_id": lead.get("profile_id"),
+        "linkedin_url": None,
+        "profile_picture_url": lead.get("profile_picture_url"),
+        "source_account_ids": [],
+        "degree": lead.get("degree"),
+        "mutual_count": lead.get("total_mutual_count") or len(mutual_ids),
+        "total_mutual_count": lead.get("total_mutual_count"),
+        "mutual_member_ids": mutual_ids,
+        "mutuals": [{"member_id": mid, "first_name": ""} for mid in mutual_ids],
+        "intro_text": lead.get("mutual_intro_text"),
+    }
+
+
+def local_title_ids(title: str) -> list[dict[str, Any]]:
+    matches = li.sales_nav("titles", SimpleNamespace(query=title))["matches"]
+    return [{"id": matches[0]["id"], "text": matches[0]["name"]}] if matches else []
+
+
+def local_searches(plan_args: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """All the plan's searches in one browser run, answered in the API's response shape."""
+    namespaces = []
+    for args in plan_args:
+        title_ids = list(args.get("title_ids") or [])
+        if args.get("title") and not title_ids:
+            title_ids = local_title_ids(args["title"])
+        namespaces.append(local_namespace(args, title_ids))
+    answers = li.sales_nav_searches(namespaces)
+    results = []
+    for args, namespace, answer in zip(plan_args, namespaces, answers):
+        leads = [lead_row(lead) for lead in answer["leads"]]
+        end = namespace.start + len(leads)
+        total = int(answer["total"])
+        results.append({
+            "backend": "local",
+            "leads": leads,
+            "total_count": total,
+            "max_total_count": total,
+            "results_returned": len(leads),
+            "accumulated_count": len(leads),
+            "has_more": end < total,
+            "next_start_offset": end if end < total else None,
+            "filters_used": {key: args[key] for key in SEARCH_ARGS if args.get(key) not in (None, "", [], {})},
+            "unsupported_filters": [key for key in LOCAL_UNSUPPORTED if args.get(key)],
+            "requests_today": answer["requests_today"],
+            "day_cap": answer["day_cap"],
+        })
+    return results
+
+
+def local_resolve(companies: list[str], titles: list[str]) -> dict[str, Any]:
+    resolved_companies = {}
+    for query in companies:
+        matches = li.sales_nav("companies", SimpleNamespace(query=query))["matches"]
+        resolved_companies[query] = [
+            {"org_id": m["id"], "name": m["name"], "headcount": m.get("headcount"), "location": m.get("location"),
+             "recommended": index == 0}
+            for index, m in enumerate(matches)
+        ]
+    resolved_titles = {}
+    for query in titles:
+        matches = li.sales_nav("titles", SimpleNamespace(query=query))["matches"]
+        resolved_titles[query] = [{"title_id": m["id"], "name": m["name"], "recommended": index == 0} for index, m in enumerate(matches)]
+    return {"backend": "local", "resolved_companies": resolved_companies, "resolved_titles": resolved_titles}
+
+
+# ── Run folder ──────────────────────────────────────────────────────────────────
+
 def ensure_init(args: argparse.Namespace, path: Path, ledger: dict[str, Any]) -> Path:
     if args.state:
         state = Path(args.state)
@@ -298,16 +364,15 @@ def ensure_init(args: argparse.Namespace, path: Path, ledger: dict[str, Any]) ->
         return state
     if done(ledger, "init_local_artifacts"):
         return Path(ledger["artifacts"]["state"])
-    if not args.query or not args.set_id:
-        raise RuntimeError("Need --query and --set-id for init, or pass --state")
+    if not args.query:
+        raise RuntimeError("Need --query for a new run, or --state for an existing one")
+    set_id = args.set_id or os.environ.get("POWERPACKS_DEFAULT_SET_ID", "").strip()
     conversation_id = args.conversation_id or str(uuid.uuid4())
     out_dir = path.parent
     cmd = [
-        sys.executable,
-        str(ROOT / ARTIFACTS_REL),
-        "init",
+        sys.executable, str(ROOT / ARTIFACTS_REL), "init",
         "--query", args.query,
-        "--set-id", args.set_id,
+        "--set-id", set_id,
         "--conversation-id", conversation_id,
         "--out-dir", str(out_dir),
     ]
@@ -317,7 +382,7 @@ def ensure_init(args: argparse.Namespace, path: Path, ledger: dict[str, Any]) ->
         "state": str(state),
         "run_dir": str(state.parent),
         "conversation_id": conversation_id,
-        "set_id": args.set_id,
+        "set_id": set_id,
     })
     mark(path, ledger, "init_local_artifacts", "completed", summary=payload, command=" ".join(map(shlex.quote, cmd)))
     return state
@@ -349,14 +414,11 @@ def normalize_search_plan(raw: Any, *, set_id: str | None, conversation_id: str 
             source_args = {key: value for key, value in item.items() if key not in PLAN_METADATA_KEYS}
 
         raw_args = dict(source_args)
-        tool_args = {key: value for key, value in raw_args.items() if key in SALES_NAV_SEARCH_ARGS and value not in (None, "", [], {})}
+        tool_args = {key: value for key, value in raw_args.items() if key in SEARCH_ARGS and value not in (None, "", [], {})}
         if set_id:
             tool_args["set_id"] = set_id
-        elif "set_id" not in tool_args:
-            raise RuntimeError("Search plan item is missing set_id")
         if conversation_id:
             tool_args["conversation_id"] = conversation_id
-        tool_args["persist_artifact"] = True
         tool_args["count"] = int(tool_args.get("count") or default_count)
         tool_args.setdefault("start_offset", 0)
 
@@ -371,10 +433,9 @@ def normalize_search_plan(raw: Any, *, set_id: str | None, conversation_id: str 
 
 
 def search_plan(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> list[dict[str, Any]]:
+    """The run's queries: what the ledger has, plus any new ids from this call's plan file."""
     artifacts = ledger.setdefault("artifacts", {})
-    existing = artifacts.get("search_plan")
-    if isinstance(existing, list):
-        return existing
+    existing = list(artifacts.get("search_plan") or [])
 
     raw: Any = None
     source = None
@@ -386,24 +447,26 @@ def search_plan(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, 
         source = str(args.search_args_json)
 
     if raw is None:
-        # Existing-state follow-ups (export/score/resolve mutual URLs) do not
-        # need a search plan.
-        if state.exists() and read_json(state, {}).get("counts", {}).get("leads", 0):
-            return []
+        if existing or (state.exists() and read_json(state, {}).get("counts", {}).get("leads", 0)):
+            return existing
         raise RuntimeError("Need --search-args-json or --search-plan-json for a new Sales Nav search")
 
     state_payload = read_json(state, {}) or {}
     set_id = args.set_id or artifacts.get("set_id") or state_payload.get("set_id")
     conversation_id = artifacts.get("conversation_id") or state_payload.get("conversation_id") or args.conversation_id
     plan, criteria = normalize_search_plan(raw, set_id=set_id, conversation_id=conversation_id, default_count=args.count)
-    if not plan:
+    known = {item["id"] for item in existing}
+    merged = existing + [item for item in plan if item["id"] not in known]
+    if not merged:
         raise RuntimeError("Search plan is empty")
-    artifacts["search_plan"] = plan
-    artifacts["search_plan_source"] = source
+    artifacts["search_plan"] = merged
+    artifacts.setdefault("search_plan_sources", [])
+    if source and source not in artifacts["search_plan_sources"]:
+        artifacts["search_plan_sources"].append(source)
     if criteria and not artifacts.get("score_criteria"):
         artifacts["score_criteria"] = criteria
     save(ledger_path_, ledger)
-    return plan
+    return merged
 
 
 def state_paths(state_path: Path) -> dict[str, Path]:
@@ -424,17 +487,9 @@ def truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def member_ids_for_enrichment(state_path: Path, *, artifact_id: str | None, limit: int) -> list[int]:
+def member_ids_for_enrichment(state_path: Path, *, limit: int) -> list[int]:
     rows = load_leads(state_path)
-    candidates: list[dict[str, Any]] = []
-    for row in rows:
-        if artifact_id and str(row.get("artifact_id") or "") != str(artifact_id):
-            continue
-        if truthy(row.get("enriched")):
-            continue
-        if not row.get("member_id"):
-            continue
-        candidates.append(row)
+    candidates = [row for row in rows if row.get("member_id") and not truthy(row.get("enriched"))]
     candidates.sort(key=lambda row: int(row.get("mutual_count") or 0), reverse=True)
     out: list[int] = []
     seen: set[int] = set()
@@ -453,243 +508,167 @@ def member_ids_for_enrichment(state_path: Path, *, artifact_id: str | None, limi
 
 
 def pending_mutual_ids(state_path: Path, *, limit: int, include_unresolved: bool = False) -> dict[str, Any]:
-    cmd = [
-        sys.executable,
-        str(ROOT / ARTIFACTS_REL),
-        "pending-mutual-ids",
-        "--state", str(state_path),
-        "--limit", str(limit),
-    ]
+    cmd = [sys.executable, str(ROOT / ARTIFACTS_REL), "pending-mutual-ids", "--state", str(state_path), "--limit", str(limit)]
     if include_unresolved:
         cmd.append("--include-unresolved")
     return require(run(cmd), "pending-mutual-ids")
 
 
-def response_summary(payload: dict[str, Any]) -> dict[str, Any]:
-    keep = [
-        "artifact_id",
-        "id",
-        "total_count",
-        "max_total_count",
-        "results_returned",
-        "accumulated_count",
-        "has_more",
-        "next_start_offset",
-        "enriched",
-        "failed",
-        "unresolvable",
-        "total_requested",
-        "updated_leads",
-        "resolved",
-        "unresolved",
-        "cache_only",
-        "error",
+def ingest_page(state: Path, response: Path) -> dict[str, Any]:
+    cmd = [sys.executable, str(ROOT / ARTIFACTS_REL), "ingest-page", "--state", str(state), "--response", str(response)]
+    return require(run(cmd), "ingest-page")
+
+
+def ingest_member_urls(state: Path, response: Path) -> dict[str, Any]:
+    cmd = [sys.executable, str(ROOT / ARTIFACTS_REL), "ingest-member-urls", "--state", str(state), "--response", str(response)]
+    return require(run(cmd), "ingest-member-urls")
+
+
+# ── Searches ────────────────────────────────────────────────────────────────────
+
+def filters_description(args: dict[str, Any]) -> str:
+    """What a query asked for, in words, the way the cloud agent reads it back."""
+    parts = []
+    names = {str(k): v for k, v in (args.get("company_names") or {}).items()}
+    if args.get("company_ids"):
+        parts.append("company=" + ",".join(names.get(str(c), str(c)) for c in args["company_ids"]))
+    past = {str(k): v for k, v in (args.get("past_company_names") or {}).items()}
+    if args.get("past_company_ids"):
+        parts.append("past_company=" + ",".join(past.get(str(c), str(c)) for c in args["past_company_ids"]))
+    if args.get("title"):
+        parts.append(f"title={args['title']}")
+    if args.get("title_ids"):
+        parts.append("title_ids=" + ",".join(str(t.get("text") or t.get("id")) for t in args["title_ids"]))
+    if args.get("seniority_ids"):
+        parts.append("seniority=" + ",".join(li.SENIORITY_LEVELS.get(str(s), str(s)) for s in args["seniority_ids"]))
+    if args.get("function_ids"):
+        parts.append("functions=" + ",".join(li.FUNCTIONS.get(str(f), str(f)) for f in args["function_ids"]))
+    if args.get("geography_ids"):
+        geo_names = list(args.get("geography_names") or [])
+        parts.append("geo=" + ",".join(geo_names[i] if i < len(geo_names) and geo_names[i] else str(g) for i, g in enumerate(args["geography_ids"])))
+    if args.get("headcount_ids"):
+        parts.append("headcount=" + ",".join(map(str, args["headcount_ids"])))
+    if args.get("keywords"):
+        parts.append(f"keywords={args['keywords']}")
+    if int(args.get("start_offset") or 0):
+        parts.append(f"start_offset={args['start_offset']}")
+    return "; ".join(parts) if parts else "no specific filters"
+
+
+def lead_summaries(leads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": lead.get("name"), "title": lead.get("title"), "company": lead.get("company"),
+            "mutual_count": lead.get("mutual_count"), "location": lead.get("location") or "",
+            "linkedin_url": lead.get("linkedin_url") or "",
+        }
+        for lead in leads[:SUMMARY_LEADS]
     ]
-    summary = {key: payload.get(key) for key in keep if key in payload}
-    if isinstance(summary.get("resolved"), dict):
-        summary["resolved_count"] = len(summary.pop("resolved"))
-    if isinstance(summary.get("unresolved"), list):
-        summary["unresolved_count"] = len(summary.pop("unresolved"))
-    artifact = payload.get("artifact")
-    if not summary.get("artifact_id") and isinstance(artifact, dict) and artifact.get("id"):
-        summary["artifact_id"] = artifact.get("id")
-    return summary
 
 
-def ingest_page(state: Path, response: Path, *, prefer_content: bool, step: str, ledger_path_: Path, ledger: dict[str, Any]) -> dict[str, Any]:
-    cmd = [
-        sys.executable,
-        str(ROOT / ARTIFACTS_REL),
-        "ingest-page",
-        "--state", str(state),
-        "--response", str(response),
-    ]
-    if prefer_content:
-        cmd.append("--prefer-content")
-    payload = require(run(cmd), step)
-    mark(ledger_path_, ledger, step, "completed", summary=payload, command=" ".join(map(shlex.quote, cmd)))
-    return payload
+def search_summary(item: dict[str, Any], payload: dict[str, Any], ingested: dict[str, Any]) -> dict[str, Any]:
+    leads = payload.get("leads") or []
+    return {
+        "id": item["id"],
+        "label": item["label"],
+        "filters_description": filters_description(item["args"]),
+        "total_count": payload.get("total_count"),
+        "max_total_count": payload.get("max_total_count"),
+        "results_returned": len(leads),
+        "new_leads": ingested.get("leads_ingested"),
+        "lead_count_after": ingested.get("lead_count"),
+        "has_more": payload.get("has_more"),
+        "next_start_offset": payload.get("next_start_offset"),
+        "lead_summaries": lead_summaries(leads),
+        "refinement_hint": payload.get("refinement_hint"),
+        "unsupported_filters": payload.get("unsupported_filters") or [],
+        "error": payload.get("error"),
+        "requests_today": payload.get("requests_today"),
+    }
 
 
-def ingest_member_urls(state: Path, response: Path, *, step: str, ledger_path_: Path, ledger: dict[str, Any]) -> dict[str, Any]:
-    cmd = [
-        sys.executable,
-        str(ROOT / ARTIFACTS_REL),
-        "ingest-member-urls",
-        "--state", str(state),
-        "--response", str(response),
-    ]
-    payload = require(run(cmd), step)
-    mark(ledger_path_, ledger, step, "completed", summary=payload, command=" ".join(map(shlex.quote, cmd)))
-    return payload
-
-
-def process_response(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
-    if not args.response:
-        return
-    response_path = Path(args.response)
-    payload = read_json(response_path, {}) or {}
-    block = ledger.get("current_block") or {}
-    step = block.get("step") or ("ingest_full_artifact" if args.prefer_content else "ingest_page")
-    tool_name = block.get("tool_name")
-
-    if tool_name == "sales_nav_search":
-        summary = response_summary(payload)
-        artifact_id = summary.get("artifact_id")
-        if artifact_id:
-            ledger.setdefault("artifacts", {}).setdefault("search_artifacts", {})[step] = artifact_id
-        mark(ledger_path_, ledger, step, "completed", summary=summary, response=str(response_path))
-        # If persistence was unavailable, still ingest the compact response so
-        # the run produces local files.
-        if not artifact_id:
-            ingest_page(state, response_path, prefer_content=False, step=f"ingest_compact_{step}", ledger_path_=ledger_path_, ledger=ledger)
-    elif tool_name == "get_artifact" or args.prefer_content:
-        ingest_page(state, response_path, prefer_content=True, step=step, ledger_path_=ledger_path_, ledger=ledger)
-    elif tool_name == "enrich_extended_profiles":
-        mark(ledger_path_, ledger, step, "completed", summary=response_summary(payload), response=str(response_path))
-    elif tool_name == "sales_nav_resolve_member_ids":
-        ingest_member_urls(state, response_path, step=step, ledger_path_=ledger_path_, ledger=ledger)
-    else:
-        # Legacy/manual continuation: store the response and continue.
-        mark(ledger_path_, ledger, step, "completed", summary=response_summary(payload), response=str(response_path))
-
-    ledger["current_block"] = None
-    save(ledger_path_, ledger)
-
-
-def latest_artifact_for_search(ledger: dict[str, Any], search_step: str) -> str | None:
-    summary = ledger.get("steps", {}).get(search_step, {}).get("summary") or {}
-    artifact_id = summary.get("artifact_id")
-    if artifact_id:
-        return str(artifact_id)
-    artifact = summary.get("artifact")
-    if isinstance(artifact, dict) and artifact.get("id"):
-        return str(artifact["id"])
-    return None
-
-
-def advance_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> int | None:
+def run_searches(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
     plan = search_plan(args, ledger_path_, ledger, state)
-    run_dir = state.parent
-    pages = run_dir / "pages"
+    pages = state.parent / "pages"
     pages.mkdir(parents=True, exist_ok=True)
-
-    for index, item in enumerate(plan):
-        search_step = f"search_{index:03d}"
-        artifact_step = f"get_artifact_{index:03d}"
-        enrich_step = f"enrich_profiles_{index:03d}"
-        enriched_artifact_step = f"get_artifact_after_enrich_{index:03d}"
-
-        if not done(ledger, search_step):
-            save_to = str(pages / f"sales-nav-search-{index:03d}.response.json")
-            tool_args = dict(item.get("args") or {})
-            return block_tool_call(
-                ledger_path_,
-                ledger,
-                step=search_step,
-                tool_name="sales_nav_search",
-                tool_args=tool_args,
-                save_response_to=save_to,
-                plan_index=index,
-                message=f"Call Sales Nav search for plan item {index + 1}/{len(plan)} ({item.get('label')}). Save the JSON response, then continue.",
-            )
-
-        artifact_id = latest_artifact_for_search(ledger, search_step)
-        if artifact_id and not done(ledger, artifact_step):
-            save_to = str(pages / f"artifact-full-{index:03d}.json")
-            payload = {"artifact_id": artifact_id, "offset": 0, "limit": args.artifact_limit, "include_content": True}
-            return block_tool_call(
-                ledger_path_,
-                ledger,
-                step=artifact_step,
-                tool_name="get_artifact",
-                tool_args=payload,
-                save_response_to=save_to,
-                plan_index=index,
-                artifact_id=artifact_id,
-                message="Call get_artifact(include_content=true) for the persisted Sales Nav search, save it, then continue.",
-            )
-        if not artifact_id and not done(ledger, f"ingest_compact_{search_step}"):
-            mark(ledger_path_, ledger, artifact_step, "completed", summary={"reason": "no_artifact_id_compact_response_ingested"})
-
-        if not args.skip_enrich and not done(ledger, enrich_step):
-            member_ids = member_ids_for_enrichment(state, artifact_id=artifact_id, limit=args.enrich_limit)
-            if member_ids:
-                save_to = str(pages / f"enrich-profiles-{index:03d}.response.json")
-                state_payload = read_json(state, {}) or {}
-                payload = {
-                    "conversation_id": (ledger.get("artifacts") or {}).get("conversation_id") or state_payload.get("conversation_id"),
-                    "member_ids": member_ids,
-                    "set_id": (ledger.get("artifacts") or {}).get("set_id") or state_payload.get("set_id"),
-                }
-                return block_tool_call(
-                    ledger_path_,
-                    ledger,
-                    step=enrich_step,
-                    tool_name="enrich_extended_profiles",
-                    tool_args=payload,
-                    save_response_to=save_to,
-                    plan_index=index,
-                    artifact_id=artifact_id,
-                    message=f"Enrich {len(member_ids)} Sales Nav lead profiles, save the JSON response, then continue.",
-                )
-            mark(ledger_path_, ledger, enrich_step, "completed", summary={"reason": "no_unenriched_member_ids", "artifact_id": artifact_id})
-
-        if not args.skip_enrich and artifact_id and done(ledger, enrich_step) and not done(ledger, enriched_artifact_step):
-            save_to = str(pages / f"artifact-full-after-enrich-{index:03d}.json")
-            payload = {"artifact_id": artifact_id, "offset": 0, "limit": args.artifact_limit, "include_content": True}
-            return block_tool_call(
-                ledger_path_,
-                ledger,
-                step=enriched_artifact_step,
-                tool_name="get_artifact",
-                tool_args=payload,
-                save_response_to=save_to,
-                plan_index=index,
-                artifact_id=artifact_id,
-                message="Reload the enriched Sales Nav artifact with include_content=true, save it, then continue.",
-            )
-
-    return None
+    pending = [(index, item) for index, item in enumerate(plan) if not done(ledger, f"search_{index:03d}")]
+    if not pending:
+        return
+    backend = backend_of(ledger)
+    plan_args = [dict(item["args"]) for _, item in pending]
+    payloads = cloud_searches(plan_args) if backend == "cloud" else local_searches(plan_args)
+    for (index, item), payload in zip(pending, payloads):
+        response_path = pages / f"sales-nav-search-{index:03d}.response.json"
+        write_json(response_path, payload)
+        if payload.get("error") and not payload.get("leads"):
+            raise RuntimeError(f"search {item['label']!r}: {payload['error']}")
+        ingested = ingest_page(state, response_path)
+        mark(ledger_path_, ledger, f"search_{index:03d}", "completed",
+             summary=search_summary(item, payload, ingested), response=str(response_path), backend=backend)
 
 
-def resolve_mutual_urls(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> int | None:
+def search_summaries(ledger: dict[str, Any]) -> list[dict[str, Any]]:
+    plan = (ledger.get("artifacts") or {}).get("search_plan") or []
+    return [ledger["steps"][f"search_{index:03d}"]["summary"] for index in range(len(plan)) if done(ledger, f"search_{index:03d}")]
+
+
+# ── Enrich, mutual URLs, attribution ───────────────────────────────────────────
+
+def enrich_profiles(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
+    if args.skip_enrich or done(ledger, "enrich_profiles"):
+        return
+    if backend_of(ledger) == "local":
+        mark(ledger_path_, ledger, "enrich_profiles", "completed", summary={"reason": "local session: no profile enrichment"})
+        return
+    member_ids = member_ids_for_enrichment(state, limit=args.enrich_limit)
+    if not member_ids:
+        mark(ledger_path_, ledger, "enrich_profiles", "completed", summary={"reason": "no_unenriched_member_ids"})
+        return
+    artifacts = ledger.get("artifacts") or {}
+    payload = cloud_call("/enrich", {"conversation_id": artifacts["conversation_id"], "member_ids": member_ids, "set_id": artifacts["set_id"]})
+    response_path = state.parent / "pages" / "enrich-profiles.response.json"
+    write_json(response_path, payload)
+    ingested = ingest_page(state, response_path) if payload.get("leads") else {}
+    summary = {key: payload.get(key) for key in ("enriched", "failed", "unresolvable", "total_requested", "updated_leads", "error") if key in payload}
+    summary["leads_ingested"] = ingested.get("leads_ingested")
+    mark(ledger_path_, ledger, "enrich_profiles", "completed", summary=summary, response=str(response_path))
+
+
+def resolve_mutual_urls(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
     if args.skip_mutual_url_resolution:
         mark(ledger_path_, ledger, "resolve_mutual_urls", "completed", summary={"reason": "skipped_by_flag"})
-        return None
+        return
+    if backend_of(ledger) == "local":
+        mark(ledger_path_, ledger, "resolve_mutual_urls", "completed", summary={"reason": "local session: no member id lookup"})
+        return
     pending = pending_mutual_ids(state, limit=args.mutual_url_limit, include_unresolved=bool(args.resolve_mutuals_external))
     member_ids = pending.get("member_ids") or []
     if not member_ids:
         if step_status(ledger, "resolve_mutual_urls") != "completed":
             mark(ledger_path_, ledger, "resolve_mutual_urls", "completed", summary={"pending": 0})
-        return None
-
+        return
     batch_index = int((ledger.get("artifacts") or {}).get("mutual_url_batches") or 0)
-    step = f"resolve_mutual_urls_{batch_index:03d}"
-    if done(ledger, step):
-        ledger.setdefault("artifacts", {})["mutual_url_batches"] = batch_index + 1
-        save(ledger_path_, ledger)
-        return resolve_mutual_urls(args, ledger_path_, ledger, state)
-    save_to = str(state.parent / "pages" / f"member-urls-{batch_index:03d}.response.json")
-    return block_tool_call(
-        ledger_path_,
-        ledger,
-        step=step,
-        tool_name="sales_nav_resolve_member_ids",
-        tool_args={"member_ids": member_ids, "use_external_apis": bool(args.resolve_mutuals_external)},
-        save_response_to=save_to,
-        message=f"Resolve {len(member_ids)} mutual member IDs to LinkedIn URLs, save the JSON response, then continue.",
-    )
+    payload = cloud_call("/member-urls", {"member_ids": member_ids, "use_external_apis": bool(args.resolve_mutuals_external)})
+    response_path = state.parent / "pages" / f"member-urls-{batch_index:03d}.response.json"
+    write_json(response_path, payload)
+    ingested = ingest_member_urls(state, response_path)
+    ledger.setdefault("artifacts", {})["mutual_url_batches"] = batch_index + 1
+    mark(ledger_path_, ledger, f"resolve_mutual_urls_{batch_index:03d}", "completed",
+         summary={"requested": len(member_ids), "resolved": len(payload.get("resolved") or {}), "unresolved": len(payload.get("unresolved") or []), **ingested},
+         response=str(response_path))
+    mark(ledger_path_, ledger, "resolve_mutual_urls", "completed", summary={"batches": batch_index + 1})
 
 
 def enrich_mutual_attribution_step(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
     """Enrich mutuals with operator attribution. Runs discover if --discover-mutuals."""
     if done(ledger, "enrich_mutual_attribution") and not args.force:
         return
+    if backend_of(ledger) == "local":
+        mark(ledger_path_, ledger, "enrich_mutual_attribution", "completed", summary={"reason": "local session: no set to attribute against"})
+        return
     mode = "discover" if getattr(args, "discover_mutuals", False) else "attribution"
     cmd = [
-        sys.executable,
-        str(ROOT / "packs/sales-nav/primitives/enrich_mutual_attribution/enrich_mutual_attribution.py"),
+        sys.executable, str(ROOT / ATTRIBUTION_REL),
         "--state", str(state),
         "--mode", mode,
         "--env-file", str(ROOT / ".env"),
@@ -710,8 +689,6 @@ def enrich_mutual_attribution_step(args: argparse.Namespace, ledger_path_: Path,
 
 
 def export_state(args: argparse.Namespace, ledger_path_: Path, ledger: dict[str, Any], state: Path) -> None:
-    if done(ledger, "export") and not args.force:
-        return
     cmd = [sys.executable, str(ROOT / ARTIFACTS_REL), "export", "--state", str(state)]
     payload = require(run(cmd), "export")
     ledger.setdefault("artifacts", {}).update({
@@ -737,8 +714,7 @@ def score_if_requested(args: argparse.Namespace, ledger_path_: Path, ledger: dic
     if done(ledger, "score_leads") and not args.force:
         return None
     cmd = [
-        sys.executable,
-        str(ROOT / SCORER_REL),
+        sys.executable, str(ROOT / SCORER_REL),
         "--state", str(state),
         "--criteria", criteria,
         "--threshold", str(args.threshold),
@@ -749,21 +725,19 @@ def score_if_requested(args: argparse.Namespace, ledger_path_: Path, ledger: dic
     return None
 
 
+# ── Commands ────────────────────────────────────────────────────────────────────
+
 def cmd_run(args: argparse.Namespace) -> int:
     try:
         ledger_path_ = ledger_path(args)
         ledger = load(ledger_path_)
-        ledger["current_block"] = None if not args.response else ledger.get("current_block")
+        ledger["current_block"] = None
         save(ledger_path_, ledger)
         state = ensure_init(args, ledger_path_, ledger)
-        process_response(args, ledger_path_, ledger, state)
 
-        blocked = advance_searches(args, ledger_path_, ledger, state)
-        if blocked is not None:
-            return blocked
-        blocked = resolve_mutual_urls(args, ledger_path_, ledger, state)
-        if blocked is not None:
-            return blocked
+        run_searches(args, ledger_path_, ledger, state)
+        enrich_profiles(args, ledger_path_, ledger, state)
+        resolve_mutual_urls(args, ledger_path_, ledger, state)
         enrich_mutual_attribution_step(args, ledger_path_, ledger, state)
         export_state(args, ledger_path_, ledger, state)
         blocked = score_if_requested(args, ledger_path_, ledger, state)
@@ -772,13 +746,33 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         ledger["current_block"] = None
         save(ledger_path_, ledger)
+        state_payload = read_json(state, {}) or {}
         emit({
             "primitive": "sales_nav_pipeline",
             "status": "completed",
+            "backend": backend_of(ledger),
             "ledger": str(ledger_path_),
             "state": str(state),
+            "counts": state_payload.get("counts"),
+            "searches": search_summaries(ledger),
             "artifacts": ledger.get("artifacts", {}),
         })
+        return 0
+    except Exception as exc:
+        emit({"primitive": "sales_nav_pipeline", "status": "failed", "error": str(exc)})
+        return 1
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Company names and titles to the ids a search plan needs, through whichever backend the set says."""
+    try:
+        set_id = args.set_id or os.environ.get("POWERPACKS_DEFAULT_SET_ID", "").strip()
+        if set_id:
+            payload = cloud_call("/resolve", {"set_id": set_id, "companies": args.company or None, "titles": args.title or None})
+            payload["backend"] = "cloud"
+        else:
+            payload = local_resolve(args.company or [], args.title or [])
+        emit({"primitive": "sales_nav_pipeline", "status": "ok", **payload})
         return 0
     except Exception as exc:
         emit({"primitive": "sales_nav_pipeline", "status": "failed", "error": str(exc)})
@@ -792,8 +786,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     emit({
         "primitive": "sales_nav_pipeline",
         "status": "ok",
+        "backend": backend_of(ledger),
         "ledger": str(path),
         "current_block": ledger.get("current_block"),
+        "searches": search_summaries(ledger),
         "artifacts": ledger.get("artifacts", {}),
         "step_counts": {status: statuses.count(status) for status in sorted(set(statuses))},
     })
@@ -827,20 +823,13 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ledger")
     parser.add_argument("--state")
     parser.add_argument("--query")
-    parser.add_argument("--set-id")
+    parser.add_argument("--set-id", help="Powerset set; default POWERPACKS_DEFAULT_SET_ID. Without one the search runs through this Mac's LinkedIn session.")
     parser.add_argument("--conversation-id")
     parser.add_argument("--run-id")
     parser.add_argument("--search-args-json")
-    parser.add_argument("--search-plan-json")
-    parser.add_argument("--response", type=Path)
-    # Legacy flags retained for old continue commands. New continues infer the
-    # response action from ledger.current_block.step/tool_name.
-    parser.add_argument("--prefer-content", action="store_true")
-    parser.add_argument("--enriched", action="store_true")
-    parser.add_argument("--require-enriched", action="store_true")
+    parser.add_argument("--search-plan-json", help="queries to run; on an existing run, the ids not seen before are added")
     parser.add_argument("--skip-enrich", action="store_true")
     parser.add_argument("--enrich-limit", type=int, default=DEFAULT_ENRICH_LIMIT)
-    parser.add_argument("--artifact-limit", type=int, default=1000)
     parser.add_argument("--skip-mutual-url-resolution", action="store_true")
     parser.add_argument("--mutual-url-limit", type=int, default=DEFAULT_MUTUAL_URL_LIMIT)
     parser.add_argument("--resolve-mutuals-external", action="store_true")
@@ -856,14 +845,19 @@ def add_common(parser: argparse.ArgumentParser) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a resumable Sales Nav MCP/local artifact workflow")
+    parser = argparse.ArgumentParser(description="Run a resumable Sales Navigator search, through the Powerset API or this Mac's LinkedIn session")
     sub = parser.add_subparsers(dest="cmd", required=True)
     run_parser = sub.add_parser("run")
     add_common(run_parser)
     run_parser.set_defaults(func=cmd_run)
-    cont_parser = sub.add_parser("continue")
+    cont_parser = sub.add_parser("continue", help="same as run: add queries, score, or pick up after an approval")
     add_common(cont_parser)
     cont_parser.set_defaults(func=cmd_run)
+    resolve_parser = sub.add_parser("resolve", help="company names and titles to LinkedIn ids")
+    resolve_parser.add_argument("--company", action="append")
+    resolve_parser.add_argument("--title", action="append")
+    resolve_parser.add_argument("--set-id")
+    resolve_parser.set_defaults(func=cmd_resolve)
     status_parser = sub.add_parser("status")
     add_common(status_parser)
     status_parser.set_defaults(func=cmd_status)

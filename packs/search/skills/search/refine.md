@@ -3,6 +3,8 @@
 Created: 2026-11-11
 
 Change log:
+- 2026-11-12: The judge only keeps or drops people; the ones kept keep their trait score and their
+  order. Only a SQL `ORDER BY` reorders. A refined row shows no score beside its Rerank Insight.
 - 2026-11-11 (later): `--criteria` is the step's name, a short noun phrase for the people kept, not the
   user's sentence; the trail no longer prefixes "only". Arthur: it should just be "people under 40".
 - 2026-11-11: First version. The cloud agent's two refine tools (`query_results` SQL and
@@ -33,7 +35,9 @@ Ask: can this be answered by checking a field value (a name, a number, a categor
 - **No → the judge**: `--criteria '<label>'` alone. It reads every profile with OpenAI and
   costs money, so never use it for a criterion SQL can answer. Ability, potential, fit, quality,
   relevance: "strongest AI background", "best fit for a VP role", "most entrepreneurial", "who has
-  X experience" (semantic; title ILIKE catches false positives from shared keywords).
+  X experience" (semantic; title ILIKE catches false positives from shared keywords). The judge
+  keeps or drops people and never reorders them: the ones kept keep their trait score and order.
+  "Sort by" / "order by" a field is SQL with `ORDER BY`.
 
 `inferred_age` **is the person's age** (94% of rows have it). "Under 35" is
 `SELECT person_id FROM candidates WHERE inferred_age < 35`. Never demand explicit age evidence.

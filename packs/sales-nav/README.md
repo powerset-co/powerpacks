@@ -1,9 +1,11 @@
 # Sales Nav Pack
 
-`packs/sales-nav` exposes a Sales Navigator search workflow on top of the
-`powerset-search` MCP server. MCP tools perform the upstream Sales Nav calls;
-local primitives normalize page responses into file-backed handoffs so agents
-can pass paths instead of large lead/mutual payloads.
+`packs/sales-nav` is a Sales Navigator search workflow. The pipeline primitive makes its
+own calls: with a set (`POWERPACKS_DEFAULT_SET_ID`, the chat's Search-in scope) it calls
+the Powerset API's `/v2/sales-nav` routes, which search every Sales Nav seat in the set
+and merge; without one it searches through the user's own LinkedIn session on this Mac
+(`packs/ingestion/primitives/discover/linkedin/linkedin_session.py`). Either way the
+leads land in file-backed handoffs so agents pass paths, not payloads.
 
 ## Why a separate pack
 
@@ -18,61 +20,45 @@ Sales Nav lives in its own pack instead of under `packs/powerset` because:
 
 ## Dependencies
 
-This pack **depends on `packs/powerset`** for:
-
-- `auth` — Auth0 PKCE login that mints the bearer token written into MCP host
-  config.
-- `mcp_install` — registers the remote `powerset-search` MCP with each
-  host (Claude Code, Codex, nanoclaw).
-- `doctor` — verifies the MCP is reachable and the token is fresh.
-
-If those are not in place, the skill routes the user through
-`$powerset setup` first.
+With a set, the pipeline needs `packs/powerset`'s `auth` for the bearer token (it refreshes
+itself). Without a set it needs the LinkedIn Chrome profile the connections import signed
+in to. No MCP install.
 
 ## Skill Surface
 
-- `sales-nav-search` — Run a Sales Navigator search through the MCP.
-  Resolves company / title filters, runs a resumable multi-query lead search
-  with server-side artifact persistence on by default, enriches loaded leads,
-  resolves mutual URLs locally, stores local `leads.jsonl` / `mutuals.jsonl`
-  handoff files, and offers paginated retrieval via `get_artifact`. See
+- `sales-nav-search` — Run a Sales Navigator search. Resolves company / title
+  filters, runs a multi-query plan the agent can extend after reading each
+  query's summary, enriches loaded leads and resolves mutual URLs (cloud), and
+  writes `leads.jsonl` / `mutuals.jsonl` plus CSV exports. See
   [`skills/sales-nav-search/SKILL.md`](skills/sales-nav-search/SKILL.md).
 
-## MCP Tools Used
+## Calls the pipeline makes
 
-The skill orchestrates these tools served by the remote MCP:
+| Step | With a set (Powerset API) | Without (own session) |
+| --- | --- | --- |
+| resolve names → ids | `POST /v2/sales-nav/resolve` | Sales Nav typeahead |
+| lead search | `POST /v2/sales-nav/search`, all seats merged | `salesApiLeadSearch`, one seat |
+| profile enrichment | `POST /v2/sales-nav/enrich` | skipped, reason recorded |
+| mutual member ids → URLs | `POST /v2/sales-nav/member-urls` | skipped, reason recorded |
 
-| Tool | Purpose |
-| --- | --- |
-| `sales_nav_resolve` | Translate human company / title strings to LinkedIn IDs. |
-| `sales_nav_search` | Paginated lead search; persists an artifact when `persist_artifact=true`. |
-| `get_artifact` | Page back through a persisted result set without re-running the search. |
-| `enrich_extended_profiles` | Enrich selected lead member IDs with full profile fields and update the latest artifact. |
-| `sales_nav_resolve_member_ids` | Resolve lead/mutual member IDs to LinkedIn URLs from cache/free layers by default. |
-
-Tool descriptions, input schemas, and return shapes are owned by the
-MCP server (`network-search-api/mcp_server/server.py`). The skill is the
-agent-facing orchestration layer; it does not duplicate those contracts.
+The routes live in `network-search-api/api_v2/routes/sales_nav.py` over the same functions
+the `powerset-search` MCP tools call.
 
 ## Local primitives
 
 | Primitive | Purpose |
 | --- | --- |
-| `sales_nav_pipeline` | Resumable orchestrator. Emits MCP `blocked_tool_call`s, ingests artifacts, enriches leads, resolves mutual URLs, exports CSVs, and approval-gates optional local scoring. |
-| `sales_nav_artifacts` | Initialize a local run, ingest MCP page responses into `leads.jsonl` / `mutuals.jsonl`, merge member URL resolutions, export CSVs, and answer lookup queries against the files. |
+| `sales_nav_pipeline` | Resumable run. Calls the backend the set decides, ingests every query's leads, enriches, resolves mutual URLs, exports CSVs, reports a summary per query, and approval-gates optional LLM scoring. |
+| `sales_nav_artifacts` | Initialize a local run, ingest search responses into `leads.jsonl` / `mutuals.jsonl`, merge member URL resolutions, export CSVs, and answer lookup queries against the files. |
 | `score_sales_nav_leads` | Fan-out LLM scoring over a run's `leads.jsonl` + mutual context, writing matching leads to `scores/<criteria>/matches.csv`. |
 
 ## Defaults
 
-- `persist_artifact: true` on every `sales_nav_search` call. Persistence
-  is cheap and lets the agent page large result sets via `get_artifact`
-  in a later turn.
 - `count: 25` per page (LinkedIn cap).
-- Do not loop unbounded. Use explicit multi-query search plans for known
-  recall gaps (strict search + fallback search, one deliberate extra broad page,
-  etc.); otherwise surface `next_start_offset` and ask before loading more.
-- Prefer structured fallbacks before free text: current company, relaxed
-  structured filters, past company, then keyword-only search last.
+- Do not loop unbounded. A plan is a few deliberate queries (structured first:
+  company, seniority, function, exact title; keywords last); read the per-query
+  summaries, add queries by id if the pool is wrong or thin, and stop at about five.
+- Local runs count against 100 LinkedIn requests a day: one per run plus one per query.
 
 ## Tasks
 
