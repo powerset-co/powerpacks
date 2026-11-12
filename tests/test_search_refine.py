@@ -140,10 +140,11 @@ class RefineTest(unittest.TestCase):
         self.assertEqual(payload["steps"][0]["jsonl"], str(self.jsonl.relative_to(self.project)))
         self.assertFalse(Path(step["jsonl"]).is_absolute())
         self.assertEqual(step["jsonl"], ".powerpacks/search/fixture/query_results.s2.jsonl")
-        self.assertEqual([row["final_score"] for row in self.step_rows()], [.95, .8, .6, .5])
+        # The judge only keeps or drops: kept rows keep their trait score and their order.
+        self.assertEqual([row["person_id"] for row in self.step_rows()], [self.ids[n] for n in (0, 1, 2, 4)])
         for row in self.step_rows():
             original = next(r for r in self.rows if r["person_id"] == row["person_id"])
-            self.assertEqual(row, dict(original, final_score=self.scores[row["person_id"]], overall_reasoning="refined"))
+            self.assertEqual(row, dict(original, overall_reasoning="refined"))
         self.assertEqual(set(pid for ids, _, _ in self.requests for pid in ids), set(self.ids[:6]))
         self.assertTrue(all(len(ids) == 2 and status == "running" for ids, _, status in self.requests))
         self.assertTrue(all(body["model"] == "gpt-5.1" and body["max_completion_tokens"] == 4096 and body["reasoning_effort"] == "low" for _, body, _ in self.requests))
@@ -164,12 +165,12 @@ class RefineTest(unittest.TestCase):
         self.types = {self.ids[0]: "filter", self.ids[2]: "rerank", self.ids[4]: "filter"}
         self.cli("--criteria", "only engineers")
         self.assertEqual(self.payload()["steps"][-1]["query_type"], "filter")
-        self.assertEqual([row["final_score"] for row in self.step_rows()], [.9, .8, .6])
+        self.assertEqual([row["final_score"] for row in self.step_rows()], [.9, .6, .35, .8])
         self.cli("--use", "s1")
         self.types = {self.ids[0]: "filter_and_rank", self.ids[2]: "filter_and_rank", self.ids[4]: "filter"}
         self.cli("--criteria", "who has experience")
         self.assertEqual(self.payload()["steps"][-1]["query_type"], "filter_and_rank")
-        self.assertEqual([row["final_score"] for row in self.step_rows()], [.95, .8, .6, .5])
+        self.assertEqual([row["final_score"] for row in self.step_rows()], [.9, .6, .35, .8])
 
     def test_batch_concurrency_is_capped(self):
         lock = threading.Lock()
