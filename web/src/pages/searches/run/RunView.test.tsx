@@ -729,13 +729,11 @@ describe("RunView, a refined run", () => {
     for (const button of trail().getAllByRole("button")) expect(button).toHaveProperty("disabled", true)
   })
 
-  it("shows each refined row's score, the refine's insight over the traits", () => {
+  it("shows each refined row's insight over the traits, no score beside it", () => {
     renderStepped()
-    const scoreCell = (personId: string) =>
-      document.querySelector(`[data-person-id='${personId}'] .result-score`)?.textContent
-    expect(scoreCell("p-jordan")).toBe("90%")
-    expect(scoreCell("p-morgan")).toBe("60%")
-    expect(scoreCell("p-casey")).toBe("55%")
+    for (const personId of ["p-jordan", "p-morgan", "p-casey"]) {
+      expect(document.querySelector(`[data-person-id='${personId}'] .result-score`)).toBeNull()
+    }
     expect(row("p-jordan").getByText("Rerank Insight")).toBeTruthy()
     expect(row("p-jordan").getByText("Leads the current reliability platform.")).toBeTruthy()
     expect(row("p-jordan").getByText("Backend depth:")).toBeTruthy()
