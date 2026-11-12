@@ -31,6 +31,35 @@ The skill itself does not call HTTP — Claude Code / Codex invoke the MCP
 tools directly once `mcp_install` (in `packs/powerset`) has registered the
 server.
 
+## Local, with your own LinkedIn session (no MCP, no Unipile)
+
+`packs/ingestion/primitives/discover/linkedin/linkedin_session.py` runs Sales Navigator and
+mutual-connection lookups inside the LinkedIn Chrome profile Powerpacks signed in to (the
+same one the connections read uses), from this Mac, as the user. Use it when the user asks
+for Sales Nav results or mutual counts and the Powerset MCP is not set up, or asks for
+"local" explicitly. Every request counts against one budget of 100 a day
+(`.powerpacks/network-import/discover/linkedin/usage.json`); the answer carries
+`requests_today`. Do not loop over pages or people to get around it: LinkedIn restricts
+accounts that fetch too much. A `signed_out` failure means the user signs in again through
+the LinkedIn connections read; a `slow_down` failure means stop for the day.
+
+```
+uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav companies "<name>"
+uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav titles "<title>"
+uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py sales-nav search \
+  --degree 2nd --company-id <id> --company-name "<name>" [--title-id <id> --title-name "<title>"] \
+  [--seniority 310] [--function 8] [--keywords "<words>"] [--start 25] [--count 25]
+uv run --project . python packs/ingestion/primitives/discover/linkedin/linkedin_session.py mutuals <linkedin url> [...up to 25]
+```
+
+`companies` and `titles` answer the ids the search filters need (a Sales Nav search costs two
+requests: its home page once, then the search). `search` returns a page of up to 25 leads in the
+cloud's lead shape (`member_id`, `profile_id`, `title`, `company_name`, `degree`,
+`total_mutual_count`, `mutual_member_ids`), so `sales_nav_artifacts.py` and the scorer read it
+unchanged. `mutuals` answers how many of the user's connections each person shares and the
+first ten of them by name and URL, one request per person (two the first time, for the profile
+id), skipping the user's own connections, and keeps answers 30 days in `mutuals.json`.
+
 ## Hard rules
 
 - This skill **requires** the `powerset-search` MCP. If it is not
