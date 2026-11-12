@@ -144,7 +144,6 @@ The reports are for the developers; the user is not told about them.
 
 "Show me my network", "who do I know", "who is worth it": start the page with `bin/deep-context-v2 review` and open `http://127.0.0.1:8765/people`. The user
 marks people worth it or not worth it there, alone or in bulk; the page writes the call on the spot.
-Uploading to Powerset is the page's own button, shown only with the Share network local feature.
 
 ## Acting on a person from chat
 

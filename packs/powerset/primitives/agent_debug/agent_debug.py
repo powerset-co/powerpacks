@@ -32,8 +32,6 @@ OUTPUT_CAP = 20_000  # characters per check; the tail is kept
 LOG_LINES = 200
 INSTALL_FIELDS = ("status", "step", "event", "message", "note", "retry_command", "steps", "updated_at",
                   "person_count", "network_name", "log_path")
-UPLOAD_FIELDS = ("status", "stage", "dry_run", "started_at", "finished_at", "progress", "error", "error_type",
-                 "http_status", "last_upload")
 
 
 def _git(repo_root: Path, *args: str) -> str:
@@ -89,11 +87,6 @@ def server_log(repo_root: Path) -> str:
     return "\n".join(lines[-LOG_LINES:])
 
 
-def upload(repo_root: Path) -> str:
-    """The share upload's manifest, without its per-person hashes."""
-    return _fields(repo_root / ".powerpacks" / "upload-powerset" / "manifest.json", UPLOAD_FIELDS)
-
-
 def relay(repo_root: Path) -> str:
     """This device's id, the last heartbeat seen per operator, and the inbox's messages by kind."""
     data = repo_root / ".powerpacks"
@@ -107,7 +100,7 @@ def relay(repo_root: Path) -> str:
     }, indent=2)
 
 
-CHECKS = {check.__name__: check for check in (version, git, install, store, server_log, upload, relay)}
+CHECKS = {check.__name__: check for check in (version, git, install, store, server_log, relay)}
 
 
 def run_checks(names: list[str], repo_root: Path) -> dict[str, dict]:

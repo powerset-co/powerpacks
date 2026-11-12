@@ -13,7 +13,6 @@ FILE = Path(".powerpacks/desktop/features.json")
 class FeatureFlags:
     sets: bool = False
     auto_reply: bool = False
-    share: bool = False
     support: bool = False
     # The Team page (remote assist from this machine); off until the owner turns it on in Settings.
     team: bool = False
@@ -22,8 +21,10 @@ class FeatureFlags:
     def parse(cls, payload: object, *, support: bool = False) -> "FeatureFlags":
         if (not isinstance(payload, dict) or not {"sets", "auto_reply"} <= set(payload) <= {"sets", "auto_reply", "share", "support", "team"}
                 or any(type(value) is not bool for value in payload.values())):
-            raise ValueError("sets, auto_reply, share, support and team must be booleans")
-        return cls(**{**payload, "support": payload.get("support", support)})
+            raise ValueError("sets, auto_reply, support and team must be booleans")
+        # "share" is still accepted from an older features.json and ignored: the share upload was removed.
+        flags = {key: value for key, value in payload.items() if key != "share"}
+        return cls(**{**flags, "support": payload.get("support", support)})
 
 
 def read(root: Path) -> FeatureFlags:

@@ -121,5 +121,4 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_review_history \
   tests.test_logbook_people \
   tests.test_logbook_archive \
-  tests.test_logbook_build \
-  tests.test_upload_powerset -v
+  tests.test_logbook_build -v

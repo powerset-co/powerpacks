@@ -9,7 +9,6 @@ import type { WorthAction } from "@/lib/people/facets"
 import { EMPTY } from "@/lib/sets"
 import type { Person, WorthResult } from "@/types/people"
 
-import { UPLOAD_KEY } from "../upload/useUpload"
 import { patchPeople, refetchPeople } from "./usePeopleList"
 
 const DONE: Record<WorthAction, (count: number) => string> = {
@@ -62,8 +61,6 @@ export function useDecisions(
         const results = await writeWorth(targets, action)
         patchWorth(queryClient, results)
         void refetchPeople(queryClient)
-        // The upload list follows worth: the upload status says so and drops a stale check.
-        void queryClient.invalidateQueries({ queryKey: UPLOAD_KEY })
         onWritten(targets)
         setToast({ message: DONE[action](results.length) })
         return true
@@ -88,7 +85,6 @@ export function useDecisions(
       try {
         const deleted = await deletePeople(targets)
         await refetchPeople(queryClient)
-        void queryClient.invalidateQueries({ queryKey: UPLOAD_KEY })
         onDeleted(targets)
         setToast({ message: `Deleted ${plural(deleted, "person")} from this computer.` })
       } catch (error) {

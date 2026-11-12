@@ -6,7 +6,6 @@ import { EmptyState, PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { fetchPeopleIds, fetchPeoplePage } from "@/lib/api/people"
-import { useFeatures } from "@/lib/features"
 import type { FacetSet, HideKey } from "@/lib/people/facets"
 import { LOGBOOK } from "@/lib/people/copy"
 import { writeView, type Tab } from "@/lib/people/view"
@@ -26,7 +25,6 @@ import { PeopleShell } from "./PeopleShell"
 import { entriesQuery } from "./logbook/queries"
 import { EmptyText } from "./table/EmptyText"
 import { PeopleTable, type PeopleTableHandle } from "./table/PeopleTable"
-import { ShareUpload } from "./upload/ShareUpload"
 
 interface PeopleWorkspaceProps {
   // The Logbook reader covers the page: its keys are off.
@@ -199,9 +197,6 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
 
   const shownRow = drawer.shownId ? (byId.get(drawer.shownId) ?? openRow.data?.rows[0] ?? null) : null
   // The search line's right end; it changes with the selection, never with j/k.
-  const { showToast } = decisions
-  // The upload is a local feature (the Share network switch); without it the page is worth and tags.
-  const features = useFeatures()
   const actions = useMemo(() => {
     // Signals read messages: a selection refreshes its people with messages, and a selection of
     // only LinkedIn-only people has none to refresh. Nothing selected is All.
@@ -211,10 +206,9 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
         {selection.selected.size && !signaled.length ? null : (
           <RefreshSignals people={signaled} onDone={refresh} />
         )}
-        {features.share ? <ShareUpload onToast={(message) => showToast({ message })} /> : null}
       </>
     )
-  }, [selection.selected, byId, refresh, showToast, features.share])
+  }, [selection.selected, byId, refresh])
   if (list.loading) return <PeopleLoading />
   if (list.error) return <PeopleShell main={<EmptyState data-empty>{list.error.message}</EmptyState>} />
   return (
