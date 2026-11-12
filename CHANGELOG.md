@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.59.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.58.1...powerpacks-v3.59.0) (2026-11-12)
+
+
+### Features
+
+* **linkedin:** mutual connections and Sales Navigator from the user's own session ([#1162](https://github.com/powerset-co/powerpacks/issues/1162)) ([f24395a](https://github.com/powerset-co/powerpacks/commit/f24395a2b97294e9d1d74a648ebb3b90a575f7be))
+* **searches:** a refined row stacks the Rerank Insight over its traits, as the cloud app does ([#1161](https://github.com/powerset-co/powerpacks/issues/1161)) ([664bcaf](https://github.com/powerset-co/powerpacks/commit/664bcafa15714d2f42d469756b6a12fc8218f59d))
+
+
+### Bug Fixes
+
+* **searches:** a qualitative refine keeps the order and trait score; no score beside the Rerank Insight ([#1163](https://github.com/powerset-co/powerpacks/issues/1163)) ([7fdcada](https://github.com/powerset-co/powerpacks/commit/7fdcada801a41afbd192ca1e235f2be0d401c755))
+* **searches:** the page shows a pond's people in their saved order, so a sort step sorts ([#1160](https://github.com/powerset-co/powerpacks/issues/1160)) ([7117b29](https://github.com/powerset-co/powerpacks/commit/7117b29469075761869760aee5bf476215e8d250))
+
+
+### Performance Improvements
+
+* **companies:** the directory answers in one narrow read at 50k companies, and a positions filter no longer probes the profile link ([#1158](https://github.com/powerset-co/powerpacks/issues/1158)) ([dd4e6b5](https://github.com/powerset-co/powerpacks/commit/dd4e6b5db4d87159d1db4bfbc12ab97fa6dc0fc4))
+
 ## [3.58.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.58.0...powerpacks-v3.58.1) (2026-11-11)
 
 
