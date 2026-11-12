@@ -32,7 +32,9 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -119,7 +121,10 @@ def run_plan(plan: list[dict[str, str]], *, profile_dir: Path = BROWSER_PROFILE,
         raise RuntimeError(deps["message"])
     with tempfile.TemporaryDirectory(prefix="linkedin-session-", dir=profile.parent) as scratch:
         clone = Path(scratch) / "profile"
-        subprocess.run(["cp", "-Rc", str(profile), str(clone)], check=True)
+        if sys.platform == "darwin":
+            subprocess.run(["cp", "-Rc", str(profile), str(clone)], check=True)  # an APFS clone: instant, no extra disk
+        else:
+            shutil.copytree(profile, clone, symlinks=True)
         plan_path, out_path = Path(scratch) / "plan.json", Path(scratch) / "out.json"
         plan_path.write_text(json.dumps(plan))
         result = runner(["node", str(BROWSER_SCRIPT), "--profile-dir", str(clone), "--plan", str(plan_path), "--out", str(out_path)],
