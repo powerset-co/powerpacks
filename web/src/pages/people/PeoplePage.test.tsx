@@ -26,7 +26,6 @@ import {
   type PersonColumn,
   type PersonDetail,
 } from "@/types/people"
-import { PLAN, uploadResponse, uploadStatus } from "@/testing/upload-fixture"
 import { deleteOnServer, pageResponse, resetPeopleServer, writeWorthOnServer } from "@/testing/people-server"
 
 import { LogbookReader } from "./logbook/LogbookReader"
@@ -94,8 +93,7 @@ function serveSaved(url: string): Response | null {
   return null
 }
 
-/** The People routes: the payload, one person's detail, a worth write that echoes the post, the upload status,
- *  and the local features with the upload switched on. */
+/** The People routes: the payload, one person's detail, a worth write that echoes the post, and the local features. */
 function serve(url: string, init?: RequestInit): Promise<Response> {
   const archive = serveSaved(url)
   if (archive) return Promise.resolve(archive)
@@ -107,11 +105,8 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
     return Promise.resolve(respond({ deleted: ids.length }))
   }
   if (url.endsWith("/api/features"))
-    return Promise.resolve(
-      respond({ sets: false, auto_reply: false, share: true, support: false, team: false }),
-    )
+    return Promise.resolve(respond({ sets: false, auto_reply: false, support: false, team: false }))
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
-  if (url.endsWith("/upload")) return Promise.resolve(uploadResponse(uploadStatus()))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
   if (url.endsWith("/signals"))
     return Promise.resolve(respond({ status: "idle", message: null, plan: null, error: null }))
@@ -304,9 +299,7 @@ describe("PeoplePage", () => {
       "fetch",
       vi.fn((url: string, init?: RequestInit) =>
         url.endsWith("/api/features")
-          ? Promise.resolve(
-              respond({ sets: false, auto_reply: false, share: false, support: false, team: false }),
-            )
+          ? Promise.resolve(respond({ sets: false, auto_reply: false, support: false, team: false }))
           : serve(url, init),
       ),
     )
@@ -316,15 +309,14 @@ describe("PeoplePage", () => {
     expect(screen.queryByRole("button", { name: "Share network" })).toBeNull()
   })
 
-  it("puts Refresh signals and Share network at the search line's right end", async () => {
+  it("puts Refresh signals at the search line's right end, with no Share network button", async () => {
     vi.stubGlobal("fetch", vi.fn(serve))
     const { container } = renderPage()
-    await screen.findByRole("button", { name: "Share network" })
+    await screen.findByRole("button", { name: /^Refresh signals/ })
     const actions = must(container.querySelector<HTMLElement>("[data-bar] > .bar-actions"))
-    expect(within(actions).getByRole("button", { name: "Share network" })).toBeTruthy()
     expect(within(actions).getByRole("button", { name: /^Refresh signals/ })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Share network" })).toBeNull()
     expect(must(container.querySelector("[data-head]")).querySelector("button")).toBeNull()
-    expect(screen.queryByText("Never shared")).toBeNull()
   })
 
   it("selects every matching person and keeps them", async () => {
@@ -348,7 +340,6 @@ describe("PeoplePage", () => {
           .map(([url]) => url)
           .filter(
             (url) =>
-              !url.endsWith("/upload") &&
               !url.includes("/logbook") &&
               !url.includes("/sets") &&
               !url.endsWith("/signals") &&
@@ -357,54 +348,6 @@ describe("PeoplePage", () => {
           .map((url) => (url.includes("ids=1") ? "ids" : url.includes("/page?") ? "page" : "worth")),
       ).toEqual(["page", "ids", "worth", "page"]),
     )
-  })
-
-  it("checks on its own after a worth edit and marks what the check found", async () => {
-    const shared = {
-      finished_at: "2026-10-09T04:55:22Z",
-      status: "completed",
-      uploaded: 5,
-      skipped: 0,
-    } as const
-    let changed = false
-    let checked = false
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string, init?: RequestInit) => {
-        if (url.endsWith("/worth")) changed = true
-        if (url.endsWith("/upload/check")) {
-          checked = true
-          return Promise.resolve(uploadResponse(uploadStatus({ status: "checking", last_upload: shared })))
-        }
-        if (url.endsWith("/upload"))
-          return Promise.resolve(
-            uploadResponse(
-              checked
-                ? uploadStatus({ status: "ready", plan: PLAN, last_upload: shared, share_changed: true })
-                : uploadStatus({ status: "completed", last_upload: shared, share_changed: changed }),
-            ),
-          )
-        return serve(url, init)
-      }),
-    )
-    const { container } = renderPage()
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("current"),
-    )
-    await selectAll(container)
-    fireEvent.click(
-      within(must(container.querySelector<HTMLElement>("[data-action-bar]"))).getByRole("button", {
-        name: "Keep Y",
-      }),
-    )
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("running"),
-    )
-    await waitFor(
-      () => expect(screen.getByRole("button", { name: "Share network" }).dataset.state).toBe("pending"),
-      { timeout: 3000 },
-    )
-    expect(checked).toBe(true)
   })
 
   it("marks an updating person and disables drawer, bulk and keyboard tag edits", async () => {

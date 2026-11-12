@@ -1,10 +1,8 @@
 // The page's words for machine values, ported 1:1 from the legacy people.js.
 
 import type { ChannelCoverage, LogbookResult } from "@/lib/api/logbook"
-import type { UploadPlan } from "@/lib/api/upload"
 import { CHANNELS } from "@/lib/channels"
-import { parseDate, plural } from "@/lib/copy"
-import type { CalmPhase, UploadPhase } from "@/lib/people/upload"
+import { plural } from "@/lib/copy"
 
 // Acronyms and fixed spellings in role and filter names: "ai engineer" -> "AI Engineer". "IT" stays out:
 // sentence case would turn every "it" into "IT".
@@ -126,80 +124,6 @@ export function eventDate(value: string | null | undefined): string {
       return name ? `${name} ${year}` : year
     },
   )
-}
-
-// The share dialog and its trigger.
-export const UPLOAD = {
-  share: "Share network",
-  upToDateNote: "Shared, nothing to update",
-  pendingNote: "Changes to share: open to upload them",
-  runningNote: "Upload running",
-  checkingNote: "Checking your network",
-  checkAgain: "Check again",
-  confirm: "Confirm sharing",
-  resume: "Resume sharing",
-  close: "Close",
-  starting: "Starting…",
-  reconnecting: "Reconnecting…",
-  progress: "People uploaded",
-  uploaded: "Uploaded",
-  upToDate: "Already up to date",
-  titleUpToDate: "Your network is up to date",
-} as const
-
-export const UPLOAD_TITLE: Readonly<Record<UploadPhase, string>> = {
-  idle: "Share your network",
-  checking: "Checking your network",
-  ready: "Ready to share",
-  uploading: "Uploading your network",
-  completed: "Your network is shared",
-  "check-failed": "Check failed",
-  "upload-failed": "Upload failed",
-  interrupted: "Upload interrupted",
-  refused: "Upload not started",
-}
-
-// A failed phase shows the server's sentence instead.
-export const UPLOAD_SENTENCE: Readonly<Record<CalmPhase, string>> = {
-  idle: "Only people you keep are uploaded.",
-  checking: "Counting who will upload. Nothing is shared yet.",
-  ready: "Only people you keep with a LinkedIn profile upload.",
-  uploading: "Closing keeps the upload running.",
-  completed: "Only people you keep are uploaded.",
-}
-
-// The check's plan, in order; a zero row is hidden except what will upload.
-export const PLAN_ROWS: readonly { key: keyof UploadPlan; label: string }[] = [
-  { key: "marked_share", label: "Kept" },
-  { key: "with_linkedin", label: "With LinkedIn, will upload" },
-  { key: "without_linkedin", label: "Without LinkedIn, stay local" },
-  { key: "new_to_cloud", label: "New to the cloud" },
-  { key: "changed", label: "Changed" },
-  { key: "already_shared", label: "Already shared" },
-  { key: "already_in_cloud", label: "In the cloud already, you join as a source" },
-  { key: "losing_access", label: "Losing access" },
-  { key: "companies_missing", label: "Companies missing" },
-]
-export const PLAN_ALWAYS: keyof UploadPlan = "with_linkedin"
-
-/** "Sep 27"; an unparseable value as written. */
-export function dayMonth(value: string): string {
-  const date = parseDate(value)
-  return date ? date.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : value
-}
-
-/** "Finished Sep 27, 3:04 PM". */
-export function finishedAt(value: string): string {
-  const date = parseDate(value)
-  const when = date
-    ? date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-    : value
-  return `Finished ${when}`
-}
-
-/** The page toast when an upload finishes while the dialog is closed. */
-export function sharedToast(count: number): string {
-  return `Shared ${plural(count, "person")}.`
 }
 
 /** The Sets page (pages/sets), and a member's relay presence for the Team page. Heartbeats come every 30 s; three missed and the member reads as last seen. */

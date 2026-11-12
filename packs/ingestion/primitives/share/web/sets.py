@@ -14,6 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-11-12: share_namespace lives here; the share upload that wrote the namespace was removed.
 - 2026-10-09: spell out owner collection in settle.
 - 2026-10-09: deleting a set also tells those with a pending invite; their machine drops the invite.
 - 2026-10-08: the owner sends the full member list to every member when it changes (set_members), so a
@@ -36,13 +37,15 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+import re
+
 import turbopuffer
 
-from packs.indexing.primitives.upload_powerset.upload_powerset import share_namespace
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_share
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
+from packs.search.primitives.lib.powerpacks_contracts import TURBOPUFFER_NAMESPACES
 
 ME_PATH = "/v2/team/me"
 MESSAGES_PATH = "/v2/agent-messages"
@@ -61,6 +64,16 @@ TIMEOUT_SECONDS = 30
 # A count moves only when someone shares; the page asks every 10 s, so it reads this cache.
 COUNT_SECONDS = 3600
 _LOG = logging.getLogger(__name__)
+
+
+def share_namespace(logical: str) -> str:
+    """The share TurboPuffer namespace for a logical name, e.g. powerpacks_summaries_v1 (moved here from the
+    removed share upload; POWERPACKS_SHARE_INDEX_VERSION picks the version, v1 by default)."""
+    version = os.environ.get("POWERPACKS_SHARE_INDEX_VERSION", "v1").strip().lower()
+    if not re.fullmatch(r"v[1-9][0-9]*", version):
+        raise ValueError(f"Invalid POWERPACKS_SHARE_INDEX_VERSION: {version!r}")
+    name = TURBOPUFFER_NAMESPACES[logical].removeprefix("aleph_").removesuffix("_v1")
+    return f"powerpacks_{name}_{version}"
 
 
 class NeedsSignIn(Exception):

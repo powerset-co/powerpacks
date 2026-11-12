@@ -5,15 +5,13 @@ import { body, failure } from "@/lib/api/http"
 export interface Features {
   sets: boolean
   auto_reply: boolean
-  /** The People page's Share network upload. */
-  share: boolean
   /** Remote assist: the Powerset team may work on this install through its agent. */
   support: boolean
   /** The Team page, for working on teammates' installs from this machine. */
   team: boolean
 }
 
-const DEFAULTS: Features = { sets: false, auto_reply: false, share: false, support: false, team: false }
+const DEFAULTS: Features = { sets: false, auto_reply: false, support: false, team: false }
 const KEY = ["features"] as const
 
 async function request(features?: Features): Promise<Features> {

@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import replace
 from http.server import HTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageChannel, MessageEntry, Person
 from packs.ingestion.primitives.deep_context_v2.collect.collect import Collect
@@ -346,7 +346,7 @@ class LinkedInFamiliesTests(unittest.TestCase):
         self.import_rows([linkedin_row("42")])
         Realize(self.conn, self.root).run()
         people = SharePeople(self.conn, self.root)
-        routes = ShareRoutes(self.conn, people, people.load, Mock(), logbook_root=self.root / "logbook")
+        routes = ShareRoutes(self.conn, people, people.load, logbook_root=self.root / "logbook")
         server = HTTPServer(("127.0.0.1", 0), make_handler(routes))
         self.addCleanup(server.server_close)
         worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})

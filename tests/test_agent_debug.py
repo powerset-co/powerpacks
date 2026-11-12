@@ -39,8 +39,6 @@ class AgentDebugTests(unittest.TestCase):
         write_json(data / "install" / "manifest.json",
                    {"status": "failed", "step": "people", "message": "boom", "fingerprints": {"x": "y"}})
         (data / "install" / "server.log").write_text("started\nserving\n", encoding="utf-8")
-        write_json(data / "upload-powerset" / "manifest.json",
-                   {"status": "completed", "stage": "completed", "person_hashes": {"p1": "h1"}})
         (data / "device-id").write_text("device-1\n", encoding="utf-8")
         write_json(data / "presence.json", {ARTHUR: "2026-10-08T00:00:00Z"})
         write_json(data / "inbox" / "req-1.json", _request())
@@ -67,7 +65,6 @@ class AgentDebugTests(unittest.TestCase):
         self.assertEqual(len(json.loads(results["git"]["output"])["commit"]), 40)
         self.assertEqual(json.loads(results["install"]["output"])["step"], "people")
         self.assertNotIn("fingerprints", results["install"]["output"])
-        self.assertNotIn("person_hashes", results["upload"]["output"])
         store = json.loads(results["store"]["output"])
         self.assertEqual(store["schema_version"], str(agent_debug.SCHEMA_VERSION))
         self.assertIn("meta", store["rows"])
@@ -79,11 +76,11 @@ class AgentDebugTests(unittest.TestCase):
         self.assertEqual(set(results), {"install", "server_log"})
 
     def test_unknown_and_failing_checks_report_not_ok(self):
-        (self.root / ".powerpacks" / "upload-powerset" / "manifest.json").unlink()
-        results = self._answer(["rm -rf /", "upload"])
+        (self.root / ".powerpacks" / "install" / "manifest.json").unlink()
+        results = self._answer(["rm -rf /", "install"])
         self.assertEqual(results["rm -rf /"], {"ok": False, "output": "unknown check"})
-        self.assertFalse(results["upload"]["ok"])
-        self.assertIn("FileNotFoundError", results["upload"]["output"])
+        self.assertFalse(results["install"]["ok"])
+        self.assertIn("FileNotFoundError", results["install"]["output"])
 
     def test_output_keeps_the_tail_under_the_cap(self):
         lines = [f"line {index:05d} " + "x" * 200 for index in range(agent_debug.LOG_LINES)]

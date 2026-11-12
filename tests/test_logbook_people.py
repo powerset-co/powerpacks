@@ -117,8 +117,7 @@ class ResolveParentsTests(LogbookPeopleFixture):
 class LogbookRoutesTests(LogbookPeopleFixture):
     def setUp(self) -> None:
         super().setUp()
-        self.routes = share_routes(self.db, self.root, upload_db=self.root / "local-search.duckdb",
-                                   upload_dir=self.root / "upload-powerset", logbook_root=self.logbook_root,
+        self.routes = share_routes(self.db, self.root, logbook_root=self.logbook_root,
                                    logbook_stores=self.stores)
 
     def _post(self, people, origin=None, host="127.0.0.1:8797"):

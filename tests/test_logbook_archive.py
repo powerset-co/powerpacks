@@ -75,8 +75,7 @@ class ParseConversationTests(LogbookPeopleFixture):
 
 class LogbookArchiveRoutesTests(LogbookPeopleFixture):
     def _routes(self):
-        return share_routes(self.db, self.root, upload_db=self.root / "local-search.duckdb",
-                            upload_dir=self.root / "upload-powerset", logbook_root=self.logbook_root,
+        return share_routes(self.db, self.root, logbook_root=self.logbook_root,
                             logbook_stores=self.stores)
 
     def _get(self, routes, route, **query):

@@ -87,7 +87,6 @@ class PeopleWorthTests(StoreTests):
         from packs.ingestion.primitives.share.person_labels import PersonLabels
         from packs.ingestion.primitives.share.web.model import SharePeople
         from packs.ingestion.primitives.share.web.server import ShareRoutes
-        from unittest.mock import Mock
 
         self.root = Path(self.tmp.name)
         self._parent("p:a", "c1", "c2")
@@ -103,7 +102,7 @@ class PeopleWorthTests(StoreTests):
         PersonLabels(self.conn, self.root).run()
         queries_share.write_tags(self.conn, [("c1", "is_recruiter", "keep note", NOW)])
         self.people = SharePeople(self.conn, self.root)
-        self.routes = ShareRoutes(self.conn, self.people, self.people.load, Mock())
+        self.routes = ShareRoutes(self.conn, self.people, self.people.load)
 
     def post(self, path: str, payload: object):
         from test_logbook_people import Handler
