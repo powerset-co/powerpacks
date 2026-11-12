@@ -45,12 +45,12 @@ check is already `ok`.
 
 Resolve and enter the installed Powerpacks repo before running any
 Powerset login/setup command. This ensures `.env` and local Powerpacks state are
-written under the installed checkout such as `~/powerpacks`, not under an agent
+written under the app's folder, `~/.powerpacks/app`, not under an agent
 skill bundle like `~/.codex/powerpacks`.
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
@@ -61,7 +61,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2
   exit 1
 }
 cd "$repo"

@@ -117,13 +117,13 @@ Run every command below from the Powerpacks checkout, like the other skills:
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" && -x "$candidate/install.sh" && -d "$candidate/packs" ]] || continue
     echo "$candidate"; return 0
   done
   return 1
 }
-REPO="$(resolve_powerpacks_root)" || { echo "Install Powerpacks to ~/powerpacks first." >&2; exit 1; }
+REPO="$(resolve_powerpacks_root)" || { echo "Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2; exit 1; }
 cd "$REPO"
 ```
 

@@ -64,6 +64,33 @@ class InstalledSkillContextTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), str(ROOT))
 
+    def test_every_skill_resolver_picks_the_app_folder_over_another_checkout(self):
+        # An old command-line checkout in the chat's directory must not win over the app's folder.
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary).resolve()
+            app = home / ".powerpacks/app"
+            stale = home / "powerpacks"
+            for checkout in (app, stale):
+                # Each resolver checks one of these files, all of which an app install has.
+                (checkout / "packs").mkdir(parents=True)
+                (checkout / "bin").mkdir()
+                (checkout / "pyproject.toml").write_text("")
+                for script in ("install.sh", "bin/update-codex"):
+                    (checkout / script).write_text("")
+                    (checkout / script).chmod(0o755)
+            skills = [path for path in (ROOT / "packs").rglob("SKILL.md")
+                      if "resolve_powerpacks_root() {" in path.read_text()]
+            self.assertGreaterEqual(len(skills), 7)
+            for skill in skills:
+                with self.subTest(skill=str(skill.relative_to(ROOT))):
+                    resolver = skill.read_text().split("resolve_powerpacks_root() {", 1)[1].split("\n}", 1)[0]
+                    result = subprocess.run(
+                        ["bash", "-c", "resolve_powerpacks_root() {" + resolver + "\n}\nresolve_powerpacks_root"],
+                        cwd=stale, text=True, capture_output=True,
+                        env={"HOME": str(home), "PATH": os.environ["PATH"]},
+                    )
+                    self.assertEqual(result.stdout.strip(), str(app), result.stderr)
+
     def test_shared_worker_updates_install_as_independent_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()

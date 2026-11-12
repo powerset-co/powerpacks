@@ -31,9 +31,7 @@ explicit request to change Powerpacks code, read `docs/development.md`.
 
 Powerpacks is installed by the desktop app at `~/.powerpacks/app`. Run
 Powerpacks commands from that folder, regardless of the chat's directory:
-configuration is its `.env`; workflow data is its `.powerpacks/`. Any other
-Powerpacks folder on this machine (such as an old `~/powerpacks`) is a stale
-install; never run commands from it. Codex skills live in `~/.agents/skills`;
+configuration is its `.env`; workflow data is its `.powerpacks/`. Codex skills live in `~/.agents/skills`;
 Claude Code skills live in `~/.claude/skills`; Pi skills live in
 `~/.pi/agent/skills`. A copied skill bundle is not a data root.
 Do not write Powerpacks state into an unrelated project or the skills folder.
@@ -45,7 +43,7 @@ Never print secret values.
 Load the matching `SKILL.md` and follow it. The skill owns its sequence,
 permissions, recovery, and verification. Don't ask the user to choose a skill
 when their intent is clear, or inspect product source on the happy path.
-Paths below are relative to the installed checkout.
+Paths below are relative to `~/.powerpacks/app`.
 
 | User intent | Skill |
 | --- | --- |

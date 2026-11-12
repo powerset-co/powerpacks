@@ -51,19 +51,18 @@ For mutating commands (`$powerset login`, `$powerset env
 pull`, `$powerset sets use`, and `$powerset create
 oauth app`), first resolve and enter the installed Powerpacks repo.
 This ensures `.env` and any local Powerpacks state are written under the
-installed checkout such as `~/powerpacks`, not under an agent skill bundle like
+app's folder, `~/.powerpacks/app`, not under an agent skill bundle like
 `~/.codex/powerpacks`.
 
 Prefer, in order:
 
 1. `$POWERPACKS_REPO_ROOT` if it points to a Powerpacks repo;
-2. current working directory if it is a Powerpacks repo and not a legacy skill bundle;
-3. `~/powerpacks`;
-4. `~/workspace/powerpacks`.
+2. `~/.powerpacks/app`, the app's folder;
+3. current working directory if it is a Powerpacks repo and not a legacy skill bundle.
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
@@ -74,7 +73,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2
   exit 1
 }
 cd "$repo"
