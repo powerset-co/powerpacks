@@ -159,6 +159,25 @@ def people_select_all(app: App) -> None:
                  WRITE, f"{total:,} selected")
 
 
+def people_not_assessed(app: App) -> None:
+    """Not assessed counts only people with more than a LinkedIn: an undecided LinkedIn-only
+    person counts (and lists) as Keep. They were counted as Not assessed, a count nobody could act on."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    count = ("JSON.parse((() => { const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&show=linkedin_only&' + %s, false); "
+             "r.send(); return r.responseText })()).matching")
+    stray = app.js(count % "'tab=unjudged&filter.evidence=No%20relationship%20labels'")
+    if stray:
+        raise Failed(f"{stray:,} LinkedIn-only people count as Not assessed")
+    unjudged = app.js(count % "'tab=unjudged'")
+    app.click({"css": "[data-bar] [aria-label='Decision']"})
+    app.wait_for({"css": "[role=listbox] [role=option]"}, CLICK, "the Decision filter opens")
+    options = app.js("[...document.querySelectorAll('[role=listbox] [role=option]')].map((o) => o.innerText.trim())")
+    app.key("Escape")
+    shown = next((o for o in options if o.startswith("Not assessed")), "Not assessed · 0")
+    if shown != f"Not assessed · {unjudged:,}" and (unjudged or shown != "Not assessed · 0"):
+        raise Failed(f"the Decision filter reads {shown!r}, the list has {unjudged:,} not assessed")
+
+
 def _matching(app: App, query: str) -> int:
     """How many people the page's own list endpoint matches for `query`."""
     return app.js(f"JSON.parse((() => {{ const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&{query}', false); "
@@ -424,6 +443,7 @@ SCENARIOS = {
     "people-search": people_search,
     "people-tab": people_tab,
     "people-select-all": people_select_all,
+    "people-not-assessed": people_not_assessed,
     "people-hide-linkedin": people_hide_linkedin,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,

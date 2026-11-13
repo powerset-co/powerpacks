@@ -38,7 +38,9 @@ export function pageResponse(url: string, payload: PeoplePayload): Response {
       next[at("reason")] = "human_worth"
       return next
     })
-  const tabOf = (row: PersonCell[]) => String(cell(row, "worth")) || "unjudged"
+  // model.py DECISION: an undecided LinkedIn-only person is a Keep.
+  const tabOf = (row: PersonCell[]) =>
+    String(cell(row, "worth")) || (cell(row, "linkedin_only") ? "yes" : "unjudged")
   const tab = params.get("tab") ?? "all"
   const inTab = rows.filter((row) => tab === "all" || tabOf(row) === tab)
   // model.py page(): a hide left alone steps aside when it would hide everyone; one turned on never does.
