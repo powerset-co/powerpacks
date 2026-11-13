@@ -96,7 +96,7 @@ Resolve and enter canonical repo:
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
@@ -107,7 +107,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2
   exit 1
 }
 cd "$repo"

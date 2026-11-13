@@ -34,9 +34,8 @@ def default_target() -> Path:
     if os.environ.get("POWERPACKS_REPO_ROOT"):
         candidates.append(expand(os.environ["POWERPACKS_REPO_ROOT"]))
     candidates.extend([
+        expand("~/.powerpacks/app"),
         Path.cwd().resolve(),
-        expand("~/powerpacks"),
-        expand("~/workspace/powerpacks"),
     ])
     for candidate in candidates:
         if is_repo_root(candidate) and "/.codex/" not in str(candidate):
@@ -90,7 +89,7 @@ def copy_tree_contents(src_root: Path, dst_root: Path, *, overwrite: bool, dry_r
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default="~/.codex/powerpacks", help="Legacy/alternate Powerpacks checkout to copy .powerpacks from")
-    parser.add_argument("--target", default="", help="Canonical Powerpacks checkout; defaults to POWERPACKS_REPO_ROOT, cwd, ~/powerpacks, or ~/workspace/powerpacks")
+    parser.add_argument("--target", default="", help="Canonical Powerpacks checkout; defaults to POWERPACKS_REPO_ROOT, ~/.powerpacks/app, or cwd")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing target files. Without this, existing files are kept.")
     parser.add_argument("--backup-existing", action="store_true", help="Move existing target .powerpacks aside before copying")
     parser.add_argument("--dry-run", action="store_true")

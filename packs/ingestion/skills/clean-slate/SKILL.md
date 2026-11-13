@@ -24,8 +24,8 @@ review.
 
 ## Run it
 
-From the canonical Powerpacks repo (`$POWERPACKS_REPO_ROOT`, else
-`~/powerpacks`, else `~/workspace/powerpacks`):
+From the Powerpacks app's folder, `~/.powerpacks/app` (`$POWERPACKS_REPO_ROOT`
+when set):
 
 1. **Stop any running review server first** (a live server would keep serving
    moved files):

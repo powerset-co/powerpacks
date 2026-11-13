@@ -23,7 +23,7 @@ Powerpacks repo before writing `.env`:
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -d "$candidate/packs" && -f "$candidate/pyproject.toml" ]]; then
@@ -34,7 +34,7 @@ resolve_powerpacks_root() {
   return 1
 }
 repo="$(resolve_powerpacks_root)" || {
-  echo "No installed Powerpacks repo found. Install/copy Powerpacks to ~/powerpacks first." >&2
+  echo "No installed Powerpacks repo found. Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2
   exit 1
 }
 cd "$repo"
@@ -44,7 +44,7 @@ For read-only set listing, still prefer the canonical repo when available.
 
 ## Workflow
 
-1. From the installed checkout, refresh the accessible sets using the existing
+1. From `~/.powerpacks/app`, refresh the accessible sets using the existing
    bootstrap request to HTTP `/v2/sets`:
 
 ```bash

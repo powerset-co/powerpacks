@@ -5,8 +5,8 @@ description: Diagnose Powerpacks installation, Python, login, and credentials pr
 
 # Powerpacks Doctor
 
-Use the installed checkout identified by this skill's context. For an uninstalled
-source skill, use `POWERPACKS_REPO_ROOT` when supplied, otherwise `~/powerpacks`.
+Use the Powerpacks app's folder, `~/.powerpacks/app` (`POWERPACKS_REPO_ROOT` when
+supplied).
 Run commands there. For data stored under the wrong installation, use
 `fix-powerpacks` instead.
 
