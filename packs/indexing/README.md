@@ -176,3 +176,16 @@ export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
 `.powerpacks/search-index/local-search.duckdb` artifact. Fan-in retains contact
 and source provenance as CSVs under `.powerpacks/network-import/merged/`; it does
 not build a second DuckDB.
+
+## Taste scores
+
+When you're signed in to Powerset, each index build saves the Powerset team's
+Taste scores into `local_person_taste` (LinkedIn URL, `employee` or `founder`
+mode, score, model, date). `fetch_taste_scores` asks the Powerset API
+(`POST /v2/taste/people`), which only reads scores already saved and never starts
+a paid scoring run. Signed out, or the API refusing, skips it and the build still
+succeeds. Run it by hand with:
+
+```bash
+uv run python packs/indexing/primitives/fetch_taste_scores/fetch_taste_scores.py
+```
