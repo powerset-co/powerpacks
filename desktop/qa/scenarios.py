@@ -291,6 +291,23 @@ def refresh_toggle(app: App) -> None:
             raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
 
 
+ACCESS = "[...document.querySelectorAll('form button[aria-pressed]')].find((b) => /^(Full Access|Ask First)$/.test(b.getAttribute('aria-label')))"
+
+
+def chat_access_pill(app: App) -> None:
+    """The chat's access pill names the access the chat has: Full Access when on, Ask First when
+    off (it read Full Access either way). Flips both ways and is put back as it was."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.wait_for(f"!!{ACCESS}", PAGE, "the access pill shows")
+    before = app.js(f"{ACCESS}.getAttribute('aria-label')")
+    for label in ("Ask First" if before == "Full Access" else "Full Access", before):
+        app.click({"text": "Full Access" if label == "Ask First" else "Ask First", "exact": True})
+        app.wait_for(f"{ACCESS}?.getAttribute('aria-label') === {label!r}", CLICK, f"the pill reads {label}")
+        pressed = app.js(f"{ACCESS}.getAttribute('aria-pressed')")
+        if pressed != ("true" if label == "Full Access" else "false"):
+            raise Failed(f"the pill reads {label} but aria-pressed is {pressed}")
+
+
 SCENARIOS = {
     "people-open": people_open,
     "people-menus": people_menus,
@@ -307,4 +324,5 @@ SCENARIOS = {
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
+    "chat-access-pill": chat_access_pill,
 }
