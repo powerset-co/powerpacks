@@ -164,30 +164,9 @@ class Onboarding:
         return account
 
     def prepare_credentials(self) -> list[str]:
+        """The sign-in pulled the account's keys into .env (auth.cmd_login); this only reads what
+        it left, so Set up never fetches them a second time."""
         self.progress("credentials.preparing")
-        values = {}
-        responses = {}
-        for path, _ in keys.KEY_SOURCES.values():
-            if path not in responses:
-                responses[path] = keys.fetch_endpoint(self.base, path, self.token)
-        for path, (state, payload) in responses.items():
-            if state != "error":
-                continue
-            http_status = payload.get("http_status")
-            reason = f"HTTP {http_status}" if http_status else payload.get("reason", "connection failed")
-            self.log(f"Search credential request failed at {path}: {reason}")
-            if not any(keys.KEY_SOURCES[key][0] == path for key in REQUIRED_KEYS):
-                continue
-            if http_status:
-                raise urllib.error.HTTPError(self.base + path, http_status, "Credential request failed", None, None)
-            raise ConnectionError(f"Could not fetch {path}: {reason}")
-        for key, (path, field) in keys.KEY_SOURCES.items():
-            state, payload = responses[path]
-            if state == "ok" and payload and payload.get(field):
-                value = str(payload[field]).strip()
-                if value:
-                    values[key] = value
-        keys.write_env(self.env_path, values)
         present = keys._read_env_file(self.env_path)
         missing = [key for key in REQUIRED_KEYS if not present.get(key)]
         if not missing:
@@ -242,17 +221,7 @@ class Onboarding:
             account = self.connect_account()
             if account is None:
                 return self.failed("account.login_failed")
-            try:
-                missing = self.prepare_credentials()
-            except urllib.error.HTTPError as exc:
-                if exc.code != 401:
-                    raise
-                if not self.login():
-                    return self.failed("account.login_failed")
-                account = self.connect_account()
-                if account is None:
-                    return self.failed("account.login_failed")
-                missing = self.prepare_credentials()
+            missing = self.prepare_credentials()
             if missing:
                 print("Missing search credentials: " + ", ".join(missing), file=sys.stderr)
             if _PROCESSING_KEY in missing:

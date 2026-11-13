@@ -85,6 +85,7 @@ export async function fetchPeoplePage(
     totals: { all: yes + no + unjudged, yes, no, unjudged },
     kinds: new Map(Object.entries(payload.kinds)),
     rows: decodePeople(payload),
+    hidden: new Set(payload.hidden ?? []),
   }
 }
 

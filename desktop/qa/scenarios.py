@@ -178,6 +178,36 @@ def people_not_assessed(app: App) -> None:
         raise Failed(f"the Decision filter reads {shown!r}, the list has {unjudged:,} not assessed")
 
 
+def _matching(app: App, query: str) -> int:
+    """How many people the page's own list endpoint matches for `query`."""
+    return app.js(f"JSON.parse((() => {{ const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&{query}', false); "
+                  "r.send(); return r.responseText })()).matching")
+
+
+def people_hide_linkedin(app: App) -> None:
+    """The Filters menu's "Hide LinkedIn-only people" does what its box shows: checked, no
+    LinkedIn-only person is listed; unchecked, everyone is. It read checked yet hid no one when
+    everyone was LinkedIn-only (a network right after its LinkedIn import). Flips both ways."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    everyone = _matching(app, "show=linkedin_only")
+    linkedin_only = _matching(app, "show=linkedin_only&filter.evidence=No%20relationship%20labels")
+    box = "[data-radix-popper-content-wrapper] [role=checkbox]"  # the menu's, not a row's select box
+    checked = f"document.querySelector({box!r})?.getAttribute('aria-checked')"
+    listed = "(document.querySelector('[aria-rowcount]') ? " + ROW_COUNT + " : 0)"  # the empty page has no table
+    for flip in (True, True, False):
+        app.click({"css": "[data-filters]"})
+        app.wait_for({"css": box}, CLICK, "the Filters menu opens")
+        state = app.js(checked)
+        want = everyone - linkedin_only if state == "true" else everyone
+        app.wait_for(f"({LOADING}) && {listed} === {want}", WRITE,
+                     f"with the box {'checked' if state == 'true' else 'unchecked'}, {want:,} of {everyone:,} people list")
+        if flip:
+            app.click({"css": box})
+            app.wait_for(f"{checked} !== {state!r}", CLICK, "the box flips")
+        app.key("Escape")
+        app.wait_for(f"!document.querySelector({box!r})", CLICK, "the Filters menu closes")
+
+
 def search_set_picker(app: App) -> None:
     """The chat's Search in picker opens, and a pick shows at once."""
     app.go("/agent", {"text": "Search in"}, PAGE)
@@ -342,6 +372,49 @@ def refresh_toggle(app: App) -> None:
             raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
 
 
+
+# Answers Accounts' checks as if WhatsApp were linked and never imported (no last sync), until
+# `window.__qaImported` is set, then as if imported. A page reload drops it.
+FAKE_WHATSAPP = """(() => {
+  if (!window.__qaFetch) window.__qaFetch = window.fetch;
+  window.__qaImported = false;
+  const json = (body) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    const response = await window.__qaFetch(input, init);
+    if (url.startsWith('/accounts/api/signed-in')) return json({ ...(await response.json()), whatsapp: true });
+    if (!url.startsWith('/accounts/api/accounts')) return response;
+    const body = await response.json();
+    const whatsapp = { source: 'whatsapp', name: 'WhatsApp', health: 'ok', note: 'Up to date', messages: 0, contacts: 0,
+      latest_message_at: null, last_sync_at: window.__qaImported ? new Date().toISOString() : null };
+    const others = body.accounts.filter((a) => a.source !== 'whatsapp' && (a.source === 'linkedin' || a.last_sync_at));
+    return json({ ...body, accounts: [...others, whatsapp] });
+  };
+  return true;
+})()"""
+PROMPT = {"css": "section[aria-label='Refresh after connecting']"}
+
+
+def accounts_refresh_prompt(app: App) -> None:
+    """While a linked message source has never been imported, the bottom of Accounts offers
+    Refresh now (no way to dismiss it); once it has been imported the card is gone. Simulated
+    through Accounts' own checks (WhatsApp linked, no last sync, then a last sync), so no real
+    refresh starts."""
+    try:
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js(FAKE_WHATSAPP)
+        app.go("/accounts", PROMPT, PAGE)
+        app.picture("accounts-refresh-prompt")
+        if app.shows({"text": "Later", "exact": True}):
+            raise Failed("the card can be put off with Later")
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js("(window.__qaImported = true, true)")
+        app.go("/accounts", {"text": "Your sources"}, PAGE)
+        app.wait_for(f"!document.querySelector({json.dumps(PROMPT['css'])})", PAGE, "the card goes once WhatsApp is imported")
+    finally:
+        app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
+
+
 ACCESS = "[...document.querySelectorAll('form button[aria-pressed]')].find((b) => /^(Full Access|Ask First)$/.test(b.getAttribute('aria-label')))"
 
 
@@ -371,11 +444,13 @@ SCENARIOS = {
     "people-tab": people_tab,
     "people-select-all": people_select_all,
     "people-not-assessed": people_not_assessed,
+    "people-hide-linkedin": people_hide_linkedin,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
     "search-no-keywords": search_no_keywords,
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
+    "accounts-refresh-prompt": accounts_refresh_prompt,
     "chat-access-pill": chat_access_pill,
 }

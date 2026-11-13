@@ -237,8 +237,6 @@ class AccountRoutesTests(unittest.TestCase):
             start.assert_not_called()
             login.assert_not_called()
 
-
-
     def test_cancel_with_nothing_running_is_idle(self) -> None:
         self.assertEqual(self._post("/api/install/cancel", {}), (HTTPStatus.ACCEPTED, {"status": "idle"}))
 

@@ -29,7 +29,7 @@ PIPE="uv run --project . python packs/sales-nav/primitives/sales_nav_pipeline/sa
 
 Which LinkedIn it talks to is decided by the set, nothing else:
 
-| | the chat has a set (`POWERPACKS_DEFAULT_SET_ID`, from the Search-in picker, or `--set-id`) | no set (local-only chat) |
+| | the chat has a set (its instructions name it; pass it as `--set-id`) | no set (local-only chat) |
 | --- | --- | --- |
 | who searches | the Powerset API, every Sales Nav seat in the set, merged | the user's own LinkedIn session on this Mac |
 | 2nd degree of | the whole team | the user |

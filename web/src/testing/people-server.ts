@@ -43,8 +43,10 @@ export function pageResponse(url: string, payload: PeoplePayload): Response {
     String(cell(row, "worth")) || (cell(row, "linkedin_only") ? "yes" : "unjudged")
   const tab = params.get("tab") ?? "all"
   const inTab = rows.filter((row) => tab === "all" || tabOf(row) === tab)
+  // model.py page(): a hide left alone steps aside when it would hide everyone; one turned on never does.
   const hide =
-    !params.getAll("show").includes("linkedin_only") && rows.some((row) => !cell(row, "linkedin_only"))
+    !params.getAll("show").includes("linkedin_only") &&
+    (params.getAll("hide").includes("linkedin_only") || rows.some((row) => !cell(row, "linkedin_only")))
   const text = (params.get("q") ?? "").trim().toLowerCase()
   const kinds = params.getAll("filter.relationship_kind")
   const id = params.get("id")
@@ -77,6 +79,7 @@ export function pageResponse(url: string, payload: PeoplePayload): Response {
     columns: payload.columns,
     rows: params.get("ids") === "1" ? [] : matching.slice(offset, offset + limit),
     ids: params.get("ids") === "1" ? matching.map((row) => String(cell(row, "parent_id"))) : [],
+    hidden: hide ? ["linkedin_only"] : [],
   }
   return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })
 }

@@ -154,10 +154,12 @@ def write_env(path: Path, updates: Mapping[str, str | None]) -> list[str]:
     return written
 
 
-def cmd_pull(args: argparse.Namespace) -> int:
-    env_path = Path(args.env_file)
+def pull_keys(env_path: Path, token: str | None = None) -> dict:
+    """Every runtime key the API holds for the signed-in account, into .env. The sign-in itself
+    calls this (auth.cmd_login, with the token it just stored), so the app has its keys, the
+    gateway's above all, the moment the user is signed in; nothing else fetches them."""
     base = api_base(env_path)
-    token = bearer_token(env_path)
+    token = token or bearer_token(env_path)
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}
     for key, (path, _) in KEY_SOURCES.items():
@@ -184,7 +186,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
         status = "error"
     else:
         status = "not_provisioned"
-    emit({
+    return {
         "primitive": "pull_runtime_keys",
         "command": "pull",
         "status": status,
@@ -193,8 +195,13 @@ def cmd_pull(args: argparse.Namespace) -> int:
         "written": written,
         "missing": missing,
         "env_file": str(env_path),
-    })
-    return 0 if written else 2
+    }
+
+
+def cmd_pull(args: argparse.Namespace) -> int:
+    pulled = pull_keys(Path(args.env_file))
+    emit(pulled)
+    return 0 if pulled["written"] else 2
 
 
 def refresh_gateway_key(env_path: Path, token: str | None = None) -> dict[str, str]:

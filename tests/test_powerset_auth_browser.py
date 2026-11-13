@@ -42,8 +42,11 @@ class PowersetBrowserTests(unittest.TestCase):
                 patch.object(auth, "_login_in_browser", side_effect=browser, create=True), \
                 patch("webbrowser.open"), \
                 patch.object(auth, "_post_json", return_value=(200, {"access_token": "synthetic.jwt.token",
-                                                                     "id_token": ID_TOKEN}, "")) as exchange:
+                                                                     "id_token": ID_TOKEN}, "")) as exchange, \
+                patch.object(auth.pull_runtime_keys, "pull_keys",
+                             return_value={"status": "ok", "written": ["POWERSET_API_KEY"]}) as pulled:
             code = auth.cmd_login(self.args)
+        self.pulled = pulled
         with socket.socket() as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("127.0.0.1", self.args.callback_port))
@@ -72,8 +75,14 @@ class PowersetBrowserTests(unittest.TestCase):
         saved = json.loads(self.args.credentials_path.read_text())
         self.assertEqual((saved["name"], saved["picture"]), ("Jordan Bravo", "https://pictures.example.test/j.jpg"))
 
+    def test_a_finished_login_pulls_the_runtime_keys_with_its_token(self):
+        code, _, _ = self.login(self.callback)
+        self.assertEqual(code, 0)
+        self.pulled.assert_called_once_with(auth.pull_runtime_keys.REPO / ".env", token="synthetic.jwt.token")
+
     def test_browser_startup_failure_closes_callback_without_saving_credentials(self):
         code, payload, exchange = self.login(RuntimeError("Install Google Chrome or Brave to continue."))
+        self.pulled.assert_not_called()
         self.assertEqual(code, 1)
         self.assertIn("Install Google Chrome", payload["error"])
         exchange.assert_not_called()

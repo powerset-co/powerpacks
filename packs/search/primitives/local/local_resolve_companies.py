@@ -712,7 +712,10 @@ def main() -> None:
     parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
     parser.add_argument("--ce-batch-size", type=int, default=20, help="Companies per CE API call")
     parser.add_argument("--ce-concurrency", type=int, default=64, help="Max parallel CE API calls")
+    parser.add_argument("--local-db", help="The local DuckDB index to resolve against")
     args = parser.parse_args()
+    if args.local_db:
+        local_backend.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

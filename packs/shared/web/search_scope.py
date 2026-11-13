@@ -1,7 +1,8 @@
 """Where chat can search: the user's Powerset sets, and this Mac's local index when it has one.
 
-The chat page shows them in its Search-in picker; the pick is pinned to the chat and reaches every
-command the agent runs through Codex (desktop codex.rs), never through `.env`. The sets are the
+The chat page shows them in its Search-in picker; the pick is pinned to the chat and named in its
+instructions as the exact flags (`--set-id <id>`, or `--backend local --db <path>`; desktop codex.rs),
+never through the environment or `.env`. The sets are the
 signed-in user's, largest first, from the Powerset API (GET /v2/sets); with no sign-in there are
 none.
 

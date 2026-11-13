@@ -38,6 +38,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Configuration (env-overridable so the primitive can target staging clients)
@@ -549,6 +551,14 @@ def cmd_login(args: argparse.Namespace, on_authorize_url: "Callable[[str], None]
         "logged_in_at": now_iso(),
     }
     _save_credentials(args.credentials_path, creds)
+    # Signing in is also when the account's runtime keys (the gateway's, OpenAI's, …) land in
+    # .env: the one place they are fetched. A failed pull is logged; the sign-in stands.
+    try:
+        pulled = pull_runtime_keys.pull_keys(pull_runtime_keys.REPO / ".env", token=access_token)
+        print(f"login: runtime keys {pulled['status']}; written: {', '.join(pulled['written']) or 'none'}",
+              file=sys.stderr, flush=True)
+    except (OSError, SystemExit, ValueError) as exc:
+        print(f"login: runtime keys not pulled: {exc}", file=sys.stderr, flush=True)
 
     emit({
         "primitive": "powerset_auth",
