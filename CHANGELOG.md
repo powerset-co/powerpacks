@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.60.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.59.0...powerpacks-v3.60.0) (2026-11-13)
+
+
+### Features
+
+* **sales-nav:** the pipeline calls Sales Navigator itself, cloud by set or through the user's own session ([#1165](https://github.com/powerset-co/powerpacks/issues/1165)) ([0895619](https://github.com/powerset-co/powerpacks/commit/08956191337f6e9da648f6ee0d8ad331c47f78b6))
+
+
+### Bug Fixes
+
+* **search:** the picker offers the local index when the sets cannot be listed ([#1173](https://github.com/powerset-co/powerpacks/issues/1173)) ([9494ff6](https://github.com/powerset-co/powerpacks/commit/9494ff611721809ab478afba35b18c9f1d1f80ca))
+* **sets:** list sets through the Powerset API, and a failed set action says why ([#1168](https://github.com/powerset-co/powerpacks/issues/1168)) ([6d42a49](https://github.com/powerset-co/powerpacks/commit/6d42a499d07386604d0d861feb82932e7c24da7c))
+
+
+### Documentation
+
+* **agents:** route people asks by the query, examples in the table ([#1169](https://github.com/powerset-co/powerpacks/issues/1169)) ([f9bc745](https://github.com/powerset-co/powerpacks/commit/f9bc745c3e050145eb1ba296b3e6eaf2bf4f9464))
+* **search:** the network first, Sales Navigator when it comes up short ([#1167](https://github.com/powerset-co/powerpacks/issues/1167)) ([e68896f](https://github.com/powerset-co/powerpacks/commit/e68896fcf9b99c81b93f831fc6e04816d64b8f7a))
+
 ## [3.59.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.58.1...powerpacks-v3.59.0) (2026-11-12)
 
 
