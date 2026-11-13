@@ -83,7 +83,7 @@ This runs the real subprocess CLI path against local mocks/fixtures:
 
 - mock OpenAI-compatible Chat Completions for the 8 parallel extractor calls
 - mock OpenAI-compatible Embeddings for local vector ranking
-- local DuckDB search backend via `POWERPACKS_LOCAL_SEARCH_DB`, which exercises
+- local DuckDB search backend via `--backend local --db <path>`, which exercises
   TurboPuffer-like filters, BM25/vector ranking, `query`, and `multi_query`
 - JSON-backed Postgres fixture via `POWERPACKS_POSTGRES_FIXTURE_JSON`, covering
   set/operator resolution, person hydration, and interaction counts

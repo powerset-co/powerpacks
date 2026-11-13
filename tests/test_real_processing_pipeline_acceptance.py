@@ -1,7 +1,6 @@
 import asyncio
 import csv
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -478,8 +477,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             import local_search_backend as local_backend  # type: ignore
             from search_common import filters_from_role_payload  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = db_payload["duckdb"]
+            local_backend.configure_local_backend(db_payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
                 knn = local_backend.namespace("people").query(
@@ -507,10 +505,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("hybrid", role_rows[0]["retrieval_mode"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+                local_backend.configure_local_backend(None)
 
     def test_pipeline_artifacts_match_copied_aleph_seed_field_shapes(self) -> None:
         self.skipTest("obsolete local-fake pipeline shape coverage replaced by mocked OpenAI artifact test")
@@ -724,8 +719,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
                 people = local_backend.namespace("people").query(
@@ -744,10 +738,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertEqual(companies.rows[0].entity_types, ["developer_tool"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+                local_backend.configure_local_backend(None)
 
     def test_company_classification_artifact_populates_pipeline_records(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -888,8 +879,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
                 company = local_backend.namespace("companies").query(
@@ -902,8 +892,6 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertTrue(local_backend.local_namespace_has_vectors("companies"))
                 self.assertTrue(local_backend.local_namespace_has_vectors("summaries"))
 
-                env = os.environ.copy()
-                env["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
                 proc = subprocess.run(
                     [
                         sys.executable,
@@ -911,12 +899,13 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                         "--payload-json",
                         json.dumps({"company_names": [company.company_name], "operator_ids": ["op-aleph-seed"]}),
                         "--no-ce",
+                        "--local-db",
+                        payload["duckdb"],
                     ],
                     cwd=ROOT,
                     capture_output=True,
                     text=True,
                     check=False,
-                    env=env,
                     timeout=60,
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -925,10 +914,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn(company.id, resolved["company_ids"])
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+                local_backend.configure_local_backend(None)
 
     def test_five_person_csv_builds_duckdb_and_local_search_smoke(self) -> None:
         self.skipTest("obsolete local-fake shim coverage replaced by mocked OpenAI DuckDB test")
@@ -962,8 +948,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
-            old_db = os.environ.get("POWERPACKS_LOCAL_SEARCH_DB")
-            os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = payload["duckdb"]
+            local_backend.configure_local_backend(payload["duckdb"])
             local_backend._local_store_for_path.cache_clear()
             try:
                 response = local_backend.namespace("people").query(
@@ -976,10 +961,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
                 self.assertIn("op-acceptance", response.rows[0].allowed_operator_ids)
             finally:
                 local_backend._local_store_for_path.cache_clear()
-                if old_db is None:
-                    os.environ.pop("POWERPACKS_LOCAL_SEARCH_DB", None)
-                else:
-                    os.environ["POWERPACKS_LOCAL_SEARCH_DB"] = old_db
+                local_backend.configure_local_backend(None)
 
 
 if __name__ == "__main__":
