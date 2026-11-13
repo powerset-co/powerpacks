@@ -204,6 +204,38 @@ def search_refine(app: App) -> None:
         raise Failed("the refinement added its tag, but the rows and scores are the same")
 
 
+PREPARE = 120000  # a chat turn that prepares a search: the model picks the skill, the expander runs
+CARD = "section[aria-label='Search filters']"
+KEYWORD_REMOVES = f"[...document.querySelectorAll(\"{CARD} button[aria-label^='Remove ']\")].filter((b) => b.closest('div').previousElementSibling?.innerText === 'Role Keywords')"
+RUN_DISABLED = "[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Run Search')?.disabled"
+
+
+def search_no_keywords(app: App) -> None:
+    """A search with its role keywords all removed asks for one and won't run (without them the
+    run screens everyone the other filters let through, or fails); adding one back runs it.
+    Prepares a search in a new chat (a model turn) and never clicks Run Search."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.click({"css": "[aria-label='New chat']"})
+    app.click({"css": "#agent-message"})
+    app.type("software engineers in the Bay Area")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{KEYWORD_REMOVES}.length > 0", PREPARE, "the search card shows its role keywords")
+    if app.js(RUN_DISABLED) is not False:
+        raise Failed("Run Search is not ready on the prepared search")
+    while app.js(f"{KEYWORD_REMOVES}.length") > 0:
+        app.js(f"{KEYWORD_REMOVES}[0].click()")
+    app.wait_for({"text": "Add a role keyword to run this search."}, CLICK, "the card asks for a role keyword")
+    if app.js(RUN_DISABLED) is not True:
+        raise Failed("Run Search still runs a search with no role keywords")
+    app.click({"css": f"{CARD} button[aria-label='Add Keywords']"})
+    app.click({"css": "input[aria-label='Add Keywords']"})
+    app.type("software engineer")
+    app.key("Enter")
+    app.wait_for(f"{RUN_DISABLED} === false", CLICK, "a keyword added back lets the search run")
+    if app.shows({"text": "Add a role keyword to run this search."}):
+        raise Failed("the warning stays after a keyword was added back")
+
+
 FAILED_CARDS = "[...document.querySelectorAll(\"[aria-label='Refinement']\")].filter((card) => card.innerText.includes('Refine failed'))"
 RETRIES = f"{FAILED_CARDS}.flatMap((card) => [...card.querySelectorAll('button')].filter((b) => b.innerText.trim() === 'Retry'))"
 
@@ -321,6 +353,7 @@ SCENARIOS = {
     "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
+    "search-no-keywords": search_no_keywords,
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
