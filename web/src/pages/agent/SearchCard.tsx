@@ -1135,8 +1135,9 @@ export function SearchCard({ search, actions, step }: SearchCardProps) {
       aria-label="Search"
       className="rise-in flex min-w-0 flex-col rounded-[var(--radius-m)] border border-line bg-card p-5 shadow-[var(--shadow-1)]"
     >
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      {/* Wraps when the chat is narrow: the set, the step and the chevron drop under the query. */}
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="flex min-w-[min(100%,14rem)] flex-1 items-center gap-2">
           <span className="shrink-0 text-sm font-medium text-foreground">Query:</span>
           {actions ? (
             <span className="flex min-w-0 items-baseline text-sm italic text-muted-foreground">
@@ -1155,22 +1156,30 @@ export function SearchCard({ search, actions, step }: SearchCardProps) {
             </h2>
           )}
           {!unfolded && applied > 0 && (
-            <span className={cn(BADGE, "shrink-0 font-medium")}>+{applied} filters</span>
+            <span className={cn(BADGE, "shrink-0 whitespace-nowrap font-medium")}>+{applied} filters</span>
           )}
         </div>
-        <ScopePill />
-        {step}
-        {!actions && (
-          <button
-            type="button"
-            aria-label={open ? "Hide filters" : "Show filters"}
-            aria-expanded={open}
-            onClick={() => setOpen(!open)}
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
-          >
-            <ChevronDown className={cn("size-5 transition-transform duration-med", open && "rotate-180")} />
-          </button>
-        )}
+        <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+          <ScopePill />
+          {(!actions || Boolean(step)) && (
+            <span className="flex shrink-0 items-center gap-3">
+              {step}
+              {!actions && (
+                <button
+                  type="button"
+                  aria-label={open ? "Hide filters" : "Show filters"}
+                  aria-expanded={open}
+                  onClick={() => setOpen(!open)}
+                  className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-muted-foreground transition-colors duration-fast ease-out hover:bg-secondary hover:text-foreground"
+                >
+                  <ChevronDown
+                    className={cn("size-5 transition-transform duration-med", open && "rotate-180")}
+                  />
+                </button>
+              )}
+            </span>
+          )}
+        </div>
       </div>
 
       {unfolded && (
