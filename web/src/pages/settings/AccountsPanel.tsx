@@ -198,6 +198,14 @@ export function AccountsPanel({
               </h2>
               {list(SERVICES)}
             </div>
+            <RefreshPrompt
+              sources={SOURCES.map((key) => ({
+                key,
+                title: items[key].title,
+                icon: items[key].icon,
+                state: items[key].state,
+              }))}
+            />
             {error || startError ? (
               <p role="alert" className="m-0 px-3 text-xs text-bad">
                 {error ?? startError}
@@ -207,14 +215,6 @@ export function AccountsPanel({
         </section>
         <aside className="border-l border-line bg-card px-8 py-10 max-[900px]:border-l-0 max-[900px]:border-t max-[680px]:px-4">
           <div className="mx-auto flex w-full max-w-[450px] flex-col gap-5">
-            <RefreshPrompt
-              sources={SOURCES.map((key) => ({
-                key,
-                title: items[key].title,
-                icon: items[key].icon,
-                state: items[key].state,
-              }))}
-            />
             {progress ? (
               <>
                 <p className="m-0 text-[10px] font-semibold uppercase tracking-[.1em] text-faint">
