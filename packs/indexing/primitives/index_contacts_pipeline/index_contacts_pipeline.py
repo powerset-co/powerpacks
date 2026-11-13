@@ -11,6 +11,8 @@ The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
 
 Changelog:
+  2026-11-13: every ready path saves the Powerset team's Taste scores into the index
+    (fetch_taste_scores; signed in only, free, never fails the build).
   2026-07-26 (declaration owns the path): DELETED `read_manifest_people_csv`. The
     fan-in used to read each `import/<source>/manifest.json` to learn where that
     source's people.csv was, then append the hardcoded path anyway — two answers
@@ -55,6 +57,7 @@ DEFAULT_MANIFEST = DEFAULT_ARTIFACT_DIR / "manifest.json"
 ProgressCallback = Callable[[str, str, str, dict[str, Any] | None], None]
 
 from packs.indexing.lib.openai_usage_tiers import openai_usage_tier_profile  # noqa: E402
+from packs.indexing.primitives.fetch_taste_scores import fetch_taste_scores  # noqa: E402
 from packs.ingestion.primitives.imports.merge_people import MERGE_SOURCES, PeopleMerge  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -619,6 +622,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
             "duckdb_freshness": duckdb_freshness_payload(args),
+            "taste_scores": fetch_taste_scores.run(ROOT, local_search_duckdb_path(args)),
             "started_at": started_at,
             "updated_at": now_iso(),
         }
@@ -670,6 +674,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
             "promoted": promoted,
             "preflight_duckdb": preflight_duckdb,
             "duckdb_freshness": duckdb_freshness_payload(args),
+            "taste_scores": fetch_taste_scores.run(ROOT, local_search_duckdb_path(args)),
             "started_at": started_at,
             "updated_at": now_iso(),
         }
@@ -762,6 +767,7 @@ def run_pipeline(args: argparse.Namespace, progress_callback: ProgressCallback |
         "fan_in": fan_in_payload,
         "promoted": promoted,
         "preflight_duckdb": preflight_duckdb,
+        "taste_scores": fetch_taste_scores.run(ROOT, local_search_duckdb_path(args)),
         "started_at": started_at,
         "updated_at": now_iso(),
     }
