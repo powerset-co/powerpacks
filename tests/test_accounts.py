@@ -111,12 +111,13 @@ class AccountsJobsTest(unittest.TestCase):
                 get("/accounts/api/accounts")
                 get("/accounts/api/accounts")
                 self.assertEqual(get("/accounts/api/signed-in")["mailboxes"], ["casey@example.com"])
-                self.assertEqual((held.call_count, probe.call_count), (1, 1))
+                # The mailbox list is one read-only read per request; Google is asked once.
+                self.assertEqual((held.call_count, probe.call_count), (3, 1))
                 # The Full Disk Access poll asks for iMessage alone: msgvault is never run.
                 self.assertEqual(get("/accounts/api/signed-in?sources=imessage"),
                                  {"linkedin": False, "gmail": False, "imessage": False, "whatsapp": False,
                                   "mailboxes": [], "healthy_mailboxes": []})
-                self.assertEqual((held.call_count, probe.call_count, messages.call_count), (1, 1, 2))
+                self.assertEqual((held.call_count, probe.call_count, messages.call_count), (3, 1, 2))
                 # A sign-in writes the mailbox's token.
                 probe.return_value = SimpleNamespace(status="healthy")
                 (home / "tokens" / "casey@example.com.json").write_text("{}")
@@ -137,6 +138,14 @@ class AccountsJobsTest(unittest.TestCase):
                 api._checked -= api_module.SIGNIN_TTL_SECONDS + 1
                 get("/accounts/api/signed-in")
                 self.assertEqual(probe.call_count, 6)
+                # Add a mailbox (setup's run, not a job here) writes its token first and msgvault
+                # names the mailbox only after its first sync: it shows on the next read, no reload.
+                (home / "tokens" / "sam@example.com.json").write_text("{}")
+                get("/accounts/api/accounts")
+                self.assertEqual(set(api._signins), {"casey@example.com", "jordan@example.com"})
+                held.return_value = ("casey@example.com", "jordan@example.com", "sam@example.com")
+                self.assertEqual(get("/accounts/api/signed-in")["mailboxes"],
+                                 ["casey@example.com", "jordan@example.com", "sam@example.com"])
 
     def test_accounts_lists_the_mailboxes_its_check_found(self):
         with tempfile.TemporaryDirectory() as tmp:

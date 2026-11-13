@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { TriangleAlert } from "lucide-react"
 
 import { EmptyState, CHANNEL_ICON, Spinner } from "@/components/shared"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchAccounts } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
@@ -47,7 +48,7 @@ export function AccountsSettings({ panel = false }: { panel?: boolean }) {
     if (!data) return null
     const matching = data.accounts.filter((account) => account.source === source)
     return matching.length ? (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col divide-y divide-line [&>*+*]:pt-4 [&>*]:pb-4 [&>:last-child]:pb-0">
         {matching.map((account) => (
           <AccountDetails key={account.name} account={account} job={jobFor(account, data.jobs)} />
         ))}
@@ -136,8 +137,13 @@ function AccountDetails({ account, job }: AccountDetailsProps) {
   const tone = job?.state === "failed" ? "error" : running ? "ok" : account.health
   return (
     <div data-account={account.source}>
-      {/* Gmail can keep several mailboxes, so each card names its own; the other sources have one. */}
-      {account.source === "gmail" ? <span className="text-[13px] font-semibold">{account.name}</span> : null}
+      {/* Gmail can keep several mailboxes, so each names its own, as a badge the eye can land on
+          between one mailbox's numbers and the next's; the other sources have one. */}
+      {account.source === "gmail" ? (
+        <Badge variant="outline" className="mb-2 max-w-full truncate">
+          {account.name}
+        </Badge>
+      ) : null}
       {/* The note, then what to do about it, on one left-aligned line. */}
       <p
         data-tone={tone}

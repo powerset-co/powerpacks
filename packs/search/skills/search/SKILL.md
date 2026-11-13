@@ -120,9 +120,12 @@ mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.j
 EOF
 ```
 
-The environment default for `backend` is one check that prints nothing secret (the desktop app
-pins a chat's scope into the environment; a command-line install may hold it in `.env`):
-`{ test -n "$POWERPACKS_LOCAL_SEARCH_DB" || grep -q '^POWERPACKS_LOCAL_SEARCH_DB=.' .env 2>/dev/null; } && echo local || echo powerset`.
+The environment default for `backend` is one check that prints nothing secret. It loads `.env`
+the way every pipeline command does, so the two agree: the desktop app pins a chat's scope into
+the environment (a set pins `POWERPACKS_LOCAL_SEARCH_DB` empty), and `.env` only fills a variable
+the environment leaves unset. Never read `.env` directly for this: a leftover
+`POWERPACKS_LOCAL_SEARCH_DB=` line there would turn a chat pinned to a set into a local search.
+`uv run --env-file .env --project . python -c 'import os; print("local" if os.environ.get("POWERPACKS_LOCAL_SEARCH_DB") else "powerset")'`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.

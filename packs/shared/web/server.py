@@ -10,6 +10,8 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-12: a set action whose Powerset API call fails answers 502 with the reason (a non-JSON error
+  body or an unreachable API used to drop the request, so the page said "Failed to fetch").
 - 2026-11-11: GET /api/search/set?set_id=, POST /api/search/sets, /api/search/set/delete and /api/search/set/invite:
   the Sets page's set, new set, delete and invite link, through the Powerset API (search_scope.py).
 - 2026-11-03: run the native daily refresh's clock (refresh/daily.py) with the server.
@@ -34,6 +36,7 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -71,6 +74,17 @@ MAX_FEEDBACK_REQUEST_BYTES = 32_768  # as much as results_web's _save_feedback r
 MAX_TEAM_REQUEST_BYTES = 160 * 1024
 # The Sets page's writes, each one Powerset API call (search_scope.py): a new set, a delete, an invite link.
 SET_ACTIONS = ("/api/search/sets", "/api/search/set/delete", "/api/search/set/invite")  # support text, including UTF-8 and JSON escaping
+
+
+def _api_error(error: urllib.error.HTTPError) -> str:
+    """The Powerset API's error for the page: its `detail`, else its body (a proxy's text or HTML
+    page is not JSON), else the status line."""
+    body = error.read().decode("utf-8", errors="replace").strip()
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    return str(detail or body[:300] or error)
 # Every Powerpacks page server's command line, old releases included, so a page another checkout
 # left on the port is stopped and replaced; anything else on the port is refused.
 PAGE_COMMAND = re.compile(r"reconcile_review_web|deep_context\.review|packs\.shared\.web\.server")
@@ -409,7 +423,9 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                     else:
                         self._json(search_scope.invite(root, str(body["set_id"])))
                 except urllib.error.HTTPError as error:
-                    self._json({"error": json.loads(error.read() or b"{}").get("detail") or str(error)},
+                    self._json({"error": _api_error(error)}, HTTPStatus.BAD_GATEWAY)
+                except (OSError, http.client.HTTPException) as error:  # unreachable, timed out or hung up
+                    self._json({"error": str(getattr(error, "reason", error)) or type(error).__name__},
                                HTTPStatus.BAD_GATEWAY)
                 except (ValueError, KeyError) as error:
                     self._json({"error": str(error)}, HTTPStatus.BAD_REQUEST)

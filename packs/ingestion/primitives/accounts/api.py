@@ -25,6 +25,8 @@ Starting a job that is already running is a no-op. The sync functions take turns
 refresh_sources' lock file (shared with the scheduled run); a Reconnect waits for the
 browser sign-in before that, so an abandoned sign-in never blocks other syncs. 
 Changelog:
+  2026-11-12: a mailbox msgvault gains after the check shows on the next read; it used to wait out the
+      TTL (Add a mailbox on Accounts showed nothing until a reload minutes later).
   2026-11-04: signed-in takes ?sources=; both routes share one Gmail check (token change, job end, TTL).
   2026-11-04: `scheduled` is the whole schedule ("weekly on Monday at 6:00 AM"), or null while off.
   2026-11-03: `scheduled` is the native daily refresh's time, or null while it is off.
@@ -121,6 +123,11 @@ class AccountsApi:
         if self._signins is None or tokens != self._tokens or stale:
             self._signins = gmail_signins()
             self._tokens, self._checked = tokens, time.monotonic()
+        else:
+            # Add a mailbox runs in setup, not here, and its token lands before its first sync
+            # names the mailbox: the list is read again (one cheap read) so the mailbox shows as
+            # soon as msgvault holds it, and Google is asked again only when the set changed.
+            self._signins = gmail_signins(self._signins)
         return self._signins
 
     @staticmethod
