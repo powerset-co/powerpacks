@@ -9,8 +9,8 @@ import { errorText } from "@/lib/api/http"
 import { REFRESH_KEY, refreshNow } from "@/lib/api/refresh"
 import { readStored, writeStored } from "@/lib/storage"
 
-// Remembered on this Mac once the prompt has shown, so it shows once, ever.
-export const REFRESH_PROMPT_KEY = "accounts.refreshPrompt"
+// The sources the prompt has shown for on this Mac, so each shows it once, ever.
+export const REFRESH_PROMPT_KEY = "accounts.refreshPrompted"
 
 export interface LinkedSource {
   key: string
@@ -19,11 +19,15 @@ export interface LinkedSource {
   state: ConnectionRowProps["state"]
 }
 
-const shown = () => readStored("local", REFRESH_PROMPT_KEY, (raw) => (raw === true ? true : null)) === true
+const prompted = () =>
+  readStored("local", REFRESH_PROMPT_KEY, (raw) =>
+    Array.isArray(raw) ? raw.filter((key): key is string => typeof key === "string") : null,
+  ) ?? []
 
-/** The first time a source goes from not connected to connected while Accounts is open, a card
- *  offers the refresh that pulls its people in (Scheduled tasks' Refresh now). Loading a page whose
- *  sources are already connected never counts: only a row seen as needed or working that turns ready. */
+/** When one of `sources` goes from not connected to connected while Accounts is open, a card
+ *  offers the refresh that pulls its people in (Scheduled tasks' Refresh now), once per source.
+ *  Loading a page whose sources are already connected never counts: only a row seen as needed or
+ *  working that turns ready. */
 export function RefreshPrompt({ sources }: { sources: readonly LinkedSource[] }) {
   const [linked, setLinked] = useState<LinkedSource | null>(null)
   const before = useRef<Record<string, LinkedSource["state"]>>({})
@@ -31,13 +35,15 @@ export function RefreshPrompt({ sources }: { sources: readonly LinkedSource[] })
   useEffect(() => {
     const previous = before.current
     before.current = Object.fromEntries(sources.map((source) => [source.key, source.state]))
-    if (linked || shown()) return
+    const done = prompted()
     const source = sources.find(
       (entry) =>
-        entry.state === "ready" && (previous[entry.key] === "needed" || previous[entry.key] === "working"),
+        !done.includes(entry.key) &&
+        entry.state === "ready" &&
+        (previous[entry.key] === "needed" || previous[entry.key] === "working"),
     )
     if (!source) return
-    writeStored("local", REFRESH_PROMPT_KEY, true)
+    writeStored("local", REFRESH_PROMPT_KEY, [...done, source.key])
     setLinked(source)
     // `states` stands for `sources`, which is a new array on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -28,11 +28,12 @@ const idle: InstallStatus = {
   retry_command: "bin/onboard",
   prose: { page: {} },
 }
-let record: InstallStatus, connected: boolean, invoke: ReturnType<typeof vi.fn>
+let record: InstallStatus, connected: boolean, whatsapp: boolean, invoke: ReturnType<typeof vi.fn>
 let jobs: Record<string, { state: "running" | "done" | "failed"; step: string }>
 beforeEach(() => {
   record = idle
   connected = true
+  whatsapp = false
   jobs = {}
   // Accounts has been opened before, so How Deep Context works stays closed.
   writeStored("local", "accounts.howItWorks", true)
@@ -67,7 +68,7 @@ beforeEach(() => {
                     linkedin: connected,
                     gmail: connected,
                     imessage: false,
-                    whatsapp: false,
+                    whatsapp,
                     mailboxes: connected ? ["jordan@example.com"] : [],
                   }
                 : url === "/accounts/api/accounts"
@@ -231,41 +232,41 @@ it("keeps owner input and stopped-run recovery on Accounts", async () => {
   expect(screen.queryByRole("button", { name: "Continue" })).toBeNull()
 })
 const PROMPT = { name: "Refresh after connecting" }
+const status = (name: RegExp) => screen.getByRole("button", { name }).textContent
 /** Mounts Accounts with LinkedIn and Gmail signed out, then signs them in. */
 async function link() {
   connected = false
   const client = mount()
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Not connected"),
-  )
+  await waitFor(() => expect(status(/Gmail/)).toContain("Not connected"))
   connected = true
   await client.invalidateQueries()
+  return client
 }
-it("offers Refresh now the first time a source turns connected, never on a page already connected", async () => {
-  localStorage.removeItem("accounts.refreshPrompt")
+it("offers Refresh now the first time a message source turns connected, never on a page already connected", async () => {
+  localStorage.removeItem("accounts.refreshPrompted")
   mount()
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Connected"),
-  )
+  await waitFor(() => expect(status(/Gmail/)).toContain("Connected"))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
   cleanup()
   await link()
   const prompt = await screen.findByRole("region", PROMPT)
-  expect(within(prompt).getByText("LinkedIn connected")).toBeTruthy()
+  expect(within(prompt).getByText("Gmail connected")).toBeTruthy()
   fireEvent.click(within(prompt).getByRole("button", { name: "Refresh now" }))
   await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/tasks"))
   expect(fetch).toHaveBeenCalledWith("/tasks/api/refresh/run", { method: "POST" })
 })
-it("shows the refresh prompt once: Later closes it and the next link doesn't bring it back", async () => {
-  localStorage.removeItem("accounts.refreshPrompt")
+it("shows the refresh prompt once per source: relinking Gmail doesn't bring it back, linking WhatsApp does", async () => {
+  localStorage.removeItem("accounts.refreshPrompted")
   await link()
   const prompt = await screen.findByRole("region", PROMPT)
   fireEvent.click(within(prompt).getByRole("button", { name: "Later" }))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
   cleanup()
-  await link()
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Connected"),
-  )
+  const client = await link()
+  await waitFor(() => expect(status(/Gmail/)).not.toContain("Not connected"))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
+  whatsapp = true
+  await client.invalidateQueries()
+  const again = await screen.findByRole("region", PROMPT)
+  expect(within(again).getByText("WhatsApp connected")).toBeTruthy()
 })

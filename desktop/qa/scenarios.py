@@ -263,46 +263,41 @@ def refresh_toggle(app: App) -> None:
 
 
 
-# Answers Accounts' sign-in check with LinkedIn signed out until `window.__qaLinked` is set; the
-# real answer otherwise. A page reload drops it.
-SIGNED_OUT_LINKEDIN = """(() => {
+# Answers Accounts' sign-in check with WhatsApp signed out, then signed in once `window.__qaLinked`
+# is set, whatever the real answer. A page reload drops it.
+FAKE_WHATSAPP_LINK = """(() => {
   if (!window.__qaFetch) window.__qaFetch = window.fetch;
   window.__qaLinked = false;
   window.fetch = async (input, init) => {
     const response = await window.__qaFetch(input, init);
-    if (!String(input).startsWith('/accounts/api/signed-in') || window.__qaLinked) return response;
+    if (!String(input).startsWith('/accounts/api/signed-in')) return response;
     const body = await response.json();
-    return new Response(JSON.stringify({ ...body, linkedin: false }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ...body, whatsapp: window.__qaLinked }), { headers: { 'Content-Type': 'application/json' } });
   };
   return true;
 })()"""
 PROMPT = {"css": "section[aria-label='Refresh after connecting']"}
-LINKEDIN_ROW = "[...document.querySelectorAll('button[aria-pressed]')].find(b => b.textContent.startsWith('LinkedIn'))?.textContent ?? ''"
+WHATSAPP_ROW = "[...document.querySelectorAll('button[aria-pressed]')].find(b => b.textContent.startsWith('WhatsApp'))?.textContent ?? ''"
 
 
 def accounts_refresh_prompt(app: App) -> None:
-    """Linking a source on Accounts offers Refresh now once, ever: never on a page that loads
-    already connected, and not again after Later. Needs LinkedIn connected on the root; the link
-    is simulated (the sign-in check answers signed out, then the real answer)."""
-    app.js("(localStorage.removeItem('accounts.refreshPrompt'), true)")
+    """Linking iMessage, Gmail or WhatsApp on Accounts offers Refresh now once per source: never
+    on a page that loads already connected, and not again for the same source after Later. The
+    link is simulated (the sign-in check answers WhatsApp signed out, then signed in)."""
+    app.js("(localStorage.removeItem('accounts.refreshPrompted'), true)")
     app.go("/accounts", {"text": "Your sources"}, PAGE)
-    app.wait_for(f"({LINKEDIN_ROW}).endsWith('Connected')", PAGE, "LinkedIn shows Connected")
-    time.sleep(CLICK / 1000)
+    time.sleep(PAGE / 1000)
     if app.shows(PROMPT):
         raise Failed("the prompt showed on a page that loaded already connected")
     try:
         for attempt in ("first", "second"):
             app.go("/people", {"css": "main"}, PAGE)
-            app.js(SIGNED_OUT_LINKEDIN)
+            app.js(FAKE_WHATSAPP_LINK)
             app.go("/accounts", {"text": "Your sources"}, PAGE)
-            app.wait_for(f"({LINKEDIN_ROW}).endsWith('Not connected')", PAGE, "LinkedIn shows Not connected")
+            app.wait_for(f"({WHATSAPP_ROW}).endsWith('Not connected')", PAGE, "WhatsApp shows Not connected")
             app.mark = app.js("performance.now()")
             app.js("(window.__qaLinked = true, dispatchEvent(new Event('visibilitychange')), true)")
-            app.wait_for(
-                f"({LINKEDIN_ROW}).endsWith('Connected') && !({LINKEDIN_ROW}).endsWith('Not connected')",
-                PAGE,
-                "LinkedIn turns Connected",
-            )
+            app.wait_for(f"({WHATSAPP_ROW}).endsWith('Connected') && !({WHATSAPP_ROW}).endsWith('Not connected')", PAGE, "WhatsApp turns Connected")
             if attempt == "first":
                 app.mark = app.js("performance.now()")
                 app.wait_for(PROMPT, CLICK, "the prompt offers Refresh now")
@@ -312,10 +307,9 @@ def accounts_refresh_prompt(app: App) -> None:
             else:
                 time.sleep(CLICK / 1000)
                 if app.shows(PROMPT):
-                    raise Failed("the prompt showed a second time")
+                    raise Failed("the prompt showed a second time for WhatsApp")
     finally:
         app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
-
 
 SCENARIOS = {
     "people-open": people_open,
