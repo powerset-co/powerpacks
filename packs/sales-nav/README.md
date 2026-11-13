@@ -1,7 +1,7 @@
 # Sales Nav Pack
 
 `packs/sales-nav` is a Sales Navigator search workflow. The pipeline primitive makes its
-own calls: with a set (`POWERPACKS_DEFAULT_SET_ID`, the chat's Search-in scope) it calls
+own calls: with a set (`--set-id`, the set the chat's instructions name) it calls
 the Powerset API's `/v2/sales-nav` routes, which search every Sales Nav seat in the set
 and merge; without one it searches through the user's own LinkedIn session on this Mac
 (`packs/ingestion/primitives/discover/linkedin/linkedin_session.py`). Either way the
