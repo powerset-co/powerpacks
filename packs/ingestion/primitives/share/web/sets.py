@@ -14,6 +14,7 @@ whose allowed_operator_ids hold any member's operator id.
 
 Created: 2026-10-08
 Changelog:
+- 2026-11-12: shared_by is gone (Ask your set asks every member).
 - 2026-11-12: share_namespace lives here; the share upload that wrote the namespace was removed.
 - 2026-10-09: spell out owner collection in settle.
 - 2026-10-09: deleting a set also tells those with a pending invite; their machine drops the invite.
@@ -292,16 +293,6 @@ class Sets:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
     # ---- the shared network
-
-    def shared_by(self, person_ids: list[str]) -> dict[str, tuple[str, ...]]:
-        """Per person id, the operators who shared that person into share_v1 (asked fresh, not cached)."""
-        try:
-            response = self._client().namespace(share_namespace("summaries")).query(
-                filters=("id", "In", person_ids), top_k=len(person_ids),
-                include_attributes=["allowed_operator_ids"])
-        except turbopuffer.NotFoundError:
-            return {}
-        return {str(row.id): tuple(getattr(row, "allowed_operator_ids", None) or ()) for row in response.rows or []}
 
     def _client(self) -> turbopuffer.Turbopuffer:
         if self._turbopuffer is None:

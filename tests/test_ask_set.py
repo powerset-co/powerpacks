@@ -1,7 +1,8 @@
-"""Ask the set as agent messages: who is asked (set members who shared the candidate), what goes out, and
-how the answers read back from this machine's inbox. The relay and TurboPuffer are stubbed.
+"""Ask the set as agent messages: who is asked (every other member of the local sets), what goes out, and
+how the answers read back from this machine's inbox. The relay is stubbed.
 
 Changelog:
+- 2026-11-12: every member is asked about every candidate.
 - 2026-10-08: created with ask_set.py.
 """
 from __future__ import annotations
@@ -13,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from packs.indexing.lib.identity import stable_person_id
 from packs.ingestion.primitives.share.web.sets import Member, SetView
 from packs.search.primitives.ask_set import ask_set
 
@@ -45,30 +45,26 @@ class AskSetTests(unittest.TestCase):
         view = SetView("set-1", "Founders", "owner", (ME,))
         self.sets.kept.return_value = [view]
         self.sets.members.return_value = [ME, CASEY, RILEY]
-        # Casey shared Alex and Sam; Riley shared only Sam; nobody outside the set counts.
-        self.sets.shared_by.return_value = {
-            stable_person_id(public_identifier="alex-foxtrot"): ("op-casey", "op-stranger"),
-            stable_person_id(public_identifier="sam-golf"): ("op-casey", "op-riley", "op-jordan"),
-        }
         self.sets.message.side_effect = lambda to, kind, payload: self.sent.append((to, kind, payload))
         self.sets.presence.return_value = {"op-casey": datetime.now(timezone.utc).isoformat()}
         self.enterContext(mock.patch.object(ask_set.snapshot, "export_snapshot", return_value=SNAPSHOT))
 
-    def test_preview_names_the_members_who_know_each_pinned_candidate(self) -> None:
+    def test_preview_asks_every_other_member_about_every_pinned_candidate(self) -> None:
         preview = ask_set.preview(self.run_dir, self.sets)
         self.assertEqual(preview["skipped"], 1)
         self.assertEqual([(c["name"], [o["name"] for o in c["owners"]]) for c in preview["candidates"]],
-                         [("Alex Foxtrot", ["Casey Delta"]), ("Sam Golf", ["Casey Delta", "Riley Echo"])])
-        self.assertEqual({o["name"]: o["candidates"] for o in preview["operators"]}, {"Casey Delta": 2, "Riley Echo": 1})
+                         [("Alex Foxtrot", ["Casey Delta", "Riley Echo"]), ("Sam Golf", ["Casey Delta", "Riley Echo"])])
+        self.assertEqual({o["name"]: o["candidates"] for o in preview["operators"]}, {"Casey Delta": 2, "Riley Echo": 2})
+        self.sets.shared_by.assert_not_called()
         self.assertEqual(self.sent, [])
 
-    def test_send_is_one_message_per_member_with_only_their_candidates(self) -> None:
+    def test_send_is_one_message_per_member_with_every_candidate(self) -> None:
         result = ask_set.send(self.run_dir, "Would you intro?", self.sets)
         self.assertEqual(result["status"], "sent")
         by_member = {to: (kind, [c["public_identifier"] for c in payload["candidates"]], payload["question"])
                      for to, kind, payload in self.sent}
         self.assertEqual(by_member, {"op-casey": ("ask", ["alex-foxtrot", "sam-golf"], "Would you intro?"),
-                                     "op-riley": ("ask", ["sam-golf"], "Would you intro?")})
+                                     "op-riley": ("ask", ["alex-foxtrot", "sam-golf"], "Would you intro?")})
         role = self.sent[0][2]["role"]
         self.assertEqual((role["title"], role["company"]), ("Founding engineer", "Acme"))
         self.assertEqual(len(role["job_description"]), ask_set.MAX_JD)
@@ -93,7 +89,14 @@ class AskSetTests(unittest.TestCase):
         self.assertEqual(owners[("Alex Foxtrot", "Casey Delta")], ("answered", True, answer))
         self.assertEqual(owners[("Sam Golf", "Casey Delta")], ("declined", True, None))
         self.assertEqual(owners[("Sam Golf", "Riley Echo")], ("pending", False, None))
-        self.assertEqual(status["answers"]["pending"], 1)
+        self.assertEqual(owners[("Alex Foxtrot", "Riley Echo")], ("pending", False, None))
+        self.assertEqual(status["answers"]["pending"], 2)
+
+    def test_a_member_of_two_sets_is_asked_once(self) -> None:
+        self.sets.kept.return_value = [SetView("set-1", "Founders", "owner", (ME,)),
+                                       SetView("set-2", "Angels", "member", (ME,))]
+        ask_set.send(self.run_dir, "Would you intro?", self.sets)
+        self.assertEqual(sorted(to for to, _, _ in self.sent), ["op-casey", "op-riley"])
 
     def test_status_without_an_ask(self) -> None:
         self.assertEqual(ask_set.status(self.run_dir, self.sets), {"ask": None})

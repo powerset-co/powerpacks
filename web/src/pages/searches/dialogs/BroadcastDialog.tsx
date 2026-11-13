@@ -144,7 +144,7 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
                       <span>{candidate.name}</span>
                       <span className="text-muted-foreground">
                         {candidate.owners.length === 0
-                          ? "nobody in the set knows them"
+                          ? "no one else is in your sets"
                           : candidate.owners.map((owner) => owner.name).join(", ")}
                       </span>
                     </li>
@@ -160,7 +160,7 @@ export function BroadcastDialog({ runId, title, pinned, onToast }: BroadcastDial
             <section>
               <h3 className="mb-1 font-medium">Sending to</h3>
               {preview.operators.length === 0 ? (
-                <p className="text-muted-foreground">No one in the set knows these candidates.</p>
+                <p className="text-muted-foreground">No one else is in your sets yet.</p>
               ) : (
                 <ul className="grid gap-0.5">
                   {preview.operators.map((operator) => (

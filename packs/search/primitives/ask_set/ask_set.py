@@ -1,14 +1,14 @@
 """Ask the set about a search's pinned candidates, as agent messages over the relay.
 
-Who to ask is worked out here: the members of this machine's sets (share/web/sets.py) who shared each
-pinned candidate into the share_v1 network (the candidate's summaries document lists them in
-allowed_operator_ids). Each of them gets one `ask` message holding the question and the candidates they
-know; their opted-in desktop answers through Codex with one `ask_answer` message, which lands in
-this machine's `.powerpacks/inbox`. The run keeps what went out in `ask.json`.
+Who to ask: every other member of this machine's local sets (share/web/sets.py). Each gets one `ask`
+message holding the question and every pinned candidate; their opted-in desktop answers through Codex
+with one `ask_answer` message (declining people not in their store), which lands in this machine's
+`.powerpacks/inbox`. The run keeps what went out in `ask.json`.
 
 The relay only carries the messages; it holds them for a member who is offline.
 
 Changelog:
+- 2026-11-12: every member of the local sets is asked about every candidate; no share upload data.
 - 2026-10-09: spell out candidate owners and answer status.
 - 2026-10-09: each ask carries the search's role (title, company, job description).
 - 2026-10-08: created; replaces the relay's ask tasks (ask_status and upload `--ask`).
@@ -22,7 +22,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from packs.indexing.lib.identity import stable_person_id
 from packs.ingestion.primitives.common.jsonio import now_iso, write_json
 from packs.ingestion.primitives.share.web.sets import Member, Sets
 from packs.ingestion.schemas.people_schema import extract_public_identifier
@@ -53,24 +52,14 @@ def pinned_candidates(rendered: dict[str, Any]) -> tuple[list[dict[str, Any]], i
 
 
 def _owners(sets: Sets, candidates: list[dict[str, Any]]) -> dict[str, list[Member]]:
-    """Per candidate slug, the set members (not me) who shared that person."""
+    """Per candidate slug, every member (not me) of this machine's local sets."""
     me = sets.me()
     members: dict[str, Member] = {}
     for view in sets.kept():
         for member in sets.members(view):
             if member.operator_id != me.operator_id:
                 members.setdefault(member.operator_id, member)
-    ids = {stable_person_id(public_identifier=candidate["public_identifier"]): candidate["public_identifier"]
-           for candidate in candidates}
-    shared_by = sets.shared_by(list(ids)) if members and ids else {}
-    owners: dict[str, list[Member]] = {}
-    for person_id, slug in ids.items():
-        candidate_owners = []
-        for operator_id in shared_by.get(person_id, ()):
-            if operator_id in members:
-                candidate_owners.append(members[operator_id])
-        owners[slug] = candidate_owners
-    return owners
+    return {candidate["public_identifier"]: list(members.values()) for candidate in candidates}
 
 
 def preview(run_dir: Path, sets: Sets) -> dict[str, Any]:
@@ -91,7 +80,7 @@ def preview(run_dir: Path, sets: Sets) -> dict[str, Any]:
 
 
 def send(run_dir: Path, question: str, sets: Sets) -> dict[str, Any]:
-    """One `ask` message per member who knows a pinned candidate; the run keeps ask.json."""
+    """One `ask` message per set member, holding every pinned candidate; the run keeps ask.json."""
     rendered = snapshot.export_snapshot(run_dir)
     candidates, _ = pinned_candidates(rendered)
     search = rendered["search"]
