@@ -2,10 +2,11 @@
 
 The chat page shows them in its Search-in picker; the pick is pinned to the chat and reaches every
 command the agent runs through Codex (desktop codex.rs), never through `.env`. The sets are the
-signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no sign-in there are
+signed-in user's, largest first, from the Powerset API (GET /v2/sets); with no sign-in there are
 none.
 
 Changelog:
+  2026-11-12: read() lists the sets through the Powerset API, not Postgres, like every other set call.
   2026-11-11: set_detail(), invite(), create_set(), delete_set(): the Sets page's reads and writes through
       the Powerset API.
   2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
@@ -25,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys
-from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import _read_env_file
 
 SEARCH_LIB = Path(__file__).resolve().parents[2] / "search" / "primitives" / "lib"
 if str(SEARCH_LIB) not in sys.path:
@@ -38,14 +38,22 @@ LOCAL_INDEX = Path(".powerpacks/search-index/local-search.duckdb")
 
 def read(root: Path) -> dict[str, Any]:
     """The user's sets, and the local index's path when this Mac has one (else null)."""
-    env = _read_env_file(root / ".env")
-    subject = postgres_client.credentials_subject()
-    sets = postgres_client.fetch_member_sets(subject, env["DATABASE_URL"]) if subject and env.get("DATABASE_URL") else []
+    sets = _member_sets(root) if postgres_client.credentials_subject() else []
     index = root / LOCAL_INDEX
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 
 
-def _api(root: Path, path: str, body: dict[str, Any] | None = None, method: str | None = None) -> dict[str, Any]:
+def _member_sets(root: Path) -> list[dict[str, Any]]:
+    """The sets you created or belong to, largest first. An app owner's list also carries every
+    other set, with role "admin"; those are not theirs, so they are left out."""
+    rows = [row for row in _api(root, "/v2/sets") if row.get("role") != "admin"]
+    sets = [{"set_id": row["id"], "name": row["name"], "is_personal": bool(row.get("is_personal")),
+             "owned": row.get("role") == "owner", "person_count": int(row.get("person_count") or 0)}
+            for row in rows]
+    return sorted(sets, key=lambda row: (-row["person_count"], row["name"].lower()))
+
+
+def _api(root: Path, path: str, body: dict[str, Any] | None = None, method: str | None = None) -> Any:
     """One call to the Powerset API as the signed-in user: GET, or POST with a JSON body; {} for a
     reply with no body (a DELETE's 204)."""
     env_file = root / ".env"
