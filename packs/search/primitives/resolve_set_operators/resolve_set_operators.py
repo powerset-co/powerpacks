@@ -105,7 +105,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Resolve a Powerset set_id to operator IDs")
-    parser.add_argument("--set-id", help="Powerset set UUID. Defaults to payload/state set_id, then POWERPACKS_DEFAULT_SET_ID/POWERSET_DEFAULT_SET_ID, then the logged-in user's personal set.")
+    parser.add_argument("--set-id", help="Powerset set UUID. Defaults to payload/state set_id, then the logged-in user's personal set.")
     parser.add_argument("--state", help="Search task state containing expand_search_request.role_search_filters.set_id")
     parser.add_argument("--payload-json", help="Role-search payload containing set_id")
     parser.add_argument("--env-file", default=".env")

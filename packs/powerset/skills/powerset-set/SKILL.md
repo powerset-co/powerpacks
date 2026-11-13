@@ -1,25 +1,28 @@
 ---
 name: powerset-set
-description: List accessible Powerset sets, show the active default set, or set POWERPACKS_DEFAULT_SET_ID so local Powerpacks search primitives inherit the desired set scope.
+description: List the Powerset sets the signed-in user can search, with ids, roles and counts. A search's set is always passed on the command (`--set-id`); nothing is written to `.env`.
 ---
 
 # Powerset Set
 
-Use this skill when the user wants to choose, inspect, retrieve, list, switch,
-or set the active Powerset set for local Powerpacks search.
+Use this skill when the user wants to list or inspect the Powerset sets they
+can search.
 
-The skill uses HTTP `/v2/sets` for set retrieval and name resolution.
-It only manages local set scope:
+The skill uses HTTP `/v2/sets` for set retrieval and name resolution. It is
+read-only:
 
 - lists sets accessible to the logged-in Powerset user
-- shows the resolved default set and operator IDs
-- writes `POWERPACKS_DEFAULT_SET_ID` into the local ignored `.env`
+- resolves a name the user typed to its set id
 - does not upload contacts, run searches, or mutate server-side set membership
+
+The desktop app's Search-in picker chooses the set a chat searches and names it
+in the chat's instructions; every search command then takes it as `--set-id`.
+In a terminal, the user names the set in the ask and the agent passes the same
+flag. There is no stored default.
 
 ## Canonical repo setup
 
-For `$powerset sets use <id|name>`, resolve and enter the installed
-Powerpacks repo before writing `.env`:
+Resolve and enter the installed Powerpacks repo first:
 
 ```bash
 resolve_powerpacks_root() {
@@ -40,8 +43,6 @@ repo="$(resolve_powerpacks_root)" || {
 cd "$repo"
 ```
 
-For read-only set listing, still prefer the canonical repo when available.
-
 ## Workflow
 
 1. From the installed checkout, refresh the accessible sets using the existing
@@ -55,29 +56,13 @@ bin/agent-bootstrap --json
    missing credentials, follow `$powerset login`, then retry. Read the fresh
    `sets` array in `.powerpacks/memory/set_ids.json` and show concise rows with
    name, ID, role, and counts.
-3. Show the current default by reading `POWERPACKS_DEFAULT_SET_ID` from local
-   `.env` and matching that ID against the returned sets. If unset, check
-   legacy `POWERSET_DEFAULT_SET_ID`.
-4. For `sets use <id|name>`, resolve the requested value against returned set
-   IDs or names. If multiple names match, ask which set; never guess. Upsert
-   only `POWERPACKS_DEFAULT_SET_ID` in local `.env` using the existing writer:
-
-```python
-from pathlib import Path
-from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import write_env
-write_env(Path(".env"), {"POWERPACKS_DEFAULT_SET_ID": "<selected set id>"})
-```
-
-5. Read `.env` back and report the selected set name, `set_id`, `person_count`,
-   `member_count`, and `sales_nav_account_count` when available. Only run
-   `resolve_set_operators` if the user specifically asks to validate local
-   TurboPuffer operator scoping.
+3. When the user names a set, resolve it against the returned ids or names. If
+   several names match, ask which set; never guess. Hand the id to the search
+   skill as `--set-id`.
 
 ## Notes
 
 - `set_id` is a Powerset set UUID.
-- Local search primitives resolve it to `operator_ids` before applying
-  TurboPuffer `allowed_operator_ids`.
-- `POWERPACKS_DEFAULT_SET_ID` is preferred. `POWERSET_DEFAULT_SET_ID` is still
-  accepted as a legacy alias by search primitives.
-- The API owns set listing. The local repo owns only the default choice in `.env`.
+- Search primitives resolve it to `operator_ids` before applying TurboPuffer
+  `allowed_operator_ids`.
+- The API owns set listing; the local repo stores no default choice.

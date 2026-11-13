@@ -50,8 +50,8 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   and the prod person UUID when a Powerset search result carried one.
 - Environment: powerpacks version (`git describe --tags --always` in the
   repo, or the `.powerpacks-install.json` stamp next to installed skills),
-  harness (codex / claude-code / pi), and the active set id
-  (`POWERPACKS_DEFAULT_SET_ID`).
+  harness (codex / claude-code / pi), and the set the chat's instructions name,
+  when they name one.
 
 ## Step 2 — compose the row
 
@@ -64,7 +64,7 @@ commands to harvest context. Collect whatever exists and skip what doesn't:
   `search`, ...). `--field-value`: the wrong value currently shown.
 - `--person-id`: PROD person UUID only, and only if one is actually in hand;
   local slugs and ids go in `--metadata` instead.
-- `--set-id`: `POWERPACKS_DEFAULT_SET_ID` when it is a real UUID; else omit.
+- `--set-id`: the set the chat's instructions name; else omit.
 - `--metadata`: one JSON object carrying the Step-1 haul. Skeleton — drop
   empty keys rather than sending blanks:
 

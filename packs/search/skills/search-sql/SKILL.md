@@ -70,8 +70,8 @@ uv run --project . python packs/search/primitives/local_duckdb_query/local_duckd
 uv run --project . python packs/search/primitives/local_duckdb_query/local_duckdb_query.py query --sql "<one SELECT/WITH statement>" [--max-rows N]
 ```
 
-- DB path defaults to `$POWERPACKS_LOCAL_SEARCH_DB` or
-  `.powerpacks/search-index/local-search.duckdb`; override with `--db`.
+- DB path defaults to `.powerpacks/search-index/local-search.duckdb`; pass `--db` with the
+  path the chat's instructions name.
 - Read-only connection; only a single SELECT/WITH statement is accepted.
 - Default row cap 200 (`truncated: true` signals more rows exist).
 - Do not write files, do not open the DuckDB any other way, and do not

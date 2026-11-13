@@ -13,7 +13,7 @@ Resumable Sales Navigator run: search plan → `leads.jsonl` → enrich → mutu
 
 ## Which backend
 
-| | set present (`--set-id` or `POWERPACKS_DEFAULT_SET_ID`) | no set |
+| | set present (`--set-id`) | no set |
 | --- | --- | --- |
 | search | Powerset API, every Sales Nav seat in the set, merged by member id | your own LinkedIn session, your seat only |
 | resolve names → ids | Powerset API | Sales Nav typeahead through your session |
@@ -22,8 +22,8 @@ Resumable Sales Navigator run: search plan → `leads.jsonl` → enrich → mutu
 | team attribution | yes | not done |
 | cost | Powerset's | 100 LinkedIn requests a day; a run costs one plus one per query (plus one per text title) |
 
-The chat's Search-in picker already puts the set into `POWERPACKS_DEFAULT_SET_ID`, so a chat
-scoped to a set runs cloud and a local-only chat runs local without a flag.
+The chat's instructions name the set its Search-in picker chose; the agent passes it as
+`--set-id`, so a chat scoped to a set runs cloud and a local-only chat runs local.
 
 ## Run
 
