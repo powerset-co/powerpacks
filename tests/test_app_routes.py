@@ -38,6 +38,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(FELL_THROUGH)
             self.end_headers()
 
+    def do_POST(self) -> None:  # noqa: N802
+        if not self.routes.post(self, urllib.parse.urlparse(self.path)):
+            self.send_response(FELL_THROUGH)
+            self.end_headers()
+
     def log_message(self, *args: object) -> None:
         pass
 
@@ -71,6 +76,27 @@ class AppRoutesTests(unittest.TestCase):
             self.assertTrue(AppRoutes().get(handler, urllib.parse.urlparse("/api/autocomplete/locations?q=Example")))
         self.assertIn("/v2/autocomplete/locations?q=Example&limit=20", upstream.call_args.args[0].full_url)
         self.assertIn(b'"type":"city"', handler.wfile.write.call_args.args[0])
+
+    def _post(self, path: str, payload: object) -> tuple[int, dict]:
+        request = urllib.request.Request(self.base + path, data=json.dumps(payload).encode(), method="POST",
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_mutuals_answers_one_persons_row_and_the_days_count(self) -> None:
+        result = {"status": "completed", "requests_today": 2, "day_cap": 100,
+                  "rows": [{"url": "u", "slug": "ann", "status": "looked_up", "count": 3, "people": []}]}
+        with patch("packs.ingestion.primitives.discover.linkedin.linkedin_session.mutuals", return_value=result) as mutuals:
+            status, body = self._post("/api/linkedin/mutuals", {"url": "https://www.linkedin.com/in/ann"})
+        mutuals.assert_called_once_with(["https://www.linkedin.com/in/ann"])
+        self.assertEqual((status, body["status"], body["count"], body["requests_today"]), (200, "looked_up", 3, 2))
+        with patch("packs.ingestion.primitives.discover.linkedin.linkedin_session.mutuals",
+                   side_effect=RuntimeError("LinkedIn is signed out")):
+            self.assertEqual(self._post("/api/linkedin/mutuals", {"url": "x"}), (409, {"error": "LinkedIn is signed out"}))
+        self.assertEqual(self._post("/api/linkedin/mutuals", {})[0], 400)
 
     def test_pages_are_the_shell_with_absolute_asset_urls(self) -> None:
         for path in ("/", "/install", "/permission", "/?stage=worth", "/people", "/team", "/searches", "/searches/run?run_id=jordan-role"):

@@ -8,8 +8,8 @@ LinkedIn restricts accounts that fetch too much, and the count is the one guard.
 
 `mutuals`: for up to 25 profile URLs, how many of the user's connections each person
 shares, and the first ten of them, from the people search "1st degree, connections of X"
-(one request per person, two when the profile id is not cached; nothing shows in the
-person's profile views). First-degree connections (Connections.csv) are skipped. Answers
+(one request per person, two when the profile id is not cached, all in one browser run;
+nothing shows in the person's profile views). First-degree connections (Connections.csv) are skipped. Answers
 are kept CACHE_DAYS in MUTUALS.
 
 `sales-nav companies|titles <query>`: Sales Navigator's typeahead ids for a filter.
@@ -217,6 +217,8 @@ def mutuals(urls: list[str], *, folder: Path = FOLDER, profile_dir: Path = BROWS
         planned.append(slug)
         if slug not in ids:
             plan.append(profile_request(slug))
+        # An unknown id is "{profile_id}": session_browser.js fills it from the profile answer just before.
+        plan.append(mutuals_request(slug, ids.get(slug, "{profile_id}")))
     def record(answer: dict[str, Any]) -> None:
         kind, slug = answer["name"].split(" ", 1)
         if kind == "profile" and profile_id_from(answer):
@@ -228,10 +230,7 @@ def mutuals(urls: list[str], *, folder: Path = FOLDER, profile_dir: Path = BROWS
 
     outcome = "completed"
     try:
-        # Ids first, so each mutuals request can be built; two short batches beat one blind one.
-        for answer in run_plan(plan, profile_dir=profile_dir, usage_path=usage_path, runner=runner):
-            record(answer)
-        plan = [mutuals_request(slug, ids[slug]) for slug in planned if slug in ids]
+        # One browser run: each id, then the mutuals request built from it (a launch costs seconds).
         for answer in run_plan(plan, profile_dir=profile_dir, usage_path=usage_path, runner=runner):
             record(answer)
     except SlowDown as stop:
