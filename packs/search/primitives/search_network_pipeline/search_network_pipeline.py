@@ -1273,13 +1273,14 @@ def cmd_prepare(args):
             payload=pin_payload_seniority_bands(payload,pinned_bands)
         if getattr(args,"current_role",False):
             payload=pin_payload_current_role(payload,True)
-        if args.set_id:
-            payload=pin_payload_set_id(payload,args.set_id)
+        set_id=getattr(args,"set_id",None)
+        if set_id:
+            payload=pin_payload_set_id(payload,set_id)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
-        if args.set_id: extra += f" --set-id {shlex.quote(args.set_id)}"
+        if set_id: extra += f" --set-id {shlex.quote(set_id)}"
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
