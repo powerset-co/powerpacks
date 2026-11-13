@@ -47,9 +47,9 @@ export function RefreshPrompt<Key extends string>({
       className="flex animate-[fade-in_var(--t-med)_var(--ease-out)] flex-col gap-3 rounded-[var(--radius-m)] border border-line-strong bg-surface-2 p-4"
     >
       <div>
-        <p className="m-0 text-sm font-semibold">Bring your people in</p>
+        <p className="m-0 text-sm font-semibold">Grow your network</p>
         <p className="mb-0 mt-1 text-xs text-muted-foreground">
-          Link more sources to find more people, then refresh.
+          Link sources to find more people, then refresh.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
