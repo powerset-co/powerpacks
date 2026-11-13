@@ -4,13 +4,15 @@ Both run requests inside the saved Chrome profile (session_browser.js), the one 
 connections read signs in to, on a clone of it made for the run and deleted after: a
 browser that cannot decrypt the profile's cookies deletes them, so the real profile is
 never opened here. Every request counts against one daily budget (USAGE, DAY_CAP);
-LinkedIn restricts accounts that fetch too much, and the count is the one guard.
+LinkedIn restricts accounts that fetch too much, and the count is the one guard. The
+count lives in the home folder, one per Mac whatever folder a command runs from, and a
+429 or 999 spends the rest of the day.
 
 `mutuals`: for up to 25 profile URLs, how many of the user's connections each person
 shares, and the first ten of them, from the people search "1st degree, connections of X"
 (one request per person, two when the profile id is not cached; nothing shows in the
 person's profile views). First-degree connections (Connections.csv) are skipped. Answers
-are kept CACHE_DAYS in MUTUALS.
+are kept CACHE_DAYS in MUTUALS; a failed request is not kept, so the next ask tries again.
 
 `sales-nav companies|titles <query>`: Sales Navigator's typeahead ids for a filter.
 `sales-nav search`: salesApiLeadSearch with the cloud's filters (relationship, current
@@ -48,9 +50,10 @@ from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("session_browser.js")
-FOLDER = Path(".powerpacks/network-import/discover/linkedin")
+# The checkout's data folder, wherever the command runs from.
+FOLDER = Path(__file__).resolve().parents[5] / ".powerpacks/network-import/discover/linkedin"
 CONNECTIONS_CSV = FOLDER / "Connections.csv"
-USAGE = FOLDER / "usage.json"
+USAGE = Path("~/.powerpacks/linkedin-usage.json").expanduser()
 MUTUALS = FOLDER / "mutuals.json"
 PROFILE_IDS = FOLDER / "profile-ids.json"
 DAY_CAP = 100
@@ -114,7 +117,7 @@ def run_plan(plan: list[dict[str, str]], *, profile_dir: Path = BROWSER_PROFILE,
     if not plan:
         return []
     profile = profile_dir.expanduser()
-    if (profile / "SingletonLock").exists():
+    if os.path.lexists(profile / "SingletonLock"):  # Chrome's lock is a symlink to nothing, which exists() calls absent
         raise RuntimeError("the LinkedIn browser profile is open (a connections read is running); try again when it finishes")
     deps = ensure_chromium()
     if deps["status"] != "ok":
@@ -131,12 +134,14 @@ def run_plan(plan: list[dict[str, str]], *, profile_dir: Path = BROWSER_PROFILE,
                         timeout=TIMEOUT_SECONDS, env={**os.environ, "NODE_PATH": deps["node_path"]})
         summary = parse_json_fragment(result.stdout) if result.stdout.strip() else {"status": "error", "message": command_error(result)}
         answers = json.loads(out_path.read_text()) if out_path.exists() else []
-    spend(int(summary.get("requests", len(answers))), usage_path)
+    # No count came back (a timeout, a crash): the whole plan may have gone out.
+    spend(int(summary.get("requests", len(plan))), usage_path)
     if summary["status"] == "signed_out":
         raise RuntimeError("LinkedIn is signed out; run the LinkedIn connections read to sign in again")
     if summary["status"] == "error":
         raise RuntimeError(summary.get("message") or "the browser run failed")
     if summary["status"] == "slow_down":
+        spend(budget(DAY_CAP, usage_path), usage_path)  # the rest of today's budget: no more requests until tomorrow
         raise SlowDown(f"LinkedIn asked to slow down at {summary['stopped_at']}; {len(answers)} answers kept", answers)
     return answers
 
@@ -188,9 +193,11 @@ def mutuals_from(answer: dict[str, Any]) -> dict[str, Any]:
     return {"count": int(paging.get("total") or 0), "people": people}
 
 
-def mutuals(urls: list[str], *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE, runner=run_streaming_command) -> dict[str, Any]:
+def mutuals(urls: list[str], *, folder: Path = FOLDER, usage_path: Path = USAGE, profile_dir: Path = BROWSER_PROFILE,
+            runner=run_streaming_command) -> dict[str, Any]:
     """Mutual counts for up to BATCH_CAP profile URLs: cached answers first, then the budget."""
-    cache_path, ids_path, usage_path = folder / MUTUALS.name, folder / PROFILE_IDS.name, folder / USAGE.name
+    cache_path, ids_path = folder / MUTUALS.name, folder / PROFILE_IDS.name
+    errors: dict[str, str] = {}
     cache, ids = read_json(cache_path, {}) or {}, read_json(ids_path, {}) or {}
     fresh_after = (datetime.now(timezone.utc) - timedelta(days=CACHE_DAYS)).isoformat()
     connected = first_degree_slugs(folder / CONNECTIONS_CSV.name)
@@ -223,8 +230,8 @@ def mutuals(urls: list[str], *, folder: Path = FOLDER, profile_dir: Path = BROWS
             ids[slug] = profile_id_from(answer)
         elif kind == "mutuals" and answer["status"] == 200:
             cache[slug] = {**mutuals_from(answer), "at": now_iso()}
-        else:
-            cache[slug] = {"count": None, "people": [], "at": now_iso(), "error": f"{kind} HTTP {answer['status']}"}
+        else:  # not cached: a failed request says nothing about the person
+            errors[slug] = f"{kind} HTTP {answer['status']}"
 
     outcome = "completed"
     try:
@@ -246,6 +253,8 @@ def mutuals(urls: list[str], *, folder: Path = FOLDER, profile_dir: Path = BROWS
             row.update(status="looked_up", **cache[slug])
         elif row["status"] == "pending":
             row["status"] = "over_budget" if slug not in planned else "not_answered"
+            if slug in errors:
+                row["error"] = errors[slug]
     return {"primitive": "linkedin_session", "command": "mutuals", "status": outcome, "rows": list(rows.values()),
             "requests_today": spent_today(usage_path), "day_cap": DAY_CAP}
 
@@ -381,10 +390,9 @@ def search_url_for(args: argparse.Namespace) -> tuple[str, list[str]]:
     return lead_search_url(filters, start=args.start, count=args.count, keywords=args.keywords), filters
 
 
-def sales_nav_searches(searches: list[argparse.Namespace], *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE,
+def sales_nav_searches(searches: list[argparse.Namespace], *, usage_path: Path = USAGE, profile_dir: Path = BROWSER_PROFILE,
                        runner=run_streaming_command) -> list[dict[str, Any]]:
     """Several lead searches in one browser run: the home page once, then one request each."""
-    usage_path = folder / USAGE.name
     if budget(len(searches) + 1, usage_path) < len(searches) + 1:
         raise RuntimeError(f"today's LinkedIn budget of {DAY_CAP} requests is spent")
     urls = [search_url_for(args) for args in searches]
@@ -403,11 +411,10 @@ def sales_nav_searches(searches: list[argparse.Namespace], *, folder: Path = FOL
     return results
 
 
-def sales_nav(action: str, args: argparse.Namespace, *, folder: Path = FOLDER, profile_dir: Path = BROWSER_PROFILE,
+def sales_nav(action: str, args: argparse.Namespace, *, usage_path: Path = USAGE, profile_dir: Path = BROWSER_PROFILE,
               runner=run_streaming_command) -> dict[str, Any]:
     if action == "search":
-        return sales_nav_searches([args], folder=folder, profile_dir=profile_dir, runner=runner)[0]
-    usage_path = folder / USAGE.name
+        return sales_nav_searches([args], usage_path=usage_path, profile_dir=profile_dir, runner=runner)[0]
     # Every Sales Navigator batch opens its home page once (session_browser.js), so it costs two.
     if budget(2, usage_path) < 2:
         raise RuntimeError(f"today's LinkedIn budget of {DAY_CAP} requests is spent")
@@ -424,7 +431,7 @@ def sales_nav(action: str, args: argparse.Namespace, *, folder: Path = FOLDER, p
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--profile-dir", type=Path, default=BROWSER_PROFILE)
-    parser.add_argument("--folder", type=Path, default=FOLDER, help="the data folder (Connections.csv, usage.json, mutuals.json)")
+    parser.add_argument("--folder", type=Path, default=FOLDER, help="the data folder (Connections.csv, mutuals.json)")
     commands = parser.add_subparsers(dest="command", required=True)
     m = commands.add_parser("mutuals", help=f"mutual connections for up to {BATCH_CAP} LinkedIn profile URLs")
     m.add_argument("urls", nargs="+")
@@ -454,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "mutuals":
             payload = mutuals(args.urls, folder=args.folder, profile_dir=args.profile_dir)
         else:
-            payload = sales_nav(args.action, args, folder=args.folder, profile_dir=args.profile_dir)
+            payload = sales_nav(args.action, args, profile_dir=args.profile_dir)
     except (RuntimeError, ValueError, SlowDown) as error:
         emit({"primitive": "linkedin_session", "status": "failed", "message": str(error)})
         return 1

@@ -46,7 +46,8 @@ def with_folder(test):
             profile = Path(raw) / "profile"
             profile.mkdir()
             (profile / "Default").mkdir()
-            with patch(f"{MODULE}.ensure_chromium", return_value={"status": "ok", "node_path": "/tmp/node_modules"}):
+            with patch(f"{MODULE}.ensure_chromium", return_value={"status": "ok", "node_path": "/tmp/node_modules"}), \
+                    patch(f"{MODULE}.USAGE", folder / "usage.json"):
                 test(self, folder, profile)
     return wrapped
 
@@ -58,7 +59,7 @@ class MutualsTests(unittest.TestCase):
         browser = FakeBrowser(lambda r: {"status": 200, "text": PROFILE_URN} if r["name"].startswith("profile")
                               else {"status": 200, "text": clusters(3, ["Ann", "Bob", "Cy"])})
         out = ls.mutuals(["https://www.linkedin.com/in/friend", "https://www.linkedin.com/in/stranger/", "nonsense"],
-                         folder=folder, profile_dir=profile, runner=browser)
+                         folder=folder, usage_path=folder / "usage.json", profile_dir=profile, runner=browser)
         by = {row["url"]: row for row in out["rows"]}
         self.assertEqual(by["https://www.linkedin.com/in/friend"]["status"], "connected")
         self.assertEqual(by["nonsense"]["status"], "no_slug")
@@ -68,7 +69,7 @@ class MutualsTests(unittest.TestCase):
         self.assertEqual(browser.plans, [["profile stranger"], ["mutuals stranger"]])
         self.assertEqual(out["requests_today"], 2)
         # The second ask costs nothing: the answer is cached and the id is kept.
-        again = ls.mutuals(["https://www.linkedin.com/in/stranger"], folder=folder, profile_dir=profile, runner=browser)
+        again = ls.mutuals(["https://www.linkedin.com/in/stranger"], folder=folder, usage_path=folder / "usage.json", profile_dir=profile, runner=browser)
         self.assertEqual((again["rows"][0]["status"], again["rows"][0]["count"], again["requests_today"]), ("cached", 3, 2))
         self.assertEqual(len(browser.plans), 2)
 
@@ -76,7 +77,7 @@ class MutualsTests(unittest.TestCase):
     def test_budget_bounds_the_batch(self, folder, profile):
         ls.spend(ls.DAY_CAP - 3, folder / "usage.json")
         browser = FakeBrowser(lambda r: {"status": 200, "text": PROFILE_URN} if r["name"].startswith("profile") else {"status": 200, "text": clusters(1, ["Ann"])})
-        out = ls.mutuals([f"https://www.linkedin.com/in/p{i}" for i in range(4)], folder=folder, profile_dir=profile, runner=browser)
+        out = ls.mutuals([f"https://www.linkedin.com/in/p{i}" for i in range(4)], folder=folder, usage_path=folder / "usage.json", profile_dir=profile, runner=browser)
         statuses = [row["status"] for row in out["rows"]]
         # 3 requests left = one person at 2 requests; the rest wait for tomorrow.
         self.assertEqual(statuses, ["looked_up", "over_budget", "over_budget", "over_budget"])
@@ -88,15 +89,33 @@ class MutualsTests(unittest.TestCase):
             out_path = Path(cmd[cmd.index("--out") + 1])
             out_path.write_text(json.dumps([{"name": "profile p0", "status": 999, "text": ""}]))
             return CommandResult(returncode=0, stdout=json.dumps({"status": "slow_down", "requests": 1, "stopped_at": "profile p0"}), stderr="", ok=True)
-        out = ls.mutuals(["https://www.linkedin.com/in/p0", "https://www.linkedin.com/in/p1"], folder=folder, profile_dir=profile, runner=answers)
+        out = ls.mutuals(["https://www.linkedin.com/in/p0", "https://www.linkedin.com/in/p1"], folder=folder, usage_path=folder / "usage.json", profile_dir=profile, runner=answers)
         self.assertTrue(out["status"].startswith("slow_down"))
-        self.assertEqual(out["requests_today"], 1)
-        self.assertEqual([row["status"] for row in out["rows"]], ["looked_up", "not_answered"])
+        # The day is over: the budget is spent, so the next ask sends nothing.
+        self.assertEqual(out["requests_today"], ls.DAY_CAP)
+        self.assertEqual([row["status"] for row in out["rows"]], ["not_answered", "not_answered"])
         self.assertEqual(out["rows"][0]["error"], "profile HTTP 999")
+        # The error is not kept as the person's answer: nothing is cached.
+        self.assertEqual(json.loads((folder / "mutuals.json").read_text()), {})
+        again = ls.mutuals(["https://www.linkedin.com/in/p0"], folder=folder, usage_path=folder / "usage.json", profile_dir=profile,
+                           runner=FakeBrowser(lambda r: self.fail("no request after a slow down")))
+        self.assertEqual(again["rows"][0]["status"], "over_budget")
+
+    @with_folder
+    def test_a_run_that_reports_nothing_spends_its_whole_plan(self, folder, profile):
+        def timed_out(cmd, *, timeout, env=None, on_progress=None):
+            return CommandResult(returncode=124, stdout="", stderr="node timed out", ok=False)
+        with self.assertRaises(RuntimeError):
+            ls.run_plan([{"name": "a", "url": "u"}, {"name": "b", "url": "u"}], profile_dir=profile, usage_path=folder / "usage.json", runner=timed_out)
+        self.assertEqual(ls.spent_today(folder / "usage.json"), 2)
+
+    def test_the_budget_is_one_file_in_the_home_folder(self):
+        self.assertEqual(ls.USAGE, Path.home() / ".powerpacks/linkedin-usage.json")
+        self.assertTrue(ls.FOLDER.is_absolute())
 
     @with_folder
     def test_open_profile_refuses(self, folder, profile):
-        (profile / "SingletonLock").write_text("")
+        (profile / "SingletonLock").symlink_to("host-123")  # as Chrome writes it: a link to no file
         with self.assertRaisesRegex(RuntimeError, "open"):
             ls.run_plan([{"name": "x", "url": "u"}], profile_dir=profile, usage_path=folder / "usage.json", runner=FakeBrowser(lambda r: {}))
 
@@ -143,7 +162,7 @@ class SalesNavTests(unittest.TestCase):
             {"firstName": "Ada", "lastName": "L", "degree": 2, "entityUrn": "urn:li:fs_salesProfile:(ACwAAARv15kBchRDx6eACJ-o_62vF3lvBgTmSKg,x,y)", "currentPositions": []}]})})
         args = Namespace(degree="2nd", company_id=[2135371], company_name=["Stripe"], title_id=None, title_name=None, region_id=None, region_name=None,
                          seniority=None, function=["8"], keywords="engineer", start=0, count=10)
-        out = ls.sales_nav("search", args, folder=folder, profile_dir=profile, runner=browser)
+        out = ls.sales_nav("search", args, usage_path=folder / "usage.json", profile_dir=profile, runner=browser)
         self.assertEqual((out["total"], out["count"], out["leads"][0]["member_id"], out["requests_today"]), (430, 1, 74438553, 1))
         self.assertEqual(browser.plans, [["lead search 0"]])
         self.assertIn("(type:FUNCTION,values:List((id:8,text:Engineering,selectionType:INCLUDED)))", out["filters"][2])
@@ -153,7 +172,7 @@ class SalesNavTests(unittest.TestCase):
         browser = FakeBrowser(lambda r: {"status": 200, "text": json.dumps({"paging": {"total": 7}, "elements": []})})
         base = dict(degree="2nd", company_id=[2135371], company_name=["Stripe"], title_id=None, title_name=None, region_id=None,
                     region_name=None, seniority=None, function=None, keywords=None, start=0, count=25)
-        out = ls.sales_nav_searches([Namespace(**base), Namespace(**{**base, "seniority": ["310", "320"]})], folder=folder, profile_dir=profile, runner=browser)
+        out = ls.sales_nav_searches([Namespace(**base), Namespace(**{**base, "seniority": ["310", "320"]})], usage_path=folder / "usage.json", profile_dir=profile, runner=browser)
         self.assertEqual(browser.plans, [["lead search 0", "lead search 1"]])
         self.assertEqual([o["total"] for o in out], [7, 7])
         self.assertIn("SENIORITY_LEVEL", out[1]["filters"][2])
@@ -161,10 +180,8 @@ class SalesNavTests(unittest.TestCase):
 
     def test_cli_reports_a_spent_budget_as_failed(self):
         with tempfile.TemporaryDirectory() as raw:
-            folder = Path(raw)
-            ls.spend(ls.DAY_CAP, folder / "usage.json")
-            with patch(f"{MODULE}.emit") as emitted:
-                code = ls.main(["--folder", str(folder), "sales-nav", "companies", "Stripe"])
+            with patch(f"{MODULE}.emit") as emitted, patch(f"{MODULE}.budget", return_value=0):
+                code = ls.main(["--folder", raw, "sales-nav", "companies", "Stripe"])
             self.assertEqual(code, 1)
             self.assertIn("budget", emitted.call_args.args[0]["message"])
 
