@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { useSearchParams } from "react-router-dom"
 
-import { LinkIcon, Page, PlusIcon, Select, TrashIcon } from "@/components/shared"
+import { LinkIcon, Page, PlusIcon, TrashIcon } from "@/components/shared"
+import { ScopePicker } from "@/components/shared/ScopePicker"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { offeredSets, SEARCH_SCOPE_KEY, setName, useSearchScope } from "@/lib/agent/useSearchScope"
+import { offeredSets, SEARCH_SCOPE_KEY, useSearchScope } from "@/lib/agent/useSearchScope"
 import { createSet, deleteSet, fetchSetDetail, inviteToSet } from "@/lib/api/searches"
 import { errorText } from "@/lib/api/http"
 import { SETS } from "@/lib/people/copy"
@@ -18,17 +19,15 @@ const LOCAL = "local"
 // Laid out as the Powerset app's Sets page: a set picker in the head, then the chosen set's card with
 // its contacts and members; New Set makes one, and on a set you own Invite makes a link and the bin
 // deletes it.
-// The picker offers what Search in offers: this Mac's local index, then your Powerset sets without
-// the cloud copy of your own network.
+// The picker is the chat's Search-in picker, so a set reads the same here as there: this Mac's local
+// index, and your Powerset sets with their counts, without the cloud copy of your own network.
 export function SetsPage() {
   const scope = useSearchScope()
   const [params, setParams] = useSearchParams()
+  const local = scope.data?.local_db ?? null
   const sets = scope.data ? offeredSets(scope.data) : []
-  const options = [
-    ...(scope.data?.local_db ? [{ value: LOCAL, label: SETS.localIndex }] : []),
-    ...sets.map((set) => ({ value: set.set_id, label: setName(set) })),
-  ]
-  const chosen = options.find(({ value }) => value === params.get("set"))?.value ?? options[0]?.value
+  const offered = [...(local ? [LOCAL] : []), ...sets.map((set) => set.set_id)]
+  const chosen = offered.find((value) => value === params.get("set")) ?? offered[0]
   const choose = (value: string) => setParams(value ? { set: value } : {}, { replace: true })
   const [naming, setNaming] = useState(false)
 
@@ -37,14 +36,12 @@ export function SetsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="m-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{SETS.lead}</p>
         <div className="flex items-center gap-2">
-          <Select
-            aria-label={SETS.choose}
-            value={chosen ?? ""}
-            onChange={choose}
-            disabled={!options.length}
+          <ScopePicker
+            value={chosen === LOCAL && local ? { local_db: local } : chosen ? { set_id: chosen } : null}
+            onChange={(next) => choose("set_id" in next ? next.set_id : LOCAL)}
+            placeholder={SETS.noneTitle}
+            title={SETS.choose}
             className="min-w-[220px]"
-            placeholder={scope.isPending ? SETS.loading : SETS.noneTitle}
-            options={options}
           />
           <Button variant="primary" className="h-8" onClick={() => setNaming(true)}>
             <PlusIcon />

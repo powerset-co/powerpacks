@@ -41,8 +41,8 @@ function setup(path: string) {
 it("opens on the local index and offers your sets without the cloud copy of your own network", async () => {
   setup("/sets")
   expect(await screen.findByText("This Mac")).toBeTruthy()
-  open("Choose a set")
-  expect(options()).toEqual(["Local index", "Team"])
+  open("Search in")
+  expect(options()).toEqual(["Team · 40,795", "Local index"])
   expect(fetchSetDetail).not.toHaveBeenCalled()
 })
 
