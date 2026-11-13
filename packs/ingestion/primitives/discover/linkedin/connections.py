@@ -21,6 +21,8 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-11-13: pictures are fetched with a User-Agent; LinkedIn's CDN answers Python's default one
+      with 403, so no picture was ever saved.
   2026-10-24: the scroll run saves one picture of the connections page (PAGE_SHOT) for the setup screen,
       and each connection's picture (PICTURES) while LinkedIn's link still works.
   2026-10-05: the read reports its count as it scrolls and returns an `outcome`
@@ -63,6 +65,8 @@ PAGE_SHOT = CONNECTIONS_CSV.with_name("connections-page.png")
 PICTURES = CONNECTIONS_CSV.with_name("pictures")
 PICTURE_SECONDS = 10
 PICTURE_WORKERS = 8
+# LinkedIn's picture CDN refuses urllib's default User-Agent (`Python-urllib/3.x`) with 403.
+PICTURE_USER_AGENT = "Powerpacks"
 BROWSER_PROFILE = Path("~/.powerpacks/browser-profiles/linkedin")
 BROWSER_SCRIPT = Path(__file__).with_name("connections_browser.js")
 EXPORT_COLUMNS = ["First Name", "Last Name", "URL", "Email Address", "Company", "Position", "Connected On"]
@@ -116,8 +120,13 @@ def picture_path(folder: Path, public_identifier: str) -> Path:
     return folder / f"{public_identifier}.jpg"
 
 
-def save_pictures(cards: list[dict[str, str]], folder: Path,
-                  fetch: Callable[[str], bytes] = lambda url: urllib.request.urlopen(url, timeout=PICTURE_SECONDS).read()) -> int:
+def fetch_picture(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": PICTURE_USER_AGENT})
+    with urllib.request.urlopen(request, timeout=PICTURE_SECONDS) as response:
+        return response.read()
+
+
+def save_pictures(cards: list[dict[str, str]], folder: Path, fetch: Callable[[str], bytes] = fetch_picture) -> int:
     """Save the picture of every card that has a link and no file yet; how many were saved. A
     picture that cannot be fetched is left for the next read."""
     wanted = {picture_path(folder, extract_public_identifier(PROFILE_URL.format(slug=card["slug"]))): card["picture"]
