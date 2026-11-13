@@ -3,15 +3,19 @@ import type { ReactNode } from "react"
 import { Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
+  failedRefine,
   preparedSearch,
   ranSearch,
   refineStep,
   stepCount,
   stepVerb,
+  unwrapped,
   wentBack,
+  type FailedRefine,
   type PreparedSearch,
   type WentBack,
 } from "@/lib/agent/preparedSearch"
+import { runCommand, send } from "@/lib/agent/store"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 import { useSearchRun } from "@/pages/searches/hooks/useSearchRun"
@@ -31,6 +35,7 @@ type Turn =
   | { kind: "search"; id: string; search: PreparedSearch }
   | { kind: "step"; id: string; step: Omit<SearchStep, "created_at"> & { run_id: string } }
   | { kind: "back"; id: string; back: WentBack }
+  | { kind: "failed"; id: string; failed: FailedRefine; retried: boolean }
 
 function isWork(entry: Entry): entry is WorkEntry {
   return (
@@ -45,15 +50,22 @@ function isWork(entry: Entry): entry is WorkEntry {
  */
 function group(entries: Entry[]): Turn[] {
   const out: Turn[] = []
-  for (const entry of entries) {
+  for (const [at, entry] of entries.entries()) {
     const last = out.at(-1)
     const search = preparedSearch(entry)
     const step = refineStep(entry)
     const back = wentBack(entry)
+    const failed = failedRefine(entry)
     if (search) out.push({ kind: "search", id: entry.id, search })
     else if (step) out.push({ kind: "step", id: entry.id, step })
     else if (back) out.push({ kind: "back", id: entry.id, back })
-    else if (!isWork(entry)) out.push({ kind: "say", entry })
+    else if (failed) {
+      // Once the same refinement ran again, the later card answers for it.
+      const retried = entries
+        .slice(at + 1)
+        .some((later) => later.kind === "command" && unwrapped(later.command) === failed.command)
+      out.push({ kind: "failed", id: entry.id, failed, retried })
+    } else if (!isWork(entry)) out.push({ kind: "say", entry })
     else if (last?.kind === "work") last.entries.push(entry)
     else out.push({ kind: "work", id: entry.id, entries: [entry] })
   }
@@ -272,6 +284,38 @@ function StepCard({
   )
 }
 
+/** A refinement that failed or was stopped: what it tried, and a retry until it ran again. */
+function FailedCard({
+  failed,
+  retried,
+  running,
+}: {
+  failed: FailedRefine
+  retried: boolean
+  running: boolean
+}) {
+  const status = useCatalog().data?.find((card) => card.run_id === failed.runId)?.status
+  const retry = () =>
+    void runCommand(failed.command).then((started) =>
+      started ? undefined : send(`Try the refinement again: ${failed.criteria ?? "the last one"}`),
+    )
+  return (
+    <section aria-label="Refinement" className={cn(STEP_CARD, "border-line")}>
+      <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-bad" />
+      <p className="m-0 flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <b className="font-semibold">Refine failed</b>
+        {failed.criteria ? <span className="min-w-0">{failed.criteria}</span> : null}
+        {failed.error ? <span className="min-w-0 text-muted-foreground">{failed.error}</span> : null}
+      </p>
+      {retried ? null : (
+        <Button size="sm" className="shrink-0" disabled={running || status === "running"} onClick={retry}>
+          Retry
+        </Button>
+      )}
+    </section>
+  )
+}
+
 /** A `rerank --use` in the chat: where the results went back to, never the command. */
 function WentBackLine({ back }: { back: WentBack }) {
   const run = useSearchRun(back.runId).data?.search
@@ -312,6 +356,8 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
           )
         if (turn.kind === "step") return <StepCard key={turn.id} step={turn.step} running={running} />
         if (turn.kind === "back") return <WentBackLine key={turn.id} back={turn.back} />
+        if (turn.kind === "failed")
+          return <FailedCard key={turn.id} failed={turn.failed} retried={turn.retried} running={running} />
         return (
           // Folded to one line until the reader asks for the commands behind it.
           <details key={turn.id} className="rise-in group/work">

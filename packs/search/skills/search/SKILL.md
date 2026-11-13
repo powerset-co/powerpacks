@@ -79,9 +79,9 @@ Decide `surface`, `backend`, `depth`, and `mode` for the query:
      (even if they also say "my network": "search my Powerset network" is `powerset`).
    - `local` — the user says "local", "offline", or "my imported network/contacts",
      even if remote credentials exist.
-   - Unstated → the chat's scope, which the pipeline also defaults to: `local` when
-     `POWERPACKS_LOCAL_SEARCH_DB` is set in the environment, otherwise `powerset`. Say which in
-     one line.
+   - Unstated → the chat's scope: the developer instructions name the set (`--set-id <id>`) or
+     the local index (`--backend local --db <path>`) this chat searches. A chat with neither
+     searches `powerset`. Say which in one line.
    - Forced values: `sql` is always `local`; `company` is always `powerset`.
 3. **depth** — how hard to search (people surface only):
    - `deep` — the input is a pasted JD or a job-posting URL, or the user asks for a
@@ -120,12 +120,9 @@ mkdir -p .powerpacks/search/<slug> && cat > .powerpacks/search/<slug>/decision.j
 EOF
 ```
 
-The environment default for `backend` is one check that prints nothing secret. It loads `.env`
-the way every pipeline command does, so the two agree: the desktop app pins a chat's scope into
-the environment (a set pins `POWERPACKS_LOCAL_SEARCH_DB` empty), and `.env` only fills a variable
-the environment leaves unset. Never read `.env` directly for this: a leftover
-`POWERPACKS_LOCAL_SEARCH_DB=` line there would turn a chat pinned to a set into a local search.
-`uv run --env-file .env --project . python -c 'import os; print("local" if os.environ.get("POWERPACKS_LOCAL_SEARCH_DB") else "powerset")'`.
+The scope is always an argument on the command: the set as `--set-id <id>`, the local index as
+`--backend local --db <path>`, exactly as the chat's instructions name them. Never look for it in
+the environment or in `.env`.
 
 - fast → `.powerpacks/search/<slug>/decision.json`, and pass the same dir as `--output-dir`
   to `prepare` so the decision, payload, and outputs live together.
@@ -138,7 +135,7 @@ Then dispatch — this table is the whole routing contract:
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
 | `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare --backend powerset`) |
+| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare --backend powerset --set-id <id>`; no `--set-id` when the chat names no set) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns orchestration and delegates each reviewed pond to the
@@ -225,7 +222,7 @@ and sends the required candidate evidence to the configured OpenAI boundary.
 Use `--search-only` to skip those model stages entirely.
 
 1. Determine the DuckDB path:
-   - `$POWERPACKS_LOCAL_SEARCH_DB` if set
+   - the path the chat's instructions name (`--db <path>`)
    - Otherwise `.powerpacks/search-index/local-search.duckdb`
 
 2. If the DB file does not exist, tell the user to run
@@ -291,12 +288,15 @@ files on the happy path. Start a fresh run for every search request.
    ```bash
    uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py prepare \
      --backend powerset \
+     --set-id "<the chat's set id>" \
      --query "<user query>" \
      --title "<3-5 word name>" \
      --output-dir ".powerpacks/search/<slug>"
    ```
 
-   Use the same `<slug>` run dir where `decision.json` was recorded. (Deep-engine delegated
+   `--set-id` is the set the chat's instructions name; leave it off when they name none, and
+   the search covers the signed-in user's personal set. Use the same `<slug>` run dir where
+   `decision.json` was recorded. (Deep-engine delegated
    profile searches pass their own output dir; follow the engine's instructions there.)
 
 2. If `prepare` returns a preview, say exactly this and nothing else (the chat shows the

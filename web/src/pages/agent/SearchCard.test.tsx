@@ -542,3 +542,51 @@ it("opens the full role query in a multiline editor and keeps edits", () => {
   execute()
   expect(sent().filters.semantic_query).toBe("Updated role description")
 })
+
+it("asks for a role keyword before running a search whose keywords were all removed", () => {
+  render(<SearchCard search={DIRECT} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "Remove vp finance" }))
+  expect(screen.getByRole("alert").textContent).toBe("Add a role keyword to run this search.")
+  const run = screen.getByRole<HTMLButtonElement>("button", { name: "Run Search" })
+  expect(run.disabled).toBe(true)
+  execute()
+  expect(store.runCommand).not.toHaveBeenCalled()
+  expect(store.send).not.toHaveBeenCalled()
+  // A keyword typed but not yet entered counts, as Run Search would send it.
+  fireEvent.click(screen.getByRole("button", { name: "Add Keywords" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Add Keywords" }), {
+    target: { value: "finance director" },
+  })
+  expect(screen.queryByRole("alert")).toBeNull()
+  expect(run.disabled).toBe(false)
+})
+
+it("asks for a filter before running a search whose filters were all removed", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: [{ key: "metro_areas", value: ["New York Metropolitan Area"] }],
+  }
+  render(<SearchCard search={search} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "Remove New York Metropolitan Area" }))
+  expect(screen.getByRole("alert").textContent).toBe("Add a filter to run this search.")
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run Search" }).disabled).toBe(true)
+})
+
+it("runs a changed query with its keywords removed, since it is prepared again", () => {
+  render(<SearchCard search={SEARCH} actions={true} />)
+  fireEvent.click(screen.getByRole("button", { name: "Remove vp finance" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "Query" }), { target: { value: "CFOs in New York" } })
+  expect(screen.queryByRole("alert")).toBeNull()
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Run Search" }).disabled).toBe(false)
+})
+
+it("runs a search prepared without role keywords", () => {
+  const search: PreparedSearch = {
+    ...SEARCH,
+    filters: SEARCH.filters.filter((filter) => filter.key !== "bm25_queries"),
+  }
+  render(<SearchCard search={search} actions={true} />)
+  expect(screen.queryByRole("alert")).toBeNull()
+  execute()
+  expect(store.send).toHaveBeenCalledWith("execute")
+})

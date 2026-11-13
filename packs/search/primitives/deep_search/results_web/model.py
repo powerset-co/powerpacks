@@ -22,6 +22,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
@@ -776,9 +777,31 @@ def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, 
     return _searches(root, payloads)
 
 
+def refine_interrupted(row: dict[str, Any]) -> bool:
+    """A refine stopped mid-judge (killed, the app quit) leaves its run "running" with the pid of a
+    process that is gone: it failed, and the run still shows the step before it."""
+    pid = row.get("refine_pid")
+    if row.get("status") != "running" or not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
+def _catalog_card(row: dict[str, Any]) -> SearchCard:
+    card = {key: value for key, value in row.items() if key != "refine_pid"}
+    if refine_interrupted(row):
+        card["status"] = "failed"
+    return SearchCard(**card)
+
+
 def load_catalog(root: Path) -> tuple[SearchCard, ...]:
     """Registered searches, newest first, without opening any run artifacts."""
-    cards = (SearchCard(**row) for row in (_payload(root / CATALOG_FILE) or {}).values())
+    cards = (_catalog_card(row) for row in (_payload(root / CATALOG_FILE) or {}).values())
     return tuple(sorted(cards, key=lambda card: (card.created_at, card.run_id), reverse=True))
 
 

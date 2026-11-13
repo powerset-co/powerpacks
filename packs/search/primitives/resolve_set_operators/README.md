@@ -8,8 +8,7 @@ Resolution order:
 1. `--set-id`
 2. `--payload-json '{"set_id": "..."}'`
 3. `--state` with `expand_search_request.output.role_search_filters.set_id`
-4. `POWERPACKS_DEFAULT_SET_ID` or `POWERSET_DEFAULT_SET_ID`
-5. The logged-in user's active personal set, inferred from
+4. The logged-in user's active personal set, inferred from
    `~/.powerpacks/credentials.json`
 
 Example:

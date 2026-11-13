@@ -16,7 +16,7 @@ import tempfile
 import duckdb
 
 from packs.indexing.lib.io import write_json
-from packs.search.primitives.deep_search.results_web.model import original_quick_step, select_quick_step
+from packs.search.primitives.deep_search.results_web.model import original_quick_step, refine_interrupted, select_quick_step
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
 from packs.search.primitives.persist_search_results.results_io import hydrated_profiles, now_iso, read_jsonl
 from packs.search.primitives.shared.openai_client import make_openai_client
@@ -158,7 +158,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
     catalog_path = root / "catalog.json"
     catalog = json.loads(catalog_path.read_text())
     card = catalog[run_id]
-    if card["status"] == "running":
+    if card["status"] == "running" and not refine_interrupted(card):
         raise ValueError("quick run is still running")
     result_path = root / run_id / "results.json"
     payload = json.loads(result_path.read_text())
@@ -206,7 +206,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
         os.environ["POWERPACKS_USAGE_LOG"] = str(usage_path)
         try:
             with make_openai_client(api_key=env["OPENAI_API_KEY"], api_base=env.get("OPENAI_API_BASE") or env.get("OPENAI_BASE_URL")) as client:
-                card.update(status="running", updated_at=now_iso())
+                card.update(status="running", refine_pid=os.getpid(), updated_at=now_iso())
                 write_json(catalog_path, catalog)
                 try:
                     summary = cohort_summary(inputs)
@@ -232,6 +232,7 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
                                 scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=sum(costs), created_at=now_iso())
                     steps.append(step)
                 except BaseException:
+                    card.pop("refine_pid", None)
                     card.update(status="failed", updated_at=now_iso())
                     write_json(catalog_path, catalog)
                     raise
@@ -247,6 +248,7 @@ def _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id
     payload["steps"] = steps
     select_quick_step(payload, step)
     write_json(result_path, payload)
+    card.pop("refine_pid", None)
     card.update(status="completed", candidates=step["shown"], updated_at=now_iso())
     write_json(catalog_path, catalog)
     print(f'search: {step["shown"]} kept of {step["scored"]} for "{step["criteria"]}"', file=sys.stderr)
