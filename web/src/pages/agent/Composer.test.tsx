@@ -37,7 +37,9 @@ it("does not send while a delivery is pending", () => {
 
 it("names the access the chat actually has", () => {
   const toggle = vi.fn()
-  const { rerender } = render(<Composer running={false} onSend={vi.fn()} fullAccess={false} onFullAccess={toggle} />)
+  const { rerender } = render(
+    <Composer running={false} onSend={vi.fn()} fullAccess={false} onFullAccess={toggle} />,
+  )
   fireEvent.click(screen.getByRole("button", { name: "Ask First" }))
   expect(toggle).toHaveBeenCalledWith(true)
   expect(screen.queryByRole("button", { name: "Full Access" })).toBeNull()
