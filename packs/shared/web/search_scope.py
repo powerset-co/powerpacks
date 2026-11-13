@@ -6,6 +6,8 @@ signed-in user's, largest first, straight from Postgres (DATABASE_URL); with no 
 none.
 
 Changelog:
+  2026-11-12: a Postgres failure leaves the sets empty and still offers the local index; the picker
+      used to vanish with the whole route a 502 (Jake, during the Supabase connection incident).
   2026-11-11: set_detail(), invite(), create_set(), delete_set(): the Sets page's reads and writes through
       the Powerset API.
   2026-10-29: no choice lives here any more: the chat pins its scope through Codex.
@@ -18,6 +20,7 @@ Changelog:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import urllib.parse
 import urllib.request
@@ -37,10 +40,18 @@ LOCAL_INDEX = Path(".powerpacks/search-index/local-search.duckdb")
 
 
 def read(root: Path) -> dict[str, Any]:
-    """The user's sets, and the local index's path when this Mac has one (else null)."""
+    """The user's sets, and the local index's path when this Mac has one (else null).
+
+    The two are independent: when Postgres cannot be reached the sets are empty and the local
+    index is still offered, so the picker shows it and a search can start on this Mac."""
     env = _read_env_file(root / ".env")
     subject = postgres_client.credentials_subject()
-    sets = postgres_client.fetch_member_sets(subject, env["DATABASE_URL"]) if subject and env.get("DATABASE_URL") else []
+    sets: list[dict[str, Any]] = []
+    if subject and env.get("DATABASE_URL"):
+        try:
+            sets = postgres_client.fetch_member_sets(subject, env["DATABASE_URL"])
+        except Exception:
+            logging.getLogger(__name__).exception("Reading the sets from Postgres failed; offering the local index")
     index = root / LOCAL_INDEX
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 

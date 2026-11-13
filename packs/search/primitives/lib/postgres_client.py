@@ -6,6 +6,8 @@ operator_person_sources are real tables there, distinct from the same-named `pub
 sets and set_members are views over public. Reading `public` alone shows counts the app never shows.
 
 Changelog:
+- 2026-11-12: connect() gives up after 10 s; a blackholed route used to hang the search picker for
+  minutes (TCP's own timeout) before the local index could be offered.
 - 2026-10-28: connect() pins the search_path; the picker's set in .env wins over a stale process env.
 """
 
@@ -71,11 +73,12 @@ def database_url() -> str:
 
 
 SEARCH_PATH = "powerset_v2, public"
+CONNECT_TIMEOUT_SECONDS = 10
 
 
 def connect(dsn: str | None = None) -> Any:
     """A connection on the API's schema layout: powerset_v2 first, public behind it."""
-    conn = ensure_psycopg2().connect(dsn or database_url())
+    conn = ensure_psycopg2().connect(dsn or database_url(), connect_timeout=CONNECT_TIMEOUT_SECONDS)
     with conn.cursor() as cur:
         cur.execute(f"SET search_path TO {SEARCH_PATH}")
     return conn

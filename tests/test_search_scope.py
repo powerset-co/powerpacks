@@ -58,9 +58,14 @@ class SearchScopeTests(unittest.TestCase):
         self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local_db": None}))
         self.fetch_member_sets.assert_not_called()
 
-    def test_postgres_failure_answers_with_an_error(self) -> None:
+    def test_postgres_failure_still_offers_the_local_index(self) -> None:
+        # Jake, 2026-11-12: the pooler unreachable turned the whole route into a 502 and the picker
+        # vanished, though his local index needed no network at all.
         self.fetch_member_sets.side_effect = RuntimeError("pooler down")
-        self.assertEqual(self.request(), (HTTPStatus.BAD_GATEWAY, {"error": "pooler down"}))
+        index = self.root / ".powerpacks/search-index/local-search.duckdb"
+        index.parent.mkdir(parents=True)
+        index.write_bytes(b"")
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local_db": str(index)}))
 
     def test_one_set_comes_from_the_powerset_api(self) -> None:
         detail = {"id": "t-1", "name": "Powerset", "role": "member", "members": []}
