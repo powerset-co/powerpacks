@@ -198,11 +198,15 @@ WARMTH_BUCKET = ("CASE WHEN warmth IS NULL THEN '' WHEN warmth < 0.5 THEN 'No re
 EVIDENCE = {"No relationship labels": "linkedin_only", "Group chats only": "group_chat_only",
             "Shared employer": "shared_employer", "Shared school": "shared_school"}
 
+# The family's decision as the page counts and lists it: a LinkedIn-only family nobody decided is a Keep (there is
+# nothing to assess it on), so Not assessed counts only people with more than a LinkedIn.
+DECISION = "CASE WHEN worth != '' THEN worth WHEN linkedin_only THEN 'yes' ELSE 'unjudged' END"
+
 # A facet (web/src/lib/people/facets.ts FACETS) -> the SQL value a held value is matched against; lists match
 # when any of their items is held.
 FACET_VALUES = {
     "reason": "reason",
-    "worth": "CASE worth WHEN '' THEN 'unjudged' ELSE worth END",
+    "worth": DECISION,
     "relationship_kind": "relationship_kind",
     "last": LAST_BUCKET,
     "linkedin": "CASE WHEN public_identifier != '' THEN 'Has LinkedIn' ELSE 'No LinkedIn' END",
@@ -226,7 +230,7 @@ TABS = ("all", "yes", "no", "unjudged")
 def _tab(tab: str) -> tuple[str, tuple[str, ...]]:
     if tab == "all":
         return "1", ()
-    return "worth = ?", ("" if tab == "unjudged" else tab,)
+    return f"{DECISION} = ?", (tab,)
 
 
 def _held(values: tuple[str, ...]) -> str:
@@ -422,7 +426,7 @@ class SharePeople:
         clause = " AND ".join([tab_where, *where, *(f"NOT {HIDES[hide]}" for hide in hides)])
         params = (*tab_args, *args)
         totals = dict(self.conn.execute(
-            "SELECT CASE worth WHEN '' THEN 'unjudged' ELSE worth END, COUNT(*) FROM families GROUP BY 1").fetchall())
+            f"SELECT {DECISION}, COUNT(*) FROM families GROUP BY 1").fetchall())
         kinds = dict(self.conn.execute(
             f"SELECT relationship_kind, COUNT(*) FROM families WHERE {tab_where} AND relationship_kind != '' "
             "GROUP BY 1", tab_args).fetchall())
