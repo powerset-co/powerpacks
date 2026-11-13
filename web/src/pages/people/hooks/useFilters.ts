@@ -16,13 +16,16 @@ export function useFilters(params: URLSearchParams) {
     setView((current) => ({ ...current, filters }))
   }, [])
 
-  const toggleHide = useCallback((key: HideKey) => {
-    setView((current) => {
-      const hide = new Set(current.hide)
-      if (!hide.delete(key)) hide.add(key)
-      return { ...current, hide }
-    })
+  // `on`: the switch's new state, the owner's choice from now on.
+  const setHide = useCallback((key: HideKey, on: boolean) => {
+    setView((current) => ({ ...current, hide: new Map(current.hide).set(key, on) }))
   }, [])
+
+  // Clear filters: every facet and every hide back to where the page starts.
+  const clearFilters = useCallback(
+    () => setView((current) => ({ ...current, filters: new Map(), hide: new Map() })),
+    [],
+  )
 
   const setText = useCallback((text: string) => setView((current) => ({ ...current, text })), [])
 
@@ -34,5 +37,5 @@ export function useFilters(params: URLSearchParams) {
     })
   }, [])
 
-  return { view, setTab, setFilters, toggleHide, setText, setSort }
+  return { view, setTab, setFilters, setHide, clearFilters, setText, setSort }
 }

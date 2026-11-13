@@ -159,6 +159,36 @@ def people_select_all(app: App) -> None:
                  WRITE, f"{total:,} selected")
 
 
+def _matching(app: App, query: str) -> int:
+    """How many people the page's own list endpoint matches for `query`."""
+    return app.js(f"JSON.parse((() => {{ const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&{query}', false); "
+                  "r.send(); return r.responseText })()).matching")
+
+
+def people_hide_linkedin(app: App) -> None:
+    """The Filters menu's "Hide LinkedIn-only people" does what its box shows: checked, no
+    LinkedIn-only person is listed; unchecked, everyone is. It read checked yet hid no one when
+    everyone was LinkedIn-only (a network right after its LinkedIn import). Flips both ways."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    everyone = _matching(app, "show=linkedin_only")
+    linkedin_only = _matching(app, "show=linkedin_only&filter.evidence=No%20relationship%20labels")
+    box = "[data-radix-popper-content-wrapper] [role=checkbox]"  # the menu's, not a row's select box
+    checked = f"document.querySelector({box!r})?.getAttribute('aria-checked')"
+    listed = "(document.querySelector('[aria-rowcount]') ? " + ROW_COUNT + " : 0)"  # the empty page has no table
+    for flip in (True, True, False):
+        app.click({"css": "[data-filters]"})
+        app.wait_for({"css": box}, CLICK, "the Filters menu opens")
+        state = app.js(checked)
+        want = everyone - linkedin_only if state == "true" else everyone
+        app.wait_for(f"({LOADING}) && {listed} === {want}", WRITE,
+                     f"with the box {'checked' if state == 'true' else 'unchecked'}, {want:,} of {everyone:,} people list")
+        if flip:
+            app.click({"css": box})
+            app.wait_for(f"{checked} !== {state!r}", CLICK, "the box flips")
+        app.key("Escape")
+        app.wait_for(f"!document.querySelector({box!r})", CLICK, "the Filters menu closes")
+
+
 def search_set_picker(app: App) -> None:
     """The chat's Search in picker opens, and a pick shows at once."""
     app.go("/agent", {"text": "Search in"}, PAGE)
@@ -351,6 +381,7 @@ SCENARIOS = {
     "people-search": people_search,
     "people-tab": people_tab,
     "people-select-all": people_select_all,
+    "people-hide-linkedin": people_hide_linkedin,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
     "search-no-keywords": search_no_keywords,

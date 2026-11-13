@@ -979,6 +979,49 @@ it("hides LinkedIn-only people until the Filters menu shows them, and keeps that
   expect(new URLSearchParams(must(at()).split("?")[1]).getAll("show")).toEqual(["linkedin_only"])
 })
 
+it("hides LinkedIn-only people when checked even if nobody is left, and shows it unchecked while it hides no one", async () => {
+  const people: Partial<Cells>[] = [
+    {
+      parent_id: "li:7001",
+      name: "Morgan Example",
+      channels: ["linkedin"],
+      linkedin_only: true,
+      reason: "unjudged",
+    },
+    {
+      parent_id: "li:7002",
+      name: "Riley Example",
+      channels: ["linkedin"],
+      linkedin_only: true,
+      reason: "unjudged",
+    },
+  ]
+  const payload: PeoplePayload = {
+    counts: { total: 2, upload: 0, private: 2 },
+    columns: [...PERSON_COLUMNS],
+    rows: people.map((person) => PERSON_COLUMNS.map((column) => ({ ...BASE, ...person })[column])),
+  }
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) =>
+      url.includes("/page?") ? Promise.resolve(pageResponse(url, payload)) : serve(url, init),
+    ),
+  )
+  const { container } = renderPage()
+  // Everyone is LinkedIn-only: left alone the hide steps aside, and the menu says it is off.
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toBe("Filters")
+  fireEvent.click(screen.getByRole("button", { name: "Filters" }))
+  const box = await screen.findByRole("checkbox", { name: "Hide LinkedIn-only people" })
+  expect(box.getAttribute("aria-checked")).toBe("false")
+  fireEvent.click(box)
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(0))
+  expect(screen.getByRole("button", { name: "Filters" }).textContent).toContain("Filters · 1")
+  expect(new URLSearchParams(must(at()).split("?")[1]).getAll("hide")).toEqual(["linkedin_only"])
+  fireEvent.click(await screen.findByRole("button", { name: "Clear filters" }))
+  await waitFor(() => expect(container.querySelectorAll(".row")).toHaveLength(2))
+})
+
 it("keeps human edits and leaves out message actions for a LinkedIn-only person", async () => {
   // A LinkedIn import with no messages, no labels and no facts, beside a family with messages.
   const people: Partial<Cells>[] = [
