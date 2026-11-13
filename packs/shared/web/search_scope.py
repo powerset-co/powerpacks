@@ -6,6 +6,8 @@ signed-in user's, largest first, from the Powerset API (GET /v2/sets); with no s
 none.
 
 Changelog:
+  2026-11-12: a failed sets call leaves the sets empty and still offers the local index; the picker
+      used to vanish with the whole route a 502 (Jake, during the Supabase connection incident).
   2026-11-12: read() lists the sets through the Powerset API, not Postgres, like every other set call.
   2026-11-11: set_detail(), invite(), create_set(), delete_set(): the Sets page's reads and writes through
       the Powerset API.
@@ -19,6 +21,7 @@ Changelog:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import urllib.parse
 import urllib.request
@@ -37,8 +40,16 @@ LOCAL_INDEX = Path(".powerpacks/search-index/local-search.duckdb")
 
 
 def read(root: Path) -> dict[str, Any]:
-    """The user's sets, and the local index's path when this Mac has one (else null)."""
-    sets = _member_sets(root) if postgres_client.credentials_subject() else []
+    """The user's sets, and the local index's path when this Mac has one (else null).
+
+    The two are independent: when the API cannot be reached the sets are empty and the local index
+    is still offered, so the picker shows it and a search can start on this Mac."""
+    sets: list[dict[str, Any]] = []
+    if postgres_client.credentials_subject():
+        try:
+            sets = _member_sets(root)
+        except Exception:
+            logging.getLogger(__name__).exception("Listing the sets failed; offering the local index")
     index = root / LOCAL_INDEX
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 
