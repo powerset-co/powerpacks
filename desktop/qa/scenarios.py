@@ -236,6 +236,48 @@ def search_no_keywords(app: App) -> None:
         raise Failed("the warning stays after a keyword was added back")
 
 
+# The pieces of each search card's header row (the query, "+N filters", the set, the step, the
+# chevron) as boxes, and the pairs that overlap.
+HEADER_OVERLAPS = """(() => {
+  const pairs = [];
+  for (const card of document.querySelectorAll("section[aria-label=Search]")) {
+    const header = card.firstElementChild;
+    const parts = [...header.children]
+      .flatMap((el) => (el.tagName === "DIV" ? [...el.children] : [el]))
+      .filter((el) => el.getClientRects().length);
+    const boxes = parts.map((el) => [el.innerText.trim() || el.getAttribute("aria-label"), el.getBoundingClientRect()]);
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, p] = boxes[i], [b, q] = boxes[j];
+        if (p.left < q.right - 1 && q.left < p.right - 1 && p.top < q.bottom - 1 && q.top < p.bottom - 1) pairs.push(a + " / " + b);
+      }
+  }
+  return pairs;
+})()"""
+
+
+def search_card_narrow(app: App) -> None:
+    """With the chat at its narrowest beside the results, the search card's header stacks its
+    pieces instead of drawing the query, the set, "+N filters" and "Showing now" over each other,
+    folded and opened. Needs the root's refined search linked to its chat."""
+    app.js("localStorage.setItem('agent.results-share', '0.95')")  # the chat keeps its 320 px floor
+    app.go("/people", {"css": "main"}, PAGE)
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    app.wait_for({"css": "section[aria-label=Search]"}, PAGE, "the chat shows its search card")
+    try:
+        overlaps = app.js(HEADER_OVERLAPS)
+        if overlaps:
+            raise Failed(f"folded, the card's header overlaps: {overlaps}")
+        app.click({"css": "section[aria-label=Search] [aria-label='Show filters']"})
+        app.wait_for({"text": "Search Filters"}, CLICK, "the card opens")
+        overlaps = app.js(HEADER_OVERLAPS)
+        if overlaps:
+            raise Failed(f"opened, the card's header overlaps: {overlaps}")
+    finally:
+        app.js("localStorage.removeItem('agent.results-share')")
+
+
 def refresh_toggle(app: App) -> None:
     """Scheduled tasks' daily switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
@@ -266,5 +308,6 @@ SCENARIOS = {
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
     "search-no-keywords": search_no_keywords,
+    "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
 }
