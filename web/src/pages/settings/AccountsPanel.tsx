@@ -27,7 +27,7 @@ import { RefreshPrompt } from "./RefreshPrompt"
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
 const SERVICES: readonly ConnectRow[] = ["browser", "codex"]
-// The sources whose first link offers Refresh now; LinkedIn is linked at onboarding.
+// The first of these to link offers Refresh now and the others; LinkedIn is linked at onboarding.
 const MESSAGE_SOURCES: readonly ConnectRow[] = ["imessage", "gmail", "whatsapp"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
@@ -204,9 +204,9 @@ export function AccountsPanel({
               sources={MESSAGE_SOURCES.map((key) => ({
                 key,
                 title: items[key].title,
-                icon: items[key].icon,
                 state: items[key].state,
               }))}
+              onPick={choose}
             />
             {error || startError ? (
               <p role="alert" className="m-0 px-3 text-xs text-bad">

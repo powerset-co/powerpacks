@@ -281,10 +281,10 @@ WHATSAPP_ROW = "[...document.querySelectorAll('button[aria-pressed]')].find(b =>
 
 
 def accounts_refresh_prompt(app: App) -> None:
-    """Linking iMessage, Gmail or WhatsApp on Accounts offers Refresh now once per source: never
-    on a page that loads already connected, and not again for the same source after Later. The
-    link is simulated (the sign-in check answers WhatsApp signed out, then signed in)."""
-    app.js("(localStorage.removeItem('accounts.refreshPrompted'), true)")
+    """The first link of iMessage, Gmail or WhatsApp on Accounts offers Refresh now once: never on
+    a page that loads already connected, and not again after Later. The link is simulated (the
+    sign-in check answers WhatsApp signed out, then signed in)."""
+    app.js("(localStorage.removeItem('accounts.refreshPrompt'), true)")
     app.go("/accounts", {"text": "Your sources"}, PAGE)
     time.sleep(PAGE / 1000)
     if app.shows(PROMPT):
@@ -307,7 +307,7 @@ def accounts_refresh_prompt(app: App) -> None:
             else:
                 time.sleep(CLICK / 1000)
                 if app.shows(PROMPT):
-                    raise Failed("the prompt showed a second time for WhatsApp")
+                    raise Failed("the prompt showed again after Later")
     finally:
         app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
 

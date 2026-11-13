@@ -242,31 +242,35 @@ async function link() {
   await client.invalidateQueries()
   return client
 }
-it("offers Refresh now the first time a message source turns connected, never on a page already connected", async () => {
-  localStorage.removeItem("accounts.refreshPrompted")
+it("offers Refresh now once a message source links, with the others to link, never on a page already connected", async () => {
+  localStorage.removeItem("accounts.refreshPrompt")
   mount()
   await waitFor(() => expect(status(/Gmail/)).toContain("Connected"))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
   cleanup()
   await link()
   const prompt = await screen.findByRole("region", PROMPT)
-  expect(within(prompt).getByText("Gmail connected")).toBeTruthy()
+  expect(within(prompt).getByRole("button", { name: "Gmail" }).hasAttribute("disabled")).toBe(true)
+  fireEvent.click(within(prompt).getByRole("button", { name: "WhatsApp" }))
+  expect(screen.getByRole("button", { name: /^WhatsApp/, pressed: true })).toBeTruthy()
   fireEvent.click(within(prompt).getByRole("button", { name: "Refresh now" }))
   await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/tasks"))
   expect(fetch).toHaveBeenCalledWith("/tasks/api/refresh/run", { method: "POST" })
 })
-it("shows the refresh prompt once per source: relinking Gmail doesn't bring it back, linking WhatsApp does", async () => {
-  localStorage.removeItem("accounts.refreshPrompted")
+it("keeps the refresh prompt across visits until Later, then never again", async () => {
+  localStorage.removeItem("accounts.refreshPrompt")
   await link()
+  await screen.findByRole("region", PROMPT)
+  cleanup()
+  mount()
   const prompt = await screen.findByRole("region", PROMPT)
   fireEvent.click(within(prompt).getByRole("button", { name: "Later" }))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
   cleanup()
   const client = await link()
   await waitFor(() => expect(status(/Gmail/)).not.toContain("Not connected"))
-  expect(screen.queryByRole("region", PROMPT)).toBeNull()
   whatsapp = true
   await client.invalidateQueries()
-  const again = await screen.findByRole("region", PROMPT)
-  expect(within(again).getByText("WhatsApp connected")).toBeTruthy()
+  await waitFor(() => expect(status(/WhatsApp/)).not.toContain("Not connected"))
+  expect(screen.queryByRole("region", PROMPT)).toBeNull()
 })
