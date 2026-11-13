@@ -1,5 +1,41 @@
 # Changelog
 
+## [3.61.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.60.0...powerpacks-v3.61.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **search:** the search scope is an argument, never the environment or .env ([#1188](https://github.com/powerset-co/powerpacks/issues/1188))
+
+### Features
+
+* **accounts:** each Gmail mailbox is a badge, with a rule between mailboxes ([#1177](https://github.com/powerset-co/powerpacks/issues/1177)) ([3d9a79c](https://github.com/powerset-co/powerpacks/commit/3d9a79c14a6e2a6c9e882d3f9d84d9c3a0be8046))
+* **accounts:** Grow your network card while a linked message source has never been imported ([#1187](https://github.com/powerset-co/powerpacks/issues/1187)) ([7af9299](https://github.com/powerset-co/powerpacks/commit/7af929921454bdff2202cbe76b780469d9ce1d15))
+* **search:** the search scope is an argument, never the environment or .env ([#1188](https://github.com/powerset-co/powerpacks/issues/1188)) ([ed51a4e](https://github.com/powerset-co/powerpacks/commit/ed51a4ef70c7594489e6c83a68f145490af5885b))
+
+
+### Bug Fixes
+
+* **accounts:** a mailbox added on Accounts shows without a reload ([#1176](https://github.com/powerset-co/powerpacks/issues/1176)) ([381cd3b](https://github.com/powerset-co/powerpacks/commit/381cd3bdf4708c55ef8fdb723e3820529e3f43af))
+* **chat:** the access pill reads Ask First when Full access is off ([#1184](https://github.com/powerset-co/powerpacks/issues/1184)) ([6d1d8af](https://github.com/powerset-co/powerpacks/commit/6d1d8af225b562f35a7277ba670e65cbff7de1d6))
+* **chat:** the search card's header stacks when the chat is narrow ([#1185](https://github.com/powerset-co/powerpacks/issues/1185)) ([bafb36f](https://github.com/powerset-co/powerpacks/commit/bafb36f5f09361825b56928f7f709ac271a93ddb))
+* **linkedin:** a crashed connections tab keeps what it read and asks for the export ([#1195](https://github.com/powerset-co/powerpacks/issues/1195)) ([71bccea](https://github.com/powerset-co/powerpacks/commit/71bcceac27611d34433c6d3cbb7fc569d3fdb77a))
+* **login:** a finished sign-in pulls the runtime keys into .env ([#1189](https://github.com/powerset-co/powerpacks/issues/1189)) ([c877037](https://github.com/powerset-co/powerpacks/commit/c877037f547e0b29fab4f5c166da9c57bfc85642))
+* **login:** the sign-in itself pulls the runtime keys; Set up only reads them ([#1194](https://github.com/powerset-co/powerpacks/issues/1194)) ([05d576e](https://github.com/powerset-co/powerpacks/commit/05d576ec95cef0984ce7312838195f687d8e7455))
+* **people:** a checked Hide LinkedIn-only people always hides them ([#1192](https://github.com/powerset-co/powerpacks/issues/1192)) ([154054a](https://github.com/powerset-co/powerpacks/commit/154054ac50d4e9ba7be69aa34c8415f78829ef92))
+* **people:** an undecided LinkedIn-only person counts and lists as Keep, not Not assessed ([#1193](https://github.com/powerset-co/powerpacks/issues/1193)) ([e60fa1e](https://github.com/powerset-co/powerpacks/commit/e60fa1eb15828e34c40115185e0c82c0db673bd8))
+* **search:** a failed or stopped refine shows as failed in the chat, with Retry ([#1182](https://github.com/powerset-co/powerpacks/issues/1182)) ([ffe7a6a](https://github.com/powerset-co/powerpacks/commit/ffe7a6a0cc220f8d8435b7c8f5420c759b665509))
+* **search:** ask for a role keyword before running a search whose keywords were removed ([#1181](https://github.com/powerset-co/powerpacks/issues/1181)) ([6643d38](https://github.com/powerset-co/powerpacks/commit/6643d38c28842bca26313642e7f582eb8febbd99))
+* **search:** prepare runs without --set-id; leftover local-index callers pass the index as an argument ([#1190](https://github.com/powerset-co/powerpacks/issues/1190)) ([7d717fe](https://github.com/powerset-co/powerpacks/commit/7d717fe0da0ad8f468ad3ed9ab5c69c3755bb746))
+* **search:** the skill's backend check reads the chat's scope, not a leftover .env line ([#1186](https://github.com/powerset-co/powerpacks/issues/1186)) ([0cf4944](https://github.com/powerset-co/powerpacks/commit/0cf49444cf5490767804942ba75c11a9c6770fc5))
+* **sets:** any failure listing sets keeps Local in the picker; no Delete on the personal set ([#1180](https://github.com/powerset-co/powerpacks/issues/1180)) ([4fcbac4](https://github.com/powerset-co/powerpacks/commit/4fcbac4971a78741076885842d5a2357cd00acff))
+* **sets:** the Sets page picks a set with the chat's Search-in picker ([#1174](https://github.com/powerset-co/powerpacks/issues/1174)) ([f0f7b73](https://github.com/powerset-co/powerpacks/commit/f0f7b737723e133ddfed9b8c21ca791e0d9d77e1))
+
+
+### Miscellaneous Chores
+
+* release 3.61.0, not 4.0.0 ([30e3f59](https://github.com/powerset-co/powerpacks/commit/30e3f59fdfa75cbf022a53f9aa67fd0e8a2aa6f1))
+
 ## [3.60.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.59.0...powerpacks-v3.60.0) (2026-11-13)
 
 
