@@ -230,3 +230,42 @@ it("keeps owner input and stopped-run recovery on Accounts", async () => {
   expect(screen.getByTestId("path").textContent).toBe("/accounts?view=sync")
   expect(screen.queryByRole("button", { name: "Continue" })).toBeNull()
 })
+const PROMPT = { name: "Refresh after connecting" }
+/** Mounts Accounts with LinkedIn and Gmail signed out, then signs them in. */
+async function link() {
+  connected = false
+  const client = mount()
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Not connected"),
+  )
+  connected = true
+  await client.invalidateQueries()
+}
+it("offers Refresh now the first time a source turns connected, never on a page already connected", async () => {
+  localStorage.removeItem("accounts.refreshPrompt")
+  mount()
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Connected"),
+  )
+  expect(screen.queryByRole("region", PROMPT)).toBeNull()
+  cleanup()
+  await link()
+  const prompt = await screen.findByRole("region", PROMPT)
+  expect(within(prompt).getByText("LinkedIn connected")).toBeTruthy()
+  fireEvent.click(within(prompt).getByRole("button", { name: "Refresh now" }))
+  await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/tasks"))
+  expect(fetch).toHaveBeenCalledWith("/tasks/api/refresh/run", { method: "POST" })
+})
+it("shows the refresh prompt once: Later closes it and the next link doesn't bring it back", async () => {
+  localStorage.removeItem("accounts.refreshPrompt")
+  await link()
+  const prompt = await screen.findByRole("region", PROMPT)
+  fireEvent.click(within(prompt).getByRole("button", { name: "Later" }))
+  expect(screen.queryByRole("region", PROMPT)).toBeNull()
+  cleanup()
+  await link()
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /LinkedIn/ }).textContent).toContain("Connected"),
+  )
+  expect(screen.queryByRole("region", PROMPT)).toBeNull()
+})

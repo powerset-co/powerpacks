@@ -21,6 +21,7 @@ import { linkedinSetup, useRun } from "@/pages/onboarding/run"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
 import { HowItWorks } from "./how-it-works/HowItWorks"
+import { RefreshPrompt } from "./RefreshPrompt"
 
 // Remembered on this Mac once How Deep Context works is closed; the "here" link opens it again.
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
@@ -206,6 +207,14 @@ export function AccountsPanel({
         </section>
         <aside className="border-l border-line bg-card px-8 py-10 max-[900px]:border-l-0 max-[900px]:border-t max-[680px]:px-4">
           <div className="mx-auto flex w-full max-w-[450px] flex-col gap-5">
+            <RefreshPrompt
+              sources={SOURCES.map((key) => ({
+                key,
+                title: items[key].title,
+                icon: items[key].icon,
+                state: items[key].state,
+              }))}
+            />
             {progress ? (
               <>
                 <p className="m-0 text-[10px] font-semibold uppercase tracking-[.1em] text-faint">

@@ -262,6 +262,61 @@ def refresh_toggle(app: App) -> None:
             raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
 
 
+
+# Answers Accounts' sign-in check with LinkedIn signed out until `window.__qaLinked` is set; the
+# real answer otherwise. A page reload drops it.
+SIGNED_OUT_LINKEDIN = """(() => {
+  if (!window.__qaFetch) window.__qaFetch = window.fetch;
+  window.__qaLinked = false;
+  window.fetch = async (input, init) => {
+    const response = await window.__qaFetch(input, init);
+    if (!String(input).startsWith('/accounts/api/signed-in') || window.__qaLinked) return response;
+    const body = await response.json();
+    return new Response(JSON.stringify({ ...body, linkedin: false }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  return true;
+})()"""
+PROMPT = {"css": "section[aria-label='Refresh after connecting']"}
+LINKEDIN_ROW = "[...document.querySelectorAll('button[aria-pressed]')].find(b => b.textContent.startsWith('LinkedIn'))?.textContent ?? ''"
+
+
+def accounts_refresh_prompt(app: App) -> None:
+    """Linking a source on Accounts offers Refresh now once, ever: never on a page that loads
+    already connected, and not again after Later. Needs LinkedIn connected on the root; the link
+    is simulated (the sign-in check answers signed out, then the real answer)."""
+    app.js("(localStorage.removeItem('accounts.refreshPrompt'), true)")
+    app.go("/accounts", {"text": "Your sources"}, PAGE)
+    app.wait_for(f"({LINKEDIN_ROW}).endsWith('Connected')", PAGE, "LinkedIn shows Connected")
+    time.sleep(CLICK / 1000)
+    if app.shows(PROMPT):
+        raise Failed("the prompt showed on a page that loaded already connected")
+    try:
+        for attempt in ("first", "second"):
+            app.go("/people", {"css": "main"}, PAGE)
+            app.js(SIGNED_OUT_LINKEDIN)
+            app.go("/accounts", {"text": "Your sources"}, PAGE)
+            app.wait_for(f"({LINKEDIN_ROW}).endsWith('Not connected')", PAGE, "LinkedIn shows Not connected")
+            app.mark = app.js("performance.now()")
+            app.js("(window.__qaLinked = true, dispatchEvent(new Event('visibilitychange')), true)")
+            app.wait_for(
+                f"({LINKEDIN_ROW}).endsWith('Connected') && !({LINKEDIN_ROW}).endsWith('Not connected')",
+                PAGE,
+                "LinkedIn turns Connected",
+            )
+            if attempt == "first":
+                app.mark = app.js("performance.now()")
+                app.wait_for(PROMPT, CLICK, "the prompt offers Refresh now")
+                app.picture("accounts-refresh-prompt")
+                app.click({"css": PROMPT["css"] + " button:nth-of-type(2)"})
+                app.wait_for(f"!document.querySelector({json.dumps(PROMPT['css'])})", CLICK, "Later closes it")
+            else:
+                time.sleep(CLICK / 1000)
+                if app.shows(PROMPT):
+                    raise Failed("the prompt showed a second time")
+    finally:
+        app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
+
+
 SCENARIOS = {
     "people-open": people_open,
     "people-menus": people_menus,
@@ -277,4 +332,5 @@ SCENARIOS = {
     "search-refine": search_refine,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
+    "accounts-refresh-prompt": accounts_refresh_prompt,
 }
