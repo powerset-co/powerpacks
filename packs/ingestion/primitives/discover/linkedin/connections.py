@@ -13,7 +13,8 @@ at), whether the whole list has been read, and the signed-in user's own profile
 URL. A read that ends under STALL_SHARE of the count stalled (LinkedIn stopped
 sending cards): it stops there to keep the account safe, asks LinkedIn for its
 data export, and says so; the next run imports that export once LinkedIn has it
-ready, and reads the list again until then. Any other read that reaches the end of the list is the whole
+ready, and reads the list again until then. A read whose tab crashed partway (a list of
+thousands can take it down) keeps the people it read and is a stall the same way. Any other read that reaches the end of the list is the whole
 list; how far it got against the count is recorded. Until the list is read, each
 run goes LOADS_PER_RUN further down than the last. A CSV with no record is a
 LinkedIn export (or an earlier setup's copy of one); the next run tops it up from
@@ -21,6 +22,8 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-11-13: a read whose browser tab crashed keeps what it read and is a stall (asks for the
+      export); it used to fail and lose the whole read, and every retry crashed at the same place.
   2026-10-24: the scroll run saves one picture of the connections page (PAGE_SHOT) for the setup screen,
       and each connection's picture (PICTURES) while LinkedIn's link still works.
   2026-10-05: the read reports its count as it scrolls and returns an `outcome`
@@ -231,7 +234,8 @@ class LinkedInConnections:
         save_pictures(payload["connections"], self.csv_path.with_name(PICTURES.name))
         total, stopped, read = payload["total"], payload["stopped"], len(payload["connections"])
         # The stall rule needs LinkedIn's count; a page that did not show one is read as far as it goes.
-        stalled = total is not None and stopped == "end" and read < total * STALL_SHARE
+        # A tab that crashed partway stalled too: a rerun scrolls from the top and crashes again.
+        stalled = stopped == "crashed" or total is not None and stopped == "end" and read < total * STALL_SHARE
         complete = (previous.get("complete", True) if stopped == "known"
                     else stopped == "end" and not stalled)
         # A stalled read asks LinkedIn for the data export; a later run imports it.

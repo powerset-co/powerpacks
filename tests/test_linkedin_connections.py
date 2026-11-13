@@ -133,6 +133,17 @@ class LinkedInConnectionsTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "export_requested")
         self.assertEqual(self.manifest()["export"], "requested")
 
+    def test_a_crashed_read_keeps_what_it_read_and_asks_for_the_export(self):
+        # The tab died 2,181 people into a list of 6,145.
+        cards = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(2181)]
+        result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 6145, "loads": 225,
+                              "stopped": "crashed", "connections": cards}, export={"status": "ok", "export": "requested"})
+        self.assertEqual((result["status"], result["outcome"], result["complete"], result["connections"]),
+                         ("completed", "export_requested", False, 2181))
+        self.assertEqual(self.exports, ["request"])
+        self.assertEqual(len(self.rows()), 2182)
+        self.assertEqual((self.manifest()["stopped"], self.manifest()["loads"]), ("stalled", 225))
+
     def test_the_run_after_a_stall_imports_the_ready_export_instead_of_reading_again(self):
         self.csv.parent.mkdir(parents=True)
         self.csv.write_text(EXPORT, encoding="utf-8")
