@@ -128,13 +128,9 @@ def credentials_subject(credentials_path: Path | None = None) -> str | None:
 
 
 def fetch_default_set_id(env_file: Path | None = None, credentials_path: Path | None = None) -> dict[str, Any]:
-    # The chat's scope arrives in the environment of every command (the desktop app pins it per
-    # chat through Codex); the env file only fills what the environment left unset.
+    """The signed-in user's personal set: the scope of a search that named no set. A set is only
+    ever named as an argument (`--set-id`); nothing is read from the environment or `.env`."""
     load_env_file(env_file)
-    explicit = os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
-    if explicit:
-        return {"set_id": explicit, "source": "env"}
-
     subject = credentials_subject(credentials_path)
     if not subject:
         return {"set_id": None, "source": "missing_credentials_subject"}
@@ -170,7 +166,7 @@ def fetch_set_operator_ids(
         users = fixture_rows("users") or []
         members = fixture_rows("set_members") or []
         source = "argument"
-        resolved_set_id = set_id or os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
+        resolved_set_id = set_id
         if not resolved_set_id:
             active_sets = [row for row in fixture_sets if row.get("is_active", True)]
             if not active_sets:

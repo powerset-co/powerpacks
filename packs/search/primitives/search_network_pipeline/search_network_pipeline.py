@@ -5,7 +5,7 @@ One orchestrator, one `--backend {powerset,local}` switch:
 - `powerset` (default): TurboPuffer retrieval + Postgres hydration, scoped by set/operators.
 - `local`: the same mechanical primitives against the local DuckDB index. Scope is the
   DuckDB file itself — no set_id, operator resolution, Postgres, or TurboPuffer. Children
-  bind the backend via POWERPACKS_LOCAL_SEARCH_DB in their environment (shared/search_backend_mode);
+  that search it take the index as `--local-db` (shared/search_backend_mode);
   company/education resolution dispatches to the local/ resolve primitives.
 
 This runner can prepare the parallel `expand_search_request` payload, then run
@@ -363,7 +363,7 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
     return {
         "normalized_query": payload.get("normalized_query"),
         "payload_json": str(payload_json),
-        "set_scope": f.get("set_id") or "env/default set or personal-set fallback",
+        "set_scope": f.get("set_id") or "personal set",
         "role_title_intent": role or None,
         "filters": filters,
         "traits": payload.get("traits") or [],
@@ -468,6 +468,15 @@ def is_present(value: Any) -> bool:
 def payload_filters(payload: dict[str, Any]) -> dict[str, Any]:
     filters = payload.get("role_search_filters")
     return dict(filters) if isinstance(filters, dict) else {}
+
+def pin_payload_set_id(payload: dict[str, Any], set_id: str) -> dict[str, Any]:
+    """The set the search is scoped to, where the preview, the pool estimate and
+    resolve_set_operators all read it."""
+    out = json.loads(json.dumps(payload))
+    filters = payload_filters(out)
+    filters["set_id"] = set_id
+    out["role_search_filters"] = filters
+    return out
 
 # The card's edits, one JSON file: {"filters": {key: value | null}, "traits": [{value, temporal, meaning}]}.
 # The pipeline applies them and logs each one in the run folder's user-edits.jsonl; the agent never edits the payload.
@@ -743,9 +752,9 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
 def configure_local_backend_mode(db_path: Path) -> None:
     """Mark this process as local-backend before any filter construction.
 
-    Shared filter helpers branch on backend mode: in remote mode an env
-    POWERPACKS_DEFAULT_SET_ID resolves through Postgres into an
-    allowed_operator_ids filter. Local search scope is the DuckDB file, so
+    Shared filter helpers branch on backend mode: in remote mode a payload's
+    set_id resolves through Postgres into an allowed_operator_ids filter.
+    Local search scope is the DuckDB file, so
     in-process payload transforms (pool estimate, title clustering) must run
     with local mode configured or a foreign set id silently zeroes the pool
     and prepare makes a network call.
@@ -844,10 +853,9 @@ def local_db_path(args) -> Path:
     return Path(getattr(args, "db", None) or DEFAULT_LOCAL_DB).expanduser().resolve()
 
 def local_run_kwargs(args, db_path: Path) -> dict[str, Any]:
-    """Child-process env contract for local mode: bind the backend via env var,
-    never merge .env (a foreign POWERPACKS_DEFAULT_SET_ID must not leak into a
-    local run)."""
-    return {"env_file": "/dev/null", "skip_env_files": True, "extra_env": {"POWERPACKS_LOCAL_SEARCH_DB": str(db_path)}}
+    """Child processes of a local run never load .env: the index needs no credentials, and the
+    children that search it take the index as `--local-db`."""
+    return {"env_file": "/dev/null", "skip_env_files": True}
 
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     pinned_bands=pinned_bands_from_args(args)
@@ -964,7 +972,8 @@ def run_pipeline(args) -> dict[str, Any]:
     state=init_state(args,lp,l)
     judge_changed = _capability_judge_changed(args, state)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
-    steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"])]
+    steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state",
+                                      *(["--set-id",args.set_id] if getattr(args,"set_id",None) else [])])]
     f=maybe_payload_filters(state)
     if f.get("investor_names"):
         steps.append(("resolve_investors",[sys.executable,str(ROOT/"packs/search/primitives/resolve_investors/resolve_investors.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
@@ -1079,14 +1088,14 @@ def run_pipeline_local(args) -> dict[str, Any]:
 
     steps: list[tuple[str, list[str]]]=[]
     if any(is_present(filters.get(key)) for key in COMPANY_RESOLVE_FILTER_KEYS):
-        steps.append(("resolve_companies",[sys.executable,str(LOCAL_DIR/"local_resolve_companies.py"),"--state",str(state),"--env-file","/dev/null","--write-state"]))
+        steps.append(("resolve_companies",[sys.executable,str(LOCAL_DIR/"local_resolve_companies.py"),"--state",str(state),"--env-file","/dev/null","--write-state","--local-db",str(db_path)]))
     if filters.get("education_names"):
-        steps.append(("resolve_education",[sys.executable,str(LOCAL_DIR/"local_resolve_education.py"),"--state",str(state),"--env-file","/dev/null","--write-state"]))
+        steps.append(("resolve_education",[sys.executable,str(LOCAL_DIR/"local_resolve_education.py"),"--state",str(state),"--env-file","/dev/null","--write-state","--local-db",str(db_path)]))
     steps += [
-        ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file","/dev/null","--write-state"]),
+        ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file","/dev/null","--write-state","--local-db",str(db_path)]),
         ("execute_role_search",[
             sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),
-            "--state",str(state),"--env-file","/dev/null","--write-state",
+            "--state",str(state),"--env-file","/dev/null","--write-state","--local-db",str(db_path),
             "--limit",str(args.limit),"--top-k",str(top_k),
             *(["--extra-candidates-json",str(Path(args.extra_candidates_json).expanduser().resolve())] if getattr(args,"extra_candidates_json",None) else []),
         ]),
@@ -1095,7 +1104,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     for step,cmd in steps:
         if done(l,step) and not args.force: continue
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-        out=require_ok(run(cmd, timeout=args.timeout, **{**run_kwargs,"extra_env":{**(run_kwargs.get("extra_env") or {}),"POWERPACKS_USAGE_STAGE":step}}),step)
+        out=require_ok(run(cmd, timeout=args.timeout, **run_kwargs, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
 
@@ -1118,9 +1127,9 @@ def run_pipeline_local(args) -> dict[str, Any]:
             replace_judge = judge_changed and step == "llm_rerank_candidates"
             if not (done(l,step) and not (args.force or getattr(args,"force_llm",False) or replace_judge)):
                 mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
-                # LLM children DO need .env (OPENAI_API_KEY) but must stay in
-                # local backend mode, so keep the env var and load env files.
-                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={**run_kwargs["extra_env"],"POWERPACKS_USAGE_STAGE":step}),step)
+                # LLM children read hydrated profiles from the state and call OpenAI only, so they
+                # load .env (OPENAI_API_KEY) and never touch the index.
+                out=require_ok(run(cmd, env_file=args.env_file, timeout=args.llm_timeout, stream_stderr=True, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
                 l.setdefault("artifacts",{}).update(collect_artifacts(out))
                 mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
                 if step == "llm_filter_candidates" and not args.jd_file:
@@ -1264,10 +1273,13 @@ def cmd_prepare(args):
             payload=pin_payload_seniority_bands(payload,pinned_bands)
         if getattr(args,"current_role",False):
             payload=pin_payload_current_role(payload,True)
+        if args.set_id:
+            payload=pin_payload_set_id(payload,args.set_id)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         issues=payload_quality_issues(payload)
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
+        if args.set_id: extra += f" --set-id {shlex.quote(args.set_id)}"
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
@@ -1368,12 +1380,11 @@ def cmd_approve(args):
     l.setdefault("approvals",{})[aid]={"confirmed":True,"type":args.kind,"approved_at":now(),"payload":cur.get("payload",{})}; l["current_block"]=None; save(lp,l); emit({"primitive":"search_network_pipeline","status":"ok","approval_id":aid}); return 0
 
 def add_backend(p):
-    # The chat's scope is the default: the desktop app pins a chat's set or local index into the
-    # environment of every command Codex runs, so an agent that leaves the flag off still searches
-    # where the chat's picker points. Explicit flags win.
-    local_db=os.environ.get("POWERPACKS_LOCAL_SEARCH_DB") or None
-    p.add_argument("--backend",choices=("powerset","local"),default="local" if local_db else "powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution). Unstated: local when POWERPACKS_LOCAL_SEARCH_DB is set")
-    p.add_argument("--db",default=local_db or DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: POWERPACKS_LOCAL_SEARCH_DB, else "+DEFAULT_LOCAL_DB)
+    # The scope is an argument. The chat's instructions name its set or its local index and the
+    # agent passes it here; nothing is read from the environment or .env for it.
+    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
+    p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: "+DEFAULT_LOCAL_DB)
+    p.add_argument("--set-id",default=None,help="Powerset set to search (used only with --backend powerset); unstated: the signed-in user's personal set")
 
 def add_run(p):
     add_backend(p)

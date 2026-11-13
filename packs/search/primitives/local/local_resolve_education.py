@@ -214,7 +214,10 @@ def main() -> None:
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--max-rows-per-name", type=int, default=5000)
+    parser.add_argument("--local-db", help="The local DuckDB index to resolve against")
     args = parser.parse_args()
+    if args.local_db:
+        local_backend.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

@@ -125,7 +125,7 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def run_prepare(tmp: Path, server: ThreadingHTTPServer, *, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+def run_prepare(tmp: Path, server: ThreadingHTTPServer, *, env: dict[str, str] | None = None, flags: list[str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
     env_file = tmp / "component.env"
     env_file.write_text("", encoding="utf-8")
     output_dir = tmp / "run"
@@ -141,6 +141,7 @@ def run_prepare(tmp: Path, server: ThreadingHTTPServer, *, env: dict[str, str] |
             sys.executable,
             str(PIPELINE),
             "prepare",
+            *(flags or []),
             "--query",
             "software engineers in sf",
             "--env-file",
@@ -318,19 +319,19 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                 env_file = tmp / "component.env"
                 write_local_search_db(local_db)
                 env_file.write_text("", encoding="utf-8")
+                # A stale local-index line in the environment must not matter: the scope is the flags.
                 component_env = {
                     "OPENAI_API_KEY": "test-key",
                     "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",
                     "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
-                    "POWERPACKS_LOCAL_SEARCH_DB": str(local_db),
+                    "POWERPACKS_LOCAL_SEARCH_DB": "/stale/from-env.duckdb",
                     "POWERPACKS_DEFAULT_SET_ID": SET_ID,
-                    "POWERSET_DEFAULT_SET_ID": SET_ID,
                     "DATABASE_URL": "",
                     "SUPABASE_DATABASE_URL": "",
                     "SUPABASE_DB_URL": "",
                     "POSTGRES_HOST": "",
                 }
-                prepare_proc, prepare = run_prepare(tmp, server, env=component_env)
+                prepare_proc, prepare = run_prepare(tmp, server, env=component_env, flags=["--backend", "local", "--db", str(local_db)])
                 self.assertEqual(prepare_proc.returncode, 0, prepare_proc.stderr + prepare_proc.stdout)
 
                 run_proc = subprocess.run(

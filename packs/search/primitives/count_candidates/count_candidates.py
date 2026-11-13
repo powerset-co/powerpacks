@@ -114,7 +114,10 @@ def main() -> None:
     parser.add_argument("--write-state", action="store_true")
     parser.add_argument("--page-size", type=int, default=10000)
     parser.add_argument("--max-position-rows", type=int, default=0)
+    parser.add_argument("--local-db", help="Count in the local DuckDB index at this path instead of TurboPuffer")
     args = parser.parse_args()
+    if args.local_db:
+        search_backend_mode.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))
