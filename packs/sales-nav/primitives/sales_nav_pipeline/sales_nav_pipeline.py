@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Resumable Sales Navigator run: search plan → leads on disk → enrich → mutual URLs → export → score.
 
-The pipeline makes its own calls. With a set (``--set-id`` or ``POWERPACKS_DEFAULT_SET_ID``,
-the chat's Search-in scope) it calls the Powerset API, which searches every Sales Nav seat in
+The pipeline makes its own calls. With a set (``--set-id``, the set the chat's instructions
+name) it calls the Powerset API, which searches every Sales Nav seat in
 the set and merges. Without a set it searches through the user's own LinkedIn session on this
 Mac (packs/ingestion/primitives/discover/linkedin/linkedin_session.py): one seat, no profile
 enrichment, no mutual URL lookup, 100 requests a day.
@@ -366,7 +366,7 @@ def ensure_init(args: argparse.Namespace, path: Path, ledger: dict[str, Any]) ->
         return Path(ledger["artifacts"]["state"])
     if not args.query:
         raise RuntimeError("Need --query for a new run, or --state for an existing one")
-    set_id = args.set_id or os.environ.get("POWERPACKS_DEFAULT_SET_ID", "").strip()
+    set_id = (args.set_id or "").strip()
     conversation_id = args.conversation_id or str(uuid.uuid4())
     out_dir = path.parent
     cmd = [
@@ -766,7 +766,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_resolve(args: argparse.Namespace) -> int:
     """Company names and titles to the ids a search plan needs, through whichever backend the set says."""
     try:
-        set_id = args.set_id or os.environ.get("POWERPACKS_DEFAULT_SET_ID", "").strip()
+        set_id = (args.set_id or "").strip()
         if set_id:
             payload = cloud_call("/resolve", {"set_id": set_id, "companies": args.company or None, "titles": args.title or None})
             payload["backend"] = "cloud"
@@ -823,7 +823,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ledger")
     parser.add_argument("--state")
     parser.add_argument("--query")
-    parser.add_argument("--set-id", help="Powerset set; default POWERPACKS_DEFAULT_SET_ID. Without one the search runs through this Mac's LinkedIn session.")
+    parser.add_argument("--set-id", help="Powerset set, as the chat's instructions name it. Without one the search runs through this Mac's LinkedIn session.")
     parser.add_argument("--conversation-id")
     parser.add_argument("--run-id")
     parser.add_argument("--search-args-json")

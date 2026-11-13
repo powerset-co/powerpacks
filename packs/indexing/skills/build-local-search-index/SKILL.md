@@ -63,11 +63,7 @@ The stage manifest is written to:
 .powerpacks/network-import/index/contacts/manifest.json
 ```
 
-Use the resulting local search DB:
-
-```bash
-export POWERPACKS_LOCAL_SEARCH_DB=.powerpacks/search-index/local-search.duckdb
-```
+Search commands take the resulting DB as `--backend local --db .powerpacks/search-index/local-search.duckdb`.
 
 Continue a partial run:
 
