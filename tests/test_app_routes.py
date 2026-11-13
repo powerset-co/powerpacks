@@ -237,41 +237,6 @@ class AccountRoutesTests(unittest.TestCase):
             start.assert_not_called()
             login.assert_not_called()
 
-    def test_a_finished_sign_in_pulls_the_runtime_keys_into_env(self) -> None:
-        from packs.search.primitives.deep_search.results_web import server
-
-        http = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(self.root, lambda: ()))
-        threading.Thread(target=http.serve_forever, daemon=True).start()
-        self.addCleanup(http.server_close)
-        self.addCleanup(http.shutdown)
-        self.base = f"http://127.0.0.1:{http.server_address[1]}"
-        pulled = {"status": "ok", "written": ["OPENAI_API_KEY", "POWERSET_API_KEY"]}
-        with patch.object(server, "ROOT", self.root), \
-             patch("packs.powerset.primitives.install.status.InstallStatus.read", return_value={}), \
-             patch.object(server.AppLogin, "finish", return_value=0), \
-             patch.object(server.pull_runtime_keys, "pull_keys", return_value=pulled) as pull:
-            status, payload = self._json("/auth/login/finish", "POST")
-        self.assertEqual((status, payload), (HTTPStatus.OK, {"ok": True, "status": "authenticated"}))
-        pull.assert_called_once_with(self.root / ".env")
-
-    def test_a_failed_sign_in_pulls_nothing(self) -> None:
-        from packs.search.primitives.deep_search.results_web import server
-
-        http = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(self.root, lambda: ()))
-        threading.Thread(target=http.serve_forever, daemon=True).start()
-        self.addCleanup(http.server_close)
-        self.addCleanup(http.shutdown)
-        self.base = f"http://127.0.0.1:{http.server_address[1]}"
-        with patch.object(server, "ROOT", self.root), \
-             patch("packs.powerset.primitives.install.status.InstallStatus.read", return_value={}), \
-             patch.object(server.AppLogin, "finish", return_value=1), \
-             patch.object(server.pull_runtime_keys, "pull_keys") as pull:
-            status, _ = self._json("/auth/login/finish", "POST")
-        self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
-        pull.assert_not_called()
-
-
-
     def test_cancel_with_nothing_running_is_idle(self) -> None:
         self.assertEqual(self._post("/api/install/cancel", {}), (HTTPStatus.ACCEPTED, {"status": "idle"}))
 

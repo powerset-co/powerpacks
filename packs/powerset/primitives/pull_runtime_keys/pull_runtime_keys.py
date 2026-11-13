@@ -154,12 +154,12 @@ def write_env(path: Path, updates: Mapping[str, str | None]) -> list[str]:
     return written
 
 
-def pull_keys(env_path: Path) -> dict:
-    """Every runtime key the API holds for the signed-in account, into .env. The sign-in finish
-    calls this, so the app has its keys (the gateway's above all) the moment the user is signed
-    in, not when Set up reaches its credentials step."""
+def pull_keys(env_path: Path, token: str | None = None) -> dict:
+    """Every runtime key the API holds for the signed-in account, into .env. The sign-in itself
+    calls this (auth.cmd_login, with the token it just stored), so the app has its keys, the
+    gateway's above all, the moment the user is signed in; nothing else fetches them."""
     base = api_base(env_path)
-    token = bearer_token(env_path)
+    token = token or bearer_token(env_path)
     # Group keys by endpoint so each is fetched once.
     by_path: dict[str, list[str]] = {}
     for key, (path, _) in KEY_SOURCES.items():

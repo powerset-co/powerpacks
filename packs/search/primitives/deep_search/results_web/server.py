@@ -30,7 +30,6 @@ from typing import Any, Callable
 
 from packs.indexing.lib.io import write_json
 from packs.powerset.primitives.install.status import InstallStatus
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys
 from packs.powerset.primitives.send_feedback.send_feedback import FeedbackRequest
 from packs.shared.web import account
 
@@ -258,14 +257,6 @@ class SearchRoutes:
                 except (OSError, SystemExit, ValueError):
                     code = 1
             if code == 0:
-                # The keys the app runs on (the gateway's first) come down with the sign-in, so
-                # nothing the user opens between sign-in and Set up runs without them.
-                try:
-                    pulled = pull_runtime_keys.pull_keys(ROOT / ".env")
-                    print(f"login: runtime keys {pulled['status']}; written: {', '.join(pulled['written']) or 'none'}",
-                          file=sys.stderr, flush=True)
-                except (OSError, SystemExit, ValueError) as exc:
-                    print(f"login: runtime keys not pulled: {exc}", file=sys.stderr, flush=True)
                 _send_json(handler, {"ok": True, "status": "authenticated"})
             else:
                 _send_json(handler, {"status": "needs_auth", "error": "Sign-in did not complete. Try again."},
