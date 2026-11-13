@@ -6,7 +6,8 @@
  * fingerprint, exactly as the site's own JavaScript would. The profile given is
  * a CLONE made by linkedin_session.py (never the real one: a launch that cannot
  * decrypt its cookies deletes them). Results go to --out as
- * [{name, status, text}]; stdout gets one JSON summary. A 429 or 999 stops the
+ * [{name, status, text}]; stdout gets one JSON summary. A url holding
+ * "{profile_id}" takes the profile id from the answer before it, or is skipped. A 429 or 999 stops the
  * batch: LinkedIn is saying slow down.
  *
  * Created: 2026-11-11
@@ -73,8 +74,15 @@ async function fetchInPage(page, url) {
         summary.requests += 1;
       }
       for (const request of plan) {
+        // "{profile_id}" is the id in the answer just before (a mutuals request after its profile lookup).
+        let url = request.url;
+        if (url.includes("{profile_id}")) {
+          const id = ((results[results.length - 1] || {}).text || "").match(/urn:li:fsd_profile:([A-Za-z0-9_-]+)/);
+          if (!id) continue;
+          url = url.replace("{profile_id}", id[1]);
+        }
         await pause();
-        const result = await fetchInPage(page, request.url);
+        const result = await fetchInPage(page, url);
         summary.requests += 1;
         results.push({ name: request.name, status: result.status, text: result.text });
         if (SLOW_DOWN.has(result.status)) {

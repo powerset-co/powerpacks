@@ -354,6 +354,22 @@ def search_card_narrow(app: App) -> None:
             raise Failed(f"opened, the card's header overlaps: {overlaps}")
     finally:
         app.js("localStorage.removeItem('agent.results-share')")
+MUTUALS = 5000  # Get Mutuals: a profile clone, a headless Chrome and up to two LinkedIn requests
+
+
+def search_mutuals(app: App) -> None:
+    """A search result's drawer has Get Mutuals; a click answers (a count and names, connected, or
+    why not) within five seconds. Spends up to two of the day's LinkedIn requests; a person
+    already looked up answers from the 30-day cache."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    app.wait_for({"css": ".result-row .result-line"}, PAGE, "the search shows its rows")
+    app.click({"css": ".result-row .result-line"})
+    button = {"css": "[data-mutuals] button", "text": "Get Mutuals"}
+    app.wait_for(button, CLICK, "the drawer shows Get Mutuals")
+    app.click(button)
+    app.wait_for("document.querySelector('[data-mutuals]') && !document.querySelector('[data-mutuals] button')",
+                 MUTUALS, "the mutuals show")
 
 
 def refresh_toggle(app: App) -> None:
@@ -450,6 +466,7 @@ SCENARIOS = {
     "search-no-keywords": search_no_keywords,
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
+    "search-mutuals": search_mutuals,
     "refresh-toggle": refresh_toggle,
     "accounts-refresh-prompt": accounts_refresh_prompt,
     "chat-access-pill": chat_access_pill,
