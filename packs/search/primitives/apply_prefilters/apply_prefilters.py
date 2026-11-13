@@ -523,7 +523,10 @@ def main() -> None:
     parser.add_argument("--company-prefilter-threshold", type=int, default=3000)
     parser.add_argument("--company-id-batch-size", type=int, default=500)
     parser.add_argument("--company-id-batch-concurrency", type=int, default=8)
+    parser.add_argument("--local-db", help="Search the local DuckDB index at this path instead of TurboPuffer")
     args = parser.parse_args()
+    if args.local_db:
+        search_backend_mode.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

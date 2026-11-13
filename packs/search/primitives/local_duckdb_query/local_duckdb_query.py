@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -41,8 +40,7 @@ class QueryGuardError(ValueError):
 
 
 def resolve_db_path(explicit: str | None) -> Path:
-    candidate = explicit or os.getenv("POWERPACKS_LOCAL_SEARCH_DB") or DEFAULT_DB_PATH
-    return Path(candidate)
+    return Path(explicit or DEFAULT_DB_PATH)
 
 
 def validate_select_only(sql: str) -> str:
@@ -130,7 +128,7 @@ def run_query(conn: Any, sql: str, *, max_rows: int, raw: bool) -> dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only SQL queries against the local search DuckDB")
-    parser.add_argument("--db", help=f"DuckDB path (default: $POWERPACKS_LOCAL_SEARCH_DB or {DEFAULT_DB_PATH})")
+    parser.add_argument("--db", help=f"DuckDB path (default: {DEFAULT_DB_PATH})")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("schema", help="List tables, columns, and row counts")
