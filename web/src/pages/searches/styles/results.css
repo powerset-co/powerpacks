@@ -714,3 +714,11 @@ section.review-sections {
     order: 1;
   }
 }
+/* Get Mutuals: each name links to the profile, quiet until hovered. */
+.evidence-operators a {
+  color: inherit;
+  text-decoration: none;
+}
+.evidence-operators a:hover {
+  text-decoration: underline;
+}

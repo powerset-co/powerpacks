@@ -4,9 +4,12 @@ Flow: the review server (and the People test server) asks `AppRoutes.get` first.
 GET `/install` (installation), `/` (the review flow), `/people`, `/searches`, `/searches/run`, `/accounts`, `/tasks` or `/agent` (any
 query) -> `app.html`, a `#root` mount whose asset URLs are absolute so any nested route resolves them; GET `/app/assets/app.js|app.css` -> the build in
 the repo's `web/dist/` (see `web/README.md`). POST `/api/profile-image/sign/batch` signs
-LinkedIn CDN URLs server-side for the gateway's saved images. Everything else falls through.
+LinkedIn CDN URLs server-side for the gateway's saved images. POST `/api/linkedin/mutuals` ({url})
+looks up one person's mutual connections through this Mac's LinkedIn session (the search drawer's
+Get Mutuals). Everything else falls through.
 
 Changelog:
+  2026-11-13: POST /api/linkedin/mutuals, the search drawer's Get Mutuals.
   2026-11-09: /companies searches the local index or a selected Powerset set.
   2026-10-13: /settings is an app page.
   2026-10-08: the shell also answers /agent (the desktop app's Codex agent).
@@ -98,7 +101,29 @@ class AppRoutes:
 
             _company_response(handler, search)
             return True
+        if parsed.path == "/api/linkedin/mutuals":
+            body, status = _mutuals(handler)
+            _send(handler, body, "application/json", cache="no-store", status=status)
+            return True
         return post_profile_images(handler, parsed)
+
+
+def _mutuals(handler: BaseHTTPRequestHandler) -> tuple[bytes, HTTPStatus]:
+    """The drawer's Get Mutuals: one person through linkedin_session.mutuals (its budget, cache and
+    first-degree skip), answered as that person's row plus the day's count."""
+    from packs.ingestion.primitives.discover.linkedin import linkedin_session
+
+    try:
+        url = str(json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))["url"])
+        result = linkedin_session.mutuals([url])
+    except (ValueError, KeyError) as error:
+        return json.dumps({"error": str(error)}).encode(), HTTPStatus.BAD_REQUEST
+    except RuntimeError as error:  # signed out, profile in use, no browser
+        return json.dumps({"error": str(error)}).encode(), HTTPStatus.CONFLICT
+    row = {**result["rows"][0], "requests_today": result["requests_today"], "day_cap": result["day_cap"]}
+    if result["status"] != "completed":
+        row["error"] = "LinkedIn asked to slow down; try again tomorrow."
+    return json.dumps(row).encode(), HTTPStatus.OK
 
 
 def _company_response(handler: BaseHTTPRequestHandler, read) -> None:

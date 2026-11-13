@@ -384,7 +384,7 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
             if self._team(parsed):
                 return
             if parsed.path in ("/api/features", "/api/feedback", "/api/search/scope", "/api/settings/providers",
-                               *SET_ACTIONS):
+                               "/api/linkedin/mutuals", *SET_ACTIONS):
                 origin = self.headers.get("Origin")
                 if origin and urllib.parse.urlparse(origin).netloc != self.headers.get("Host"):
                     self._json({"error": "cross-origin request rejected"}, HTTPStatus.FORBIDDEN)

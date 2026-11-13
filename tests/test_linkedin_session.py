@@ -65,12 +65,12 @@ class MutualsTests(unittest.TestCase):
         stranger = by["https://www.linkedin.com/in/stranger/"]
         self.assertEqual((stranger["status"], stranger["count"], [p["name"] for p in stranger["people"]]), ("looked_up", 3, ["Ann", "Bob", "Cy"]))
         self.assertEqual(stranger["people"][0]["url"], "https://www.linkedin.com/in/ann")
-        self.assertEqual(browser.plans, [["profile stranger"], ["mutuals stranger"]])
+        self.assertEqual(browser.plans, [["profile stranger", "mutuals stranger"]])
         self.assertEqual(out["requests_today"], 2)
         # The second ask costs nothing: the answer is cached and the id is kept.
         again = ls.mutuals(["https://www.linkedin.com/in/stranger"], folder=folder, profile_dir=profile, runner=browser)
         self.assertEqual((again["rows"][0]["status"], again["rows"][0]["count"], again["requests_today"]), ("cached", 3, 2))
-        self.assertEqual(len(browser.plans), 2)
+        self.assertEqual(len(browser.plans), 1)
 
     @with_folder
     def test_budget_bounds_the_batch(self, folder, profile):

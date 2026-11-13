@@ -204,6 +204,24 @@ def search_refine(app: App) -> None:
         raise Failed("the refinement added its tag, but the rows and scores are the same")
 
 
+MUTUALS = 5000  # Get Mutuals: a profile clone, a headless Chrome and up to two LinkedIn requests
+
+
+def search_mutuals(app: App) -> None:
+    """A search result's drawer has Get Mutuals; a click answers (a count and names, connected, or
+    why not) within five seconds. Spends up to two of the day's LinkedIn requests; a person
+    already looked up answers from the 30-day cache."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    app.wait_for({"css": ".result-row .result-line"}, PAGE, "the search shows its rows")
+    app.click({"css": ".result-row .result-line"})
+    button = {"css": "[data-mutuals] button", "text": "Get Mutuals"}
+    app.wait_for(button, CLICK, "the drawer shows Get Mutuals")
+    app.click(button)
+    app.wait_for("document.querySelector('[data-mutuals]') && !document.querySelector('[data-mutuals] button')",
+                 MUTUALS, "the mutuals show")
+
+
 def refresh_toggle(app: App) -> None:
     """Scheduled tasks' daily switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
@@ -233,5 +251,6 @@ SCENARIOS = {
     "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
+    "search-mutuals": search_mutuals,
     "refresh-toggle": refresh_toggle,
 }
