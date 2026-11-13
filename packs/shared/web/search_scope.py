@@ -6,6 +6,8 @@ signed-in user's, largest first, from the Powerset API (GET /v2/sets); with no s
 none.
 
 Changelog:
+  2026-11-13: ANY failure listing the sets still offers the local index; an expired sign-in
+      (SystemExit, not an Exception) used to end the request and take Local out of the picker.
   2026-11-12: a failed sets call leaves the sets empty and still offers the local index; the picker
       used to vanish with the whole route a 502 (Jake, during the Supabase connection incident).
   2026-11-12: read() lists the sets through the Powerset API, not Postgres, like every other set call.
@@ -45,11 +47,11 @@ def read(root: Path) -> dict[str, Any]:
     The two are independent: when the API cannot be reached the sets are empty and the local index
     is still offered, so the picker shows it and a search can start on this Mac."""
     sets: list[dict[str, Any]] = []
-    if postgres_client.credentials_subject():
-        try:
+    try:  # anything at all (an expired sign-in raises SystemExit): no sets, the local index stays
+        if postgres_client.credentials_subject():
             sets = _member_sets(root)
-        except Exception:
-            logging.getLogger(__name__).exception("Listing the sets failed; offering the local index")
+    except BaseException:
+        logging.getLogger(__name__).exception("Listing the sets failed; offering the local index")
     index = root / LOCAL_INDEX
     return {"sets": sets, "local_db": str(index) if index.is_file() else None}
 

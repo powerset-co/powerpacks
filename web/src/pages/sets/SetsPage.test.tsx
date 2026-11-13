@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { createSet, deleteSet, fetchSearchScope, fetchSetDetail, inviteToSet } from "@/lib/api/searches"
 import { open, options } from "@/testing/select"
+import type { SearchScope } from "@/types/searches"
 import { SetsPage } from "./SetsPage"
 
 vi.mock("@/lib/api/searches", () => ({
@@ -27,8 +28,8 @@ const SCOPE = {
   local_db: "/idx/local-search.duckdb",
 }
 
-function setup(path: string) {
-  vi.mocked(fetchSearchScope).mockResolvedValue(SCOPE)
+function setup(path: string, scope: SearchScope = SCOPE) {
+  vi.mocked(fetchSearchScope).mockResolvedValue(scope)
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <MemoryRouter initialEntries={[path]}>
@@ -132,4 +133,19 @@ it("deletes a set you own after you confirm", async () => {
   expect(deleteSet).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "Delete set" }))
   await vi.waitFor(() => expect(deleteSet).toHaveBeenCalledWith("t-1"))
+})
+
+it("has no Delete on your personal set", async () => {
+  // With no local index the picker offers your personal set; the bin showed on it like any set you own.
+  vi.mocked(fetchSetDetail).mockResolvedValue({
+    id: "p-1",
+    name: "Personal Connections",
+    role: "owner",
+    member_count: 1,
+    person_count: 15,
+    members: [],
+  })
+  setup("/sets?set=p-1", { ...SCOPE, local_db: null })
+  expect(await screen.findByRole("button", { name: "Invite" })).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Delete set" })).toBeNull()
 })
