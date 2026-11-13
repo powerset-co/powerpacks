@@ -27,7 +27,8 @@ import { RefreshPrompt } from "./RefreshPrompt"
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
 const SERVICES: readonly ConnectRow[] = ["browser", "codex"]
-// The first of these to link offers Refresh now and the others; LinkedIn is linked at onboarding.
+// One of these connected but never imported offers Refresh now and the others; LinkedIn is
+// linked at onboarding.
 const MESSAGE_SOURCES: readonly ConnectRow[] = ["imessage", "gmail", "whatsapp"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
@@ -205,6 +206,11 @@ export function AccountsPanel({
                 key,
                 title: items[key].title,
                 state: items[key].state,
+                imported:
+                  accounts === undefined ||
+                  accounts.accounts.some(
+                    (account) => account.source === key && account.last_sync_at !== null,
+                  ),
               }))}
               onPick={choose}
             />

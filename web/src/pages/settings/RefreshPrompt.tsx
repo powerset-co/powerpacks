@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import type { ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Plus } from "lucide-react"
@@ -8,66 +8,39 @@ import type { ConnectionRowProps } from "@/components/shared/ConnectionRow"
 import { Button } from "@/components/ui/button"
 import { errorText } from "@/lib/api/http"
 import { REFRESH_KEY, refreshNow } from "@/lib/api/refresh"
-import { readStored, writeStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
+import { useRefresh } from "@/pages/tasks/useRefresh"
 
-// "open" from the first link until Refresh now or Later, then "done": the card shows once.
-export const REFRESH_PROMPT_KEY = "accounts.refreshPrompt"
-type Stage = "open" | "done"
-
-export interface LinkedSource<Key extends string = string> {
+export interface PromptSource<Key extends string = string> {
   key: Key
   title: ReactNode
   state: ConnectionRowProps["state"]
+  // Its first import has run (the account's last sync), so its people are in.
+  imported: boolean
 }
 
-const stored = () =>
-  readStored<Stage>("local", REFRESH_PROMPT_KEY, (raw) => (raw === "open" || raw === "done" ? raw : null))
-
-/** The first time one of `sources` goes from not connected to connected while Accounts is open, a
- *  card offers the refresh that pulls people in (Scheduled tasks' Refresh now) and shows every
- *  source, the ones still to link one click away. It stays, on later visits too, until Refresh now
- *  or Later. A page that loads with sources already connected never opens it: only a row seen as
- *  needed or working that turns ready. */
+/** While a connected source has never been imported, a card offers the refresh that brings its
+ *  people in (Scheduled tasks' Refresh now) and shows every source, the ones still to link one
+ *  click away. It has no dismiss: it goes once the refresh has imported every connected source. */
 export function RefreshPrompt<Key extends string>({
   sources,
   onPick,
 }: {
-  sources: readonly LinkedSource<Key>[]
+  sources: readonly PromptSource<Key>[]
   onPick: (key: Key) => void
 }) {
-  const [stage, setStage] = useState(stored)
-  const before = useRef<Record<string, LinkedSource["state"]>>({})
-  const states = sources.map((source) => `${source.key}:${source.state}`).join(",")
-  useEffect(() => {
-    const previous = before.current
-    before.current = Object.fromEntries(sources.map((source) => [source.key, source.state]))
-    if (stage !== null) return
-    const linked = sources.some(
-      (entry) =>
-        entry.state === "ready" && (previous[entry.key] === "needed" || previous[entry.key] === "working"),
-    )
-    if (!linked) return
-    writeStored("local", REFRESH_PROMPT_KEY, "open")
-    setStage("open")
-    // `states` stands for `sources`, which is a new array on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [states])
-  const close = () => {
-    writeStored("local", REFRESH_PROMPT_KEY, "done")
-    setStage("done")
-  }
   const navigate = useNavigate()
   const client = useQueryClient()
+  const refresh = useRefresh()
   const start = useMutation({
     mutationFn: refreshNow,
     onSuccess: (next) => {
       client.setQueryData(REFRESH_KEY, next)
-      close()
       void navigate("/tasks")
     },
   })
-  if (stage !== "open") return null
+  if (!sources.some((source) => source.state === "ready" && !source.imported)) return null
+  const running = Boolean(refresh.data?.running)
   return (
     <section
       aria-label="Refresh after connecting"
@@ -101,15 +74,16 @@ export function RefreshPrompt<Key extends string>({
           )
         })}
       </div>
-      <div className="flex items-center gap-2">
-        <Button variant="primary" size="lg" disabled={start.isPending} onClick={() => start.mutate()}>
-          {start.isPending ? <Spinner className="size-3.5" /> : null}
-          Refresh now
-        </Button>
-        <Button variant="ghost" size="lg" onClick={close}>
-          Later
-        </Button>
-      </div>
+      <Button
+        variant="primary"
+        size="lg"
+        className="self-start"
+        disabled={running || start.isPending}
+        onClick={() => start.mutate()}
+      >
+        {running || start.isPending ? <Spinner className="size-3.5" /> : null}
+        {running ? "Refreshing…" : "Refresh now"}
+      </Button>
       {start.error ? (
         <p role="alert" className="m-0 text-xs text-bad">
           {errorText(start.error)}

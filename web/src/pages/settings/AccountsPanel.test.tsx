@@ -28,12 +28,17 @@ const idle: InstallStatus = {
   retry_command: "bin/onboard",
   prose: { page: {} },
 }
-let record: InstallStatus, connected: boolean, whatsapp: boolean, invoke: ReturnType<typeof vi.fn>
+let record: InstallStatus,
+  connected: boolean,
+  whatsapp: boolean,
+  synced: string | null,
+  invoke: ReturnType<typeof vi.fn>
 let jobs: Record<string, { state: "running" | "done" | "failed"; step: string }>
 beforeEach(() => {
   record = idle
   connected = true
   whatsapp = false
+  synced = "2026-10-01T00:00:00Z"
   jobs = {}
   // Accounts has been opened before, so How Deep Context works stays closed.
   writeStored("local", "accounts.howItWorks", true)
@@ -83,7 +88,7 @@ beforeEach(() => {
                               messages: 120,
                               contacts: 40,
                               latest_message_at: null,
-                              last_sync_at: null,
+                              last_sync_at: synced,
                             },
                           ]
                         : [],
@@ -233,44 +238,32 @@ it("keeps owner input and stopped-run recovery on Accounts", async () => {
 })
 const PROMPT = { name: "Refresh after connecting" }
 const status = (name: RegExp) => screen.getByRole("button", { name }).textContent
-/** Mounts Accounts with LinkedIn and Gmail signed out, then signs them in. */
-async function link() {
-  connected = false
-  const client = mount()
-  await waitFor(() => expect(status(/Gmail/)).toContain("Not connected"))
-  connected = true
-  await client.invalidateQueries()
-  return client
-}
-it("offers Refresh now once a message source links, with the others to link, never on a page already connected", async () => {
-  localStorage.removeItem("accounts.refreshPrompt")
+it("offers Refresh now while a connected source has never been imported, with the others to link", async () => {
+  synced = null
   mount()
-  await waitFor(() => expect(status(/Gmail/)).toContain("Connected"))
-  expect(screen.queryByRole("region", PROMPT)).toBeNull()
-  cleanup()
-  await link()
   const prompt = await screen.findByRole("region", PROMPT)
   expect(within(prompt).getByRole("button", { name: "Gmail" }).hasAttribute("disabled")).toBe(true)
+  expect(within(prompt).queryByRole("button", { name: "Later" })).toBeNull()
   fireEvent.click(within(prompt).getByRole("button", { name: "WhatsApp" }))
   expect(screen.getByRole("button", { name: /^WhatsApp/, pressed: true })).toBeTruthy()
   fireEvent.click(within(prompt).getByRole("button", { name: "Refresh now" }))
   await waitFor(() => expect(screen.getByTestId("path").textContent).toBe("/tasks"))
   expect(fetch).toHaveBeenCalledWith("/tasks/api/refresh/run", { method: "POST" })
 })
-it("keeps the refresh prompt across visits until Later, then never again", async () => {
-  localStorage.removeItem("accounts.refreshPrompt")
-  await link()
-  await screen.findByRole("region", PROMPT)
-  cleanup()
-  mount()
-  const prompt = await screen.findByRole("region", PROMPT)
-  fireEvent.click(within(prompt).getByRole("button", { name: "Later" }))
+it("shows no refresh prompt once every connected source has been imported, or none is connected", async () => {
+  const client = mount()
+  await waitFor(() => expect(status(/Gmail/)).toContain("Connected"))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
+  synced = null
+  await client.invalidateQueries({ queryKey: ["accounts"] })
+  await screen.findByRole("region", PROMPT)
+  synced = "2026-11-13T00:00:00Z"
+  await client.invalidateQueries({ queryKey: ["accounts"] })
+  await waitFor(() => expect(screen.queryByRole("region", PROMPT)).toBeNull())
   cleanup()
-  const client = await link()
-  await waitFor(() => expect(status(/Gmail/)).not.toContain("Not connected"))
-  whatsapp = true
-  await client.invalidateQueries()
-  await waitFor(() => expect(status(/WhatsApp/)).not.toContain("Not connected"))
+  connected = false
+  synced = null
+  mount()
+  await waitFor(() => expect(status(/Gmail/)).toContain("Not connected"))
   expect(screen.queryByRole("region", PROMPT)).toBeNull()
 })

@@ -263,51 +263,44 @@ def refresh_toggle(app: App) -> None:
 
 
 
-# Answers Accounts' sign-in check with WhatsApp signed out, then signed in once `window.__qaLinked`
-# is set, whatever the real answer. A page reload drops it.
-FAKE_WHATSAPP_LINK = """(() => {
+# Answers Accounts' checks as if WhatsApp were linked and never imported (no last sync), until
+# `window.__qaImported` is set, then as if imported. A page reload drops it.
+FAKE_WHATSAPP = """(() => {
   if (!window.__qaFetch) window.__qaFetch = window.fetch;
-  window.__qaLinked = false;
+  window.__qaImported = false;
+  const json = (body) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
   window.fetch = async (input, init) => {
+    const url = String(input);
     const response = await window.__qaFetch(input, init);
-    if (!String(input).startsWith('/accounts/api/signed-in')) return response;
+    if (url.startsWith('/accounts/api/signed-in')) return json({ ...(await response.json()), whatsapp: true });
+    if (!url.startsWith('/accounts/api/accounts')) return response;
     const body = await response.json();
-    return new Response(JSON.stringify({ ...body, whatsapp: window.__qaLinked }), { headers: { 'Content-Type': 'application/json' } });
+    const whatsapp = { source: 'whatsapp', name: 'WhatsApp', health: 'ok', note: 'Up to date', messages: 0, contacts: 0,
+      latest_message_at: null, last_sync_at: window.__qaImported ? new Date().toISOString() : null };
+    const others = body.accounts.filter((a) => a.source !== 'whatsapp' && (a.source === 'linkedin' || a.last_sync_at));
+    return json({ ...body, accounts: [...others, whatsapp] });
   };
   return true;
 })()"""
 PROMPT = {"css": "section[aria-label='Refresh after connecting']"}
-WHATSAPP_ROW = "[...document.querySelectorAll('button[aria-pressed]')].find(b => b.textContent.startsWith('WhatsApp'))?.textContent ?? ''"
 
 
 def accounts_refresh_prompt(app: App) -> None:
-    """The first link of iMessage, Gmail or WhatsApp on Accounts offers Refresh now once: never on
-    a page that loads already connected, and not again after Later. The link is simulated (the
-    sign-in check answers WhatsApp signed out, then signed in)."""
-    app.js("(localStorage.removeItem('accounts.refreshPrompt'), true)")
-    app.go("/accounts", {"text": "Your sources"}, PAGE)
-    time.sleep(PAGE / 1000)
-    if app.shows(PROMPT):
-        raise Failed("the prompt showed on a page that loaded already connected")
+    """While a linked message source has never been imported, the bottom of Accounts offers
+    Refresh now (no way to dismiss it); once it has been imported the card is gone. Simulated
+    through Accounts' own checks (WhatsApp linked, no last sync, then a last sync), so no real
+    refresh starts."""
     try:
-        for attempt in ("first", "second"):
-            app.go("/people", {"css": "main"}, PAGE)
-            app.js(FAKE_WHATSAPP_LINK)
-            app.go("/accounts", {"text": "Your sources"}, PAGE)
-            app.wait_for(f"({WHATSAPP_ROW}).endsWith('Not connected')", PAGE, "WhatsApp shows Not connected")
-            app.mark = app.js("performance.now()")
-            app.js("(window.__qaLinked = true, dispatchEvent(new Event('visibilitychange')), true)")
-            app.wait_for(f"({WHATSAPP_ROW}).endsWith('Connected') && !({WHATSAPP_ROW}).endsWith('Not connected')", PAGE, "WhatsApp turns Connected")
-            if attempt == "first":
-                app.mark = app.js("performance.now()")
-                app.wait_for(PROMPT, CLICK, "the prompt offers Refresh now")
-                app.picture("accounts-refresh-prompt")
-                app.click({"css": PROMPT["css"] + " button:nth-of-type(2)"})
-                app.wait_for(f"!document.querySelector({json.dumps(PROMPT['css'])})", CLICK, "Later closes it")
-            else:
-                time.sleep(CLICK / 1000)
-                if app.shows(PROMPT):
-                    raise Failed("the prompt showed again after Later")
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js(FAKE_WHATSAPP)
+        app.go("/accounts", PROMPT, PAGE)
+        app.picture("accounts-refresh-prompt")
+        if app.shows({"text": "Later", "exact": True}):
+            raise Failed("the card can be put off with Later")
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js("(window.__qaImported = true, true)")
+        app.go("/accounts", {"text": "Your sources"}, PAGE)
+        app.wait_for(f"!document.querySelector({json.dumps(PROMPT['css'])})", PAGE, "the card goes once WhatsApp is imported")
     finally:
         app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
 
