@@ -204,6 +204,35 @@ def search_refine(app: App) -> None:
         raise Failed("the refinement added its tag, but the rows and scores are the same")
 
 
+FAILED_CARDS = "[...document.querySelectorAll(\"[aria-label='Refinement']\")].filter((card) => card.innerText.includes('Refine failed'))"
+RETRIES = f"{FAILED_CARDS}.flatMap((card) => [...card.querySelectorAll('button')].filter((b) => b.innerText.trim() === 'Retry'))"
+
+
+def search_refine_retry(app: App) -> None:
+    """A refinement that fails shows a failed card with Retry, and Retry runs it again (a second
+    failed card; the first one's Retry goes). The refine is SQL that returns no person_id: it fails
+    before any write and costs no OpenAI tokens. Needs the root's refined search and ChatGPT."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    run_id = app.js(
+        "(() => { const x = new XMLHttpRequest(); x.open('GET', '/searches/api/catalog', false); x.send();"
+        f" return JSON.parse(x.responseText).searches.find((card) => card.title === {json.dumps(REFINED)})?.run_id }})()"
+    )
+    if not run_id:
+        raise Failed(f"no saved search titled {REFINED!r}")
+    before = app.js(f"{FAILED_CARDS}.length")
+    command = ("uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/"
+               f"search_network_pipeline.py rerank --run-dir .powerpacks/search/{run_id} --criteria qa-failure --sql 'SELECT 1'")
+    app.click({"css": "#agent-message"})
+    app.type(f"Run exactly this command once and nothing else, then stop: {command}")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 1} && {RETRIES}.length >= 1", REFINE, "the failed refine shows Retry")
+    app.wait_for(f"{RETRIES}.at(-1)?.disabled === false", REFINE, "Retry waits only for the turn")
+    app.js(f"{RETRIES}.at(-1).click()")
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 2}", GO_BACK, "Retry runs the refine again")
+    app.wait_for(f"{FAILED_CARDS}.at(-2).querySelector('button') === null", CLICK, "the first card's Retry goes")
+
+
 # The pieces of each search card's header row (the query, "+N filters", the set, the step, the
 # chevron) as boxes, and the pairs that overlap.
 HEADER_OVERLAPS = """(() => {
@@ -292,6 +321,7 @@ SCENARIOS = {
     "people-select-all": people_select_all,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
+    "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
     "chat-access-pill": chat_access_pill,

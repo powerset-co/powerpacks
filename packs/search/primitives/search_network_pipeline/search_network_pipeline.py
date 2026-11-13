@@ -14,6 +14,8 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-11-13: a refine killed mid-judge no longer holds its run "running": the card carries the
+        refine's pid, and a gone pid reads as failed so the next refine (or a retry) runs.
     2026-11-10: `rerank --sql` is the second tool: a hard criterion is DuckDB SQL over the rows showing
         (candidates, positions, education, trait_scores), free; the judge stays for qualitative ones.
     2026-11-09: `rerank --criteria` scores the rows showing with the cloud refine
