@@ -236,6 +236,35 @@ def search_no_keywords(app: App) -> None:
         raise Failed("the warning stays after a keyword was added back")
 
 
+FAILED_CARDS = "[...document.querySelectorAll(\"[aria-label='Refinement']\")].filter((card) => card.innerText.includes('Refine failed'))"
+RETRIES = f"{FAILED_CARDS}.flatMap((card) => [...card.querySelectorAll('button')].filter((b) => b.innerText.trim() === 'Retry'))"
+
+
+def search_refine_retry(app: App) -> None:
+    """A refinement that fails shows a failed card with Retry, and Retry runs it again (a second
+    failed card; the first one's Retry goes). The refine is SQL that returns no person_id: it fails
+    before any write and costs no OpenAI tokens. Needs the root's refined search and ChatGPT."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    run_id = app.js(
+        "(() => { const x = new XMLHttpRequest(); x.open('GET', '/searches/api/catalog', false); x.send();"
+        f" return JSON.parse(x.responseText).searches.find((card) => card.title === {json.dumps(REFINED)})?.run_id }})()"
+    )
+    if not run_id:
+        raise Failed(f"no saved search titled {REFINED!r}")
+    before = app.js(f"{FAILED_CARDS}.length")
+    command = ("uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/"
+               f"search_network_pipeline.py rerank --run-dir .powerpacks/search/{run_id} --criteria qa-failure --sql 'SELECT 1'")
+    app.click({"css": "#agent-message"})
+    app.type(f"Run exactly this command once and nothing else, then stop: {command}")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 1} && {RETRIES}.length >= 1", REFINE, "the failed refine shows Retry")
+    app.wait_for(f"{RETRIES}.at(-1)?.disabled === false", REFINE, "Retry waits only for the turn")
+    app.js(f"{RETRIES}.at(-1).click()")
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 2}", GO_BACK, "Retry runs the refine again")
+    app.wait_for(f"{FAILED_CARDS}.at(-2).querySelector('button') === null", CLICK, "the first card's Retry goes")
+
+
 # The pieces of each search card's header row (the query, "+N filters", the set, the step, the
 # chevron) as boxes, and the pairs that overlap.
 HEADER_OVERLAPS = """(() => {
@@ -294,6 +323,23 @@ def refresh_toggle(app: App) -> None:
             raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
 
 
+ACCESS = "[...document.querySelectorAll('form button[aria-pressed]')].find((b) => /^(Full Access|Ask First)$/.test(b.getAttribute('aria-label')))"
+
+
+def chat_access_pill(app: App) -> None:
+    """The chat's access pill names the access the chat has: Full Access when on, Ask First when
+    off (it read Full Access either way). Flips both ways and is put back as it was."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.wait_for(f"!!{ACCESS}", PAGE, "the access pill shows")
+    before = app.js(f"{ACCESS}.getAttribute('aria-label')")
+    for label in ("Ask First" if before == "Full Access" else "Full Access", before):
+        app.click({"text": "Full Access" if label == "Ask First" else "Ask First", "exact": True})
+        app.wait_for(f"{ACCESS}?.getAttribute('aria-label') === {label!r}", CLICK, f"the pill reads {label}")
+        pressed = app.js(f"{ACCESS}.getAttribute('aria-pressed')")
+        if pressed != ("true" if label == "Full Access" else "false"):
+            raise Failed(f"the pill reads {label} but aria-pressed is {pressed}")
+
+
 SCENARIOS = {
     "people-open": people_open,
     "people-menus": people_menus,
@@ -308,6 +354,8 @@ SCENARIOS = {
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
     "search-no-keywords": search_no_keywords,
+    "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
+    "chat-access-pill": chat_access_pill,
 }
