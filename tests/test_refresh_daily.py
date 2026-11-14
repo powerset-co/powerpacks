@@ -224,6 +224,19 @@ class RunTests(unittest.TestCase):
         self.assertEqual(run.problems[0].href, "/accounts")
 
 
+class ConnectedSourcesTests(unittest.TestCase):
+    def test_a_saved_linkedin_sign_in_is_linkedin_to_refresh_before_any_csv(self):
+        # A first read whose tab died left the sign-in but no Connections.csv; Refresh now must redo it.
+        root, home = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        profile = home / "linkedin"
+        with patch("packs.ingestion.primitives.discover.linkedin.connections.BROWSER_PROFILE", profile), \
+                patch("packs.ingestion.primitives.setup.automations.accounts.stored_mailboxes", return_value=[]):
+            self.assertNotIn("linkedin", daily.connected_sources(root))
+            (profile / "Default").mkdir(parents=True)
+            (profile / "Default/Cookies").write_bytes(b"")
+            self.assertIn("linkedin", daily.connected_sources(root))
+
+
 class RenewTests(unittest.TestCase):
     def test_every_mailbox_that_needs_a_sign_in_is_signed_back_in_once(self):
         from packs.ingestion.primitives.setup.automations import accounts
