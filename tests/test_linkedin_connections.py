@@ -41,7 +41,7 @@ class LinkedInConnectionsTests(unittest.TestCase):
         deps.start()
         self.addCleanup(deps.stop)
 
-    def scrape(self, browser_payload, export=None):
+    def scrape(self, browser_payload, export=None, pages=()):
         self.exports = []
 
         def browser(command, *, timeout, env, on_progress=None):
@@ -51,6 +51,9 @@ class LinkedInConnectionsTests(unittest.TestCase):
             known_file = command[command.index("--known-file") + 1]
             self.known = json.loads(Path(known_file).read_text())
             self.flags = {flag: command[command.index(flag) + 1] for flag in ("--stop-after-known", "--max-loads")}
+            self.start = command[command.index("--start") + 1]
+            for page in pages:  # pages the browser sends as it reads them
+                on_progress(page)
             return CommandResult(ok=True, stdout=json.dumps(browser_payload))
         with patch(f"{MODULE}.run_streaming_command", side_effect=browser):
             return LinkedInConnections(csv_path=self.csv, profile_dir=self.csv.parent / "profile").run()
@@ -160,6 +163,35 @@ class LinkedInConnectionsTests(unittest.TestCase):
                          ("completed", "export_imported", True, 1))
         self.assertIn("riley-echo", self.csv.read_text(encoding="utf-8"))
         self.assertEqual((self.manifest()["stopped"], self.manifest()["complete"]), ("export", True))
+
+    def test_each_page_is_written_as_it_lands_and_a_dead_run_goes_on_from_where_it_got(self):
+        # The browser read two pages of LinkedIn's API, then died before it could answer.
+        people = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(80)]
+        pages = [{"read": 40, "total": 6145, "cards": people[:40], "offset": 40},
+                 {"read": 80, "total": 6145, "cards": people[40:], "offset": 80}]
+        result = self.scrape({"status": "error", "message": "page.evaluate: Target crashed"}, pages=pages)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(self.rows()), 81)
+        self.assertEqual((self.manifest()["complete"], self.manifest()["offset"]), (False, 80))
+
+        # The next run starts a page back from there and adds only the people it has not got.
+        more = [{"slug": f"person-{n}", "name": f"Person {n}", "headline": "", "connected_on": ""} for n in range(40, 120)]
+        result = self.scrape({"status": "ok", "owner_slug": "casey-owner", "total": 120, "loads": 3, "stopped": "end",
+                              "offset": 120, "connections": more})
+        self.assertEqual((self.start, self.flags["--stop-after-known"]), ("40", "0"))
+        self.assertEqual((result["connections"], result["added"], result["complete"]), (120, 40, True))
+        self.assertEqual(len(self.rows()), 121)
+
+    def test_a_whole_list_read_before_stays_whole_when_a_top_up_dies(self):
+        self.csv.parent.mkdir(parents=True)
+        self.csv.write_text(EXPORT, encoding="utf-8")
+        self.csv.with_name("connections.json").write_text(json.dumps({"complete": True, "offset": 1, "total": 1}))
+        page = {"read": 1, "total": 2, "offset": 40, "cards": [
+            {"slug": "jordan-bravo", "name": "Jordan Bravo", "headline": "", "connected_on": ""}]}
+        self.scrape({"status": "error", "message": "killed"}, pages=[page])
+        self.assertEqual(self.start, "0")
+        self.assertIn("jordan-bravo", self.rows()[1])
+        self.assertEqual(self.manifest(), {"complete": True, "offset": 1, "total": 1})
 
     def test_a_read_to_the_end_is_the_whole_list_and_records_how_far_it_got(self):
         # LinkedIn counts 298 but its list shows 294.
