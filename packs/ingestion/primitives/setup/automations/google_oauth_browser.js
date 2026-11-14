@@ -20,6 +20,10 @@
  *   2026-10-28: waits are measured (page_wait.js): a page settles when two reads agree, the
  *     network is dead when Chrome says so and nothing answers for a minute, the person is gone
  *     after five idle minutes. No networkidle: Google's long-polls never let it fire.
+ *   2026-11-14: --mode publish moves the app to "In production": Google expires a Testing
+ *     app's Gmail sign-in after 7 days, a published personal-use app's sign-in lasts.
+ *     --mode accept-terms agrees to the Google Cloud Terms of Service a Google account must
+ *     accept before it can create a project.
  */
 
 const fs = require("fs");
@@ -456,6 +460,64 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   await requireGoogleAuthConfigured(page);
 }
 
+// Google expires the Gmail sign-in of an External app in "Testing" after 7 days. Each person's
+// app is theirs alone (Google's personal-use exception, fewer than 100 users), so it is
+// published without verification; the consent screen keeps the unverified-app warning the
+// authorize step already passes. An Internal (Workspace) app has no Testing state and no button.
+async function publishApp(page, project) {
+  const audienceUrl = consoleUrl("auth/audience", project);
+  await gotoPage(page, audienceUrl, "OAuth audience");
+  await settle(page);
+  await requireGoogleAuthConfigured(page);
+  const body = async () => compactText(await page.locator("body").innerText({ timeout: 8000 }).catch(() => ""));
+  if (!/Publish app/i.test(await body())) {
+    log(/In production/i.test(await body()) ? "app already in production" : "no Publish app button (internal app)");
+    return { ok: true, published: false };
+  }
+  if (!(await clickButton(page, [/^Publish app$/i, /Publish app/i], 5000))) {
+    throw new StepError("publish.open", "Publish app was not visible on the OAuth audience page.");
+  }
+  const root = await modalRoot(page);
+  if (!(await clickLocator(root.getByRole("button", { name: /^Confirm$/i }), "Confirm", 5000))) {
+    throw new StepError("publish.confirm", "Confirm was not visible after Publish app.");
+  }
+  await page.waitForTimeout(2500);
+  await gotoPage(page, audienceUrl, "OAuth audience verification");
+  await settle(page);
+  if (!/In production/i.test(await body())) {
+    throw new StepError("publish.verify", "The app is not In production after Publish app.");
+  }
+  log("app published");
+  return { ok: true, published: true };
+}
+
+// A Google account that has never used Cloud must agree to the Google Cloud Terms of Service
+// (a dialog on its first Console visit) before `gcloud projects create` works; there is no API
+// for it. The person agreed in Powerpacks, so the dialog's required box is checked and agreed
+// to; the optional email-updates choices are left alone.
+async function acceptCloudTerms(page) {
+  await gotoPage(page, `https://console.cloud.google.com/?authuser=${encodeURIComponent(consoleAccount)}`, "Console home");
+  await settle(page);
+  const agree = page.getByRole("button", { name: /Agree and continue/i });
+  if (!(await visible(agree, 4000))) {
+    log("no Terms of Service dialog");
+    return { ok: true, accepted: false };
+  }
+  const box = page.getByRole("checkbox", { name: /Terms of Service/i });
+  if (await visible(box, 2000)) {
+    log("checking the Terms of Service box");
+    await box.first().check({ force: true, timeout: 2500 }).catch(() => box.first().click({ force: true, timeout: 2500 }));
+  }
+  await clickLocator(agree, "Agree and continue", 2500);
+  await page.waitForTimeout(2500);
+  await settle(page);
+  if (await visible(agree, 1500)) {
+    throw new StepError("terms.agree", "The Google Cloud Terms of Service dialog is still open.");
+  }
+  log("Terms of Service accepted");
+  return { ok: true, accepted: true };
+}
+
 async function modalRoot(page) {
   const dialogs = page.getByRole("dialog");
   if (await visible(dialogs, 1200)) return dialogs.last();
@@ -868,7 +930,11 @@ async function main() {
 
   let payload;
   try {
-    if (mode === "add-test-users") {
+    if (mode === "publish") {
+      payload = { status: "ok", project, ...(await publishApp(page, project)) };
+    } else if (mode === "accept-terms") {
+      payload = { status: "ok", project, ...(await acceptCloudTerms(page)) };
+    } else if (mode === "add-test-users") {
       const added = await addTestUsers(page, project, email, testUsers, timeoutMs);
       payload = {
         status: "ok",

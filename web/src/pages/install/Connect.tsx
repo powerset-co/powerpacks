@@ -292,12 +292,20 @@ function Mailboxes({
         Add a mailbox
       </Button>
     )
+  // The first connect may create a Google Cloud project, which needs Google's terms accepted.
   return (
     <span>
       Connects {email || "your Google account"} ·{" "}
       <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
         Change
       </button>
+      <span className="block">
+        By connecting, you accept the{" "}
+        <a className={LINK} href="https://cloud.google.com/terms" target="_blank" rel="noreferrer">
+          Google Cloud Terms of Service
+        </a>
+        .
+      </span>
     </span>
   )
 }

@@ -613,6 +613,53 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["account"]["status"], "ok")
 
+    def test_browser_setup_accepts_cloud_terms_and_creates_the_project_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            secret = tmp_path / "client_secret.json"
+            self.write_secret(secret)
+            refused = {"status": "error", "project": "local-msg-vault-test",
+                       "message": "FAILED_PRECONDITION: Callers must accept Terms of Service"}
+            created = {"status": "ok", "project": "local-msg-vault-test", "created": True}
+            with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
+                mock.patch.object(gcloud_project, "ensure_gcloud_auth", return_value={"status": "ok", "account": "me@example.com"}), \
+                mock.patch.object(gcloud_project, "create_gcloud_project", side_effect=[refused, created]) as create, \
+                mock.patch.object(gcloud_project, "enable_gmail_api", return_value={"status": "ok"}), \
+                mock.patch.object(msgvault_home, "init_db", return_value={"status": "ok"}), \
+                mock.patch.object(oauth_browser, "run_browser_mode", return_value={"status": "ok", "accepted": True}) as mode, \
+                mock.patch.object(oauth_browser, "run_browser_automation", return_value={"status": "ok", "client_secret_path": str(secret)}), \
+                mock.patch.object(accounts, "status_payload", return_value={"status": "ok"}):
+                code, payload = self.invoke(["browser-setup", "--home", str(tmp_path / "msgvault"),
+                                             "--project", "local-msg-vault-test", "--email", "me@example.com"])
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(create.call_count, 2)
+            self.assertEqual(mode.call_args.args, ("accept-terms",))
+
+    def test_sign_in_publishes_the_app_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "msgvault"
+            msgvault_home.save_setup_state(home, {"project_id": "local-msg-vault-test", "email": "me@example.com"})
+            with mock.patch.object(oauth_browser, "run_browser_mode", return_value={"status": "ok", "published": True}) as mode, \
+                mock.patch.object(oauth_browser, "authorize_account", return_value={"status": "ok"}) as authorize:
+                accounts.add_account(home, "me@example.com", "", headless=False, force=True)
+                accounts.add_account(home, "me@example.com", "", headless=False, force=True)
+            mode.assert_called_once_with("publish", project="local-msg-vault-test", email="me@example.com")
+            self.assertEqual(authorize.call_count, 2)
+            self.assertTrue(msgvault_home.load_setup_state(home).published)
+
+    def test_a_failed_publish_still_signs_in_and_tries_again_next_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "msgvault"
+            msgvault_home.save_setup_state(home, {"project_id": "local-msg-vault-test", "email": "me@example.com"})
+            with mock.patch.object(oauth_browser, "run_browser_mode", return_value={"status": "error", "message": "x"}) as mode, \
+                mock.patch.object(oauth_browser, "authorize_account", return_value={"status": "ok"}):
+                first = accounts.add_account(home, "me@example.com", "", headless=False, force=False)
+                accounts.add_account(home, "me@example.com", "", headless=False, force=False)
+            self.assertEqual(first["status"], "ok")
+            self.assertEqual(mode.call_count, 2)
+            self.assertFalse(msgvault_home.load_setup_state(home).published)
+
     def test_add_test_users_uses_saved_project_and_browser_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "msgvault"

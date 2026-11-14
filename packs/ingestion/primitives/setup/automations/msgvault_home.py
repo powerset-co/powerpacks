@@ -129,6 +129,8 @@ class SetupState:
     project_id: str = ""
     email: str = ""
     test_users: tuple[str, ...] = ()
+    # The app was moved out of Testing (oauth_browser.run_browser_mode("publish")).
+    published: bool = False
 
     @classmethod
     def from_record(cls, record: Any) -> SetupState:
@@ -140,6 +142,7 @@ class SetupState:
             project_id=str(record.get("project_id") or ""),
             email=str(record.get("email") or ""),
             test_users=tuple(str(user) for user in raw_users) if isinstance(raw_users, list) else (),
+            published=record.get("published") is True,
         )
 
 
