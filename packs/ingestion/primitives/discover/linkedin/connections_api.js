@@ -40,8 +40,8 @@ function connectionRows(answer, timeZone) {
     const profile = byUrn.get(connection["*connectedMemberResolutionResult"] || connection.connectedMember);
     if (!profile?.publicIdentifier) continue;
     rows.push({ slug: profile.publicIdentifier,
-                name: [profile.firstName, profile.lastName].filter(Boolean).join(" "),
-                headline: profile.headline || "", connected_on: connectedOn(connection.createdAt, timeZone),
+                name: [profile.firstName, profile.lastName].map((part) => (part || "").trim()).filter(Boolean).join(" "),
+                headline: (profile.headline || "").replace(/\s+/g, " ").trim(), connected_on: connectedOn(connection.createdAt, timeZone),
                 picture: pictureOf(profile) });
   }
   return { rows, size: connections.length };

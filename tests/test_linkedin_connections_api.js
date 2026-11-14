@@ -19,7 +19,7 @@ const connection = (urn, member, createdAt) => ({
 const ANSWER = {
   data: { "*elements": ["urn:li:fsd_connection:2", "urn:li:fsd_connection:1", "urn:li:fsd_connection:3"] },
   included: [
-    profile("urn:li:fsd_profile:A", "casey-lane", "Casey", "Lane", "Engineer at Example"),
+    profile("urn:li:fsd_profile:A", "casey-lane", "Casey ", "Lane", "Engineer  at Example\n"),
     connection("urn:li:fsd_connection:1", "urn:li:fsd_profile:A", Date.UTC(2026, 0, 1, 12)),
     connection("urn:li:fsd_connection:2", "urn:li:fsd_profile:B", Date.UTC(2026, 9, 2, 12)),
     profile("urn:li:fsd_profile:B", "jordan-bravo", "Jordan", "Bravo", "", false),
