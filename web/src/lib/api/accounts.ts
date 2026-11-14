@@ -41,8 +41,9 @@ export async function fetchSignedIn(
   return body<SignedIn>(response)
 }
 
-/** One of the user's Chrome profiles holding a LinkedIn or Google session (chrome_profiles.py). */
+/** One of the user's Chrome or Brave profiles holding a LinkedIn or Google session (chrome_profiles.py). */
 export interface ChromeProfile {
+  browser: "chrome" | "brave"
   folder: string
   name: string
   email: string
@@ -50,10 +51,10 @@ export interface ChromeProfile {
   google: boolean
 }
 
-/** The profiles to pick from, and the folder the sign-in browser was copied from (null before a copy). */
+/** The profiles to pick from, and the one the sign-in browser was copied from (null before a copy). */
 export interface ChromeProfiles {
   profiles: ChromeProfile[]
-  linked: string | null
+  linked: Pick<ChromeProfile, "browser" | "folder"> | null
 }
 
 export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeProfiles> {
@@ -63,8 +64,8 @@ export async function fetchChromeProfiles(signal?: AbortSignal): Promise<ChromeP
 }
 
 /** Copies one profile's sign-ins and saved passwords into the browser Powerpacks signs in with. */
-export function copyChromeProfile(folder: string): Promise<void> {
-  return post("/accounts/api/chrome-profile", { folder }, "Couldn't copy that Chrome profile.")
+export function copyChromeProfile({ browser, folder }: Pick<ChromeProfile, "browser" | "folder">): Promise<void> {
+  return post("/accounts/api/chrome-profile", { browser, folder }, "Couldn't copy that Chrome profile.")
 }
 
 /** Opens Google's sign-in for one Gmail account; the server syncs Gmail once it lands. */

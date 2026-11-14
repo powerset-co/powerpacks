@@ -44,7 +44,7 @@ function show(profiles: unknown[]) {
 
 it("copies the profile the user picks, then moves on to sign up", async () => {
   const fetchMock = show([
-    { folder: "Default", name: "Person 1", email: "a@example.com", linkedin: true, google: true },
+    { browser: "chrome", folder: "Default", name: "Person 1", email: "a@example.com", linkedin: true, google: true },
   ])
   fireEvent.click(await screen.findByRole("button", { name: /a@example.com/ }))
   await screen.findByText("sign up")
@@ -60,8 +60,23 @@ it("goes straight to sign up without a profile to pick", async () => {
 })
 
 it("moves on without copying when the user starts empty", async () => {
-  const fetchMock = show([{ folder: "Default", name: "Person 1", email: "", linkedin: true, google: false }])
+  const fetchMock = show([{ browser: "chrome", folder: "Default", name: "Person 1", email: "", linkedin: true, google: false }])
   fireEvent.click(await screen.findByRole("button", { name: "Start empty and sign in myself" }))
   await screen.findByText("sign up")
   expect(fetchMock).not.toHaveBeenCalledWith("/accounts/api/chrome-profile", expect.anything())
+})
+
+it("shows each profile's browser and copies from the one picked", async () => {
+  const fetchMock = show([
+    { browser: "chrome", folder: "Default", name: "Person 1", email: "a@example.com", linkedin: true, google: false },
+    { browser: "brave", folder: "Default", name: "Person 2", email: "b@example.com", linkedin: false, google: true },
+  ])
+  expect(await screen.findByAltText("Chrome")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: /b@example.com/ }))
+  await screen.findByText("sign up")
+  const [, init] = fetchMock.mock.calls.find(([url]) => url === "/accounts/api/chrome-profile") as unknown as [
+    string,
+    RequestInit,
+  ]
+  expect(String(init.body)).toContain("brave")
 })

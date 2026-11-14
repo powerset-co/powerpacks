@@ -4,7 +4,7 @@
  * POWERPACKS_BROWSERS_DIR, default ~/.powerpacks/browsers), else Chrome, Brave, Edge, Arc.
  * A saved profile last written by a newer Chrome than that Chromium opens in the installed
  * browser instead: Chrome refuses a profile from a newer version.
- * A profile copied from the user's Chrome (chrome_profiles.py) opens in the installed browser
+ * A profile copied from the user's Chrome or Brave (chrome_profiles.py) opens in that same browser
  * with the real Keychain, the only way its cookies and passwords decrypt.
  * The user agent matches the installed major
  * version so it agrees with the Sec-CH-UA hints the browser sends. After a login
@@ -13,6 +13,7 @@
  * (Terminal, Ghostty, the Claude or Codex desktop app).
  *
  * Changelog:
+ * 2026-11-14: Profiles copied from Brave open in Brave.
  * 2026-10-30: Profiles copied from the user's Chrome.
  * 2026-10-27: Powerpacks' own Chromium first; the installed browsers are the fallback, and
  *   the browser for a profile made by a newer Chrome.
@@ -28,6 +29,8 @@ const BROWSER_APPS = [
   "Google Chrome", "Brave Browser", "Microsoft Edge", "Arc",
 ];
 const FALLBACK_MAJOR = 149;
+// chrome_profiles.py BROWSERS keys -> the app a copy from that browser opens in.
+const COPY_APPS = { chrome: "Google Chrome", brave: "Brave Browser" };
 
 // Playwright's Chromium, newest revision first, in the layouts its versions have used.
 function ownChromium() {
@@ -48,10 +51,14 @@ function ownChromium() {
   return null;
 }
 
+function app(name) {
+  const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
+  return fs.existsSync(executable) ? { name, path: executable } : null;
+}
+
 function installedBrowser() {
   for (const name of BROWSER_APPS) {
-    const executable = `/Applications/${name}.app/Contents/MacOS/${name}`;
-    if (fs.existsSync(executable)) return { name, path: executable };
+    if (app(name)) return app(name);
   }
   return null;
 }
@@ -72,14 +79,20 @@ function chromiumMajor(executable) {
   return majorOf(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]);
 }
 
-const copiedFromChrome = profileDir => Boolean(profileDir) && fs.existsSync(path.join(profileDir, "chrome-profile.json"));
+// The browser key a profile was copied from (no key: Chrome, the only source before Brave), or null.
+function copiedFrom(profileDir) {
+  const marker = profileDir && path.join(profileDir, "chrome-profile.json");
+  if (!marker || !fs.existsSync(marker)) return null;
+  return JSON.parse(fs.readFileSync(marker, "utf8")).browser || "chrome";
+}
 
-// The browser for `profileDir`: our Chromium, unless the profile is a copy from Chrome or a newer
-// installed Chrome wrote it.
+// The browser for `profileDir`: our Chromium, unless the profile is a copy from the user's browser
+// (opened in that browser) or a newer installed Chrome wrote it.
 function whichBrowser(profileDir) {
+  const copied = copiedFrom(profileDir);
+  if (copied) return app(COPY_APPS[copied]);
   const own = ownChromium();
   const installed = installedBrowser();
-  if (copiedFromChrome(profileDir)) return installed;
   if (own && installed && profileMajor(profileDir) > chromiumMajor(own.path)) return installed;
   return own || installed;
 }
@@ -93,7 +106,7 @@ function browserTarget(profileDir) {
 
 // Spread into launchPersistentContext options, after browserTarget.
 function ignoredArgs(profileDir) {
-  const keychain = copiedFromChrome(profileDir) ? ["--use-mock-keychain", "--password-store=basic"] : [];
+  const keychain = copiedFrom(profileDir) ? ["--use-mock-keychain", "--password-store=basic"] : [];
   return { ignoreDefaultArgs: ["--enable-automation", ...keychain] };
 }
 

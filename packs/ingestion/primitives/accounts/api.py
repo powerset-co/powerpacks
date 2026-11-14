@@ -8,9 +8,9 @@ GET  /accounts/api/signed-in  which sources need no sign-in (accounts.signed_in)
                               ?sources=imessage,... reads only those
                               Jobs and health arrive together, so a finished job never
                               shows next to the account's pre-sync health.
-GET  /accounts/api/chrome-profiles  the user's Chrome profiles with a LinkedIn or Google session,
-                              and the folder the sign-in browser was copied from
-POST /accounts/api/chrome-profile   folder=<profile>: copy it into the sign-in browsers
+GET  /accounts/api/chrome-profiles  the user's Chrome and Brave profiles with a LinkedIn or Google
+                              session, and the browser + folder the sign-in browser was copied from
+POST /accounts/api/chrome-profile   browser=chrome|brave&folder=<profile>: copy it into the sign-in browsers
 POST /accounts/api/sync       source=imessage|whatsapp, or source=gmail&email=<address>:
                               sync that one card
 POST /accounts/api/reconnect  email=<gmail>: open msgvault's Google sign-in, then sync
@@ -143,7 +143,7 @@ class AccountsApi:
         form = {key: values[0] for key, values in urllib.parse.parse_qs(handler.rfile.read(length).decode()).items()}
         source, email = form.get("source"), form.get("email")
         if parsed.path == CHROME_PROFILE_PATH:
-            use_chrome_profile(form["folder"])
+            use_chrome_profile(form.get("browser", "chrome"), form["folder"])
             _send_json(handler, {"status": "copied"})
             return True
         if parsed.path == SYNC_PATH and source in MESSAGE_SYNCS:

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 
-import { copyChromeProfile, fetchChromeProfiles } from "@/lib/api/accounts"
+import { copyChromeProfile, fetchChromeProfiles, type ChromeProfile } from "@/lib/api/accounts"
 import { errorText } from "@/lib/api/http"
 import { ProfileList } from "@/pages/onboarding/ChromeProfile"
 
@@ -14,10 +14,10 @@ export function BrowserProfiles() {
   })
   const [copying, setCopying] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const use = (folder: string) => {
+  const use = (profile: ChromeProfile) => {
     setError(null)
-    setCopying(folder)
-    copyChromeProfile(folder)
+    setCopying(`${profile.browser}/${profile.folder}`)
+    copyChromeProfile(profile)
       .then(() => client.refetchQueries({ queryKey: ["chrome-profiles"] }))
       .catch((caught: unknown) => setError(errorText(caught)))
       .finally(() => setCopying(null))
