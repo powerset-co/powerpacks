@@ -330,18 +330,26 @@ impl Codex {
     }
 
     /// Writes stay in the Powerpacks folder plus uv's cache (every `bin/*` command runs through
-    /// `uv run`, which dies without it); network is on, since every search calls Powerset. The
-    /// chat's scope (`{"set_id": …}` or `{"local_db": …}`, from the page's Search-in picker) is one
+    /// `uv run`, which dies without it) and the saved browser profiles and Powerpacks' own Chromium
+    /// under ~/.powerpacks (the LinkedIn and Google sign-ins live there, outside the app folder, so
+    /// the agent can run a LinkedIn read or a Google sign-in itself); network is on, since every
+    /// search calls Powerset. The chat's scope (`{"set_id": …}` or `{"local_db": …}`, from the page's Search-in picker) is one
     /// sentence of the developer instructions: the agent passes it to every search command as an
     /// argument, so nothing is read from the environment or `.env` for it.
     fn thread_settings(cwd: &Path, scope: &Value) -> Value {
-        let uv_cache = dirs::home_dir().unwrap_or_default().join(".cache/uv");
+        let home = dirs::home_dir().unwrap_or_default();
+        let writable = [
+            ".cache/uv",
+            ".powerpacks/browser-profiles",
+            ".powerpacks/browsers",
+        ]
+        .map(|dir| home.join(dir));
         json!({
             "cwd": cwd,
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
             "config": {
-                "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] },
+                "sandbox_workspace_write": { "network_access": true, "writable_roots": writable },
             },
             "developerInstructions": Self::developer_instructions(scope),
         })
@@ -529,5 +537,26 @@ mod scope_instruction_tests {
         assert!(settings["config"].get("shell_environment_policy").is_none());
         let pinned = Codex::thread_settings(Path::new("/w"), &json!({ "set_id": "abc" }));
         assert!(pinned["config"].get("shell_environment_policy").is_none());
+    }
+
+    #[test]
+    fn the_agent_may_write_the_saved_browser_profiles_and_chromium() {
+        let settings = Codex::thread_settings(Path::new("/w"), &Value::Null);
+        let roots: Vec<String> = settings["config"]["sandbox_workspace_write"]["writable_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|root| root.as_str().unwrap().to_string())
+            .collect();
+        for dir in [
+            ".cache/uv",
+            ".powerpacks/browser-profiles",
+            ".powerpacks/browsers",
+        ] {
+            assert!(
+                roots.iter().any(|root| root.ends_with(dir)),
+                "{dir} missing from {roots:?}"
+            );
+        }
     }
 }
