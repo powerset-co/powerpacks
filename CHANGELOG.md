@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.61.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.61.0...powerpacks-v3.61.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **linkedin:** connection pictures are fetched with a User-Agent, so they are saved ([#1196](https://github.com/powerset-co/powerpacks/issues/1196)) ([73984a9](https://github.com/powerset-co/powerpacks/commit/73984a97f737a70f8188c463bcced8e08293128e))
+* **linkedin:** read connections from LinkedIn's paged API, writing each page as it lands ([#1197](https://github.com/powerset-co/powerpacks/issues/1197)) ([22a19f1](https://github.com/powerset-co/powerpacks/commit/22a19f12e5373c6ee84545a3b92f4457a0432d1c))
+* **refresh:** LinkedIn counts as connected once its sign-in is saved; agents sync through the app ([#1201](https://github.com/powerset-co/powerpacks/issues/1201)) ([fd38026](https://github.com/powerset-co/powerpacks/commit/fd38026fb59955db775ab74326fc65ba91ac361d))
+* **setup:** a refresh of some sources keeps the other chosen sources in the saved command ([#1198](https://github.com/powerset-co/powerpacks/issues/1198)) ([a5e9056](https://github.com/powerset-co/powerpacks/commit/a5e90561bb9f2403d99ed63a454482e27c1193d9))
+
 ## [3.61.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.60.0...powerpacks-v3.61.0) (2026-11-13)
 
 
