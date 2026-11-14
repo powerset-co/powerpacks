@@ -8,6 +8,13 @@
  * list is newest-first, so with --stop-after-known N the scroll stops once N
  * connections from --known-file have loaded (0 never stops early).
  *
+ * The list is read from LinkedIn's paged connections API, the request its own page makes as
+ * it scrolls (connections_api.js), 40 people a request from --start, so the tab holds nothing
+ * as the list grows: scrolling one tab through thousands of cards ran LinkedIn's page out of
+ * JavaScript memory (Chrome kills the tab at ~1/4 of the Mac's RAM, "Target crashed" ~2,200 in).
+ * Every page is sent to the caller as it lands (progress `cards`, `offset`). When the API does
+ * not answer the way this expects, it scrolls the page as before.
+ *
  * Every scroll is one request to LinkedIn for the next 10 people. Scrolls wait a
  * random 0.5-1.5 s and stop after --max-loads (300 per run: ~3,000 people in
  * ~5 minutes).
@@ -27,13 +34,21 @@
  *
  * Prints one JSON object on stdout:
  *   {"status": "ok", "connections": [{slug, name, headline, connected_on, picture}],
- *    "total": n, "loads": n, "stopped": "known" | "end" | "limit", "owner_slug": str}
+ *    "total": n, "loads": n, "stopped": "known" | "end" | "limit" | "crashed", "offset": n, "owner_slug": str}
+ *   "offset": how far down the API read got (0 when it scrolled); "limit" also covers LinkedIn
+ *   saying slow down or failing partway.
+ *   "crashed": the tab died partway (a list of thousands can take it down); the
+ *   connections are the ones read before it.
  *   {"status": "needs_user_action", "message": ...}   login not finished in time
  *   {"status": "error", "message": ...}
  *
  * Created: 2026-10-03 (scroll and card parsing adapted from
  * stickerdaniel/linkedin-mcp-server#170).
- * Changelog: 2026-10-24: each card's picture link rides its row (LinkedIn's links expire in weeks, so the
+ * Changelog: 2026-11-13: the list comes from LinkedIn's paged API, each page sent as it lands and
+ *   resumable from --start; the scroll is the fallback and also sends its cards per chunk.
+ *   2026-11-13: the list is read every CHUNK_LOADS loads, so a tab that crashes
+ *   partway keeps what it read and reports stopped "crashed" instead of losing it all.
+ *   2026-10-24: each card's picture link rides its row (LinkedIn's links expire in weeks, so the
  *   read saves the pictures while they work). --screenshot <path> saves one picture of the connections page before the
  *   scroll, for the setup screen. 2026-10-05: returns LinkedIn's "N connections" count; --export
  * requests and downloads LinkedIn's data export after a stalled read.
@@ -46,6 +61,7 @@ const fs = require("fs");
 const { chromium } = require("playwright-core");
 const { browserTarget, desktopUserAgent, ignoredArgs, returnFocus } = require("../../common/browser.js");
 const { shownCount } = require("./count.js");
+const { connectionsUrl, connectionRows } = require("./connections_api.js");
 
 const CONNECTIONS_URL = "https://www.linkedin.com/mynetwork/invite-connect/connections/";
 // Where LinkedIn sends a browser whose session is missing, expired or challenged.
@@ -55,10 +71,13 @@ const LOGIN_POLL_MS = 2000;
 const PAUSE_MIN_MS = 500;
 const PAUSE_JITTER_MS = 1000;
 const END_AFTER_MS = 15000;
+const CHUNK_LOADS = 25;
 const OWNER_URL = "https://www.linkedin.com/in/me/";
 const EXPORT_URL = "https://www.linkedin.com/mypreferences/d/download-my-data";
 // The larger archive is the one that includes Connections.csv.
 const LARGER_ARCHIVE = "#fast-file-only-plus-other-data";
+// LinkedIn saying slow down.
+const SLOW_DOWN = new Set([429, 999]);
 
 function parseArgs(argv) {
   const args = {};
@@ -163,8 +182,24 @@ async function waitForConnections(page, deadline) {
 
 // Scroll <main> (the list's own scroller, not the page body) until enough
 // known connections appear, nothing new loads for endAfter ms, or maxLoads.
-async function scrollList(page, known, stopAfterKnown, maxLoads) {
-  return page.evaluate(async ({ cardLink, known, stopAfterKnown, maxLoads, pauseMin, pauseJitter, endAfter }) => {
+// It scrolls CHUNK_LOADS at a time and reads the cards after each chunk into `read` (cards by
+// slug, and the loads so far), so a tab that crashes partway keeps everything read before it.
+async function scrollList(page, known, stopAfterKnown, maxLoads, read) {
+  let state = { loads: 0, lastGrowth: Date.now() };
+  while (!state.stopped) {
+    state = await scrollChunk(page, known, stopAfterKnown, maxLoads, state);
+    const fresh = (await readCards(page)).filter((card) => !read.cards.has(card.slug));
+    for (const card of fresh) read.cards.set(card.slug, card);
+    read.loads = state.loads;
+    if (fresh.length) progress({ read: read.cards.size, cards: fresh });
+  }
+  return state;
+}
+
+// Up to CHUNK_LOADS more loads from `state`; `stopped` is unset when the chunk ran out first.
+async function scrollChunk(page, known, stopAfterKnown, maxLoads, state) {
+  return page.evaluate(async ({ cardLink, known, stopAfterKnown, maxLoads, until, loads, lastGrowth,
+                                pauseMin, pauseJitter, endAfter }) => {
     const knownSet = new Set(known);
     const slugs = () => {
       const seen = new Set();
@@ -183,10 +218,8 @@ async function scrollList(page, known, stopAfterKnown, maxLoads) {
     const main = document.querySelector("main");
     const scroller = main.scrollHeight > main.clientHeight ? main : document.scrollingElement;
 
-    let lastGrowth = performance.now();
-    let loads = 0;
-    while (loads < maxLoads) {
-      if (reachedKnown()) return { loads, stopped: "known" };
+    while (loads < until) {
+      if (reachedKnown()) return { loads, lastGrowth, stopped: "known" };
       const before = slugs().size;
       const height = scroller.scrollHeight;
       scroller.scrollTop = scroller.scrollHeight;
@@ -195,12 +228,53 @@ async function scrollList(page, known, stopAfterKnown, maxLoads) {
       loads += 1;
       if (loads % 5 === 0) window.powerpacksRead(slugs().size);
       await new Promise((resolve) => setTimeout(resolve, pauseMin + Math.random() * pauseJitter));
-      if (scroller.scrollHeight !== height || slugs().size !== before) lastGrowth = performance.now();
-      else if (performance.now() - lastGrowth >= endAfter) return { loads, stopped: "end" };
+      if (scroller.scrollHeight !== height || slugs().size !== before) lastGrowth = Date.now();
+      else if (Date.now() - lastGrowth >= endAfter) return { loads, lastGrowth, stopped: "end" };
     }
-    return { loads, stopped: reachedKnown() ? "known" : "limit" };
-  }, { cardLink: CARD_LINK, known, stopAfterKnown, maxLoads, pauseMin: PAUSE_MIN_MS,
-       pauseJitter: PAUSE_JITTER_MS, endAfter: END_AFTER_MS });
+    if (loads < maxLoads) return { loads, lastGrowth };
+    return { loads, lastGrowth, stopped: reachedKnown() ? "known" : "limit" };
+  }, { cardLink: CARD_LINK, known, stopAfterKnown, maxLoads, until: Math.min(state.loads + CHUNK_LOADS, maxLoads),
+       ...state, pauseMin: PAUSE_MIN_MS, pauseJitter: PAUSE_JITTER_MS, endAfter: END_AFTER_MS });
+}
+
+// The list from LinkedIn's paged API (connections_api.js), 40 people a request from
+// `start`, one request per pause like a scroll, so nothing piles up in the tab. Each page goes to
+// the caller as it lands (progress `cards`), so a run that dies keeps every page before it, and
+// the next one starts at `offset`. null when the first request is not answered the way this
+// expects (the caller scrolls instead); a slow-down or a later failure stops at "limit".
+async function readByApi(page, known, stopAfterKnown, maxRequests, start, read, total) {
+  const knownSet = new Set(known);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let offset = start;
+  let seenKnown = 0;
+  for (let requests = 0; requests < maxRequests; requests += 1) {
+    if (requests) await page.waitForTimeout(PAUSE_MIN_MS + Math.random() * PAUSE_JITTER_MS);
+    const answer = await page.evaluate(async (url) => {
+      const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)/) || [])[1];
+      const response = await fetch(url, { credentials: "include", headers: {
+        "csrf-token": csrf, "x-restli-protocol-version": "2.0.0", accept: "application/vnd.linkedin.normalized+json+2.1" } });
+      return { status: response.status, text: await response.text() };
+    }, connectionsUrl(offset)).catch((error) => ({ status: 0, text: String(error.message) }));
+    let answered = null;
+    if (answer.status === 200) {
+      try { answered = connectionRows(JSON.parse(answer.text), timeZone); } catch (_) { answered = null; }
+    }
+    if (answered === null || (requests === 0 && start === 0 && !answered.rows.length && total !== 0)) {
+      log(`LinkedIn's connections API answered ${answer.status}`);
+      if (requests === 0 && !SLOW_DOWN.has(answer.status)) return null;
+      return { loads: requests, stopped: "limit", offset };
+    }
+    if (!answered.size) return { loads: requests + 1, stopped: "end", offset };
+    const { rows } = answered;
+    offset += answered.size;
+    const fresh = rows.filter((row) => !read.cards.has(row.slug));
+    for (const row of fresh) read.cards.set(row.slug, row);
+    read.loads = requests + 1;
+    progress({ read: read.cards.size, total, cards: fresh, offset });
+    seenKnown += rows.filter((row) => knownSet.has(row.slug.toLowerCase())).length;
+    if (stopAfterKnown > 0 && seenKnown >= stopAfterKnown) return { loads: requests + 1, stopped: "known", offset };
+  }
+  return { loads: maxRequests, stopped: "limit", offset };
 }
 
 // One row per profile: the card's first line is the name, a "Connected on"
@@ -284,14 +358,26 @@ async function main() {
       await page.screenshot({ path: args.screenshot, type: "png" }).catch(() => {});
     }
     await page.exposeFunction("powerpacksRead", (read) => progress({ read, total }));
-    const scrolled = await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads));
-    const connections = await readCards(page);
+    const read = { cards: new Map(), loads: 0 };
+    let scrolled = await readByApi(page, known, Number(args.stopAfterKnown), Number(args.maxRequests || args.maxLoads),
+                                   Number(args.start || 0), read, total);
+    if (!scrolled) log("scrolling the page instead");
+    try {
+      scrolled = scrolled || await scrollList(page, known, Number(args.stopAfterKnown), Number(args.maxLoads), read);
+    } catch (error) {
+      if (!/Target crashed/.test(String(error && error.message))) throw error;
+      // The caller reads a crash like a stall: keep the cards read so far, ask for LinkedIn's export.
+      log(`the LinkedIn tab crashed after ${read.cards.size} connections; keeping those`);
+      scrolled = { loads: read.loads, stopped: "crashed" };
+      page = await context.newPage();
+    }
+    const connections = [...read.cards.values()];
     log(`read ${connections.length} connections in ${scrolled.loads} loads (${scrolled.stopped})`);
     // LinkedIn's script swaps /in/me for the real slug just after the page loads.
     await page.goto(OWNER_URL, { waitUntil: "domcontentloaded" });
     await page.waitForURL((url) => !/\/in\/me\/?$/.test(new URL(url).pathname), { timeout: 15000 }).catch(() => {});
     const owner = page.url().match(/\/in\/([^/?#]+)/);
-    result({ status: "ok", connections, total, ...scrolled, owner_slug: owner && owner[1] !== "me" ? owner[1] : "" });
+    result({ status: "ok", connections, total, loads: scrolled.loads, stopped: scrolled.stopped, offset: scrolled.offset || 0, owner_slug: owner && owner[1] !== "me" ? owner[1] : "" });
   } finally {
     await context.close().catch(() => {});
   }

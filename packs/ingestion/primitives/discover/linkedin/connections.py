@@ -13,7 +13,8 @@ at), whether the whole list has been read, and the signed-in user's own profile
 URL. A read that ends under STALL_SHARE of the count stalled (LinkedIn stopped
 sending cards): it stops there to keep the account safe, asks LinkedIn for its
 data export, and says so; the next run imports that export once LinkedIn has it
-ready, and reads the list again until then. Any other read that reaches the end of the list is the whole
+ready, and reads the list again until then. A read whose tab crashed partway (a list of
+thousands can take it down) keeps the people it read and is a stall the same way. Any other read that reaches the end of the list is the whole
 list; how far it got against the count is recorded. Until the list is read, each
 run goes LOADS_PER_RUN further down than the last. A CSV with no record is a
 LinkedIn export (or an earlier setup's copy of one); the next run tops it up from
@@ -21,6 +22,12 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-11-13: the browser reads LinkedIn's paged API (connections_browser.js); every page is written
+      to the CSV as it lands and connections.json records how far down it got (`offset`), so a run
+      that dies keeps what it read and the next run goes on from there. A stall is judged on all
+      the rows held, since a resumed run reads only the rest.
+  2026-11-13: a read whose browser tab crashed keeps what it read and is a stall (asks for the
+      export); it used to fail and lose the whole read, and every retry crashed at the same place.
   2026-11-13: pictures are fetched with a User-Agent; LinkedIn's CDN answers Python's default one
       with 403, so no picture was ever saved.
   2026-10-24: the scroll run saves one picture of the connections page (PAGE_SHOT) for the setup screen,
@@ -76,6 +83,8 @@ LOGIN_TIMEOUT_SECONDS = 900
 SECONDS_PER_LOAD = 3
 LOADS_PER_RUN = 300
 KNOWN_OVERLAP = 25
+# How far before the last backfill's end the next API read starts.
+BACKFILL_OVERLAP = 40
 # A read that ends with less than this share of LinkedIn's count stalled: one run
 # got 10 of 298 when LinkedIn stopped sending cards. A full read can still end a
 # little short, since the count includes people the list never shows (two reads a
@@ -199,6 +208,10 @@ class LinkedInConnections:
         return {"status": "completed", "outcome": "export_imported", "complete": True, "connections": len(rows),
                 "added": len(added), "path": str(self.csv_path)}
 
+    @staticmethod
+    def _new(card: dict[str, str], known: set[str], added: dict[str, Any]) -> bool:
+        return card["slug"] not in added and extract_public_identifier(PROFILE_URL.format(slug=card["slug"])) not in known
+
     def run(self, *, on_count: Callable[[int, int], None] | None = None) -> dict[str, Any]:
         """Read new connections; `on_count(read, total)` follows the read as it scrolls. `outcome`
         says how it ended: read, partial (LinkedIn shows more), limit, stalled, export_requested,
@@ -214,15 +227,30 @@ class LinkedInConnections:
                     return imported
         backfill = previous.get("complete") is False
         max_loads = previous.get("loads", 0) + LOADS_PER_RUN if backfill else LOADS_PER_RUN
+        # The API read picks up where the last backfill ended; a few back, since new people push the list down.
+        start = max(0, previous.get("offset", 0) - BACKFILL_OVERLAP) if backfill else 0
+        added: dict[str, dict[str, str]] = {}
+
+        def on_progress(progress: dict) -> None:
+            # Each page is written as it lands, so a run that dies keeps everything read before it.
+            fresh = [card for card in progress.get("cards", []) if self._new(card, known, added)]
+            if fresh:
+                added.update({card["slug"]: _export_row(card) for card in fresh})
+                CsvIO.write_dict_rows(self.csv_path, EXPORT_COLUMNS, [*added.values(), *existing])
+            # And how far down it got, so the next run goes on from there (a whole list read before stays whole).
+            if "offset" in progress and not previous.get("complete"):
+                write_json(self.record_path, {**previous, "complete": False, "offset": progress["offset"], "updated_at": now_iso()})
+            if on_count and progress.get("read") is not None:
+                on_count(progress["read"], progress.get("total"))
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(sorted(known), handle)
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             payload = self._browser(
                 "--known-file", handle.name, "--stop-after-known", "0" if backfill else str(KNOWN_OVERLAP),
-                "--max-loads", str(max_loads), "--screenshot", str(self.csv_path.with_name(PAGE_SHOT.name)),
-                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD,
-                on_progress=(lambda progress: on_count(progress["read"], progress["total"])) if on_count else None)
+                "--max-loads", str(max_loads), "--max-requests", str(LOADS_PER_RUN), "--start", str(start),
+                "--screenshot", str(self.csv_path.with_name(PAGE_SHOT.name)),
+                timeout=self.login_timeout_seconds + max_loads * SECONDS_PER_LOAD, on_progress=on_progress)
         finally:
             os.unlink(handle.name)
         if payload["status"] == "needs_user_action":
@@ -230,9 +258,8 @@ class LinkedInConnections:
         if payload["status"] != "ok":
             return {"status": "failed", "message": payload["message"]}
 
-        added = [_export_row(card) for card in payload["connections"]
-                 if extract_public_identifier(PROFILE_URL.format(slug=card["slug"])) not in known]
-        rows = [*added, *existing]
+        added.update({card["slug"]: _export_row(card) for card in payload["connections"] if self._new(card, known, added)})
+        rows = [*added.values(), *existing]
         if not rows:
             return {"status": "failed", "message": "LinkedIn showed no connections."}
         if added:
@@ -240,14 +267,16 @@ class LinkedInConnections:
         save_pictures(payload["connections"], self.csv_path.with_name(PICTURES.name))
         total, stopped, read = payload["total"], payload["stopped"], len(payload["connections"])
         # The stall rule needs LinkedIn's count; a page that did not show one is read as far as it goes.
-        stalled = total is not None and stopped == "end" and read < total * STALL_SHARE
+        # A tab that crashed partway stalled too: a rerun scrolls from the top and crashes again.
+        stalled = stopped == "crashed" or total is not None and stopped == "end" and len(rows) < total * STALL_SHARE
         complete = (previous.get("complete", True) if stopped == "known"
                     else stopped == "end" and not stalled)
         # A stalled read asks LinkedIn for the data export; a later run imports it.
         export = self._export("request").get("export", "") if stalled else previous.get("export", "")
         write_json(self.record_path, {
             "status": "completed", "complete": complete, "total": total, "connections": len(rows),
-            "added": len(added), "loads": payload["loads"], "stopped": "stalled" if stalled else stopped,
+            "added": len(added), "loads": payload["loads"], "offset": payload.get("offset", 0),
+            "stopped": "stalled" if stalled else stopped,
             "export": export,
             "owner_url": PROFILE_URL.format(slug=payload["owner_slug"]) if payload["owner_slug"] else "",
             "updated_at": now_iso()})
