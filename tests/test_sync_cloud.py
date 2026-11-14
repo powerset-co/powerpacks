@@ -70,8 +70,8 @@ class FakeCloud:
         self.stored: dict[str, str] = {}
         self.applied: list[dict] = []
 
-    def __call__(self, path, body):
-        body = json.loads(gzip.decompress(gzip.compress(json.dumps(body, default=str).encode())))
+    def __call__(self, path, data):
+        body = json.loads(gzip.decompress(data))
         if path.endswith("/diff"):
             sent = body["hashes"]
             return {"upsert": sorted(p for p, h in sent.items() if self.stored.get(p) != h),
@@ -140,6 +140,48 @@ class SyncCloudTest(unittest.TestCase):
             with mock.patch.object(sync_cloud, "BATCH_PEOPLE", 1):
                 sync_cloud.sync(root, cloud, log=lambda _: None)
             self.assertEqual(sum(len(b["companies"]) for b in cloud.applied), 1)
+
+
+    def test_vectors_travel_as_base64_float32(self):
+        import array
+        import base64
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cloud = FakeCloud()
+            sync_cloud.sync(build_root(Path(tmp)), cloud, log=lambda _: None)
+            ada = next(p for p in cloud.applied[0]["people"] if p["person_id"] == P1)
+            vector = array.array("f", base64.b64decode(ada["docs"]["summaries"][0]["vector"])).tolist()
+            self.assertEqual([round(v, 3) for v in vector], [0.3, 0.4])
+            self.assertNotIn("hydrated_context", ada["profile"])  # the fixture has none
+
+    def test_oversized_batches_are_halved_until_they_fit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cloud = FakeCloud()
+            with mock.patch.object(sync_cloud, "MAX_BATCH_GZ", 1):
+                result = sync_cloud.sync(build_root(Path(tmp)), cloud, log=lambda _: None)
+            self.assertEqual([len(b["people"]) for b in cloud.applied], [1, 1])
+            self.assertEqual(result["batches"], 2)
+            self.assertEqual(sum(len(b["companies"]) for b in cloud.applied), 1)
+
+    def test_transient_failures_are_retried_and_client_errors_are_not(self):
+        import urllib.error
+
+        calls = []
+
+        def flaky(path, data):
+            calls.append(path)
+            if len(calls) == 1:
+                raise urllib.error.URLError("reset")
+            return {"ok": 1}
+
+        with mock.patch.object(sync_cloud.time, "sleep"):
+            self.assertEqual(sync_cloud.call_with_retry(flaky, "/x", b"", lambda _: None), {"ok": 1})
+
+            def bad(path, data):
+                raise urllib.error.HTTPError(path, 400, "bad", {}, None)
+
+            with self.assertRaises(urllib.error.HTTPError):
+                sync_cloud.call_with_retry(bad, "/x", b"", lambda _: None)
 
 
 if __name__ == "__main__":
