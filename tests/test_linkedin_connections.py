@@ -3,13 +3,15 @@ import contextlib
 import io
 import json
 import sys
+import threading
 import zipfile
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections
+from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections, save_pictures
 from packs.ingestion.primitives.setup.automations.shell import CommandResult, run_streaming_command
 
 MODULE = "packs.ingestion.primitives.discover.linkedin.connections"
@@ -225,6 +227,32 @@ class LinkedInConnectionsTests(unittest.TestCase):
         result = self.scrape({"status": "error", "message": "chrome is not installed"})
         self.assertEqual(result, {"status": "failed", "message": "chrome is not installed"})
         self.assertFalse(self.csv.exists())
+
+
+class PictureCdn(BaseHTTPRequestHandler):
+    """LinkedIn's picture CDN as it answers: 403 to urllib's default User-Agent."""
+
+    def do_GET(self):
+        refused = self.headers.get("User-Agent", "").startswith("Python-urllib")
+        self.send_response(403 if refused else 200)
+        self.end_headers()
+        if not refused:
+            self.wfile.write(b"jpeg")
+
+    def log_message(self, *args):
+        pass
+
+
+class SavePicturesTests(unittest.TestCase):
+    def test_pictures_are_saved_from_a_cdn_that_refuses_pythons_user_agent(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), PictureCdn)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        folder = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        url = f"http://127.0.0.1:{server.server_port}/ann.jpg"
+        self.assertEqual(save_pictures([{"slug": "ann-a", "picture": url}], folder), 1)
+        self.assertEqual((folder / "ann-a.jpg").read_bytes(), b"jpeg")
 
 
 if __name__ == "__main__":
