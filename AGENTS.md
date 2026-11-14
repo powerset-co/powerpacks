@@ -87,3 +87,8 @@ finished. The user completes login or OS permission dialogs; the agent resumes
 the workflow.
 If a targeted repair leaves the same failure, explain the remaining problem
 and the specific action needed instead of retrying indefinitely.
+
+To sync LinkedIn connections (or every connected source) from chat, ask the app
+to run it: `curl -fsS -X POST http://127.0.0.1:8765/tasks/api/refresh/run`, then
+poll `GET /tasks/api/refresh` until the run finishes. The app runs the browser
+read itself; the chat sandbox cannot start Chromium or open the saved sign-in.

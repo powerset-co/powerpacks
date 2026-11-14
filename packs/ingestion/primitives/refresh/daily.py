@@ -29,6 +29,9 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-13: LinkedIn counts as connected once its sign-in is saved, not only once Connections.csv
+    exists, so Refresh now (and an agent posting to /tasks/api/refresh/run) can redo a first read
+    that died before saving anything.
   2026-11-05: a stopped refresh keeps the failed step's own line with the run, and links to that run.
   2026-11-05: a stopped refresh points at Scheduled tasks, not Accounts' import view, in its own words.
   2026-11-04: weekly (day of week) and monthly (day of month) schedules besides daily; a missed
@@ -450,13 +453,15 @@ def _read(path: Path) -> str:
 
 
 def connected_sources(root: Path) -> list[SourceName]:
-    """The sources set up on this Mac: each has data from an earlier import."""
+    """The sources set up on this Mac: each has data from an earlier import, or for LinkedIn a saved
+    sign-in (a first read that died before writing Connections.csv is still LinkedIn to refresh)."""
     from packs.ingestion.primitives.accounts.accounts import MSGVAULT_HOME
+    from packs.ingestion.primitives.discover.linkedin.connections import BROWSER_PROFILE
     from packs.ingestion.primitives.discover.messages.wacli.paths import DEFAULT_STORE
     from packs.ingestion.primitives.setup.automations.accounts import stored_mailboxes
 
     found: list[SourceName] = []
-    if (root / CONNECTIONS_CSV).is_file():
+    if (root / CONNECTIONS_CSV).is_file() or (BROWSER_PROFILE.expanduser() / "Default/Cookies").is_file():
         found.append("linkedin")
     if stored_mailboxes(MSGVAULT_HOME):
         found.append("gmail")
