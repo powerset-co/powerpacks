@@ -194,3 +194,38 @@ export function stepCount(step: Omit<SearchStep, "created_at">): string {
     ? `${step.shown} of ${step.scored} people`
     : `${step.shown} people`
 }
+
+// Quoted plainly or inside the shell wrapper's `'"'"'`; a bare word is the criteria too.
+const CRITERIA = /\s--criteria\s+(?:'([^']*)'|"([^"]*)"|([^\s'"]+))/
+const SHELL = /^\/bin\/(?:z|ba)?sh -lc '([\s\S]*)'$/
+
+/** The command a `/bin/zsh -lc '…'` wrapper runs, so running it again does not nest a shell. */
+export function unwrapped(command: string): string {
+  const inner = SHELL.exec(command)?.[1]
+  return inner === undefined ? command : inner.replaceAll(`'"'"'`, "'")
+}
+
+/** A `rerank --criteria` that failed or was stopped: its run, what it tried, why, and the command to run again. */
+export interface FailedRefine {
+  runId: string
+  criteria: string | null
+  error: string | null
+  command: string
+}
+
+/** The command's failed refinement, or null for any other command or one still running. */
+export function failedRefine(entry: Entry): FailedRefine | null {
+  if (entry.kind !== "command" || !RERANK.test(entry.command) || USE.test(entry.command)) return null
+  const failed = entry.status === "failed" || (entry.status === "done" && (entry.exitCode ?? 0) !== 0)
+  const runId = RUN_DIR.exec(entry.command)?.[1]
+  if (!failed || !runId) return null
+  const command = unwrapped(entry.command)
+  const match = CRITERIA.exec(command)
+  const error = printed(entry)?.error
+  return {
+    runId,
+    criteria: match?.[1] ?? match?.[2] ?? match?.[3] ?? null,
+    error: typeof error === "string" ? error : null,
+    command,
+  }
+}

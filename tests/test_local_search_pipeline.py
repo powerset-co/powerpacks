@@ -1478,31 +1478,37 @@ class AgeFilterPreviewTests(unittest.TestCase):
 
 
 
-class PickerBackendDefaultTests(unittest.TestCase):
-    """The chat's pinned scope, in the environment, is the pipeline's default backend."""
+class ScopeIsAnArgumentTests(unittest.TestCase):
+    """The scope is only ever an argument: the environment and .env never pick the backend or the set."""
 
-    def parse(self, env: dict[str, str], *flags: str) -> tuple[str, str]:
+    def parse(self, env: dict[str, str], *flags: str) -> tuple[str, str, str | None]:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 
         with mock.patch.dict(os.environ, env, clear=False):
-            for key in ("POWERPACKS_LOCAL_SEARCH_DB", "POWERPACKS_DEFAULT_SET_ID"):
-                if key not in env:
-                    os.environ.pop(key, None)
             args = pipeline.build_parser().parse_args(["run", "--query", "q", *flags])
-        return args.backend, args.db
+        return args.backend, args.db, args.set_id
 
-    def test_local_index_pinned(self) -> None:
-        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}),
-                         ("local", "/idx/local-search.duckdb"))
+    def test_nothing_in_the_environment_changes_the_default(self) -> None:
+        stale = {"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb", "POWERPACKS_DEFAULT_SET_ID": "abc"}
+        self.assertEqual(self.parse(stale), ("powerset", pipeline_default_db(), None))
+        self.assertEqual(self.parse({}), ("powerset", pipeline_default_db(), None))
 
-    def test_set_pinned_or_nothing(self) -> None:
-        self.assertEqual(self.parse({"POWERPACKS_DEFAULT_SET_ID": "abc", "POWERPACKS_LOCAL_SEARCH_DB": ""})[0], "powerset")
-        self.assertEqual(self.parse({})[0], "powerset")
+    def test_the_flags_carry_the_scope(self) -> None:
+        self.assertEqual(self.parse({}, "--set-id", "abc")[::2], ("powerset", "abc"))
+        self.assertEqual(self.parse({}, "--backend", "local", "--db", "/other.duckdb"), ("local", "/other.duckdb", None))
 
-    def test_explicit_flags_win(self) -> None:
-        self.assertEqual(self.parse({"POWERPACKS_LOCAL_SEARCH_DB": "/idx/local-search.duckdb"}, "--backend", "powerset")[0],
-                         "powerset")
-        self.assertEqual(self.parse({}, "--backend", "local", "--db", "/other.duckdb"), ("local", "/other.duckdb"))
+    def test_prepare_pins_the_set_into_the_payload(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        payload = pipeline.pin_payload_set_id({"normalized_query": "q", "role_search_filters": {"cities": ["SF"]}}, "abc")
+        self.assertEqual(payload["role_search_filters"], {"cities": ["SF"], "set_id": "abc"})
+        self.assertEqual(pipeline.compact_preview(payload, Path("/p.json"), [])["set_scope"], "abc")
+
+
+def pipeline_default_db() -> str:
+    from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+    return pipeline.DEFAULT_LOCAL_DB
 
 
 if __name__ == "__main__":

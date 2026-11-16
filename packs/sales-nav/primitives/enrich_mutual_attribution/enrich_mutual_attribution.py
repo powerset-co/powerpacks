@@ -374,9 +374,9 @@ def main() -> None:
 
     state_path = Path(args.state)
     state = load_state(state_path)
-    set_id = args.set_id or state.get("set_id") or os.environ.get("POWERPACKS_DEFAULT_SET_ID")
+    set_id = args.set_id or state.get("set_id")
     if not set_id:
-        print(json.dumps({"status": "failed", "error": "No set_id provided or found in state/env"}))
+        print(json.dumps({"status": "failed", "error": "No set_id provided or found in state"}))
         raise SystemExit(1)
 
     try:

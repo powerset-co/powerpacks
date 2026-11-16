@@ -100,10 +100,14 @@ export function Composer({
             {footer}
             {onFullAccess && (
               <ComposerToggle
-                label="Full Access"
+                label={fullAccess ? "Full Access" : "Ask First"}
                 enabled={fullAccess}
                 onChange={() => onFullAccess(!fullAccess)}
-                description="Lets your Codex run commands without asking. Does not change permissions for shared replies."
+                description={
+                  fullAccess
+                    ? "Lets your Codex run commands without asking. Does not change permissions for shared replies."
+                    : "Your Codex works in the Powerpacks folder and asks before going outside it. Click for Full Access."
+                }
               />
             )}
             {isDesktop() && features.auto_reply && <AutoReply />}

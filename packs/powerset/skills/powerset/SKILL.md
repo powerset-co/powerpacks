@@ -19,8 +19,7 @@ First-run setup has one path, the install skill
 | `$powerset login` | Run the login workflow below. |
 | `$powerset status` | Run the setup check quietly and summarize only blockers. |
 | `$powerset whoami` | Run the Auth0 `whoami` primitive. |
-| `$powerset sets`, `$powerset sets list` | Follow `packs/powerset/skills/powerset-set/SKILL.md` to list sets via HTTP `/v2/sets`. |
-| `$powerset sets use <id|name>` | Follow `packs/powerset/skills/powerset-set/SKILL.md` to resolve a set via HTTP `/v2/sets` and write `POWERPACKS_DEFAULT_SET_ID` to local `.env`. |
+| `$powerset sets`, `$powerset sets list` | Follow `packs/powerset/skills/powerset-set/SKILL.md` to list sets via HTTP `/v2/sets`. A search's set is passed on its command as `--set-id`; nothing is written to `.env`. |
 | `$powerset env pull` | Pull your Modal token + OpenAI key + Parallel key + Powerset API key from the Powerset API (using your Auth0 login) into `.env`. The explicit command is consent to write `.env`. |
 | `$powerset create oauth app` | Route to the msgvault setup primitive for Gmail OAuth Desktop app guidance. |
 

@@ -333,13 +333,11 @@ def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
         return list(dict.fromkeys(str(value) for value in explicit if value))
 
     # `set_id` is a Powerset set UUID, not a TurboPuffer operator id. Resolve it
-    # through Postgres before applying the `allowed_operator_ids` filter. When no
-    # set_id is present, low-level filters only inherit explicit env defaults;
-    # personal-set fallback lives in the resolve_set_operators primitive so
-    # import-time/unit-test filter construction never unexpectedly hits Postgres.
-    set_id = str(payload["set_id"]) if payload.get("set_id") else (
-        os.getenv("POWERPACKS_DEFAULT_SET_ID") or os.getenv("POWERSET_DEFAULT_SET_ID")
-    )
+    # through Postgres before applying the `allowed_operator_ids` filter. A payload
+    # without one is unscoped here; the personal-set fallback lives in the
+    # resolve_set_operators primitive so import-time/unit-test filter construction
+    # never unexpectedly hits Postgres.
+    set_id = str(payload["set_id"]) if payload.get("set_id") else None
     if not set_id:
         return []
     try:

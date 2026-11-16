@@ -3,6 +3,9 @@
 This tiny module is intentionally not local- or TurboPuffer-specific.  Shared
 query/filter helpers use it only to avoid remote-only defaults, while concrete
 pipelines import their backend modules directly.
+
+Local mode is only ever configured by the process itself, from its own `--db` /
+`--local-db` argument. Nothing is read from the environment or `.env`.
 """
 
 from __future__ import annotations
@@ -19,10 +22,7 @@ def configure_local_backend(db_path: str | os.PathLike[str] | None) -> None:
 
 
 def explicit_local_backend_path() -> str | None:
-    if _EXPLICIT_LOCAL_SEARCH_DB:
-        return _EXPLICIT_LOCAL_SEARCH_DB
-    value = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
-    return value if value else None
+    return _EXPLICIT_LOCAL_SEARCH_DB or None
 
 
 def is_local_backend_configured() -> bool:

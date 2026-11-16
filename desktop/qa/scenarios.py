@@ -159,6 +159,55 @@ def people_select_all(app: App) -> None:
                  WRITE, f"{total:,} selected")
 
 
+def people_not_assessed(app: App) -> None:
+    """Not assessed counts only people with more than a LinkedIn: an undecided LinkedIn-only
+    person counts (and lists) as Keep. They were counted as Not assessed, a count nobody could act on."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    count = ("JSON.parse((() => { const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&show=linkedin_only&' + %s, false); "
+             "r.send(); return r.responseText })()).matching")
+    stray = app.js(count % "'tab=unjudged&filter.evidence=No%20relationship%20labels'")
+    if stray:
+        raise Failed(f"{stray:,} LinkedIn-only people count as Not assessed")
+    unjudged = app.js(count % "'tab=unjudged'")
+    app.click({"css": "[data-bar] [aria-label='Decision']"})
+    app.wait_for({"css": "[role=listbox] [role=option]"}, CLICK, "the Decision filter opens")
+    options = app.js("[...document.querySelectorAll('[role=listbox] [role=option]')].map((o) => o.innerText.trim())")
+    app.key("Escape")
+    shown = next((o for o in options if o.startswith("Not assessed")), "Not assessed · 0")
+    if shown != f"Not assessed · {unjudged:,}" and (unjudged or shown != "Not assessed · 0"):
+        raise Failed(f"the Decision filter reads {shown!r}, the list has {unjudged:,} not assessed")
+
+
+def _matching(app: App, query: str) -> int:
+    """How many people the page's own list endpoint matches for `query`."""
+    return app.js(f"JSON.parse((() => {{ const r = new XMLHttpRequest(); r.open('GET', '/api/people/page?limit=1&{query}', false); "
+                  "r.send(); return r.responseText })()).matching")
+
+
+def people_hide_linkedin(app: App) -> None:
+    """The Filters menu's "Hide LinkedIn-only people" does what its box shows: checked, no
+    LinkedIn-only person is listed; unchecked, everyone is. It read checked yet hid no one when
+    everyone was LinkedIn-only (a network right after its LinkedIn import). Flips both ways."""
+    app.go("/people", {"css": "[data-viewport] .row"}, PAGE)
+    everyone = _matching(app, "show=linkedin_only")
+    linkedin_only = _matching(app, "show=linkedin_only&filter.evidence=No%20relationship%20labels")
+    box = "[data-radix-popper-content-wrapper] [role=checkbox]"  # the menu's, not a row's select box
+    checked = f"document.querySelector({box!r})?.getAttribute('aria-checked')"
+    listed = "(document.querySelector('[aria-rowcount]') ? " + ROW_COUNT + " : 0)"  # the empty page has no table
+    for flip in (True, True, False):
+        app.click({"css": "[data-filters]"})
+        app.wait_for({"css": box}, CLICK, "the Filters menu opens")
+        state = app.js(checked)
+        want = everyone - linkedin_only if state == "true" else everyone
+        app.wait_for(f"({LOADING}) && {listed} === {want}", WRITE,
+                     f"with the box {'checked' if state == 'true' else 'unchecked'}, {want:,} of {everyone:,} people list")
+        if flip:
+            app.click({"css": box})
+            app.wait_for(f"{checked} !== {state!r}", CLICK, "the box flips")
+        app.key("Escape")
+        app.wait_for(f"!document.querySelector({box!r})", CLICK, "the Filters menu closes")
+
+
 def search_set_picker(app: App) -> None:
     """The chat's Search in picker opens, and a pick shows at once."""
     app.go("/agent", {"text": "Search in"}, PAGE)
@@ -204,6 +253,67 @@ def search_refine(app: App) -> None:
         raise Failed("the refinement added its tag, but the rows and scores are the same")
 
 
+PREPARE = 120000  # a chat turn that prepares a search: the model picks the skill, the expander runs
+CARD = "section[aria-label='Search filters']"
+KEYWORD_REMOVES = f"[...document.querySelectorAll(\"{CARD} button[aria-label^='Remove ']\")].filter((b) => b.closest('div').previousElementSibling?.innerText === 'Role Keywords')"
+RUN_DISABLED = "[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Run Search')?.disabled"
+
+
+def search_no_keywords(app: App) -> None:
+    """A search with its role keywords all removed asks for one and won't run (without them the
+    run screens everyone the other filters let through, or fails); adding one back runs it.
+    Prepares a search in a new chat (a model turn) and never clicks Run Search."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.click({"css": "[aria-label='New chat']"})
+    app.click({"css": "#agent-message"})
+    app.type("software engineers in the Bay Area")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{KEYWORD_REMOVES}.length > 0", PREPARE, "the search card shows its role keywords")
+    if app.js(RUN_DISABLED) is not False:
+        raise Failed("Run Search is not ready on the prepared search")
+    while app.js(f"{KEYWORD_REMOVES}.length") > 0:
+        app.js(f"{KEYWORD_REMOVES}[0].click()")
+    app.wait_for({"text": "Add a role keyword to run this search."}, CLICK, "the card asks for a role keyword")
+    if app.js(RUN_DISABLED) is not True:
+        raise Failed("Run Search still runs a search with no role keywords")
+    app.click({"css": f"{CARD} button[aria-label='Add Keywords']"})
+    app.click({"css": "input[aria-label='Add Keywords']"})
+    app.type("software engineer")
+    app.key("Enter")
+    app.wait_for(f"{RUN_DISABLED} === false", CLICK, "a keyword added back lets the search run")
+    if app.shows({"text": "Add a role keyword to run this search."}):
+        raise Failed("the warning stays after a keyword was added back")
+
+
+FAILED_CARDS = "[...document.querySelectorAll(\"[aria-label='Refinement']\")].filter((card) => card.innerText.includes('Refine failed'))"
+RETRIES = f"{FAILED_CARDS}.flatMap((card) => [...card.querySelectorAll('button')].filter((b) => b.innerText.trim() === 'Retry'))"
+
+
+def search_refine_retry(app: App) -> None:
+    """A refinement that fails shows a failed card with Retry, and Retry runs it again (a second
+    failed card; the first one's Retry goes). The refine is SQL that returns no person_id: it fails
+    before any write and costs no OpenAI tokens. Needs the root's refined search and ChatGPT."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    run_id = app.js(
+        "(() => { const x = new XMLHttpRequest(); x.open('GET', '/searches/api/catalog', false); x.send();"
+        f" return JSON.parse(x.responseText).searches.find((card) => card.title === {json.dumps(REFINED)})?.run_id }})()"
+    )
+    if not run_id:
+        raise Failed(f"no saved search titled {REFINED!r}")
+    before = app.js(f"{FAILED_CARDS}.length")
+    command = ("uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/"
+               f"search_network_pipeline.py rerank --run-dir .powerpacks/search/{run_id} --criteria qa-failure --sql 'SELECT 1'")
+    app.click({"css": "#agent-message"})
+    app.type(f"Run exactly this command once and nothing else, then stop: {command}")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 1} && {RETRIES}.length >= 1", REFINE, "the failed refine shows Retry")
+    app.wait_for(f"{RETRIES}.at(-1)?.disabled === false", REFINE, "Retry waits only for the turn")
+    app.js(f"{RETRIES}.at(-1).click()")
+    app.wait_for(f"{FAILED_CARDS}.length === {before + 2}", GO_BACK, "Retry runs the refine again")
+    app.wait_for(f"{FAILED_CARDS}.at(-2).querySelector('button') === null", CLICK, "the first card's Retry goes")
+
+
 # The pieces of each search card's header row (the query, "+N filters", the set, the step, the
 # chevron) as boxes, and the pairs that overlap.
 HEADER_OVERLAPS = """(() => {
@@ -247,9 +357,9 @@ def search_card_narrow(app: App) -> None:
 
 
 def refresh_toggle(app: App) -> None:
-    """Scheduled tasks' daily switch flips on the click and the flip is saved (it survives a
+    """Scheduled tasks' automatic refresh switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
-    switch = {"css": "[role=switch][aria-label='Refresh every day']"}
+    switch = {"css": "[role=switch][aria-label='Refresh automatically']"}
     checked = "document.querySelector('[role=switch]')?.getAttribute('aria-checked')"
     app.go("/tasks", switch, PAGE)
     before = app.js(checked)
@@ -260,6 +370,66 @@ def refresh_toggle(app: App) -> None:
         app.go("/tasks", switch, PAGE)
         if app.js(checked) != state:
             raise Failed(f"the switch went back to {app.js(checked)!r} after a reload")
+
+
+
+# Answers Accounts' checks as if WhatsApp were linked and never imported (no last sync), until
+# `window.__qaImported` is set, then as if imported. A page reload drops it.
+FAKE_WHATSAPP = """(() => {
+  if (!window.__qaFetch) window.__qaFetch = window.fetch;
+  window.__qaImported = false;
+  const json = (body) => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+  window.fetch = async (input, init) => {
+    const url = String(input);
+    const response = await window.__qaFetch(input, init);
+    if (url.startsWith('/accounts/api/signed-in')) return json({ ...(await response.json()), whatsapp: true });
+    if (!url.startsWith('/accounts/api/accounts')) return response;
+    const body = await response.json();
+    const whatsapp = { source: 'whatsapp', name: 'WhatsApp', health: 'ok', note: 'Up to date', messages: 0, contacts: 0,
+      latest_message_at: null, last_sync_at: window.__qaImported ? new Date().toISOString() : null };
+    const others = body.accounts.filter((a) => a.source !== 'whatsapp' && (a.source === 'linkedin' || a.last_sync_at));
+    return json({ ...body, accounts: [...others, whatsapp] });
+  };
+  return true;
+})()"""
+PROMPT = {"css": "section[aria-label='Refresh after connecting']"}
+
+
+def accounts_refresh_prompt(app: App) -> None:
+    """While a linked message source has never been imported, the bottom of Accounts offers
+    Refresh now (no way to dismiss it); once it has been imported the card is gone. Simulated
+    through Accounts' own checks (WhatsApp linked, no last sync, then a last sync), so no real
+    refresh starts."""
+    try:
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js(FAKE_WHATSAPP)
+        app.go("/accounts", PROMPT, PAGE)
+        app.picture("accounts-refresh-prompt")
+        if app.shows({"text": "Later", "exact": True}):
+            raise Failed("the card can be put off with Later")
+        app.go("/people", {"css": "main"}, PAGE)
+        app.js("(window.__qaImported = true, true)")
+        app.go("/accounts", {"text": "Your sources"}, PAGE)
+        app.wait_for(f"!document.querySelector({json.dumps(PROMPT['css'])})", PAGE, "the card goes once WhatsApp is imported")
+    finally:
+        app.js("(window.__qaFetch && (window.fetch = window.__qaFetch), true)")
+
+
+ACCESS = "[...document.querySelectorAll('form button[aria-pressed]')].find((b) => /^(Full Access|Ask First)$/.test(b.getAttribute('aria-label')))"
+
+
+def chat_access_pill(app: App) -> None:
+    """The chat's access pill names the access the chat has: Full Access when on, Ask First when
+    off (it read Full Access either way). Flips both ways and is put back as it was."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.wait_for(f"!!{ACCESS}", PAGE, "the access pill shows")
+    before = app.js(f"{ACCESS}.getAttribute('aria-label')")
+    for label in ("Ask First" if before == "Full Access" else "Full Access", before):
+        app.click({"text": "Full Access" if label == "Ask First" else "Ask First", "exact": True})
+        app.wait_for(f"{ACCESS}?.getAttribute('aria-label') === {label!r}", CLICK, f"the pill reads {label}")
+        pressed = app.js(f"{ACCESS}.getAttribute('aria-pressed')")
+        if pressed != ("true" if label == "Full Access" else "false"):
+            raise Failed(f"the pill reads {label} but aria-pressed is {pressed}")
 
 
 SCENARIOS = {
@@ -273,8 +443,17 @@ SCENARIOS = {
     "people-search": people_search,
     "people-tab": people_tab,
     "people-select-all": people_select_all,
+    "people-not-assessed": people_not_assessed,
+    "people-hide-linkedin": people_hide_linkedin,
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
+    "search-no-keywords": search_no_keywords,
+    "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "refresh-toggle": refresh_toggle,
+    "accounts-refresh-prompt": accounts_refresh_prompt,
+    "chat-access-pill": chat_access_pill,
 }
+
+# Need the desktop bridge (chat runs only in the app): left out of a --browser run.
+NATIVE_ONLY = {"search-set-picker"}

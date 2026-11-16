@@ -21,11 +21,15 @@ import { linkedinSetup, useRun } from "@/pages/onboarding/run"
 import type { AccountSource, AccountsPayload } from "@/types/accounts"
 
 import { HowItWorks } from "./how-it-works/HowItWorks"
+import { RefreshPrompt } from "./RefreshPrompt"
 
 // Remembered on this Mac once How Deep Context works is closed; the "here" link opens it again.
 const HOW_IT_WORKS_KEY = "accounts.howItWorks"
 const SOURCES: readonly ConnectRow[] = ["imessage", "linkedin", "gmail", "whatsapp"]
 const SERVICES: readonly ConnectRow[] = ["browser", "codex"]
+// One of these connected but never imported offers Refresh now and the others; LinkedIn is
+// linked at onboarding.
+const MESSAGE_SOURCES: readonly ConnectRow[] = ["imessage", "gmail", "whatsapp"]
 const SUBTITLE: Record<ConnectRow, string> = {
   imessage: "iMessage & Contacts",
   linkedin: "Your connections",
@@ -197,6 +201,19 @@ export function AccountsPanel({
               </h2>
               {list(SERVICES)}
             </div>
+            <RefreshPrompt
+              sources={MESSAGE_SOURCES.map((key) => ({
+                key,
+                title: items[key].title,
+                state: items[key].state,
+                imported:
+                  accounts === undefined ||
+                  accounts.accounts.some(
+                    (account) => account.source === key && account.last_sync_at !== null,
+                  ),
+              }))}
+              onPick={choose}
+            />
             {error || startError ? (
               <p role="alert" className="m-0 px-3 text-xs text-bad">
                 {error ?? startError}

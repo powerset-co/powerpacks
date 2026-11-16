@@ -60,7 +60,7 @@ uv run --project . python scripts/build-local-duckdb-shim.py \
   --operator-email "$OPERATOR_EMAIL" \
   --force > "$BASE/duckdb.json"
 
-POWERPACKS_LOCAL_SEARCH_DB="$OUT/local-search.duckdb" uv run --project . python - <<'PY' > "$BASE/smoke.json"
+uv run --project . python - "$OUT/local-search.duckdb" <<'PY' > "$BASE/smoke.json"
 import asyncio, json, os, sys
 from pathlib import Path
 ROOT = Path.cwd()
@@ -69,7 +69,8 @@ for path in ['lib', 'shared', 'local', 'turbopuffer']:
     sys.path.insert(0, str(PRIMITIVES / path))
 import local_search_backend as local_backend  # type: ignore
 
-db = os.environ['POWERPACKS_LOCAL_SEARCH_DB']
+db = sys.argv[1]
+local_backend.configure_local_backend(db)
 local_backend._local_store_for_path.cache_clear()
 people = local_backend.namespace('people').query(top_k=5, include_attributes=['base_id', 'position_title', 'vector']).rows
 companies = local_backend.namespace('companies').query(top_k=5, include_attributes=['company_name', 'vector']).rows

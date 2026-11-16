@@ -141,6 +141,11 @@ class SourceOnboarding:
         saved, _ = _parser().parse_known_args(command[1:] if Path(command[0]).name == "onboard" else [])
         selected = set(Source(source) for source in (sources or saved.source or _DEFAULT_SOURCES))
         self.sources = tuple(source for source in Source if source in selected)
+        # A refresh of some sources (the scheduled refresh, a row's Sync) runs those alone but is not
+        # a new choice: the saved command keeps every chosen source, so a later Try again or Sync
+        # does not shrink to the one that happened to refresh last.
+        recorded = selected | set(Source(source) for source in saved.source) if refresh and sources else selected
+        self.recorded_sources = tuple(source for source in Source if source in recorded)
         skip_sources = skip_sources if sources else (*saved.skip_source, *skip_sources)
         self.skip_sources = tuple(dict.fromkeys(Source(source) for source in skip_sources))
         if not set(self.skip_sources) <= set(self.sources):
@@ -175,7 +180,7 @@ class SourceOnboarding:
                    and previous.get("steps", {}).get(step, {}).get("status") in {"completed", "skipped"}]
         self.plan = list(dict.fromkeys([*history, *steps]))
         args = [str(self.root / "bin/onboard")]
-        for source in self.sources:
+        for source in self.recorded_sources:
             args.extend(("--source", source.value))
         for email in self.gmail_emails:
             args.extend(("--gmail-email", email))

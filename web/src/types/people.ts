@@ -131,6 +131,8 @@ export interface PeoplePagePayload {
   columns: string[]
   rows: PersonCell[][]
   ids: string[]
+  // The Filters menu's hides the server applied (model.py PeoplePage.hidden).
+  hidden?: string[]
 }
 
 /** One fetched slice, decoded. */
@@ -139,6 +141,7 @@ export interface PeoplePage {
   totals: Record<WorthTab, number>
   kinds: ReadonlyMap<string, number>
   rows: Person[]
+  hidden: ReadonlySet<string>
 }
 
 /** One dated line of the relationship. */

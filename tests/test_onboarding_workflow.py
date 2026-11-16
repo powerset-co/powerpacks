@@ -33,7 +33,7 @@ from packs.powerset.primitives.install.status import InstallStatus
 from packs.powerset.primitives.install.steps import InstallStep
 from packs.powerset.primitives.install.tools import ImportTools
 from packs.powerset.primitives.install import workflow
-from packs.powerset.primitives.install.workflow import SourceOnboarding
+from packs.powerset.primitives.install.workflow import Source, SourceOnboarding
 from packs.ingestion.schemas.message_contacts import CSV_HEADERS
 from packs.shared.csv_io import CsvIO
 
@@ -164,6 +164,22 @@ class SourceOnboardingTests(unittest.TestCase):
         self.assertEqual(override.sync_after, '2025-10-03')
         self.assertEqual(override.wacli_store, store)
         self.assertEqual(override.skip_sources, ())
+
+    def test_a_refresh_of_one_source_keeps_the_other_chosen_sources_in_the_saved_command(self):
+        # Amir, 2026-11-13: the scheduled refresh ran `--refresh --source whatsapp` alone and the saved
+        # command shrank to WhatsApp, so every later Try again asked for a WhatsApp QR and synced nothing.
+        chosen = SourceOnboarding(self.root, sources=('linkedin', 'gmail'), gmail_emails=('casey@example.com',))
+        chosen._write('gmail.connect.waiting')
+        refresh = SourceOnboarding(self.root, sources=('whatsapp',), refresh=True)
+        self.assertEqual(tuple(refresh.sources), ('whatsapp',))
+        self.assertIn('--source linkedin --source gmail --source whatsapp', refresh.retry_command)
+        refresh._write('sources.all_skipped')
+        later = SourceOnboarding(self.root, sources=())
+        self.assertEqual(tuple(later.sources), (Source.LINKEDIN, Source.GMAIL, Source.WHATSAPP))
+        # A new choice without --refresh still replaces the saved sources.
+        replaced = SourceOnboarding(self.root, sources=('imessage',))
+        self.assertIn('--source imessage', replaced.retry_command)
+        self.assertNotIn('--source whatsapp', replaced.retry_command)
 
     def test_explicit_source_account_and_history_override_saved_choices(self):
         flow = SourceOnboarding(self.root, sources=('gmail',),

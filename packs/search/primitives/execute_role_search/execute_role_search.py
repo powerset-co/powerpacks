@@ -271,7 +271,10 @@ def main() -> None:
         "--extra-candidates-json",
         help="JSON file with agentic SQL vertical people ({'people': [{person_id, evidence, ...}]} or a bare list); unioned into candidates so they flow through the same hydration and LLM filter/rerank steps",
     )
+    parser.add_argument("--local-db", help="Search the local DuckDB index at this path instead of TurboPuffer")
     args = parser.parse_args()
+    if args.local_db:
+        search_backend_mode.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

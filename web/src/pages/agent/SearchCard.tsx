@@ -1098,18 +1098,39 @@ export function SearchCard({ search, actions, step }: SearchCardProps) {
     return true
   }
 
-  const row = (field: Field) => (
-    <FieldRow
-      key={field.label}
-      field={field}
-      values={shownValues}
-      prepared={prepared}
-      editable={actions}
-      onChange={setValues}
-      draft={drafts[field.label] ?? NO_DRAFT}
-      onDraft={(draft) => setDrafts({ ...drafts, [field.label]: draft })}
-    />
-  )
+  // What the run needs before Run Search: a search prepared with role keywords keeps at least one
+  // (without them the run matches no titles: it ranks on the role query alone, or with none screens
+  // everyone the other filters let through), and a search prepared with filters keeps at least one
+  // (with none the run fails). A changed query or trait is prepared again, so it needs neither.
+  const sending = clean(valuesWithDrafts())
+  const anyFilter = (map: Values) => [...map.values()].some(filled)
+  const kept = actions && !(dirty && isNewSearch(search, edits))
+  const needsKeyword = kept && filled(prepared.get(KEYWORDS)) && !filled(sending.get(KEYWORDS))
+  const needsFilter = kept && anyFilter(prepared) && !anyFilter(sending)
+
+  const row = (field: Field) => {
+    const fieldRow = (
+      <FieldRow
+        key={field.label}
+        field={field}
+        values={shownValues}
+        prepared={prepared}
+        editable={actions}
+        onChange={setValues}
+        draft={drafts[field.label] ?? NO_DRAFT}
+        onDraft={(draft) => setDrafts({ ...drafts, [field.label]: draft })}
+      />
+    )
+    if (!(needsKeyword && "key" in field.control && field.control.key === KEYWORDS)) return fieldRow
+    return (
+      <div key={field.label} className="flex min-w-0 flex-col gap-2">
+        {fieldRow}
+        <p role="alert" className="m-0 text-xs text-warn">
+          Add a role keyword to run this search.
+        </p>
+      </div>
+    )
+  }
 
   // Role Query, Seniority and Role Keywords lead, as the cloud app has them; Seniority and Role
   // Keywords stay while editing so they can be filled. The rest follow in the table's order. Read-
@@ -1208,6 +1229,11 @@ export function SearchCard({ search, actions, step }: SearchCardProps) {
               {lead.map(row)}
               {rest.map(row)}
             </div>
+            {needsFilter && !needsKeyword && (
+              <p role="alert" className="m-0 mt-4 text-xs text-warn">
+                Add a filter to run this search.
+              </p>
+            )}
             {estimate !== null && (
               <div
                 className={cn(
@@ -1263,7 +1289,13 @@ export function SearchCard({ search, actions, step }: SearchCardProps) {
             Edit Filters
           </Button>
           {search.blockers.length === 0 ? (
-            <Button variant="primary" size="lg" className="flex-1" onClick={() => submit(true)}>
+            <Button
+              variant="primary"
+              size="lg"
+              className="flex-1"
+              onClick={() => submit(true)}
+              disabled={needsKeyword || needsFilter}
+            >
               Run Search
             </Button>
           ) : (

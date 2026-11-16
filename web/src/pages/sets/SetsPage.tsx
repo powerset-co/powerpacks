@@ -68,7 +68,12 @@ export function SetsPage() {
       {chosen === LOCAL ? (
         <LocalCard />
       ) : chosen ? (
-        <SetCard key={chosen} setId={chosen} onDeleted={() => choose("")} />
+        <SetCard
+          key={chosen}
+          setId={chosen}
+          personal={sets.some((set) => set.set_id === chosen && set.is_personal)}
+          onDeleted={() => choose("")}
+        />
       ) : null}
     </Page>
   )
@@ -133,7 +138,16 @@ function NewSet({ onCancel, onCreated }: { onCancel: () => void; onCreated: (id:
   )
 }
 
-function SetCard({ setId, onDeleted }: { setId: string; onDeleted: () => void }) {
+// Your personal set (your own network in the cloud) has no Delete.
+function SetCard({
+  setId,
+  personal,
+  onDeleted,
+}: {
+  setId: string
+  personal: boolean
+  onDeleted: () => void
+}) {
   const client = useQueryClient()
   const detail = useQuery({ queryKey: ["sets", setId], queryFn: () => fetchSetDetail(setId) })
   const invite = useMutation({ mutationFn: () => inviteToSet(setId) })
@@ -174,9 +188,16 @@ function SetCard({ setId, onDeleted }: { setId: string; onDeleted: () => void })
               <LinkIcon />
               {SETS.invite}
             </Button>
-            <Button variant="ghost" size="icon" aria-label={SETS.delete} onClick={() => setConfirming(true)}>
-              <TrashIcon />
-            </Button>
+            {personal ? null : (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={SETS.delete}
+                onClick={() => setConfirming(true)}
+              >
+                <TrashIcon />
+              </Button>
+            )}
           </div>
         )}
       </div>

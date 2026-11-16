@@ -96,9 +96,9 @@ def resolve_retrieval_identity(
 ) -> tuple[dict[str, Any], str | None, str]:
     """Resolve the exact corpus identity that approved artifacts may use."""
     if backend == "powerset":
-        set_id = str(requested_set_id or os.environ.get("POWERPACKS_DEFAULT_SET_ID") or "").strip()
+        set_id = str(requested_set_id or "").strip()
         if not set_id:
-            raise ValueError("Powerset search requires --set-id or POWERPACKS_DEFAULT_SET_ID")
+            raise ValueError("Powerset search requires --set-id")
         return {"backend": "powerset", "set_id": set_id}, set_id, requested_db
 
     db_path = Path(requested_db)

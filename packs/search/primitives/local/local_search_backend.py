@@ -2,13 +2,12 @@
 
 `turbopuffer_search_backend.py` remains the remote TurboPuffer client.  The functions in
 this module are the local-only branch used when a primitive is run with an
-explicit DuckDB path via `POWERPACKS_LOCAL_SEARCH_DB` or `configure_local_backend`.
+explicit DuckDB path through `configure_local_backend` (from its `--local-db` / `--db` argument).
 """
 
 from __future__ import annotations
 
 import functools
-import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -38,7 +37,7 @@ def configure_local_backend(db_path: str | Path | None) -> None:
 def explicit_local_backend_path() -> str | None:
     if _EXPLICIT_LOCAL_SEARCH_DB:
         return _EXPLICIT_LOCAL_SEARCH_DB
-    return search_backend_mode.explicit_local_backend_path() or os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
+    return search_backend_mode.explicit_local_backend_path()
 
 
 def is_local_backend() -> bool:

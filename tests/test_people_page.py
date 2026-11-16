@@ -48,9 +48,28 @@ class PeoplePageTests(unittest.TestCase):
     def test_linkedin_only_people_hide_only_while_anyone_else_shows(self) -> None:
         self.conn.execute("UPDATE families SET linkedin_only = 1 WHERE parent_id = 'p:casey'")
         self.assertEqual(self.names(tab=["no"]), ["Jordan Bravo", "Riley Echo"])
+        self.assertEqual(self.people.page(PeopleQuery.parse({}), frozenset()).hidden, ("linkedin_only",))
         self.assertEqual(self.names(tab=["no"], show=["linkedin_only"]), ["Casey Delta", "Jordan Bravo", "Riley Echo"])
         self.conn.execute("UPDATE families SET linkedin_only = 1")
-        self.assertEqual(self.names(tab=["no"]), ["Casey Delta", "Jordan Bravo", "Riley Echo"])
+        # Left alone, the hide steps aside rather than empty the list, and says so.
+        page = self.people.page(PeopleQuery.parse({"tab": ["no"]}), frozenset())
+        self.assertEqual(([row.name for row in page.rows], page.hidden),
+                         (["Casey Delta", "Jordan Bravo", "Riley Echo"], ()))
+        # Turned on, it hides them even when nobody is left.
+        page = self.people.page(PeopleQuery.parse({"tab": ["no"], "hide": ["linkedin_only"]}), frozenset())
+        self.assertEqual((page.rows, page.matching, page.hidden), ((), 0, ("linkedin_only",)))
+
+    def test_an_undecided_linkedin_only_person_counts_and_lists_as_keep(self) -> None:
+        # Casey: LinkedIn-only, nobody decided. Jordan: LinkedIn-only but skipped. Riley: undecided, with messages.
+        self.conn.execute("UPDATE families SET linkedin_only = 1, worth = '' WHERE parent_id = 'p:casey'")
+        self.conn.execute("UPDATE families SET linkedin_only = 1 WHERE parent_id = 'p:jordan'")
+        self.conn.execute("UPDATE families SET worth = '' WHERE parent_id = 'p:riley'")
+        page = self.people.page(PeopleQuery.parse({"tab": ["yes"], "show": ["linkedin_only"]}), frozenset())
+        self.assertEqual(page.totals, {"yes": 2, "no": 1, "unjudged": 1})
+        self.assertEqual([row.name for row in page.rows], ["Casey Delta", "Morgan Fox"])
+        self.assertEqual(self.names(tab=["unjudged"], show=["linkedin_only"]), ["Riley Echo"])
+        self.assertEqual(self.names(tab=["no"], show=["linkedin_only"]), ["Jordan Bravo"])
+        self.assertEqual(self.names(show=["linkedin_only"], **{"filter.worth": ["yes"]}), ["Casey Delta", "Morgan Fox"])
 
     def test_every_held_facet_and_the_counts(self) -> None:
         held = {"filter.relationship_kind": ["family"], "filter.last": ["< 1 year"]}

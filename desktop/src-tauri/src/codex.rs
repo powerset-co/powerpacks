@@ -331,28 +331,34 @@ impl Codex {
 
     /// Writes stay in the Powerpacks folder plus uv's cache (every `bin/*` command runs through
     /// `uv run`, which dies without it); network is on, since every search calls Powerset. The
-    /// chat's scope (`{"set_id": …}` or `{"local_db": …}`, from the page's Search-in picker) goes
-    /// into the environment of every command the agent runs, both keys always, so a stale value in
-    /// `.env` fills neither; a chat with no scope (from before scopes) leaves `.env` to decide.
+    /// chat's scope (`{"set_id": …}` or `{"local_db": …}`, from the page's Search-in picker) is one
+    /// sentence of the developer instructions: the agent passes it to every search command as an
+    /// argument, so nothing is read from the environment or `.env` for it.
     fn thread_settings(cwd: &Path, scope: &Value) -> Value {
         let uv_cache = dirs::home_dir().unwrap_or_default().join(".cache/uv");
-        let mut config = json!({
-            "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] },
-        });
-        if scope.is_object() {
-            let text = |key: &str| scope.get(key).and_then(Value::as_str).unwrap_or("");
-            config["shell_environment_policy"] = json!({ "set": {
-                "POWERPACKS_DEFAULT_SET_ID": text("set_id"),
-                "POWERPACKS_LOCAL_SEARCH_DB": text("local_db"),
-            } });
-        }
         json!({
             "cwd": cwd,
             "approvalPolicy": "on-request",
             "sandbox": "workspace-write",
-            "config": config,
-            "developerInstructions": DEVELOPER_INSTRUCTIONS,
+            "config": {
+                "sandbox_workspace_write": { "network_access": true, "writable_roots": [uv_cache] },
+            },
+            "developerInstructions": Self::developer_instructions(scope),
         })
+    }
+
+    /// The app's standing instructions, plus the chat's scope when it has one.
+    fn developer_instructions(scope: &Value) -> String {
+        let text = |key: &str| scope.get(key).and_then(Value::as_str).unwrap_or("");
+        let (set_id, local_db) = (text("set_id"), text("local_db"));
+        let scope_line = if !set_id.is_empty() {
+            format!(" This chat searches the Powerset set {set_id}: pass `--set-id {set_id}` to every search command.")
+        } else if !local_db.is_empty() {
+            format!(" This chat searches the local index at {local_db}: pass `--backend local --db {local_db}` to every search command.")
+        } else {
+            String::new()
+        };
+        format!("{DEVELOPER_INSTRUCTIONS}{scope_line}")
     }
 
     /// A new chat pinned to `scope`; the scope is kept by thread id so reopening the chat keeps it.
@@ -494,5 +500,34 @@ mod pipeline_command_tests {
         assert!(!is_pipeline_command(&format!("{run} && curl x")));
         assert!(!is_pipeline_command(&format!("{run} $(id)")));
         assert!(!is_pipeline_command("rm -rf ~ python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run"));
+    }
+}
+
+#[cfg(test)]
+mod scope_instruction_tests {
+    use super::*;
+
+    #[test]
+    fn a_set_is_named_as_its_flag() {
+        let text = Codex::developer_instructions(&json!({ "set_id": "abc-123" }));
+        assert!(text.starts_with(DEVELOPER_INSTRUCTIONS));
+        assert!(text.ends_with("pass `--set-id abc-123` to every search command."));
+    }
+
+    #[test]
+    fn the_local_index_is_named_as_its_flags() {
+        let text = Codex::developer_instructions(&json!({ "local_db": "/idx/local-search.duckdb" }));
+        assert!(text.ends_with(
+            "pass `--backend local --db /idx/local-search.duckdb` to every search command."
+        ));
+    }
+
+    #[test]
+    fn a_chat_without_a_scope_gets_the_plain_instructions_and_no_environment() {
+        let settings = Codex::thread_settings(Path::new("/w"), &Value::Null);
+        assert_eq!(settings["developerInstructions"], DEVELOPER_INSTRUCTIONS);
+        assert!(settings["config"].get("shell_environment_policy").is_none());
+        let pinned = Codex::thread_settings(Path::new("/w"), &json!({ "set_id": "abc" }));
+        assert!(pinned["config"].get("shell_environment_policy").is_none());
     }
 }

@@ -38,7 +38,6 @@ class OnboardingTests(unittest.TestCase):
         self.empty_contacts = False
         self.blank_keys = set()
         self.operator_id = ""
-        self.reject_key_once = False
         self.reject_old_token = False
         self.owner_id = "auth0|operator"
         case = self
@@ -51,9 +50,6 @@ class OnboardingTests(unittest.TestCase):
                 case.calls.append(("GET", self.path, None))
                 if self.path == case.fail_path:
                     return self.reply({"detail": "mock failure"}, case.fail_code)
-                if case.reject_key_once and self.path == "/v2/integrations/openai/key":
-                    case.reject_key_once = False
-                    return self.reply({"detail": "expired"}, 401)
                 if case.reject_old_token and self.headers.get("Authorization") == "Bearer old-token":
                     return self.reply({"detail": "expired"}, 401)
                 if self.path == "/v2/team/me":
@@ -65,9 +61,7 @@ class OnboardingTests(unittest.TestCase):
                     return self.reply({"members": [{"user_id": case.owner_id, "role": "owner"}]})
                 if self.path.startswith("/v2/set-contacts/"):
                     return self.reply({"leads": [] if case.empty_contacts else [{"id": "person-one"}]})
-                fields = {field: "  " if key in case.blank_keys else "mock-value" for key, (path, field) in keys.KEY_SOURCES.items()
-                          if path == self.path and key not in case.missing_keys}
-                return self.reply(fields, 200 if fields else 404)
+                return self.reply({}, 404)
 
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -111,7 +105,13 @@ class OnboardingTests(unittest.TestCase):
         auth._save_credentials(self.credentials, {"access_token": "old-token", "refresh_token": "mock-refresh",
             "expires_at": time.time() + (-100 if expired else 3600), "email": "stale@example.com"})
 
+    def seed_keys(self):
+        """What the sign-in left in .env: every key the account has, none it lacks."""
+        keys.write_env(self.root / ".env", {key: "mock-value" for key in keys.KEY_SOURCES
+                                            if key not in self.missing_keys and key not in self.blank_keys})
+
     def run_onboarding(self):
+        self.seed_keys()
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = Onboarding(self.root, pid=os.getpid(),
@@ -238,6 +238,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
 
     def run_install_command(self, *source_args):
+        self.seed_keys()
         argv = ["onboard", "--root", str(self.root), *source_args]
         with patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()), \
                 patch("packs.powerset.primitives.install.onboard.SourceOnboarding") as sources, \
@@ -316,33 +317,6 @@ class OnboardingTests(unittest.TestCase):
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
         self.assertEqual(state["step"], "credentials")
-
-    def test_required_credential_outage_fails_without_provisioning_advice(self):
-        self.fail_path = "/v2/integrations/openai/key"
-        code, state, output = self.run_onboarding()
-        self.assertEqual(code, 1)
-        self.assertEqual(state["status"], "failed")
-        self.assertIn("503", output)
-        self.assertNotIn("provision", state["message"])
-        self.assertNotIn("finish enabling", output)
-
-    def test_optional_credential_outage_does_not_block_search(self):
-        self.fail_path = "/v2/integrations/parallel/key"
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 0)
-        self.assertEqual(state["status"], "completed")
-
-    def test_credential_401_reconnects_and_verifies_account_before_retry(self):
-        self.reject_key_once = True
-        def login(args):
-            self.save_credentials()
-            return 0
-        with patch.object(auth, "cmd_login", side_effect=login) as login_mock:
-            code, _, _ = self.run_onboarding()
-        self.assertEqual(code, 0)
-        login_mock.assert_called_once()
-        self.assertEqual(sum(call[1] == "/v2/team/me" for call in self.calls), 2)
-        self.assertEqual(sum(call[1] == "/v2/integrations/openai/key" for call in self.calls), 2)
 
     def test_blank_required_credential_is_not_usable(self):
         self.blank_keys.add("OPENAI_API_KEY")

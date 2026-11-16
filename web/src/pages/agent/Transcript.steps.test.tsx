@@ -196,3 +196,55 @@ it("gives each search card in the chat its own run's way back, and none to a run
   await Promise.resolve()
   expect(store.runCommand.mock.calls).toEqual([[goBackCommand(RUN_ID, "s1")], [goBackCommand(OTHER, "s1")]])
 })
+
+function failedRerank(id: string, flag: string, status: "failed" | "done" = "failed"): Entry {
+  return {
+    kind: "command",
+    id,
+    command: `/bin/zsh -lc '${PIPELINE} rerank --run-dir '"'"'.powerpacks/search/${RUN_ID}'"'"' ${flag}'`,
+    status,
+    exitCode: status === "failed" ? null : 1,
+    output: `${JSON.stringify({ primitive: "search_network_pipeline", status: "failed", error: "judge batch failed" })}\n`,
+    durationMs: 900,
+  }
+}
+
+it("shows a failed or stopped refinement as a failed card that runs the same command again", async () => {
+  const stopped = failedRerank("c6", `--criteria '"'"'people under 40'"'"'`)
+  renderWith([PREPARE, RAN, S2, S3, stopped], STEPPED_RUN)
+  const failed = cards()[2]
+  if (!failed || cards().length !== 3) throw new Error("Expected a failed card after the two steps")
+  expect(failed.textContent).toContain("Refine failed")
+  expect(failed.textContent).toContain("people under 40")
+  expect(failed.textContent).toContain("judge batch failed")
+  fireEvent.click(within(failed).getByRole("button", { name: "Retry" }))
+  await Promise.resolve()
+  expect(store.runCommand.mock.calls).toEqual([
+    [`${PIPELINE} rerank --run-dir '.powerpacks/search/${RUN_ID}' --criteria 'people under 40'`],
+  ])
+  expect(store.send).not.toHaveBeenCalled()
+})
+
+it("asks in the chat when the app cannot run the retry, and waits while a turn runs", async () => {
+  store.runCommand.mockImplementation(() => Promise.resolve(false))
+  renderWith([PREPARE, RAN, failedRerank("c6", "--criteria 'people under 40'", "done")], STEPPED_RUN)
+  const failed = cards()[0]
+  if (!failed) throw new Error("Expected a failed card")
+  fireEvent.click(within(failed).getByRole("button", { name: "Retry" }))
+  await vi.waitFor(() => expect(store.send).toHaveBeenCalledWith("Try the refinement again: people under 40"))
+  cleanup()
+  renderWith([PREPARE, RAN, failedRerank("c6", "--criteria 'people under 40'")], STEPPED_RUN, true)
+  const waiting = cards()[0]
+  if (!waiting) throw new Error("Expected a failed card")
+  expect(within(waiting).getByRole("button", { name: "Retry" }).hasAttribute("disabled")).toBe(true)
+})
+
+it("drops the retry once the same refinement ran again", () => {
+  const first = failedRerank("c6", "--criteria 'people under 40'")
+  const again = failedRerank("c7", "--criteria 'people under 40'")
+  renderWith([PREPARE, RAN, first, again], STEPPED_RUN)
+  const [old, latest] = cards()
+  if (!old || !latest) throw new Error("Expected two failed cards")
+  expect(within(old).queryByRole("button", { name: "Retry" })).toBeNull()
+  expect(within(latest).getByRole("button", { name: "Retry" })).toBeTruthy()
+})

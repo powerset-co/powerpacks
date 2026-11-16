@@ -6,7 +6,7 @@ import { EmptyState, PageHeader, Toast } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { useSelection } from "@/hooks/useSelection"
 import { fetchPeopleIds, fetchPeoplePage } from "@/lib/api/people"
-import type { FacetSet, HideKey } from "@/lib/people/facets"
+import { HIDES, type FacetSet, type HideKey } from "@/lib/people/facets"
 import { LOGBOOK } from "@/lib/people/copy"
 import { writeView, type Tab } from "@/lib/people/view"
 
@@ -52,6 +52,11 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
     return list.rows.map((row) => row && { ...row, logbook: saved.get(row.parent_id) ?? "" })
   }, [list.rows, catalog.data])
   const { kinds, totals } = list
+  // The switches as on: the owner's choice, else what the server applied.
+  const hidden = useMemo(
+    () => new Set(HIDES.map(({ key }) => key).filter((key) => view.hide.get(key) ?? list.hidden.has(key))),
+    [view.hide, list.hidden],
+  )
   const byId = useMemo(
     () => new Map(matching.flatMap((row) => (row ? [[row.parent_id, row] as const] : []))),
     [matching],
@@ -126,7 +131,13 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
 
   // A new tab, filter or search starts over: nothing selected, no focus, back at the top.
   // Each handler keeps one identity, so j/k and the drawer never re-render the bars.
-  const { setTab: pickTab, setFilters: pickFilters, toggleHide: pickHide, setText: pickText } = filters
+  const {
+    setTab: pickTab,
+    setFilters: pickFilters,
+    setHide: pickHide,
+    clearFilters: pickClear,
+    setText: pickText,
+  } = filters
   const startOver = useCallback(() => {
     clearSelection()
     setFocus(-1)
@@ -157,12 +168,15 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
   )
   const toggleHide = useCallback(
     (key: HideKey) => {
-      pickHide(key)
+      pickHide(key, !hidden.has(key))
       startOver()
     },
-    [pickHide, startOver],
+    [pickHide, hidden, startOver],
   )
-  const clearFilters = useCallback(() => setFilters({}), [setFilters])
+  const clearFilters = useCallback(() => {
+    pickClear()
+    startOver()
+  }, [pickClear, startOver])
   const setRelationship = useCallback(
     (kind: string) => setFilters(kind ? { relationship_kind: [kind] } : {}),
     [setFilters],
@@ -227,7 +241,7 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
             onText={setText}
             onTab={setTab}
             onRelationship={setRelationship}
-            hide={view.hide}
+            hide={hidden}
             onHide={toggleHide}
             actions={actions}
             notice={
@@ -256,7 +270,7 @@ export function PeopleWorkspace({ reading, logbook, onView }: PeopleWorkspacePro
             empty={
               <EmptyText
                 hasPeople={totals.all > 0}
-                filtered={view.filters.size > 0 || view.text !== ""}
+                filtered={view.filters.size > 0 || view.text !== "" || [...view.hide.values()].some(Boolean)}
                 tab={view.tab}
                 onClear={clearFilters}
               />

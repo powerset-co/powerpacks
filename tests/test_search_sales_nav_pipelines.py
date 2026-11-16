@@ -328,6 +328,18 @@ class SalesNavPipelineTests(unittest.TestCase):
         self.assertEqual(sales.backend_of({"artifacts": {"set_id": ""}}), "local")
         self.assertEqual(sales.backend_of({"artifacts": {"set_id": "set-123"}}), "cloud")
 
+    def test_sales_resolve_scope_is_the_argument_never_the_environment(self):
+        args = SimpleNamespace(set_id=None, company=["Stripe"], title=[])
+        with mock.patch.dict("os.environ", {"POWERPACKS_DEFAULT_SET_ID": "stale-set"}), \
+             mock.patch.object(sales, "cloud_call", return_value={}) as cloud, \
+             mock.patch.object(sales, "local_resolve", return_value={}) as local, \
+             mock.patch.object(sales, "emit"):
+            sales.cmd_resolve(args)
+            cloud.assert_not_called()
+            local.assert_called_once()
+            sales.cmd_resolve(SimpleNamespace(set_id="set-123", company=["Stripe"], title=[]))
+            self.assertEqual(cloud.call_args.args[1]["set_id"], "set-123")
+
     def test_sales_local_search_maps_args_and_answers_in_the_api_shape(self):
         lead = {"first_name": "Ada", "last_name": "L", "title": "CTO", "company_name": "Stripe", "location": "SF",
                 "member_id": 74438553, "profile_id": "ACwAAA", "degree": 2, "total_mutual_count": 3,

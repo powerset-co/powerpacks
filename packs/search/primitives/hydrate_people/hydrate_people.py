@@ -678,8 +678,6 @@ def fetch_local_person_rows(
     batch_size: int | None = None,
 ) -> list[dict[str, Any]] | None:
     load_env_file(env_file)
-    if db_path is None and os.getenv("POWERPACKS_ENABLE_LEGACY_LOCAL_SEARCH_ENV") == "1":
-        db_path = os.getenv("POWERPACKS_LOCAL_SEARCH_DB")
     if not db_path:
         return None
     if not person_ids:

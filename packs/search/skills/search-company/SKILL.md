@@ -24,10 +24,10 @@ company set from the user's current request every time.
    `company_names`, `company_semantic_queries`, `entity_types`, `sector_types`,
    funding/headcount filters, company geography, `investor_names`, and
    resolved `investors`. Preserve `set_id` when the user provides one.
-2. Resolve set scoping before company resolution. If the user did not provide a
-   `set_id`, run `resolve_set_operators` without `--set-id` so it inherits
-   `POWERPACKS_DEFAULT_SET_ID` / `POWERSET_DEFAULT_SET_ID`, or falls back to the
-   logged-in operator's active personal set. Copy the returned `operator_ids`
+2. Resolve set scoping before company resolution. Run `resolve_set_operators` with
+   `--set-id` set to the set the chat's instructions name (or the user provided);
+   without one it falls back to the logged-in operator's active personal set.
+   Copy the returned `operator_ids`
    into the company resolver payload. Do not pass the raw set UUID as
    `allowed_operator_ids`.
 3. If `investor_names` are present, run `resolve_investors` first and record or

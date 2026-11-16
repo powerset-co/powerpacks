@@ -252,6 +252,24 @@ class RefineTest(unittest.TestCase):
                 self.assertEqual(load_catalog(self.root)[0].status, "completed")
         self.assertEqual(self.requests, [])
 
+    def test_killed_refine_reads_failed_and_can_run_again(self):
+        # A refine killed mid-judge never reaches its except: the run stays "running" with its pid.
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        catalog = json.loads(self.catalog_path.read_text())
+        catalog["fixture"].update(status="running", refine_pid=gone.pid)
+        self.catalog_path.write_text(json.dumps(catalog))
+        self.assertEqual(load_catalog(self.root)[0].status, "failed")
+        self.cli("--criteria", "again")
+        self.assertEqual(load_catalog(self.root)[0].status, "completed")
+        self.assertNotIn("refine_pid", json.loads(self.catalog_path.read_text())["fixture"])
+        # A refine still running holds the run.
+        catalog = json.loads(self.catalog_path.read_text())
+        catalog["fixture"].update(status="running", refine_pid=os.getpid())
+        self.catalog_path.write_text(json.dumps(catalog))
+        self.assertEqual(load_catalog(self.root)[0].status, "running")
+        self.cli("--criteria", "held", expected=1)
+
     def test_refusals_leave_files_unchanged(self):
         before = self.snapshot()
         self.cli("--criteria", "test", run_dir=self.root / "fixture", expected=1)

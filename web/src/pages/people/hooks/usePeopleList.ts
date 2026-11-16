@@ -14,6 +14,7 @@ export const PAGE_SIZE = 200
 const NO_ROWS: readonly (Person | null)[] = []
 const NO_TOTALS = { all: 0, yes: 0, no: 0, unjudged: 0 }
 const NO_KINDS: ReadonlyMap<string, number> = new Map()
+const NO_HIDDEN: ReadonlySet<string> = new Set()
 
 /** Each loaded row of every slice through `patch` (a write's answer, applied in place). */
 export function patchPeople(client: QueryClient, patch: (row: Person) => Person): void {
@@ -92,6 +93,7 @@ export function usePeopleList(view: PeopleView) {
     matching: head?.matching ?? 0,
     totals: head?.totals ?? NO_TOTALS,
     kinds: head?.kinds ?? NO_KINDS,
+    hidden: head?.hidden ?? NO_HIDDEN,
     // Nothing to show yet: the loading page.
     loading: !shown && !error,
     error,

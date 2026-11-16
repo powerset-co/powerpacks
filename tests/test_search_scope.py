@@ -76,6 +76,15 @@ class SearchScopeTests(unittest.TestCase):
         index.write_bytes(b"")
         self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local_db": str(index)}))
 
+    def test_expired_sign_in_still_offers_the_local_index(self) -> None:
+        # An expired sign-in still has a subject in credentials.json; bearer_token() then raises
+        # SystemExit, which `except Exception` let through and the request died with no answer.
+        self.api.side_effect = SystemExit("not signed in to Powerset; run `$powerset login` first")
+        index = self.root / ".powerpacks/search-index/local-search.duckdb"
+        index.parent.mkdir(parents=True)
+        index.write_bytes(b"")
+        self.assertEqual(self.request(), (HTTPStatus.OK, {"sets": [], "local_db": str(index)}))
+
     def test_one_set_comes_from_the_powerset_api(self) -> None:
         detail = {"id": "t-1", "name": "Powerset", "role": "member", "members": []}
         with patch("packs.shared.web.search_scope.set_detail", return_value=detail) as read:

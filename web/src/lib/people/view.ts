@@ -11,9 +11,9 @@ export const TABS: readonly Tab[] = WORTH_TABS
 export interface PeopleView {
   tab: Tab
   filters: FacetFilters
-  // The Filters menu: the kinds of people hidden from the list. Every kind starts hidden; the
-  // URL names the ones shown (`show=`).
-  hide: ReadonlySet<HideKey>
+  // The Filters menu: the hides the owner turned on (true, `hide=`) or off (false, `show=`). One left
+  // alone is the server's call: on while anyone else would show (the page's `hidden`).
+  hide: ReadonlyMap<HideKey, boolean>
   text: string
   sort: Sort
 }
@@ -21,7 +21,7 @@ export interface PeopleView {
 export const DEFAULT_VIEW: PeopleView = {
   tab: "all",
   filters: new Map(),
-  hide: new Set(HIDES.map(({ key }) => key)),
+  hide: new Map(),
   text: "",
   // Warmest first: warmth sorts warmest-first in its ascending direction, like the column's first click.
   sort: { key: "warmth", dir: 1 },
@@ -39,7 +39,15 @@ export function readView(params: URLSearchParams): PeopleView {
         return values.length ? [[key, new Set(values)]] : []
       }),
     ),
-    hide: new Set(HIDES.map(({ key }) => key).filter((key) => !params.getAll("show").includes(key))),
+    hide: new Map(
+      HIDES.flatMap(({ key }): [HideKey, boolean][] =>
+        params.getAll("show").includes(key)
+          ? [[key, false]]
+          : params.getAll("hide").includes(key)
+            ? [[key, true]]
+            : [],
+      ),
+    ),
   }
 }
 
@@ -60,7 +68,8 @@ export function writeView(
     for (const value of filters.get(key) ?? []) params.append(`filter.${key}`, value)
   }
   params.delete("show")
-  for (const { key } of HIDES) if (!hide.has(key)) params.append("show", key)
+  params.delete("hide")
+  for (const [key, on] of hide) params.append(on ? "hide" : "show", key)
   return params
 }
 

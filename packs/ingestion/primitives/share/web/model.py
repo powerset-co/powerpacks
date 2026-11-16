@@ -198,11 +198,15 @@ WARMTH_BUCKET = ("CASE WHEN warmth IS NULL THEN '' WHEN warmth < 0.5 THEN 'No re
 EVIDENCE = {"No relationship labels": "linkedin_only", "Group chats only": "group_chat_only",
             "Shared employer": "shared_employer", "Shared school": "shared_school"}
 
+# The family's decision as the page counts and lists it: a LinkedIn-only family nobody decided is a Keep (there is
+# nothing to assess it on), so Not assessed counts only people with more than a LinkedIn.
+DECISION = "CASE WHEN worth != '' THEN worth WHEN linkedin_only THEN 'yes' ELSE 'unjudged' END"
+
 # A facet (web/src/lib/people/facets.ts FACETS) -> the SQL value a held value is matched against; lists match
 # when any of their items is held.
 FACET_VALUES = {
     "reason": "reason",
-    "worth": "CASE worth WHEN '' THEN 'unjudged' ELSE worth END",
+    "worth": DECISION,
     "relationship_kind": "relationship_kind",
     "last": LAST_BUCKET,
     "linkedin": "CASE WHEN public_identifier != '' THEN 'Has LinkedIn' ELSE 'No LinkedIn' END",
@@ -226,7 +230,7 @@ TABS = ("all", "yes", "no", "unjudged")
 def _tab(tab: str) -> tuple[str, tuple[str, ...]]:
     if tab == "all":
         return "1", ()
-    return "worth = ?", ("" if tab == "unjudged" else tab,)
+    return f"{DECISION} = ?", (tab,)
 
 
 def _held(values: tuple[str, ...]) -> str:
@@ -236,7 +240,8 @@ def _held(values: tuple[str, ...]) -> str:
 @dataclass(frozen=True)
 class PeopleQuery:
     """The page's view as the query string writes it (web/src/lib/people/view.ts): tab, q, sort, dir,
-    filter.<facet> (repeated), show (the hides turned off), and the slice."""
+    filter.<facet> (repeated), show / hide (a hide the owner turned off / on), and the slice. A hide left
+    alone is on while anyone else would show, so a LinkedIn-only network does not open to an empty list."""
 
     tab: str
     text: str
@@ -244,6 +249,7 @@ class PeopleQuery:
     desc: bool
     filters: tuple[tuple[str, tuple[str, ...]], ...]
     hide: tuple[str, ...]
+    forced: tuple[str, ...]  # the hides the owner turned on: they apply even when nobody is left
     offset: int
     limit: int
     ids: bool
@@ -260,6 +266,7 @@ class PeopleQuery:
             desc=one("dir", "") == "desc",
             filters=tuple((key, tuple(query[f"filter.{key}"])) for key in facets if query.get(f"filter.{key}")),
             hide=tuple(key for key in HIDES if key not in query.get("show", [])),
+            forced=tuple(key for key in HIDES if key in query.get("hide", []) and key not in query.get("show", [])),
             offset=max(0, int(one("offset", "0"))),
             limit=min(500, max(1, int(one("limit", "200")))),
             ids=one("ids", "") == "1",
@@ -304,6 +311,7 @@ class PeoplePage:
     kinds: dict[str, int]
     rows: tuple[SharePerson, ...]
     ids: tuple[str, ...]
+    hidden: tuple[str, ...] = ()  # the hides applied: the Filters menu shows these as on
 
 
 class SharePeople:
@@ -417,12 +425,12 @@ class SharePeople:
         self.refresh()
         tab_where, tab_args = _tab(query.tab)
         where, args = query.where(logbooks)
-        hides = [hide for hide in query.hide
-                 if self.conn.execute(f"SELECT 1 FROM families WHERE NOT {HIDES[hide]} LIMIT 1").fetchone()]
+        hides = tuple(hide for hide in query.hide if hide in query.forced
+                      or self.conn.execute(f"SELECT 1 FROM families WHERE NOT {HIDES[hide]} LIMIT 1").fetchone())
         clause = " AND ".join([tab_where, *where, *(f"NOT {HIDES[hide]}" for hide in hides)])
         params = (*tab_args, *args)
         totals = dict(self.conn.execute(
-            "SELECT CASE worth WHEN '' THEN 'unjudged' ELSE worth END, COUNT(*) FROM families GROUP BY 1").fetchall())
+            f"SELECT {DECISION}, COUNT(*) FROM families GROUP BY 1").fetchall())
         kinds = dict(self.conn.execute(
             f"SELECT relationship_kind, COUNT(*) FROM families WHERE {tab_where} AND relationship_kind != '' "
             "GROUP BY 1", tab_args).fetchall())
@@ -431,11 +439,11 @@ class SharePeople:
         if query.ids:
             ids = tuple(row[0] for row in self.conn.execute(
                 f"SELECT parent_id FROM families WHERE {clause} ORDER BY {order}", params))
-            return PeoplePage(matching, totals, kinds, (), ids)
+            return PeoplePage(matching, totals, kinds, (), ids, hides)
         rows = tuple(_person(row) for row in self.conn.execute(
             f"SELECT * FROM families WHERE {clause} ORDER BY {order} LIMIT ? OFFSET ?",
             (*params, query.limit, query.offset)))
-        return PeoplePage(matching, totals, kinds, rows, ())
+        return PeoplePage(matching, totals, kinds, rows, (), hides)
 
     def detail(self, parent_id: str) -> PersonDetail | None:
         row = queries_share.families(self.conn, (parent_id,)).get(parent_id)
@@ -529,6 +537,7 @@ def page_payload(page: PeoplePage) -> dict[str, Any]:
         "columns": list(PEOPLE_COLUMNS),
         "rows": [list(astuple(row)) for row in page.rows],
         "ids": list(page.ids),
+        "hidden": list(page.hidden),
     }
 
 
