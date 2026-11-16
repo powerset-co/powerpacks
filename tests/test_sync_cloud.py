@@ -174,6 +174,7 @@ class SyncCloudTest(unittest.TestCase):
             con.execute("INSERT INTO local_companies VALUES (?, 'Acme', [1.0, 0.0])", [company])
             con.execute("UPDATE local_people_positions SET company_id = ? WHERE position_title = 'CTO'", [company])
             con.execute("UPDATE local_people_positions SET company_id = '' WHERE position_title = 'Engineer'")
+            con.execute("UPDATE local_person_profiles SET source_channels = 'gmail_msgvault,linkedin' WHERE person_id = ?", [P1])
             con.execute("ALTER TABLE local_person_profiles ALTER source_channels TYPE VARCHAR[] "
                         "USING string_split(source_channels, ',')")
             con.close()

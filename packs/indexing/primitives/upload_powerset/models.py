@@ -26,6 +26,7 @@ CLOUD_SOURCE_CHANNEL = {
     "imessage": "imessage",
     "whatsapp": "whatsapp",
     "linkedin_csv": "linkedin",
+    "linkedin": "linkedin",  # newer indexes label LinkedIn connections plainly
 }
 
 DISCOVERY_METHOD = "powerpacks"
