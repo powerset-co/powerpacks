@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from datetime import date
@@ -67,20 +66,17 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(ref["months_in_seat"], 8)
 
     def test_name_resolution_accepts_only_an_exact_returned_name(self) -> None:
-        exact = [{"company_name": "Firecrawl", "linkedin_url":
-                  "https://www.linkedin.com/company/firecrawl"}]
-        with mock.patch.object(company_context.company_search, "exact_name_lookup",
-                               new=mock.AsyncMock(return_value=exact)):
+        exact = [{"name": "Firecrawl Labs", "linkedin_url": "https://www.linkedin.com/company/other"},
+                 {"name": "Firecrawl", "linkedin_url": "https://www.linkedin.com/company/firecrawl"}]
+        with mock.patch.object(company_context, "company_search", return_value=exact):
             ref = company_context.resolve_hiring_company_ref(
                 {"name": "Firecrawl", "website_url": None})
         self.assertEqual(ref["slug"], "firecrawl")
         self.assertEqual(ref["resolution_basis"], "verified_name")
 
     def test_source_domain_overrides_job_board_company_link(self) -> None:
-        exact = [{"company_name": "Lovable", "website_domain": "lovable.dev",
-                  "linkedin_url": "https://www.linkedin.com/company/lovable-dev"}]
-        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
-                               new=mock.AsyncMock(return_value=exact)):
+        html = '<a href="https://www.linkedin.com/company/lovable-dev">LinkedIn</a>'
+        with mock.patch.object(company_context, "fetch", return_value=(html, "https://lovable.dev")):
             ref = company_context.resolve_hiring_company_ref(
                 {"name": "Lovable", "website_url": "https://jobs.ashbyhq.com/lovable/id"},
                 "https://lovable.dev/careers/design-engineer")
@@ -89,11 +85,9 @@ class CompanyContextTests(unittest.TestCase):
         self.assertEqual(ref["verified_domain"], "lovable.dev")
         self.assertEqual(ref["slug"], "lovable-dev")
 
-    def test_known_domain_uses_company_site_link_when_directory_has_no_slug(self) -> None:
+    def test_known_domain_uses_the_company_site_link(self) -> None:
         html = '<a href="https://www.linkedin.com/company/lovable-dev">LinkedIn</a>'
-        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
-                               new=mock.AsyncMock(return_value=[])), \
-                mock.patch.object(company_context, "fetch",
+        with mock.patch.object(company_context, "fetch",
                                   return_value=(html, "https://lovable.dev")) as fetch:
             ref = company_context.resolve_hiring_company_ref(
                 {"name": "Lovable", "website_url": "https://lovable.dev"})
@@ -104,9 +98,7 @@ class CompanyContextTests(unittest.TestCase):
 
     def test_company_site_bridge_rejects_redirect_to_another_domain(self) -> None:
         html = '<a href="https://www.linkedin.com/company/wrong-company">LinkedIn</a>'
-        with mock.patch.object(company_context.company_search, "exact_domain_lookup",
-                               new=mock.AsyncMock(return_value=[])), \
-                mock.patch.object(company_context, "fetch",
+        with mock.patch.object(company_context, "fetch",
                                   return_value=(html, "https://other.example")):
             ref = company_context.resolve_hiring_company_ref(
                 {"name": "Lovable", "website_url": "https://lovable.dev"})

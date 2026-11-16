@@ -17,8 +17,7 @@ PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
 import search_backend_mode  # noqa: E402
@@ -52,13 +51,12 @@ INCLUDE_ATTRIBUTES = [
 
 
 def search_backend() -> Any:
-    if search_backend_mode.is_local_backend_configured():
-        import local_search_backend as local_backend  # type: ignore
+    """The local DuckDB index; a Powerset set is searched through the Powerset API (cloud_search)."""
+    if not search_backend_mode.is_local_backend_configured():
+        raise RuntimeError("a set search runs through the Powerset API (cloud_search.py), not this primitive")
+    import local_search_backend as local_backend  # type: ignore
 
-        return local_backend
-    import turbopuffer_search_backend as turbopuffer_client  # type: ignore
-
-    return turbopuffer_client
+    return local_backend
 
 
 async def local_summary_rows(payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:

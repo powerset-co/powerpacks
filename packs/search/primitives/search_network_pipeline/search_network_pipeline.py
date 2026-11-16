@@ -2,7 +2,8 @@
 """Resumable orchestrator for the search-network primitive pipeline, both backends.
 
 One orchestrator, one `--backend {powerset,local}` switch:
-- `powerset` (default): TurboPuffer retrieval + Postgres hydration, scoped by set/operators.
+- `powerset` (default): the Powerset API's search and hydration for a set (cloud_search.py);
+  no Postgres or TurboPuffer.
 - `local`: the same mechanical primitives against the local DuckDB index. Scope is the
   DuckDB file itself — no set_id, operator resolution, Postgres, or TurboPuffer. Children
   that search it take the index as `--local-db` (shared/search_backend_mode);
@@ -39,7 +40,6 @@ PRIMITIVES_DIR = ROOT / "packs/search/primitives"
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(SHARED_DIR) not in sys.path:
@@ -49,6 +49,7 @@ if str(LIB_DIR) not in sys.path:
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
+from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -68,8 +69,9 @@ DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.env
 PAYLOAD_KEYS = {
     "intent_type", "source_type", "normalized_query", "vertical",
     "role_search_filters", "traits", "has_domain_intent", "notes",
+    "api_filters",  # a set search keeps the API's expansion to map the card's names back to ids
 }
-LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS
+LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS - {"api_filters"}
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
 DEFAULT_TOP_K = {"powerset": 10000, "local": 5000}
 REMOTE_SCOPE_KEYS = {"set_id", "operator_ids", "allowed_operator_ids", "searcher_operator_id"}
@@ -692,7 +694,7 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
     if not any(filters.get(key) for key in ["role_ids", "role_agent_ids", "role_tracks", "seniority_bands", "company_ids"]):
         return _with_local_title_clustering_status(payload, {"status": "skipped_no_title_scope"})
     try:
-        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
             if str(_path) not in sys.path:
                 sys.path.insert(0, str(_path))
         # Lazy by design: the import firewall requires this module to import
@@ -752,14 +754,12 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
 def configure_local_backend_mode(db_path: Path) -> None:
     """Mark this process as local-backend before any filter construction.
 
-    Shared filter helpers branch on backend mode: in remote mode a payload's
-    set_id resolves through Postgres into an allowed_operator_ids filter.
-    Local search scope is the DuckDB file, so
+    Shared filter helpers branch on backend mode. Local search scope is the DuckDB file, so
     in-process payload transforms (pool estimate, title clustering) must run
     with local mode configured or a foreign set id silently zeroes the pool
     and prepare makes a network call.
     """
-    for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+    for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
         if str(_path) not in sys.path:
             sys.path.insert(0, str(_path))
     import search_backend_mode  # type: ignore
@@ -971,19 +971,9 @@ def run_pipeline(args) -> dict[str, Any]:
     bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
     judge_changed = _capability_judge_changed(args, state)
-    top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["powerset"]
-    steps=[("resolve_set_operators",[sys.executable,str(ROOT/"packs/search/primitives/resolve_set_operators/resolve_set_operators.py"),"--state",str(state),"--env-file",args.env_file,"--write-state",
-                                      *(["--set-id",args.set_id] if getattr(args,"set_id",None) else [])])]
-    f=maybe_payload_filters(state)
-    if f.get("investor_names"):
-        steps.append(("resolve_investors",[sys.executable,str(ROOT/"packs/search/primitives/resolve_investors/resolve_investors.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
-    if f.get("company_names") or f.get("company_ids") or f.get("current_company_names") or f.get("company_semantic_queries") or f.get("sector_types") or f.get("investor_names"):
-        steps.append(("resolve_companies",[sys.executable,str(ROOT/"packs/search/primitives/turbopuffer/turbopuffer_resolve_companies.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
-    if f.get("education_names"):
-        steps.append(("resolve_education",[sys.executable,str(ROOT/"packs/search/primitives/turbopuffer/turbopuffer_resolve_education.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]))
-    steps += [
-        ("apply_prefilters",[sys.executable,str(ROOT/"packs/search/primitives/apply_prefilters/apply_prefilters.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
-        ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/execute_role_search/execute_role_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),"--top-k",str(top_k)]),
+    steps=[
+        ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/cloud_search/cloud_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),
+                                *(["--set-id",args.set_id] if getattr(args,"set_id",None) else [])]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
     ]
     for step,cmd in steps:
@@ -1199,7 +1189,7 @@ def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_f
     if ledger.get("mode")=="local_duckdb":
         from packs.search.primitives.deep_search.person_attribution import local_network_attribution
         return local_network_attribution(Path(ledger["duckdb"]), people), None
-    set_id=latest_step(state,"resolve_set_operators").get("set_id")
+    set_id=latest_step(state,"execute_role_search").get("set_id") or latest_step(state,"resolve_set_operators").get("set_id")
     if not people or not set_id:
         return {}, None
     try:
@@ -1255,14 +1245,8 @@ def cmd_prepare(args):
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
-        prompt_snapshot=out_dir/"expand-prompts"
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
-             "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
-             "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
-             "--snapshot-prompts-dir",str(prompt_snapshot)]
-        prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
-        if prompts_dir: cmd += ["--prompts-dir",prompts_dir]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
+        set_id=getattr(args,"set_id",None)
+        expand=cloud_search.expand(Path(args.env_file), args.query, set_id)
         payload=payload_from_expand_output(expand)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
@@ -1271,12 +1255,11 @@ def cmd_prepare(args):
             payload=pin_payload_seniority_bands(payload,pinned_bands)
         if getattr(args,"current_role",False):
             payload=pin_payload_current_role(payload,True)
-        set_id=getattr(args,"set_id",None)
         if set_id:
             payload=pin_payload_set_id(payload,set_id)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        issues=payload_quality_issues(payload)
+        issues=[]  # the API's own expansion: no local quality rules
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         if set_id: extra += f" --set-id {shlex.quote(set_id)}"
         extra+=execution_contract_suffix(args)
@@ -1290,15 +1273,13 @@ def cmd_prepare(args):
             "query":args.query,
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),
-            "expand_prompt_bundle":str(prompt_snapshot),
-            "expand_prompt_bundle_sha256":(expand.get("prompt_bundle") or {}).get("bundle_sha256"),
             "ledger":str(ledger),
             "quality_issues":issues,
             "preview":compact_preview(payload,payload_json,issues),
             "execute_command":uv_python_command(args,"run",ledger,extra),
         })
         return 0
-    except Exception as e:
+    except (Exception, SystemExit) as e:  # a signed-out bearer_token() raises SystemExit
         emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
 def cmd_prepare_local(args):
@@ -1381,7 +1362,7 @@ def cmd_approve(args):
 def add_backend(p):
     # The scope is an argument. The chat's instructions name its set or its local index and the
     # agent passes it here; nothing is read from the environment or .env for it.
-    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = TurboPuffer + Postgres remote retrieval; local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
+    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = the Powerset API (POST /v2/search/expand + /execute) for a set; local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
     p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: "+DEFAULT_LOCAL_DB)
     p.add_argument("--set-id",default=None,help="Powerset set to search (used only with --backend powerset); unstated: the signed-in user's personal set")
 

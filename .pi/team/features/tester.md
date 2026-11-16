@@ -36,7 +36,6 @@ bash scripts/lint-powerpacks
 bash scripts/test-powerpacks
 bash scripts/test-search
 uv run pytest tests -k '<selector>'
-uv run python evals/run_company_search_harness.py
 pi --models gpt-5.5,claude-opus-4-6 --session .pi/team/runtime/pi-sessions/<name>.jsonl
 ```
 

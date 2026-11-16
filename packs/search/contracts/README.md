@@ -2,10 +2,9 @@
 
 These files are the checked-in source of truth for Powerpacks primitives.
 
-Agents and primitives should read these contracts instead of guessing live table
-or attribute names. Live schema inspection is allowed only through the explicit
-`primitives/contracts` diagnostic primitive, and generated dumps should be kept
-as artifacts unless a human decides to update these checked-in contracts.
+Agents and primitives should read these contracts instead of guessing table or
+attribute names. The local index mirrors these shapes; an install never reads
+Postgres or TurboPuffer itself (a set goes through the Powerset API).
 
 ## Layout
 
@@ -16,13 +15,3 @@ as artifacts unless a human decides to update these checked-in contracts.
 - `profiles/hydrated-profile.schema.json` describes the normalized hydrated
   candidate profile passed between hydration, LLM filtering, persistence, and
   review UI primitives.
-
-## Diagnostics
-
-```bash
-uv run --project . python packs/search/primitives/contracts/contracts.py list
-uv run --project . python packs/search/primitives/contracts/contracts.py show postgres/persons.table.json
-uv run --env-file .env --project . python packs/search/primitives/contracts/contracts.py check-postgres
-uv run --env-file .env --project . python packs/search/primitives/contracts/contracts.py dump-postgres \
-  --out .powerpacks/schema-dumps/postgres-live.json
-```

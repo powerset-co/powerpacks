@@ -35,8 +35,7 @@ tests/test_company_search_harness.py
 
 ```bash
 bash scripts/test-search
-uv run pytest tests/test_company_search_harness.py tests/test_core_layout.py
-uv run python evals/run_company_search_harness.py
+uv run pytest tests/test_core_layout.py
 ```
 
 ## Startup checklist

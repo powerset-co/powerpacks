@@ -17,8 +17,7 @@ PRIMITIVES = ROOT / "packs/search/primitives"
 LIB = PRIMITIVES / "lib"
 SHARED = PRIMITIVES / "shared"
 LOCAL = PRIMITIVES / "local"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
-for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
+for _path in [LIB, SHARED, LOCAL]:
     sys.path.insert(0, str(_path))
 
 
@@ -34,7 +33,6 @@ def load_module(name: str, path: Path):
 local_backend = load_module("local_search_backend", LOCAL / "local_search_backend.py")
 local_search_verticals = load_module("local_search_verticals", LOCAL / "local_search_verticals.py")
 search_common = load_module("search_common", SHARED / "search_common.py")
-turbopuffer_client = load_module("turbopuffer_search_backend", TURBOPUFFER / "turbopuffer_search_backend.py")
 local_filter_eval = load_module("local_filter_eval", LOCAL / "local_filter_eval.py")
 apply_prefilters = load_module("apply_prefilters", ROOT / "packs/search/primitives/apply_prefilters" / "apply_prefilters.py")
 resolve_education = load_module("local_resolve_education", LOCAL / "local_resolve_education.py")
@@ -963,9 +961,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(low_rows[0]["x_twitter_followers"], 120)
 
     def test_stage_bounds_know_series_e_to_i(self) -> None:
-        turbopuffer_resolve = load_module(
-            "turbopuffer_resolve_companies", TURBOPUFFER / "turbopuffer_resolve_companies.py")
-        for module in (resolve_companies, turbopuffer_resolve):
+        for module in (resolve_companies,):
             with self.subTest(module=module.__name__):
                 self.assertEqual(module.normalize_stage("Series E"), 7)
                 self.assertEqual(module.normalize_stage("series-f"), 8)

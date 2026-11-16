@@ -1,7 +1,7 @@
 """Explicit local DuckDB backend adapter for search primitives.
 
-`turbopuffer_search_backend.py` remains the remote TurboPuffer client.  The functions in
-this module are the local-only branch used when a primitive is run with an
+A Powerset set is searched through the Powerset API (cloud_search). The functions in
+this module are the local branch used when a primitive is run with an
 explicit DuckDB path through `configure_local_backend` (from its `--local-db` / `--db` argument).
 """
 

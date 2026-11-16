@@ -1380,7 +1380,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             state = root / ".powerpacks/runs/founders.json"
             state.write_text(json.dumps({"query": "founders", "steps": [
                 {"id": "expand_search_request", "output": {"role_search_filters": {}}},
-                {"id": "resolve_set_operators", "output": {"set_id": "s1", "operator_ids": ["op1"]}},
+                {"id": "execute_role_search", "output": {"set_id": "s1"}},
             ]}))
             for slug, mode, expected in (("founders", None, known), ("founders-local", "local_duckdb", known)):
                 run = root / ".powerpacks/search" / slug
@@ -1419,7 +1419,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             state = root / ".powerpacks/runs/founders.json"
             state.write_text(json.dumps({"query": "founders", "steps": [
                 {"id": "expand_search_request", "output": {"role_search_filters": {}}},
-                {"id": "resolve_set_operators", "output": {"set_id": "s1", "operator_ids": ["op1"]}},
+                {"id": "execute_role_search", "output": {"set_id": "s1"}},
             ]}))
             run = root / ".powerpacks/search/founders"
             run.mkdir(parents=True)

@@ -62,12 +62,11 @@ class CoreLayoutTests(unittest.TestCase):
         self.assertNotIn("workflows/query-decomposition.md", text)
         self.assertIn("search_network_pipeline.py prepare", text)
 
-    def test_search_company_skill_uses_company_resolver(self) -> None:
+    def test_search_company_skill_uses_the_api_or_local_index(self) -> None:
         text = (ROOT / "packs/search/skills/search-company/SKILL.md").read_text()
-        self.assertIn("resolve_companies", text)
-        self.assertIn("company_semantic_queries", text)
-        self.assertIn("investor_names", text)
-        self.assertIn("company_sector_strategy", text)
+        self.assertIn("cloud_search/search_companies.py", text)
+        self.assertIn("/v2/companies/search", text)
+        self.assertNotIn("turbopuffer_resolve", text)
 
 
     def test_pi_adapter_installs_skills(self) -> None:
@@ -208,8 +207,8 @@ class CoreLayoutTests(unittest.TestCase):
     def test_search_network_uses_expand_primitive_directly(self) -> None:
         task = json.loads((ROOT / "packs/search/tasks/search-network.task.json").read_text())
         task_step_ids = [step["id"] for step in task["steps"]]
-        self.assertIn("resolve_investors", task_step_ids)
-        self.assertIn("count_candidates", task_step_ids)
+        self.assertNotIn("resolve_investors", task_step_ids)
+        self.assertNotIn("resolve_set_operators", task_step_ids)
         self.assertIn("execute_role_search", task_step_ids)
         self.assertNotIn("direct_count", task_step_ids)
         self.assertNotIn("direct_execute", task_step_ids)
