@@ -1,6 +1,6 @@
 # hydrate_people
 
-Hydrate person IDs returned by TurboPuffer into richer profile objects suitable
+Hydrate the frontier's person IDs into richer profile objects suitable
 for final answer formatting and follow-up filtering.
 
 By default, verbose hydrated profiles are written to local JSONL handoff files
@@ -8,10 +8,10 @@ and the task state stores only file paths/counts/IDs. Downstream primitives read
 those paths directly so the agent does not shuttle large profile blobs through
 chat or command arguments.
 
-Powerpacks hydrates directly from the checked-in Postgres/Supabase contract.
-It reads canonical `persons.hydrated_context` and normalizes that into the
-Powerpacks profile shape. It does not import any external app repo and does not use
-Supabase MCP.
+A local search reads the local DuckDB index (`--local-db`). A set search asks the
+Powerset API: `POST /v2/hydrate` for the profiles and
+`POST /v2/sets/{id}/person-attribution` for who in the set knows each person.
+Neither reads Postgres or TurboPuffer.
 
 Hydrate the full frontier before `llm_filter_candidates`:
 
@@ -23,7 +23,7 @@ uv run --env-file .env --project . python \
   --write-state
 ```
 
-Dry-run without connecting to Postgres:
+Dry-run without reading any profiles:
 
 ```bash
 uv run --project . python \
@@ -42,8 +42,3 @@ Outputs in task state:
 Pass `--no-compress-profiles` only when you need a plaintext raw
 `profiles.jsonl`. Pass `--dump-profiles` only when you want an additional debug
 `profiles.json`.
-
-Credentials can come from `DATABASE_URL`, `SUPABASE_DATABASE_URL`,
-`SUPABASE_DB_URL`, or `POSTGRES_*` environment variables. The script uses
-`psycopg2`; if it is not installed and `uv` is available, it re-runs itself with
-`uv run --with psycopg2-binary`.

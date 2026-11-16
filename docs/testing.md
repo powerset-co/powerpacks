@@ -47,23 +47,6 @@ packs/search/evals/company_search.md
 
 ## Primitive Recall
 
-Primitive recall answers: if the query payload is correct, do the packaged
-primitives retrieve representative data?
-
-```bash
-scripts/test-search primitive-recall --bucket education
-scripts/test-search primitive-recall --bucket company
-scripts/test-search primitive-recall --case-glob stanford --max-cases 2
-```
-
-This uses deterministic decomposition in `packs/search/evals/run_recall_parity.py`, then
-runs resolver, prefilter, count, retrieval, hydration, and export primitives.
-It writes the report to:
-
-```text
-packs/search/evals/recall_parity.md
-```
-
 ## Parallel Query Expansion
 
 Pipeline eval answers: can the parallel `expand_search_request` primitive

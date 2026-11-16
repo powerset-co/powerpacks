@@ -5,8 +5,6 @@ import { useNavigate } from "react-router-dom"
 import { useDismiss } from "@/hooks/useDismiss"
 import { DEBUG_KEY, fetchDebugState, resetData, skipSetup } from "@/lib/api/debug"
 import { errorText } from "@/lib/api/http"
-import { connectRelay } from "@/lib/api/relay"
-import { useFeatures, useUpdateFeatures } from "@/lib/features"
 import { desktopPlatform, isDesktop } from "@/lib/desktop"
 
 // Every page the app shows, including the ones outside the side nav.
@@ -37,8 +35,6 @@ export function DebugMenu() {
 }
 
 function DesktopDebugMenu() {
-  const features = useFeatures()
-  const updateFeatures = useUpdateFeatures()
   const client = useQueryClient()
   const navigate = useNavigate()
   const state = useQuery({ queryKey: DEBUG_KEY, queryFn: fetchDebugState })
@@ -133,51 +129,6 @@ function DesktopDebugMenu() {
               className="accent-[var(--primary)]"
             />
           </label>
-          <div className="my-1.5 border-t border-line" />
-          <p className="m-0 px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[.08em] text-faint">
-            Local features
-          </p>
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
-            Sets
-            <input
-              type="checkbox"
-              checked={features.sets}
-              disabled={updateFeatures.isPending}
-              onChange={() =>
-                updateFeatures.mutate(
-                  { ...features, sets: !features.sets },
-                  // Wakes the relay connection to follow the switch now, not at its next 30 s check.
-                  { onSuccess: () => void connectRelay().catch(() => undefined) },
-                )
-              }
-              className="accent-[var(--primary)]"
-            />
-          </label>
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
-            Auto Reply
-            <input
-              type="checkbox"
-              checked={features.auto_reply}
-              disabled={updateFeatures.isPending}
-              onChange={() => updateFeatures.mutate({ ...features, auto_reply: !features.auto_reply })}
-              className="accent-[var(--primary)]"
-            />
-          </label>
-          <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[var(--radius-s)] px-2.5 py-1.5 text-[13px] hover:bg-secondary">
-            Share network (upload)
-            <input
-              type="checkbox"
-              checked={features.share}
-              disabled={updateFeatures.isPending}
-              onChange={() => updateFeatures.mutate({ ...features, share: !features.share })}
-              className="accent-[var(--primary)]"
-            />
-          </label>
-          {updateFeatures.error && (
-            <p role="alert" className="m-0 px-2.5 py-1 text-xs text-bad">
-              {errorText(updateFeatures.error)}
-            </p>
-          )}
           <button
             type="button"
             role="menuitem"

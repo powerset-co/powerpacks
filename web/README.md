@@ -13,6 +13,8 @@ Change log:
   `FeedbackFooter` moved to the shared components; the side nav's footer shows the
   signed-in picture, name and email, each on one line; People's Sharing select offers All, and
   Refresh signals and Share network moved to the right end of its search line.
+- 2026-11-12: the People page Share network button, its upload dialog and the debug menu's
+  Share switch are removed with the share upload.
 - 2026-11-03: the chat's search card is laid out as the cloud app's search screen (Query and
   set, Traits, Search Filters, the estimate, Edit Filters beside Run Search); the side nav, the
   chat/results divider and the drawers resize by dragging their edge (`ResizeHandle`), kept per machine.
@@ -65,7 +67,6 @@ server; everything else reads typed values.
 | `src/pages/people/`                                         | `PeoplePage` (load), `PeopleWorkspace` (state wiring), `PeopleShell`, `PeopleLoading`, `BulkBar`                                                        | Its hooks; renders the sections   |
 | `src/pages/people/hooks/`                                   | People-typed hooks: view state (`useFilters`), rows query, drawer + person detail, decisions (writes), the page's keys (`useKeyboard`) and their wiring | `lib/api`, `lib/people/view`      |
 | `src/pages/people/head/`                                    | Refresh signals, the header's action beside Share network                                                                                               | The signals routes                |
-| `src/pages/people/upload/`                                  | Share button (last upload beside it) and its dialog: `useUpload` (poll while running), plan summary, progress bar, result                               | `lib/api/upload`, page toast      |
 | `src/pages/people/filters/`                                 | The search line: search box, Sharing and Relationship selects (each option counted), the narrowed count                                                 | View tab, filters and text        |
 | `src/pages/people/table/`                                   | Virtualized table: head, rows, cells, columns, `ROW_H`                                                                                                  | Matching people, selection, focus |
 | `src/pages/people/drawer/`                                  | Person drawer (in the shared `Drawer`): header, actions, the feedback flag, sections                                                                    | Person detail; writes share tags  |

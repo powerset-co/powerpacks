@@ -428,7 +428,7 @@ function Profile({ rail }: { rail: boolean }) {
             "border-0 bg-gradient-to-br from-[#f2502a] to-[#f87171] text-[12px] font-semibold text-white",
         )}
       />
-      {features.sets ? <RelayDot tip={rail ? "right" : "above"} /> : null}
+      {features.team ? <RelayDot tip={rail ? "right" : "above"} /> : null}
     </span>
   )
   const items = menu && (

@@ -91,7 +91,7 @@ class PlainSearchPipelineTests(unittest.TestCase):
             payload = {"normalized_query": "Storage engineers", "traits": [],
                        "role_search_filters": {"semantic_query": "Engineers who build and operate distributed storage systems, recovery protocols and database infrastructure"}}
             stdout = io.StringIO()
-            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": payload}), \
+            with mock.patch.object(pipeline.cloud_search, "expand", return_value=payload), \
                     contextlib.redirect_stdout(stdout):
                 args = pipeline.build_parser().parse_args([
                     "prepare", "--query", "Storage engineers", "--output-dir", directory])
@@ -181,7 +181,7 @@ class PlainSearchPipelineTests(unittest.TestCase):
                 elif stage == "results_io":
                     results_io.main()
                 else:
-                    self.assertIn(stage, ("resolve_set_operators", "apply_prefilters", "execute_role_search", "hydrate_people"))
+                    self.assertIn(stage, ("cloud_search", "apply_prefilters", "execute_role_search", "hydrate_people"))
                     return {"returncode": 0, "json": hydrated if stage == "hydrate_people" else {}}
             return {"returncode": 0, "json": json.loads(output.getvalue())}
 

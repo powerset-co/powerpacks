@@ -1,6 +1,7 @@
-"""Poll the inbox, answer Powerset support and set debug requests, and announce set presence.
+"""Poll the inbox, answer Powerset support requests, and announce presence.
 
 Changelog:
+- 2026-11-16: local sets are gone: no set debug requests, no presence file for the sets page.
 - 2026-11-10: the inbox poll and presence run for every signed-in install; Sets only gates answering set asks.
 - 2026-10-17: Powerset accounts poll and handle support independently of Sets; support runs serially.
 - 2026-10-12: poll the authenticated HTTP inbox independently of NATS presence.
@@ -22,7 +23,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from contextlib import closing
 from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
@@ -31,13 +31,9 @@ from uuid import uuid4
 import nats
 from dotenv import dotenv_values
 
-from packs.ingestion.primitives.common.jsonio import now_iso, write_json
-from packs.ingestion.primitives.deep_context_v2.db.store import open_store, store_path
-from packs.ingestion.primitives.share.web.sets import Sets
-from packs.powerset.primitives.agent_debug import agent_debug
 from packs.powerset.primitives.agent_inbox import agent_inbox
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys as auth
-from packs.shared.web import features, support
+from packs.shared.web import support
 
 HEARTBEAT_SECONDS = 30
 REFRESH_SECONDS = 20 * 3600
@@ -46,19 +42,9 @@ MAX_BACKOFF_SECONDS = 30
 HTTP_TIMEOUT_SECONDS = 30
 SUPPORT_POLL_SECONDS = 2
 _LOG = logging.getLogger(__name__)
-# Set debug checks; support has its own serial worker, questions the recipient's Codex harness.
-ANSWERED_HERE = {"debug_request": agent_debug.answer}
 # The relay state the page shows: connected, signed_out or offline. The loop is the only writer.
 STATUS = {"state": "offline"}
 WAKE = threading.Event()  # set after a sign-in so a signed-out wait reconnects at once
-
-
-def _set_members(repo_root: Path, env_file: Path) -> set[str]:
-    """The operators in this owner's sets, read from the store the People page keeps."""
-    with closing(open_store(store_path(repo_root / ".powerpacks"))) as conn:
-        sets = Sets(conn, env_file)
-        sets.settle()  # a delete or a leave the relay just delivered counts before anyone is answered
-        return sets.known_operators()
 
 
 def _device_id(repo_root: Path) -> str:
@@ -91,25 +77,6 @@ def _connection(env_file: Path) -> dict:
         raise
 
 
-def _answer_pending(*, repo_root: Path, env_file: Path) -> None:
-    """Answer teammate debug requests; failed answers retry on the next pull."""
-    known = _set_members(repo_root, env_file)
-    for path in sorted((repo_root / ".powerpacks" / "inbox").glob("*.json")):
-        message = json.loads(path.read_text(encoding="utf-8"))
-        handler = ANSWERED_HERE.get(message["kind"])
-        if handler is None or "answered_at" in message:
-            continue
-        if message["from"]["operator_id"] not in known:
-            write_json(path, {**message, "answered_at": now_iso(), "refused": "not in a set"})
-            continue
-        try:
-            handler(message, repo_root=repo_root, env_file=env_file)
-        except Exception as exc:
-            _LOG.warning("Answering %s: %s", message["kind"], type(exc).__name__)
-            continue
-        write_json(path, {**json.loads(path.read_text(encoding="utf-8")), "answered_at": now_iso()})
-
-
 async def _poll(*, repo_root: Path, env_file: Path) -> None:
     backoff = 1
     while True:
@@ -131,11 +98,6 @@ async def _poll(*, repo_root: Path, env_file: Path) -> None:
         else:
             STATUS["state"] = "connected"
             backoff = 1
-            try:
-                if features.read(repo_root).sets:
-                    await asyncio.to_thread(_answer_pending, repo_root=repo_root, env_file=env_file)
-            except (SystemExit, Exception) as exc:
-                _LOG.warning("Inbox debug checks: %s", type(exc).__name__)
         await asyncio.to_thread(WAKE.wait, delay)
 
 
@@ -161,14 +123,6 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
         WAKE.set()
         await message.ack()
 
-    presence_file = repo_root / ".powerpacks" / "presence.json"
-    seen = json.loads(presence_file.read_text(encoding="utf-8")) if presence_file.exists() else {}
-
-    async def heartbeat(message) -> None:
-        beat = json.loads(message.data)
-        seen[beat["operator_id"]] = beat["at"]
-        write_json(presence_file, seen)
-
     subjects = connection["subjects"]
     nc = await nats.connect(connection["url"], token=connection["token"],
                             allow_reconnect=False, closed_cb=on_close, error_cb=on_error)
@@ -191,7 +145,6 @@ async def _connected(connection: dict, *, repo_root: Path, env_file: Path, devic
     try:
         await nc.jetstream().subscribe(subjects["inbox"], stream="asks", durable=device_id + "-inbox",
                                        cb=inbox, manual_ack=True)
-        await nc.subscribe(subjects["presence"], cb=heartbeat)
         await watch()
     finally:
         await nc.close()

@@ -34,7 +34,7 @@ class SearchScopeTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         for name, target, value in (
-                ("credentials_subject", "packs.shared.web.search_scope.postgres_client.credentials_subject", "auth0|me"),
+                ("credentials_subject", "packs.shared.web.search_scope.powerset_api.signed_in_subject", "auth0|me"),
                 ("api", "packs.shared.web.search_scope._api", API_SETS)):
             patcher = patch(target, return_value=value)
             self.addCleanup(patcher.stop)

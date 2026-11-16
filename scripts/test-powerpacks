@@ -45,23 +45,22 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_v2_review_routes \
   tests.test_proposed_profiles \
   tests.test_people_page \
-  tests.test_people_sets \
   tests.test_people_worth \
   tests.test_settings_providers \
   tests.test_luna_signals \
   tests.test_signals_refresh \
   tests.test_agent_messages \
-  tests.test_agent_debug \
   tests.test_asks_loop \
   tests.test_remote_assist \
-  tests.test_ask_set \
-  tests.test_ask_worker \
   tests.test_install_coordinator \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \
   tests.test_capability_contract \
   tests.test_clean_job_description \
+  tests.test_cloud_search \
+  tests.test_school_parents \
   tests.test_company_context \
+  tests.test_search_backend_boundaries \
   tests.test_core_layout \
   tests.test_cross_encoder_client \
   tests.test_cross_encoder_search \
@@ -122,5 +121,4 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_review_history \
   tests.test_logbook_people \
   tests.test_logbook_archive \
-  tests.test_logbook_build \
-  tests.test_upload_powerset -v
+  tests.test_logbook_build -v

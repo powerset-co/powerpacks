@@ -368,7 +368,7 @@ class SignalsRefreshTests(StoreTests):
         self.assertTrue(path.exists())
 
     def test_routes_check_saved_evidence_without_provider_calls_and_gate_paid_start(self) -> None:
-        routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
+        routes = share_routes(self.conn, self.root)
         with NO_CALLS:
             handler = Handler()
             self.assertTrue(routes.get(handler, urllib.parse.urlparse("/api/people/signals")))
@@ -389,7 +389,7 @@ class SignalsRefreshTests(StoreTests):
             self.assertIn("confirm", routes.signals.status()["error"])
 
     def test_routes_refresh_everyone_with_no_one_selected(self) -> None:
-        routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
+        routes = share_routes(self.conn, self.root)
         handler = Handler(body=json.dumps({"people": []}).encode())
         routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
         self.assertEqual(json.loads(handler.wfile.getvalue())["status"], "running")
@@ -397,7 +397,7 @@ class SignalsRefreshTests(StoreTests):
         self.assertEqual(routes.signals.status()["plan"]["people"], 2)
 
     def test_routes_reject_a_malformed_selection_and_other_origins(self) -> None:
-        routes = share_routes(self.conn, self.root, upload_dir=self.root / "upload")
+        routes = share_routes(self.conn, self.root)
         handler = Handler(body=json.dumps({"people": [7]}).encode())
         routes.post(handler, urllib.parse.urlparse("/api/people/signals/check"))
         self.assertEqual(handler.response_status, 409)

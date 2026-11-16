@@ -121,7 +121,7 @@ export function BookIcon(props: IconProps) {
   )
 }
 
-/** The broadcast mark: the hive, filled. Its button carries the label. */
+/** The sets mark: the hive, filled. */
 export function HiveIcon(props: IconProps) {
   return (
     <svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden {...props}>

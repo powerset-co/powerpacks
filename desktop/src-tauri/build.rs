@@ -8,8 +8,6 @@ const COMMANDS: &[&str] = &[
     "codex_start_thread",
     "codex_open_thread",
     "codex_threads",
-    "codex_answer_question",
-    "codex_auto_reply",
     "codex_call",
     "codex_respond",
     "app_focus",

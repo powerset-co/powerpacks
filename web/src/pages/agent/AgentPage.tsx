@@ -1,4 +1,3 @@
-import { useFeatures } from "@/lib/features"
 import { useQueryClient } from "@tanstack/react-query"
 import { useEffect, useMemo, useRef, useState } from "react"
 
@@ -23,8 +22,6 @@ import { FullAccessTip } from "./FullAccessTip"
 import { ModelPicker } from "./ModelPicker"
 import { SearchScope } from "./SearchScope"
 import { Transcript } from "./Transcript"
-import { SearchHistory } from "./collaboration/SearchHistory"
-import { useCollaboration } from "./collaboration/useCollaboration"
 
 // Within this distance of the bottom, new output keeps the transcript pinned to the end.
 const STICK_PX = 120
@@ -62,16 +59,7 @@ function ChatHeader({ runTitle }: { runTitle: string | null }) {
   )
 }
 
-function Conversation({
-  runTitle,
-  runId,
-  collaboration,
-}: {
-  runTitle: string | null
-  runId: string | null
-  collaboration: ReturnType<typeof useCollaboration>
-}) {
-  const features = useFeatures()
+function Conversation({ runTitle }: { runTitle: string | null }) {
   const agent = useAgent()
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -94,44 +82,6 @@ function Conversation({
     const element = scroller.current
     if (element && pinned.current) element.scrollTop = element.scrollHeight
   }, [agent.entries, agent.approvals, waiting])
-
-  if (runId && features.sets)
-    return (
-      <section className="flex min-h-0 min-w-0 flex-col">
-        <ChatHeader runTitle={runTitle} />
-        <SearchHistory
-          key={runId}
-          searchId={runId}
-          title={runTitle ?? "Search"}
-          collaboration={collaboration}
-          onPrivateSend={send}
-          composer={{
-            running: agent.running,
-            fullAccess: agent.fullAccess,
-            onFullAccess: fullAccess,
-            onStop: () => void stop(),
-          }}
-        >
-          {agent.entries.length > 0 && <Transcript entries={agent.entries} running={agent.running} />}
-          {tip.shown && agent.approvals.length > 0 && !agent.fullAccess && (
-            <FullAccessTip onEnable={() => fullAccess(true)} onDismiss={tip.dismiss} />
-          )}
-          {agent.approvals.map((approval) => (
-            <ApprovalCard
-              key={String(approval.requestId)}
-              approval={approval}
-              onAnswer={(choice) => void answer(approval, choice)}
-            />
-          ))}
-          {waiting && (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Spinner />
-              Working
-            </p>
-          )}
-        </SearchHistory>
-      </section>
-    )
 
   return (
     <section className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto]">
@@ -217,15 +167,12 @@ function SignedInAgent() {
  *  the chats. */
 function Workspace() {
   const agent = useAgent()
-  const features = useFeatures()
-  const collaboration = useCollaboration(features.sets)
   const catalog = useCatalog(agent.running)
   const client = useQueryClient()
   const listed = useMemo(() => new Set(catalog.data?.map(({ run_id }) => run_id)), [catalog.data])
   const runId = chatRun(agent.entries, listed) ?? agent.searchRun
   const card = catalog.data?.find((item) => item.run_id === runId)
-  const runTitle =
-    card?.title ?? collaboration.data?.conversations.find((item) => item.search_id === runId)?.title ?? null
+  const runTitle = card?.title ?? null
   const runRunning = card?.status === "running"
   // The run last seen running; only that same run leaving "running" is re-read.
   const lastRunning = useRef(runRunning ? runId : null)
@@ -268,7 +215,7 @@ function Workspace() {
           : "minmax(0, 1fr)",
       }}
     >
-      <Conversation runTitle={runTitle} runId={runId} collaboration={collaboration} />
+      <Conversation runTitle={runTitle} />
       {runId && listed.has(runId) && (
         <div className="searches-main relative border-l border-line" aria-label="Search results">
           <ResizeHandle

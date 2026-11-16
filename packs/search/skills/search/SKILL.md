@@ -135,7 +135,7 @@ Then dispatch — this table is the whole routing contract:
 | surface `company` | load `packs/search/skills/search-company/SKILL.md` (decision.json still written first) |
 | surface `sql` | load `packs/search/skills/search-sql/SKILL.md` (decision.json still written first) |
 | `people` + `fast` + `local` | **Local Happy Path** below (`search_network_pipeline.py prepare --backend local --db <db>`) |
-| `people` + `fast` + `powerset` | **TurboPuffer Happy Path** below (`search_network_pipeline.py prepare --backend powerset --set-id <id>`; no `--set-id` when the chat names no set) |
+| `people` + `fast` + `powerset` | **Set Happy Path** below (`search_network_pipeline.py prepare --backend powerset --set-id <id>`; no `--set-id` when the chat names no set) |
 | `people` + `deep` | load `packs/search/skills/search/deep-mode.md` (`--jd-file` / `--jd-url` as it documents; on backend `local` add `--backend local --db <db>` to `deep_search_loop.py`) |
 
 The deep engine owns orchestration and delegates each reviewed pond to the
@@ -165,7 +165,7 @@ viewer; auto deep mode runs all approved ponds without that pause.
 ### Retrieval surface boundary
 
 `$search` people retrieval means the Powerpacks network surface: the `powerset` backend is
-set-scoped TurboPuffer/Postgres and the `local` backend is DuckDB. It is not Sales Navigator.
+the Powerset API for a set (POST /v2/search/expand + /execute; no Postgres or TurboPuffer) and the `local` backend is DuckDB. It is not Sales Navigator.
 
 - An explicit Powerset/network request stays on `$search` with `surface: people` and
   `backend: powerset`, including retries, wider probes, adjacency, and sparse-result diagnosis.
@@ -180,7 +180,7 @@ set-scoped TurboPuffer/Postgres and the `local` backend is DuckDB. It is not Sal
 ## Hiring seniority & hireability defaults
 
 These apply to every hiring-intent search (a JD, a role brief, "find
-candidates", "people like X for this role") in both local and TurboPuffer
+candidates", "people like X for this role") in both local and set
 modes, and they bind any fallback behavior too:
 
 The order is **explicit user preferences > JD-supported inference > defaults**.
@@ -278,7 +278,7 @@ do not need SQL assistance.
 
 ---
 
-## TurboPuffer Happy Path
+## Set Happy Path
 
 Do not inspect repo docs, source, memory, prior transcripts, or prior result
 files on the happy path. Start a fresh run for every search request.

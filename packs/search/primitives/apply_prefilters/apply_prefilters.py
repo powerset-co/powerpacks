@@ -17,8 +17,7 @@ PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
 import search_backend_mode  # noqa: E402
@@ -41,7 +40,6 @@ from search_common import (  # noqa: E402
     search_mode_for_payload,
     seniority_intent,
 )
-from postgres_client import fetch_interaction_filter_person_ids, fetch_social_filter_person_ids  # noqa: E402
 
 
 def now_iso() -> str:
@@ -155,29 +153,6 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
 
 
-def social_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: int) -> tuple[list[str], dict[str, Any]] | None:
-    keys = [
-        "x_followers_min", "x_followers_max", "li_followers_min", "li_followers_max",
-        "li_connections_min", "li_connections_max", "ig_followers_min", "ig_followers_max",
-    ]
-    active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
-    if not active:
-        return None
-    if search_backend_mode.is_local_backend_configured():
-        return None
-    ids = fetch_social_filter_person_ids(payload, env_file=env_file)
-    return ids[:max_ids], {"stage": "social", "filters": active, "matched": len(ids)}
-
-
-def interaction_base_ids(payload: dict[str, Any], *, env_file: Path | None, max_ids: int) -> tuple[list[str], dict[str, Any]] | None:
-    keys = ["operator_interaction_min", "operator_interaction_max", "set_interaction_min", "set_interaction_max"]
-    active = {key: payload.get(key) for key in keys if payload.get(key) is not None}
-    if not active:
-        return None
-    ids = fetch_interaction_filter_person_ids(payload, env_file=env_file)
-    return ids[:max_ids], {"stage": "interaction", "filters": active, "matched": len(ids)}
-
-
 def company_people_payload(
     payload: dict[str, Any],
     company_ids: list[str],
@@ -251,13 +226,12 @@ PEOPLE_ATTRIBUTES = [
 
 
 def search_backend() -> Any:
-    if search_backend_mode.is_local_backend_configured():
-        import local_search_backend as local_backend  # type: ignore
+    """The local DuckDB index; a Powerset set is searched through the Powerset API (cloud_search)."""
+    if not search_backend_mode.is_local_backend_configured():
+        raise RuntimeError("a set search runs through the Powerset API (cloud_search.py), not this primitive")
+    import local_search_backend as local_backend  # type: ignore
 
-        return local_backend
-    import turbopuffer_search_backend as turbopuffer_client  # type: ignore
-
-    return turbopuffer_client
+    return local_backend
 
 
 async def filter_only_rows_for_namespace(
@@ -430,12 +404,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     base_ids: list[str] | None = None
     company_union_ids: list[str] = []
     stage_outputs: list[dict[str, Any]] = []
-    env_file = Path(args.env_file) if args.env_file else None
     prefilter_results = [
         await education_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
         await tech_skill_base_ids(payload, page_size=args.page_size, max_ids=args.max_ids),
-        social_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
-        interaction_base_ids(payload, env_file=env_file, max_ids=args.max_ids),
     ]
     for maybe_result in prefilter_results:
         if maybe_result is None:

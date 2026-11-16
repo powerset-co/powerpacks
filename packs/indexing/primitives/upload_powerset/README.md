@@ -3,98 +3,16 @@
 Created: 2026-09-24
 
 Change log:
-- 2026-10-09: share namespaces are `powerpacks_<name>_<version>`, set by
-  `POWERPACKS_SHARE_INDEX_VERSION`; `$search` keeps the `aleph_` ones.
-- 2026-10-08: the upload writes the isolated share_v1 family, not v3.
+- 2026-11-12: the share upload (CLI, plan, Postgres writes, manifest) was removed with
+  the People page Share button. What is left is kept for network-search-api's index
+  refresh (`scripts/powerset_v2/prepare_refreshed_indexes.py` imports `local_index`).
+- 2026-10-08: the upload wrote the isolated share_v1 family, not v3.
 - 2026-09-24: first version.
 
-Makes the Powerset cloud state for ONE operator equal the local share list.
-Reconcile, not append: a person dropped from the share list loses this operator's
-source rows and is patched out of `allowed_operator_ids`. Documents are never
-deleted, and no cloud-enriched value is ever overwritten with a local one.
+| file | role |
+| --- | --- |
+| `local_index.py` | local DuckDB readers for profiles and namespace documents |
+| `models.py` | frozen value types + the channel/identifier table (`CLOUD_SOURCE_CHANNEL`, also read by deep search attribution) |
+| `turbopuffer_writer.py` | namespace definitions (`NAMESPACES`, `NAMESPACE_BY_LOGICAL`) that `local_index` reads, and the write schema |
 
-The upload list reads effective worth from the local v2 store: yes only, human over
-machine. The owner is excluded; family, partner and minor flags exclude a family
-unless a human set its worth. Human tags stay local.
-
-`--dry-run` is the default and only reads. `--apply` writes.
-
-```mermaid
-flowchart TD
-  share[("store: worth + person_labels")] --> plan
-  people["merged/people.csv"] --> plan
-  duck["search-index/local-search.duckdb"] --> plan
-  pg[("Postgres: persons, operator_person_sources")] --> plan
-  tp[("TurboPuffer: 5 namespaces")] --> plan
-  plan["plan.build_plan (pure)"] --> dry["--dry-run: manifest only"]
-  plan --> apply["--apply"]
-  apply --> pgw[("persons upsert -> sources upsert/delete")]
-  pgw --> allowed["re-read allowed_operator_ids"]
-  allowed --> tpw[("new people: upsert docs / known people: patch allowed_operator_ids")]
-  tpw --> manifest[".powerpacks/upload-powerset/manifest.json"]
-```
-
-| file | role | reads | writes |
-| --- | --- | --- | --- |
-| `upload_powerset.py` | CLI + `UploadPowerset` orchestrator; owns the people.csv read, the worth-list read, and the stage manifest | worth, person_labels, people.csv, Postgres, TurboPuffer | `.powerpacks/upload-powerset/manifest.json`, Postgres + TurboPuffer on `--apply` |
-| `local_index.py` | local DuckDB readers for profiles and namespace documents | local-search.duckdb | — |
-| `models.py` | frozen value types + the channel/identifier table | — | — |
-| `plan.py` | pure reconcile: local + cloud -> `UploadPlan` | — | — |
-| `postgres.py` | every SQL statement, each taking a cursor | `persons`, `operator_person_sources`, `users` | persons and sources |
-| `turbopuffer_writer.py` | namespace definitions and reads, 500-row upserts, `allowed_operator_ids` patches | the 5 namespaces | the 5 namespaces |
-
-## What the plan decides
-
-- `persons_upsert` — eligible people that have a LinkedIn `public_identifier`.
-  The SQL is the cloud pipeline's own COALESCE upsert
-  (`sync_persons_to_supabase.py`), so a laptop value never replaces a cloud one.
-- `skipped_no_linkedin` — eligible people without a slug. `persons.public_identifier`
-  is UNIQUE and the cloud has no non-LinkedIn person key, so they stay local.
-- `sources_insert` — every DESIRED `operator_person_sources` row, one per
-  (person, channel). The statement is an upsert, so re-sending an unchanged row
-  is how interaction counts stay current; the count is a desired-state count,
-  not a "rows that were missing" count.
-- `sources_delete` — this operator's `discovery_method='powerpacks'` rows that
-  the share list no longer wants.
-- namespace `upsert` — for `people`/`summaries`/`education` these are PERSON ids
-  (people the cloud's `persons` table has never seen); the document count is
-  whatever the local index holds for them, which is 0 for a person with no
-  positions. For `companies`/`schools` they are entity ids the namespace lacks.
-- namespace `patch_people` — people the cloud already has, plus the un-shared
-  ones. Only `allowed_operator_ids` is written, on every document the CLOUD
-  holds for that person, so an un-share also reaches documents this laptop
-  never had.
-
-## Facts the code depends on (read 2026-09-24)
-
-- Local `people.csv` `id` uses the cloud's own `uuid5(6ba7b810…, "linkedin:<slug>")`
-  recipe, so person ids match across the boundary. Company and school ids do
-  NOT: local ids are `uuid5(POWERPACKS_INDEXING_NAMESPACE, …)` while
-  `aleph_companies_v1` is keyed `urn:harmonic:company:<n>`.
-- The live namespaces carry FEWER attributes than the checked-in contracts, so
-  every upsert column set is `contract ∩ local table ∩ live namespace schema`.
-- Person documents are addressed differently per namespace: `aleph_people_v1`
-  by `base_id`, `aleph_summaries_v1` by document id, `aleph_people_education_v1`
-  by `person_id`.
-- `operator_person_sources.operator_id` is VARCHAR, and its UNIQUE key includes
-  `source_identifier`, so a channel with no identifier contributes no row.
-
-## Run
-
-```bash
-uv run --project . python \
-  packs/indexing/primitives/upload_powerset/upload_powerset.py \
-  --db .powerpacks/search-index/local-search.duckdb \
-  --people-csv .powerpacks/network-import/merged/people.csv \
-  --share-db .powerpacks/deep-context/deep-context.sqlite
-```
-
-Without `--apply` it plans only. The CLI loads `.env` once at start and writes
-the isolated shared network: the `powerpacks_<name>_v1` TurboPuffer namespaces and
-the `powerset_share_v1` Postgres tables (`share_v1.sql`), not the `aleph_` namespaces
-`$search` reads. `POWERPACKS_SHARE_INDEX_VERSION` (default `v1`) picks the version;
-search keeps `ALEPH_INDEX_VERSION`.
-
-The upload runs from the laptop only: the build may run on Modal, but
-`download` already brings `local-search.duckdb` home, and the upload is a few MB
-of I/O with no compute in it.
+Nothing in the app writes Powerset Postgres or TurboPuffer from here any more.

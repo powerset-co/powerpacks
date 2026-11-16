@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
-vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: false, auto_reply: false }) }))
+vi.mock("@/lib/features", () => ({ useFeatures: () => ({ support: false, team: false }) }))
 
 import { Composer } from "./Composer"
 

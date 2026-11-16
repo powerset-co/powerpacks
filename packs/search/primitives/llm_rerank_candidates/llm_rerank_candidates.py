@@ -70,8 +70,7 @@ PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402

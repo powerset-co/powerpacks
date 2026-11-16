@@ -7,6 +7,7 @@ signed-in user's, largest first, from the Powerset API (GET /v2/sets); with no s
 none.
 
 Changelog:
+  2026-11-16: the sign-in check and API calls use packs/shared/powerset_api.py; no postgres_client.
   2026-11-13: ANY failure listing the sets still offers the local index; an expired sign-in
       (SystemExit, not an Exception) used to end the request and take Local out of the picker.
   2026-11-12: a failed sets call leaves the sets empty and still offers the local index; the picker
@@ -23,21 +24,12 @@ Changelog:
 
 from __future__ import annotations
 
-import json
 import logging
-import sys
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys
-
-SEARCH_LIB = Path(__file__).resolve().parents[2] / "search" / "primitives" / "lib"
-if str(SEARCH_LIB) not in sys.path:
-    sys.path.insert(0, str(SEARCH_LIB))
-
-import postgres_client  # noqa: E402
+from packs.shared import powerset_api
 
 LOCAL_INDEX = Path(".powerpacks/search-index/local-search.duckdb")
 
@@ -49,7 +41,7 @@ def read(root: Path) -> dict[str, Any]:
     is still offered, so the picker shows it and a search can start on this Mac."""
     sets: list[dict[str, Any]] = []
     try:  # anything at all (an expired sign-in raises SystemExit): no sets, the local index stays
-        if postgres_client.credentials_subject():
+        if powerset_api.signed_in_subject():
             sets = _member_sets(root)
     except BaseException:
         logging.getLogger(__name__).exception("Listing the sets failed; offering the local index")
@@ -68,18 +60,8 @@ def _member_sets(root: Path) -> list[dict[str, Any]]:
 
 
 def _api(root: Path, path: str, body: dict[str, Any] | None = None, method: str | None = None) -> Any:
-    """One call to the Powerset API as the signed-in user: GET, or POST with a JSON body; {} for a
-    reply with no body (a DELETE's 204)."""
-    env_file = root / ".env"
-    request = urllib.request.Request(
-        pull_runtime_keys.api_base(env_file) + path,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"Authorization": f"Bearer {pull_runtime_keys.bearer_token(env_file)}",
-                 "Content-Type": "application/json"},
-        method=method,
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read() or b"{}")
+    """One call to the Powerset API as the signed-in user (powerset_api.call)."""
+    return powerset_api.call(root / ".env", path, body, method=method, timeout=30)
 
 
 def set_detail(root: Path, set_id: str) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Read and write the People labels, human tags and local sets; delete a family for good."""
+"""Read and write the People labels, human tags, and delete a family for good."""
 from __future__ import annotations
 
 import json
@@ -156,30 +156,6 @@ def delete_parents(conn: sqlite3.Connection, parent_ids: tuple[str, ...], now: s
 
 def deleted_parents(conn: sqlite3.Connection) -> set[str]:
     return {row["parent_id"] for row in conn.execute("SELECT parent_id FROM deleted_parents")}
-
-
-# ---- the sets on this machine (sets.py): made here, or joined by accepting an invite
-
-def sets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """The sets on this machine, by name."""
-    return conn.execute("SELECT set_id, name, role, members_json FROM sets ORDER BY name COLLATE NOCASE").fetchall()
-
-
-def insert_set(conn: sqlite3.Connection, set_id: str, name: str, role: str, members_json: str, created_at: str) -> None:
-    with conn:
-        # A second invite to a set already joined is accepted again: the newer answer stands.
-        conn.execute("INSERT OR REPLACE INTO sets (set_id, name, role, members_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                     (set_id, name, role, members_json, created_at))
-
-
-def update_set_members(conn: sqlite3.Connection, set_id: str, members_json: str) -> None:
-    with conn:
-        conn.execute("UPDATE sets SET members_json = ? WHERE set_id = ?", (members_json, set_id))
-
-
-def delete_set(conn: sqlite3.Connection, set_id: str) -> None:
-    with conn:
-        conn.execute("DELETE FROM sets WHERE set_id = ?", (set_id,))
 
 
 def families(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, sqlite3.Row]:
