@@ -357,6 +357,7 @@ class ShareRoutes:
         else:
             self._send_json(handler, payload)
 
+    @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
               status: int = HTTPStatus.OK, *, cache: str = "no-store") -> None:
         encoding = ""

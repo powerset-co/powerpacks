@@ -124,14 +124,21 @@ print(json.dumps({"binary": sys.argv[0], "args": args, "cwd": os.getcwd(), "home
         assert send.call_args.args[3]["request_id"] == message["id"]
         assert "answered_at" in saved(self.root, message)
 
-    def test_non_team_local_account_does_not_handle_support(self):
-        message = request(self.root)
+    def test_non_team_local_account_answers_only_once_its_owner_opts_in(self):
         self.enterContext(patch.object(account, "read", return_value={"email": "jordan@example.com"}))
+        message = request(self.root)
         with patch.object(support.subprocess, "run") as run, patch.object(agent_inbox, "send") as send:
             support.answer_pending(repo_root=self.root, env_file=self.root / ".env")
-        run.assert_not_called()
-        send.assert_not_called()
-        assert "answered_at" not in saved(self.root, message)
+        run.assert_not_called()  # off by default for an account outside powerset.co
+        assert "off" in send.call_args.args[3]["text"]
+        features.save(self.root, features.FeatureFlags(support=True))
+        opted_in = request(self.root)
+        with patch.object(support, "_run", return_value="Synthetic report") as run, \
+                patch.object(agent_inbox, "send") as send:
+            support.answer_pending(repo_root=self.root, env_file=self.root / ".env")
+        run.assert_called_once()
+        assert send.call_args.args[3]["text"] == "Synthetic report"
+        assert "answered_at" in saved(self.root, opted_in)
 
     def test_failed_send_reuses_codex_report(self):
         message = request(self.root)
