@@ -24,6 +24,7 @@
  *     must accept before it can create a project. The scopes check waits for the Data Access
  *     page's tables: it read the page while only the nav and a spinner were up, and reported
  *     saved scopes as missing.
+ *   2026-11-16: settle counts a spinner on screen as still loading (every Console page).
  */
 
 const fs = require("fs");
@@ -93,9 +94,31 @@ function log(message) {
 // follow are the backstop for a page that would not settle by `until`.
 async function settle(page, label = "settle", until = Date.now() + 30000) {
   const start = Date.now();
-  const stable = await settled(page, until);
-  log(`${label}: waited ${Date.now() - start}ms${stable === null ? " (not settled)" : ""}`);
+  let stable = await settled(page, until);
+  // A Console page draws its frame, then a spinner while it fetches its content: two reads of
+  // that agree, so it "settled" with nothing on it and a check read saved work as missing. A
+  // spinner on screen is still loading; once it goes, settle again on what replaced it.
+  const spinnerUntil = Math.min(until, Date.now() + 15000);
+  let spun = false;
+  while (await spinning(page) && Date.now() < spinnerUntil) {
+    spun = true;
+    await page.waitForTimeout(250);
+  }
+  if (spun) stable = await settled(page, until);
+  log(`${label}: waited ${Date.now() - start}ms${spun ? " (spinner)" : ""}${stable === null ? " (not settled)" : ""}`);
   await snapshot(page);
+}
+
+// Whether the Console shows a loading spinner: an indeterminate progress indicator with a size.
+function spinning(page) {
+  return page.evaluate(() => [...document.querySelectorAll(
+    '[role="progressbar"], mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, cfc-progress-spinner, cfc-loader',
+  )].some((node) => {
+    if (node.getAttribute("aria-hidden") === "true" || node.hasAttribute("aria-valuenow")) return false;
+    const box = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0;
+  })).catch(() => false);
 }
 
 // A picture of the page as it stands, for the person watching from Powerpacks (the Sources
@@ -964,7 +987,7 @@ async function main() {
   result(payload);
 }
 
-module.exports = { launchChrome };
+module.exports = { launchChrome, settle, spinning };
 
 if (require.main === module) main().catch((error) => {
   result({ status: "error", message: String(error && error.message ? error.message : error) });
