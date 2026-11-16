@@ -262,12 +262,16 @@ function Mailboxes({
   known,
   email,
   disabled,
+  termsAccepted,
+  onTermsAccepted,
   onChange,
   onAdd,
 }: {
   known: readonly string[]
   email: string
   disabled: boolean
+  termsAccepted: boolean
+  onTermsAccepted: (accepted: boolean) => void
   onChange: (email: string) => void
   onAdd: (email: string) => void
 }) {
@@ -299,13 +303,22 @@ function Mailboxes({
       <button type="button" className={LINK} disabled={disabled} onClick={() => setTyping(true)}>
         Change
       </button>
-      <span className="block">
-        By connecting, you accept the{" "}
-        <a className={LINK} href="https://cloud.google.com/terms" target="_blank" rel="noreferrer">
-          Google Cloud Terms of Service
-        </a>
-        .
-      </span>
+      <label className="mt-1 flex w-fit cursor-pointer items-center gap-2">
+        <input
+          type="checkbox"
+          checked={termsAccepted}
+          disabled={disabled}
+          onChange={(event) => onTermsAccepted(event.target.checked)}
+          className="accent-[var(--primary)]"
+        />
+        <span>
+          I accept Powerpacks accepting{" "}
+          <a className={LINK} href="https://cloud.google.com/terms" target="_blank" rel="noreferrer">
+            GCP ToS
+          </a>{" "}
+          on my behalf
+        </span>
+      </label>
     </span>
   )
 }
@@ -346,6 +359,8 @@ export function Connect({
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [mailbox, setMailbox] = useState<string | null>(null)
+  // The first Gmail connect may accept the Google Cloud Terms of Service; the person agrees here first.
+  const [termsAccepted, setTermsAccepted] = useState(false)
   // Your LinkedIn profile, when setup goes without LinkedIn's sign-in.
   const [profile, setProfile] = useState<string | null>(null)
   // The mailboxes Gmail's last connect asked for, so Try again asks for them again.
@@ -502,7 +517,8 @@ export function Connect({
           if (name === "gmail") connectGmail(asked ?? (known.length ? [...known] : [email]))
           else void connect(name)
         },
-        disabled: locked || (name === "gmail" && !email.includes("@")),
+        disabled:
+          locked || (name === "gmail" && (!email.includes("@") || (known.length === 0 && !termsAccepted))),
       },
       children: (
         <>
@@ -619,6 +635,8 @@ export function Connect({
         known={known}
         email={email}
         disabled={locked}
+        termsAccepted={termsAccepted}
+        onTermsAccepted={setTermsAccepted}
         onChange={setMailbox}
         onAdd={(added) => {
           onGuide?.("gmail")
