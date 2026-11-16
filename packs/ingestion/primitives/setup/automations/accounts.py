@@ -12,8 +12,6 @@ account — and `CHECK_BUCKETS` says which payload lists each verdict lands in.
 nested dict.
 
 Changelog:
-  2026-11-14: `add_account` first publishes the app once (`publish_app`): Google expires a
-    Testing app's Gmail sign-in after 7 days, so every mailbox had to sign in again weekly.
   2026-11-04: `check_account` asks Google about the saved token (gmail_token.py) and
     `stored_mailboxes` reads msgvault's `sources` table read-only: neither runs msgvault,
     which opens and migrates the whole archive per command and timed out on large ones
@@ -66,7 +64,6 @@ from packs.ingestion.primitives.setup.automations.msgvault_home import (  # noqa
     load_setup_state,
     parse_client_secret_paths,
     run_msgvault,
-    save_oauth_app_state,
     validate_client_secret,
 )
 from packs.ingestion.primitives.setup.automations.shell import (  # noqa: E402
@@ -277,29 +274,11 @@ def msgvault_account_authorize_command(home: Path, email: str, *, force: bool) -
     return shlex.join(cmd)
 
 
-def publish_app(home: Path, app_name: str) -> None:
-    """Move this install's Google app out of Testing, once, before a sign-in.
-
-    Google expires a Testing app's Gmail sign-in after 7 days. The app is the person's own
-    (personal use), so it is published without verification. Best effort: a failure leaves
-    the app as it was, the sign-in still works for 7 days, and the next sign-in tries again."""
-    state = load_setup_state(home, app_name)
-    if state.published or not state.project_id or not state.email:
-        return
-    progress("Publishing the Google app so Gmail stays signed in...")
-    result = oauth_browser.run_browser_mode("publish", project=state.project_id, email=state.email)
-    if oauth_browser.browser_status(result) == "ok":
-        save_oauth_app_state(home, app_name, {"published": True})
-    else:
-        progress(f"Google app not published: {result.get('message', 'unknown error')}")
-
-
 def add_account(home: Path, email: str, app_name: str, *, headless: bool, force: bool,
                 on_progress: Callable[[dict], None] | None = None) -> dict[str, Any]:
     """Authorize with the saved Google session, handing sign-in to the user."""
     progress(f"Authorizing msgvault account {email}...")
     if not headless:
-        publish_app(home, app_name)
         result = oauth_browser.authorize_account(home, email, app_name, force=force, on_progress=on_progress)
         if result["status"] == "ok":
             progress("msgvault account authorized.")

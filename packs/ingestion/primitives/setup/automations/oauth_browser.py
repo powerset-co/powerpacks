@@ -6,8 +6,7 @@ downloads the client secret JSON, the add-test-users flow, and msgvault account
 consent. Sign-in and challenges use a visible window in the same profile.
 
 Changelog:
-  2026-11-14: run_browser_mode runs the one-page Console modes: `publish` (the app leaves
-    Testing, whose Gmail sign-ins Google expires after 7 days) and `accept-terms`.
+  2026-11-14: run_browser_mode runs a one-page Console mode: `accept-terms`.
   2026-10-27: ensure_chromium installs Playwright's Chromium into ~/.powerpacks/browsers
     (POWERPACKS_BROWSERS_DIR) once; every browser automation calls it before node, and
     common/browser.js launches that Chromium before any browser on the Mac.
@@ -409,7 +408,7 @@ def run_browser_mode(
     profile_dir: Path = DEFAULT_BROWSER_PROFILE.expanduser(),
     timeout_seconds: int = 900,
 ) -> dict[str, Any]:
-    """Drive google_oauth_browser.js in a one-page mode (`publish`, `accept-terms`) in the saved
+    """Drive google_oauth_browser.js in a one-page mode (`accept-terms`) in the saved
     Google profile; a visible window opens only if Google needs a login."""
     deps = ensure_chromium()
     if deps["status"] != "ok":

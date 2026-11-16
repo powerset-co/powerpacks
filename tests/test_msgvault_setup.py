@@ -636,30 +636,6 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(create.call_count, 2)
             self.assertEqual(mode.call_args.args, ("accept-terms",))
 
-    def test_sign_in_publishes_the_app_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "msgvault"
-            msgvault_home.save_setup_state(home, {"project_id": "local-msg-vault-test", "email": "me@example.com"})
-            with mock.patch.object(oauth_browser, "run_browser_mode", return_value={"status": "ok", "published": True}) as mode, \
-                mock.patch.object(oauth_browser, "authorize_account", return_value={"status": "ok"}) as authorize:
-                accounts.add_account(home, "me@example.com", "", headless=False, force=True)
-                accounts.add_account(home, "me@example.com", "", headless=False, force=True)
-            mode.assert_called_once_with("publish", project="local-msg-vault-test", email="me@example.com")
-            self.assertEqual(authorize.call_count, 2)
-            self.assertTrue(msgvault_home.load_setup_state(home).published)
-
-    def test_a_failed_publish_still_signs_in_and_tries_again_next_time(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "msgvault"
-            msgvault_home.save_setup_state(home, {"project_id": "local-msg-vault-test", "email": "me@example.com"})
-            with mock.patch.object(oauth_browser, "run_browser_mode", return_value={"status": "error", "message": "x"}) as mode, \
-                mock.patch.object(oauth_browser, "authorize_account", return_value={"status": "ok"}):
-                first = accounts.add_account(home, "me@example.com", "", headless=False, force=False)
-                accounts.add_account(home, "me@example.com", "", headless=False, force=False)
-            self.assertEqual(first["status"], "ok")
-            self.assertEqual(mode.call_count, 2)
-            self.assertFalse(msgvault_home.load_setup_state(home).published)
-
     def test_add_test_users_uses_saved_project_and_browser_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "msgvault"

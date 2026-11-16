@@ -20,12 +20,10 @@
  *   2026-10-28: waits are measured (page_wait.js): a page settles when two reads agree, the
  *     network is dead when Chrome says so and nothing answers for a minute, the person is gone
  *     after five idle minutes. No networkidle: Google's long-polls never let it fire.
- *   2026-11-14: --mode publish moves the app to "In production": Google expires a Testing
- *     app's Gmail sign-in after 7 days, a published personal-use app's sign-in lasts.
- *     --mode accept-terms agrees to the Google Cloud Terms of Service a Google account must
- *     accept before it can create a project. The scopes check waits for the Data Access page's
- *     tables: it read the page while only the nav and a spinner were up, and reported saved
- *     scopes as missing.
+ *   2026-11-14: --mode accept-terms agrees to the Google Cloud Terms of Service a Google account
+ *     must accept before it can create a project. The scopes check waits for the Data Access
+ *     page's tables: it read the page while only the nav and a spinner were up, and reported
+ *     saved scopes as missing.
  */
 
 const fs = require("fs");
@@ -460,43 +458,6 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   await settle(page);
   await settle(page);
   await requireGoogleAuthConfigured(page);
-}
-
-// Google expires the Gmail sign-in of an External app in "Testing" after 7 days. Each person's
-// app is theirs alone (Google's personal-use exception, fewer than 100 users), so it is
-// published without verification; the consent screen keeps the unverified-app warning the
-// authorize step already passes. An Internal (Workspace) app has no Testing state and no button.
-async function publishApp(page, project) {
-  const audienceUrl = consoleUrl("auth/audience", project);
-  await gotoPage(page, audienceUrl, "OAuth audience");
-  await settle(page);
-  await requireGoogleAuthConfigured(page);
-  const body = async () => compactText(await page.locator("body").innerText({ timeout: 8000 }).catch(() => ""));
-  if (!/Publish app/i.test(await body())) {
-    log(/In production/i.test(await body()) ? "app already in production" : "no Publish app button (internal app)");
-    return { ok: true, published: false };
-  }
-  // Google disables the button while the Branding page is incomplete, and says so beside it.
-  const publish = page.getByRole("button", { name: /Publish app/i }).first();
-  if (await visible(publish, 5000) && !(await publish.isEnabled().catch(() => true))) {
-    const why = (/To publish your app[^.]*\./i.exec(await body()) || ["Google has Publish app disabled."])[0];
-    throw new StepError("publish.disabled", why);
-  }
-  if (!(await clickButton(page, [/^Publish app$/i, /Publish app/i], 5000))) {
-    throw new StepError("publish.open", "Publish app was not visible on the OAuth audience page.");
-  }
-  const root = await modalRoot(page);
-  if (!(await clickLocator(root.getByRole("button", { name: /^Confirm$/i }), "Confirm", 5000))) {
-    throw new StepError("publish.confirm", "Confirm was not visible after Publish app.");
-  }
-  await page.waitForTimeout(2500);
-  await gotoPage(page, audienceUrl, "OAuth audience verification");
-  await settle(page);
-  if (!/In production/i.test(await body())) {
-    throw new StepError("publish.verify", "The app is not In production after Publish app.");
-  }
-  log("app published");
-  return { ok: true, published: true };
 }
 
 // A Google account that has never used Cloud must agree to the Google Cloud Terms of Service
@@ -949,9 +910,7 @@ async function main() {
 
   let payload;
   try {
-    if (mode === "publish") {
-      payload = { status: "ok", project, ...(await publishApp(page, project)) };
-    } else if (mode === "accept-terms") {
+    if (mode === "accept-terms") {
       payload = { status: "ok", project, ...(await acceptCloudTerms(page)) };
     } else if (mode === "add-test-users") {
       const added = await addTestUsers(page, project, email, testUsers, timeoutMs);
