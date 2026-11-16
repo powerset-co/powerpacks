@@ -4,7 +4,7 @@
 `SearchResult.queries` and `Candidate.suggested_pin` are not emitted.
 
 Changelog:
-  2026-11-09: /api/search.json?step= reads the requested step without changing the saved current step.
+  2026-11-16: /api/search.json no longer takes step=; the page only ever read the current step.
   2026-11-09: /card-edits saves a chat search card's edits beside its prepare, so the chat shows none of the JSON.
   2026-10-08: the ask routes work out who to ask from the local sets and send agent messages (ask_set.py).
   2026-10-08: /api/ask/preview, /api/ask/status and the ask send for the broadcast button.
@@ -27,7 +27,6 @@ from packs.powerset.primitives.agent_inbox.messages import Rejected
 from packs.search.primitives.ask_set import ask_set
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 
-from .model import load_search
 from .server import LOCAL_HOSTS, SearchRoutes, _send_json
 
 
@@ -58,15 +57,7 @@ class SearchApi:
         if not run_id:
             _send_json(handler, {"error": "run_id is required"}, status=HTTPStatus.BAD_REQUEST)
             return True
-        step = (urllib.parse.parse_qs(parsed.query).get("step") or [None])[0]
-        if step is not None:
-            try:
-                search = load_search(self.routes.results_root, run_id, step=step)
-            except ValueError as error:
-                _send_json(handler, {"error": str(error)}, status=HTTPStatus.NOT_FOUND)
-                return True
-        else:
-            search = self.routes.one(run_id)
+        search = self.routes.one(run_id)
         if search is None:
             _send_json(handler, {"error": f"unknown search: {run_id}"}, status=HTTPStatus.NOT_FOUND)
             return True
