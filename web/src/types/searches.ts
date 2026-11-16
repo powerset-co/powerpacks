@@ -173,6 +173,8 @@ export interface NetworkOperator {
   gmail_interactions: number | null
   message_interactions: number | null
   gmail_account_details: GmailAccountDetail[]
+  /** This member's closeness to the person, 0-4; null when their install has not scored them. */
+  warmth: number | null
 }
 
 export interface PersonAttribution {
@@ -180,6 +182,8 @@ export interface PersonAttribution {
   sources: NetworkSource[]
   operators: NetworkOperator[]
   total_interactions: number
+  /** The highest warmth among the members. */
+  warmth: number | null
 }
 
 export interface Candidate {

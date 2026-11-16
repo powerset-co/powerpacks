@@ -33,6 +33,7 @@ export {
 } from "./icons/actions"
 export { CHANNEL_ICON } from "./icons/channels"
 export { initials } from "./initials"
+export { WarmthBar } from "./WarmthBar"
 export { Kbd } from "./Kbd"
 export { NotesField } from "./NotesField"
 export { SearchField } from "./SearchField"
