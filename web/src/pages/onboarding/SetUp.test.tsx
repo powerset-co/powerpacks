@@ -172,7 +172,7 @@ it("a LinkedIn-only run lists its two rows, Modal's words with a count and time 
   await act(() => client.invalidateQueries())
   await screen.findByRole("heading", { name: "Making your connections searchable" })
   expect(rows()).toEqual([
-    ["done", "1,075 LinkedIn connections (12 new)"],
+    ["done", "Reading your connections1,075 LinkedIn connections (12 new)"],
     ["current", "Making your connections searchableUnderstanding companiesabout 10 min left"],
   ])
   expect(screen.getByText("Understanding companies")).toBeTruthy()
@@ -198,8 +198,8 @@ it("a LinkedIn-only run lists its two rows, Modal's words with a count and time 
   await act(() => client.invalidateQueries())
   await screen.findByRole("heading", { name: "Search is ready" })
   expect(rows()).toEqual([
-    ["done", "1,075 LinkedIn connections (12 new)"],
-    ["done", "Search is ready: 1,075 people searchable."],
+    ["done", "Reading your connections1,075 LinkedIn connections (12 new)"],
+    ["done", "Making your connections searchableSearch is ready: 1,075 people searchable."],
   ])
 })
 
@@ -243,11 +243,11 @@ it("Import lists every row in its run's plan, deep context with its count", asyn
   mount("/accounts")
   await screen.findByRole("heading", { name: "Learning who they are" })
   expect(rows()).toEqual([
-    ["done", "whatsapp_login done"],
-    ["done", "linkedin done"],
-    ["done", "gmail_import done"],
-    ["done", "imessage_import done"],
-    ["done", "whatsapp_import done"],
+    ["done", "Signing you inwhatsapp_login done"],
+    ["done", "Reading your connectionslinkedin done"],
+    ["done", "Syncing Gmailgmail_import done"],
+    ["done", "Reading your Messagesimessage_import done"],
+    ["done", "Syncing WhatsAppwhatsapp_import done"],
     ["current", "Learning who they areLearning about your contacts: 40 of 298"],
     ["next", "Enriching people"],
     ["next", "Making your connections searchable"],
