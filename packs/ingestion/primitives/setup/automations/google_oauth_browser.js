@@ -106,19 +106,22 @@ async function settle(page, label = "settle", until = Date.now() + 90000, spinne
   // The spinner is Google's markup and there are stretches without one, so the positive sign
   // counts too: a Console page whose text is only its frame (top bar and nav, 96 characters
   // measured) has not drawn yet.
-  const spinnerUntil = Math.min(until, Date.now() + spinnerMs);
+  // Its own clock, not `until`: a document that used up `until` may still be drawing.
+  const spinnerUntil = Date.now() + spinnerMs;
   let spun = false;
   while (Date.now() < spinnerUntil && (await spinning(page) || await bare(page))) {
     spun = true;
     await page.waitForTimeout(250);
   }
-  if (spun) stable = await settled(page, until);
+  if (spun) stable = await settled(page, Math.max(until, Date.now() + 10000));
   log(`${label}: waited ${Date.now() - start}ms${spun ? " (loading)" : ""}${stable === null ? " (not settled)" : ""}`);
   await snapshot(page);
 }
 
 // Whether a Console page shows only its frame. Other sites (Google's sign-in) are never bare.
-const FRAME_CHARS = 200;
+// Measured live: the frame is 96 characters, 230 with Google's free-trial banner; the smallest
+// drawn page (Clients, one client) is 320 without the banner.
+const FRAME_CHARS = 280;
 async function bare(page) {
   if (!page.url().startsWith("https://console.cloud.google.com/") && !process.env.POWERPACKS_TEST_CONSOLE) return false;
   const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => null);
