@@ -66,12 +66,12 @@ test("a hidden progress bar is not loading", { skip }, async () => {
   await page.close();
 });
 
-test("a spinner that never goes costs 15 s, not the whole settle", { skip }, async () => {
+test("a spinner that never goes costs its cap, not the whole settle", { skip }, async () => {
   const page = await browser.newPage();
   await page.goto(`${base()}/`);
   const start = Date.now();
-  await settle(page);
+  await settle(page, "settle", Date.now() + 90000, 3000);
   const took = Date.now() - start;
-  assert.ok(took >= 14000 && took < 20000, `took ${took}ms`);
+  assert.ok(took >= 2500 && took < 8000, `took ${took}ms`);
   await page.close();
 });

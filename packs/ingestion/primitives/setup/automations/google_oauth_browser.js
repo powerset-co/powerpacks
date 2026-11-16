@@ -24,7 +24,8 @@
  *     must accept before it can create a project. The scopes check waits for the Data Access
  *     page's tables: it read the page while only the nav and a spinner were up, and reported
  *     saved scopes as missing.
- *   2026-11-16: settle counts a spinner on screen as still loading (every Console page).
+ *   2026-11-16: settle counts a spinner on screen as still loading (every Console page), and
+ *     gives a slow document 90 s while the network is alive.
  */
 
 const fs = require("fs");
@@ -92,13 +93,17 @@ function log(message) {
 // Wait for the page to settle (page_wait.js: loaded, and two reads agree), and log how long it
 // actually took so timings are visible in the job log. Never throws; the element waits that
 // follow are the backstop for a page that would not settle by `until`.
-async function settle(page, label = "settle", until = Date.now() + 30000) {
+// Measured on the live Console (2026-11-16): content follows the full-pane spinner by 1-10 s on a
+// throttled network with a warm cache, and with a cold cache at 400 kbit/s the document itself
+// takes about a minute. So: 90 s for the document while the network is alive (page_wait.js ends
+// the wait early when it is dead), and 45 s for a spinner.
+async function settle(page, label = "settle", until = Date.now() + 90000, spinnerMs = 45000) {
   const start = Date.now();
   let stable = await settled(page, until);
   // A Console page draws its frame, then a spinner while it fetches its content: two reads of
   // that agree, so it "settled" with nothing on it and a check read saved work as missing. A
   // spinner on screen is still loading; once it goes, settle again on what replaced it.
-  const spinnerUntil = Math.min(until, Date.now() + 15000);
+  const spinnerUntil = Math.min(until, Date.now() + spinnerMs);
   let spun = false;
   while (await spinning(page) && Date.now() < spinnerUntil) {
     spun = true;
@@ -112,7 +117,7 @@ async function settle(page, label = "settle", until = Date.now() + 30000) {
 // Whether the Console shows a loading spinner: an indeterminate progress indicator with a size.
 function spinning(page) {
   return page.evaluate(() => [...document.querySelectorAll(
-    '[role="progressbar"], mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, cfc-progress-spinner, cfc-loader',
+    '.pcc-loading-overlay, [role="progressbar"], mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, cfc-progress-spinner, cfc-loader',
   )].some((node) => {
     // Not aria-hidden: the Console's first, full-pane spinner (.pcc-loading-overlay) carries it.
     if (node.hasAttribute("aria-valuenow")) return false;
