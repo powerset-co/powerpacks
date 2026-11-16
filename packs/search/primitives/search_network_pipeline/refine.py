@@ -19,9 +19,10 @@ from packs.indexing.lib.io import write_json
 from packs.search.primitives.deep_search.results_web.model import original_quick_step, refine_interrupted, select_quick_step
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
 from packs.search.primitives.persist_search_results.results_io import hydrated_profiles, now_iso, read_jsonl
-from packs.search.primitives.shared.openai_client import make_openai_client
+from packs.search.primitives.shared.openai_client import _usage_row as usage_row, make_openai_client
 from packs.search.primitives.search_network_pipeline.refine_prompt import build_prompt, candidate_xml, cohort_summary
 
+PRICES = load_prices()
 MIN_RERANK_SCORE = 0.5
 MIN_INITIAL_SCORE = 0.3
 BATCH_SIZE = 2
@@ -95,7 +96,8 @@ def _score_batch(client, model, batch, query, criteria, summary):
             else:
                 continue
         scores.append((pid, float(item.get("score", 0)), item.get("reasoning", "")))
-    return scores, query_type
+    usage = usage_row(model, response, 0)
+    return scores, query_type, (row_cost_usd(usage, PRICES) or 0) if usage else 0
 
 
 def _lower(value):
@@ -148,13 +150,55 @@ def _sql_rows(inputs, sql):
         return ordered
 
 
+def _pool(project, ledger, current, *, screened):
+    """The rows showing and each one's hydrated profile, the judge's and the SQL tables' input.
+    `screened` drops the first step's rows the page hides: under the 0.3 cut or with a zero trait."""
+    profiles = hydrated_profiles(json.loads((project / ledger["state"]).read_text()))
+    if not profiles:
+        raise ValueError("quick run has no hydrated profiles")
+    rows = read_jsonl(project / current["jsonl"])
+    if screened:
+        rows = [row for row in rows if float(row["final_score"]) >= MIN_INITIAL_SCORE and not _has_zero_trait_score(row.get("trait_scores"))]
+    inputs = []
+    for row in rows:
+        profile = dict(profiles[row["person_id"]], person_id=row["person_id"], base_score=float(row["final_score"]))
+        for key, default in (("matched_position_indexes", []), ("trait_scores", {}), ("vertical_sources", [])):
+            profile[key] = _decoded(row.get(key), default)
+        profile["trait_scores"] = profile["trait_scores"].get("trait_scores", profile["trait_scores"])
+        inputs.append(profile)
+    return rows, inputs
+
+
+def _sql_step(rows, inputs, sql):
+    """The rows a SQL query keeps, in its order; a `reasoning` column replaces the row's."""
+    found = _sql_rows(inputs, sql)
+    order = {pid: index for index, pid in enumerate(found)}
+    kept = sorted((dict(row, overall_reasoning=found[row["person_id"]]) if found[row["person_id"]] else row
+                   for row in rows if row["person_id"] in found), key=lambda row: order[row["person_id"]])
+    return kept, "sort" if len(kept) == len(rows) else "filter", 0
+
+
+def _judge_step(rows, inputs, query, criteria, model, env):
+    """The rows the judge keeps. It only keeps or drops: kept rows keep their trait score and the
+    order they had (only a SQL sort reorders). Also the judge's query type and what the calls cost."""
+    summary = cohort_summary(inputs)
+    batches = [inputs[i:i + BATCH_SIZE] for i in range(0, len(inputs), BATCH_SIZE)]
+    with make_openai_client(api_key=env["OPENAI_API_KEY"], api_base=env.get("OPENAI_API_BASE") or env.get("OPENAI_BASE_URL")) as client, \
+            ThreadPoolExecutor(max_workers=max(1, min(len(batches), MAX_CONCURRENT_BATCHES))) as executor:
+        scored = list(executor.map(lambda batch: _score_batch(client, model, batch, query, criteria, summary), batches))
+    votes = Counter(query_type for _, query_type, _ in scored)
+    judged = {pid: (score, reasoning) for scores, _, _ in scored for pid, score, reasoning in scores}
+    kept = [dict(row, overall_reasoning=judged[row["person_id"]][1]) for row in rows
+            if row["person_id"] in judged and judged[row["person_id"]][0] >= MIN_RERANK_SCORE]
+    return kept, votes.most_common(1)[0][0] if votes else "rerank", sum(cost for _, _, cost in scored)
+
+
 def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str], sql: str | None = None):
+    """Go back to a saved step (`use`), or add one from the rows showing: by SQL, else by the judge."""
     run_dir = run_dir.expanduser().resolve()
     if run_dir.parent.name != "search" or run_dir.parent.parent.name != ".powerpacks":
         raise ValueError("rerank requires a quick run under .powerpacks/search/")
-    ledger = json.loads((run_dir / "pipeline.ledger.json").read_text())
-    root = run_dir.parent.parent / "deep-search"
-    run_id = run_dir.name
+    project, root, run_id = run_dir.parent.parent.parent, run_dir.parent.parent / "deep-search", run_dir.name
     catalog_path = root / "catalog.json"
     catalog = json.loads(catalog_path.read_text())
     card = catalog[run_id]
@@ -168,79 +212,30 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
         step = next((step for step in steps if step["id"] == use), None)
         if step is None:
             raise ValueError(f"unknown step: {use}")
+        return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
+    ledger = json.loads((run_dir / "pipeline.ledger.json").read_text())
+    current = next(step for step in steps if step["id"] == parent)
+    rows, inputs = _pool(project, ledger, current, screened=parent == "s1" and sql is None)
+    if sql is not None:
+        kept, query_type, cost = _sql_step(rows, inputs, sql)
     else:
-        project = run_dir.parent.parent.parent
-        profiles = hydrated_profiles(json.loads((project / ledger["state"]).read_text()))
-        if not profiles:
-            raise ValueError("quick run has no hydrated profiles")
-        current = next(step for step in steps if step["id"] == parent)
-        rows = read_jsonl(project / current["jsonl"])
-        if parent == "s1" and sql is None:
-            rows = [row for row in rows if float(row["final_score"]) >= MIN_INITIAL_SCORE and not _has_zero_trait_score(row.get("trait_scores"))]
-        inputs = []
-        for row in rows:
-            profile = dict(profiles[row["person_id"]], person_id=row["person_id"], base_score=float(row["final_score"]))
-            for key, default in (("matched_position_indexes", []), ("trait_scores", {}), ("vertical_sources", [])):
-                profile[key] = _decoded(row.get(key), default)
-            profile["trait_scores"] = profile["trait_scores"].get("trait_scores", profile["trait_scores"])
-            inputs.append(profile)
-        step_id = f"s{len(steps) + 1}"
-        jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
-        if sql is not None:
-            found = _sql_rows(inputs, sql)
-            order = {pid: index for index, pid in enumerate(found)}
-            kept = sorted((dict(row, overall_reasoning=found[row["person_id"]]) if found[row["person_id"]] else row
-                           for row in rows if row["person_id"] in found), key=lambda row: order[row["person_id"]])
-            jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
-            step = dict(id=step_id, parent=parent, criteria=criteria, sql=sql,
-                        query_type="sort" if len(kept) == len(rows) else "filter", shown=len(kept),
-                        scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=0, created_at=now_iso())
-            steps.append(step)
-            return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
         if not env.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY is required")
-        usage_path = Path(env.get("POWERPACKS_USAGE_LOG") or run_dir / f"refine.{step_id}.usage.jsonl")
-        offset = usage_path.stat().st_size if usage_path.exists() else 0
-        # The shared client captures the chosen log path when it is constructed.
-        previous_log = os.environ.get("POWERPACKS_USAGE_LOG")
-        os.environ["POWERPACKS_USAGE_LOG"] = str(usage_path)
+        card.update(status="running", refine_pid=os.getpid(), updated_at=now_iso())
+        write_json(catalog_path, catalog)
         try:
-            with make_openai_client(api_key=env["OPENAI_API_KEY"], api_base=env.get("OPENAI_API_BASE") or env.get("OPENAI_BASE_URL")) as client:
-                card.update(status="running", refine_pid=os.getpid(), updated_at=now_iso())
-                write_json(catalog_path, catalog)
-                try:
-                    summary = cohort_summary(inputs)
-                    batches = [inputs[i:i + BATCH_SIZE] for i in range(0, len(inputs), BATCH_SIZE)]
-                    with ThreadPoolExecutor(max_workers=max(1, min(len(batches), MAX_CONCURRENT_BATCHES))) as executor:
-                        futures = [executor.submit(_score_batch, client, model, batch, payload["iterations"][0]["query"], criteria, summary) for batch in batches]
-                        scored = [future.result() for future in futures]
-                    votes = Counter(query_type for _, query_type in scored)
-                    query_type = votes.most_common(1)[0][0] if votes else "rerank"
-                    # A qualitative refine only keeps or drops: the kept rows keep their trait score
-                    # and the order they had. Only a SQL sort reorders.
-                    judged = {pid: (score, reasoning) for scores, _ in scored for pid, score, reasoning in scores}
-                    kept = [dict(row, overall_reasoning=judged[row["person_id"]][1]) for row in rows
-                            if row["person_id"] in judged and judged[row["person_id"]][0] >= MIN_RERANK_SCORE]
-                    costs = []
-                    if usage_path.exists():
-                        with usage_path.open("rb") as handle:
-                            handle.seek(offset)
-                            prices = load_prices()
-                            costs = [row_cost_usd(json.loads(line), prices) or 0 for line in handle if line.strip()]
-                    jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
-                    step = dict(id=step_id, parent=parent, criteria=criteria, sql=None, query_type=query_type, shown=len(kept),
-                                scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=sum(costs), created_at=now_iso())
-                    steps.append(step)
-                except BaseException:
-                    card.pop("refine_pid", None)
-                    card.update(status="failed", updated_at=now_iso())
-                    write_json(catalog_path, catalog)
-                    raise
-        finally:
-            if previous_log is None:
-                os.environ.pop("POWERPACKS_USAGE_LOG", None)
-            else:
-                os.environ["POWERPACKS_USAGE_LOG"] = previous_log
+            kept, query_type, cost = _judge_step(rows, inputs, payload["iterations"][0]["query"], criteria, model, env)
+        except BaseException:
+            card.pop("refine_pid", None)
+            card.update(status="failed", updated_at=now_iso())
+            write_json(catalog_path, catalog)
+            raise
+    step_id = f"s{len(steps) + 1}"
+    jsonl = (project / steps[0]["jsonl"]).with_suffix(f".{step_id}.jsonl")
+    jsonl.write_text("".join(json.dumps(row) + "\n" for row in kept))
+    step = dict(id=step_id, parent=parent, criteria=criteria, sql=sql, query_type=query_type, shown=len(kept),
+                scored=len(rows), jsonl=str(jsonl.relative_to(project)), cost_usd=cost, created_at=now_iso())
+    steps.append(step)
     return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
 
 

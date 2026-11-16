@@ -193,20 +193,11 @@ export function RefreshPage() {
                 )}
                 className={cn(PICKER, "min-w-[96px]")}
               />
-              <span className="ml-1 text-faint">
-                {data.running ? (
-                  <Link
-                    to="/accounts?view=sync"
-                    className="font-semibold text-info no-underline hover:underline"
-                  >
-                    See progress
-                  </Link>
-                ) : data.next_run_at ? (
-                  `Next run ${lower(when(data.next_run_at))}`
-                ) : (
-                  "Off"
-                )}
-              </span>
+              {!data.running && (
+                <span className="ml-1 text-faint">
+                  {data.next_run_at ? `Next run ${lower(when(data.next_run_at))}` : "Off"}
+                </span>
+              )}
             </div>
             {(settings.error ?? start.error) && (
               <p role="alert" className="m-0 text-xs text-bad">
@@ -290,6 +281,11 @@ function RunRow({ run }: { run: RefreshRun }) {
         </td>
         <td className={CELL}>
           <span className="flex items-center gap-1.5">
+            {run.status === "running" && (
+              <Link to="/accounts?view=sync" className="font-semibold text-info no-underline hover:underline">
+                See progress
+              </Link>
+            )}
             {run.sources.map((source) => (
               <Badge
                 key={source.source}
