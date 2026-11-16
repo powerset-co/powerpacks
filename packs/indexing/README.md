@@ -176,10 +176,12 @@ not build a second DuckDB.
 ## Taste scores
 
 When you're signed in to Powerset, each index build saves the Powerset team's
-Taste scores into `local_person_taste` (LinkedIn URL, `employee` or `founder`
-mode, score, model, date). `fetch_taste_scores` asks the Powerset API
-(`POST /v2/taste/people`), which only reads scores already saved and never starts
-a paid scoring run. Signed out, or the API refusing, skips it and the build still
+Taste scores: people into `local_person_taste` (LinkedIn URL, `employee` or
+`founder` mode, score, model, date) and companies into `local_company_taste`
+(website domain, overall, team, momentum, investors, product_market).
+`fetch_taste_scores` asks the Powerset API (`POST /v2/taste/people` and
+`/v2/taste/companies`), which only read scores already saved and never start a
+paid scoring run. Signed out, or the API refusing, skips it and the build still
 succeeds. Run it by hand with:
 
 ```bash

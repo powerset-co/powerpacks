@@ -11,7 +11,8 @@ The lower-level record builders stay in build_processing_pipeline.py. This
 wrapper owns orchestration and writes a stable stage manifest.
 
 Changelog:
-  2026-11-13: every ready path saves the Powerset team's Taste scores into the index
+  2026-11-13: every ready path saves the Powerset team's Taste scores (people and
+    companies) into the index
     (fetch_taste_scores; signed in only, free, never fails the build).
   2026-07-26 (declaration owns the path): DELETED `read_manifest_people_csv`. The
     fan-in used to read each `import/<source>/manifest.json` to learn where that
