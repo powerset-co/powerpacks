@@ -75,6 +75,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_import_contacts_quality \
   tests.test_import_status \
   tests.test_index_contacts_pipeline \
+  tests.test_fetch_taste_scores \
   tests.test_ingestion_messages_contract \
   tests.test_interaction_counts \
   tests.test_jd_query \

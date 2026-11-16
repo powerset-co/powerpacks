@@ -172,3 +172,18 @@ Search commands take the result as `--backend local --db .powerpacks/search-inde
 `.powerpacks/search-index/local-search.duckdb` artifact. Fan-in retains contact
 and source provenance as CSVs under `.powerpacks/network-import/merged/`; it does
 not build a second DuckDB.
+
+## Taste scores
+
+When you're signed in to Powerset, each index build saves the Powerset team's
+Taste scores: people into `local_person_taste` (LinkedIn URL, `employee` or
+`founder` mode, score, model, date) and companies into `local_company_taste`
+(website domain, overall, team, momentum, investors, product_market).
+`fetch_taste_scores` asks the Powerset API (`POST /v2/taste/people` and
+`/v2/taste/companies`), which only read scores already saved and never start a
+paid scoring run. Signed out, or the API refusing, skips it and the build still
+succeeds. Run it by hand with:
+
+```bash
+uv run python packs/indexing/primitives/fetch_taste_scores/fetch_taste_scores.py
+```
