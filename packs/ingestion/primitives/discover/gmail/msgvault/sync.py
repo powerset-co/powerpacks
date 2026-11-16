@@ -1,6 +1,10 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
 Changelog:
+  2026-11-16 (count): the page's "N of M messages" gets its total from Gmail itself
+    (`gmail_token.count_messages` over the same window and query) before the sync starts. The
+    bundled msgvault syncs through its daemon and never prints a total, so the log line the
+    count used to read no longer exists.
   2026-09-23 (typed rows): added `MsgvaultSyncPayload` — the ONE parse of a
     msgvault sync summary (the JSON a `msgvault sync-full` run prints, or the dict
     `sync_msgvault_account` returns) — and `MsgvaultSyncMarker` for
@@ -37,7 +41,6 @@ import subprocess
 from collections.abc import Callable
 from contextlib import closing
 import threading
-import re
 import urllib.parse
 import sys
 
@@ -49,6 +52,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.common.proc import emit_progress, run_cmd  # noqa: E402
+from packs.ingestion.primitives.setup.automations.gmail_token import count_messages  # noqa: E402
 
 
 MSGVAULT_REAUTH_ERROR_MARKERS = (
@@ -215,27 +219,19 @@ def msgvault_reauthorize_command(email: str) -> str:
     )
 
 
-_TOTAL_LINE = re.compile(r'msg="syncing account".*\bmessages=(\d+)')
-
-
 class _SyncWatcher:
-    """How far msgvault's sync has got, for a count on the page: the total is the `messages=`
-    on its "syncing account" log line; the messages done so far is the run row it keeps in
-    its own database (sync_runs.messages_processed), read every few seconds."""
+    """How far msgvault's sync has got, for a count on the page: `total` is Gmail's count of the
+    window (gmail_token.count_messages); the messages done so far is the run row msgvault keeps
+    in its own database (sync_runs.messages_processed), read every few seconds."""
 
-    def __init__(self, db: str, email: str, on_progress: Callable[[int, int], None]) -> None:
+    def __init__(self, db: str, email: str, total: int, on_progress: Callable[[int, int], None]) -> None:
         self.db = db
         self.email = email
         self.on_progress = on_progress
-        self.total = 0
+        self.total = total
         self.done = -1
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._poll, daemon=True)
-
-    def on_line(self, line: str) -> None:
-        match = _TOTAL_LINE.search(line)
-        if match:
-            self.total = int(match.group(1))
 
     def start(self) -> None:
         self._thread.start()
@@ -246,8 +242,6 @@ class _SyncWatcher:
 
     def _poll(self) -> None:
         while not self._stop.wait(_PROGRESS_SECONDS):
-            if not self.total:
-                continue
             done = self._processed()
             if done is None or done == self.done:
                 continue
@@ -321,11 +315,15 @@ def sync_msgvault_account(
         cmd.append("--no-attachments")
     window_label = f" after {sync_after}" if sync_after else ""
     emit_progress(f"Starting Gmail sync for {email}{window_label}.")
-    watcher = _SyncWatcher(db, email, on_progress) if on_progress else None
+    # The window as Gmail search words, the way msgvault itself sends it (syncfull.go).
+    window = " ".join(part for part in (f"after:{sync_after}" if sync_after else "",
+                                        f"before:{sync_before}" if sync_before else "", query) if part)
+    total = count_messages(db_home, email, window) if on_progress else None
+    watcher = _SyncWatcher(db, email, total, on_progress) if on_progress and total else None
     if watcher:
         watcher.start()
     try:
-        code, payload, stderr = run_cmd(cmd, on_stderr=watcher.on_line if watcher else None)
+        code, payload, stderr = run_cmd(cmd)
     finally:
         if watcher:
             watcher.stop()

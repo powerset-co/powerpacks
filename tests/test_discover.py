@@ -5,6 +5,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -133,6 +134,36 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertEqual(payload["sync_after"], "2026-05-20")
             self.assertEqual(payload["sync_after_source"], "msgvault.sources.last_sync_at")
             self.assertEqual(calls, [["msgvault", "--home", str(tmp), "sync-full", "me@example.com", "--after", "2026-05-20", "--query", "-category:social"]])
+
+    def test_gmail_sync_counts_toward_gmails_total_for_the_window(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            db = tmp / "msgvault.db"
+            write_msgvault_db(db)
+            con = sqlite3.connect(db)
+            con.execute("CREATE TABLE sync_runs (id INTEGER PRIMARY KEY, source_id INTEGER, messages_processed INTEGER)")
+            con.execute("INSERT INTO sync_runs (source_id, messages_processed) SELECT id, 1500 FROM sources WHERE identifier = 'me@example.com'")
+            con.commit()
+            con.close()
+            seen: list[tuple[int, int]] = []
+
+            def fake_run_cmd(cmd, timeout=None, **_kwargs):
+                for _ in range(40):
+                    if seen:
+                        break
+                    time.sleep(0.05)
+                return 0, {"status": "completed"}, ""
+
+            with mock.patch.object(discover_gmail_sync.shutil, "which", return_value="/usr/bin/msgvault"), \
+                 mock.patch.object(discover_gmail_sync, "_PROGRESS_SECONDS", 0.05), \
+                 mock.patch.object(discover_gmail_sync, "count_messages", return_value=7500) as count, \
+                 mock.patch.object(discover_gmail_sync, "run_cmd", side_effect=fake_run_cmd):
+                discover_gmail_sync.sync_msgvault_account(
+                    "me@example.com", str(db), "-category:social", sync_after_override="2025-11-16",
+                    on_progress=lambda read, total: seen.append((read, total)))
+
+            count.assert_called_once_with(tmp, "me@example.com", "after:2025-11-16 -category:social")
+            self.assertEqual(seen, [(1500, 7500)])
 
     def test_gmail_sync_expired_token_returns_actionable_reauthorization_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
