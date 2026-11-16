@@ -23,7 +23,9 @@
  *   2026-11-14: --mode publish moves the app to "In production": Google expires a Testing
  *     app's Gmail sign-in after 7 days, a published personal-use app's sign-in lasts.
  *     --mode accept-terms agrees to the Google Cloud Terms of Service a Google account must
- *     accept before it can create a project.
+ *     accept before it can create a project. The scopes check waits for the Data Access page's
+ *     tables: it read the page while only the nav and a spinner were up, and reported saved
+ *     scopes as missing.
  */
 
 const fs = require("fs");
@@ -474,6 +476,12 @@ async function publishApp(page, project) {
     log(/In production/i.test(await body()) ? "app already in production" : "no Publish app button (internal app)");
     return { ok: true, published: false };
   }
+  // Google disables the button while the Branding page is incomplete, and says so beside it.
+  const publish = page.getByRole("button", { name: /Publish app/i }).first();
+  if (await visible(publish, 5000) && !(await publish.isEnabled().catch(() => true))) {
+    const why = (/To publish your app[^.]*\./i.exec(await body()) || ["Google has Publish app disabled."])[0];
+    throw new StepError("publish.disabled", why);
+  }
   if (!(await clickButton(page, [/^Publish app$/i, /Publish app/i], 5000))) {
     throw new StepError("publish.open", "Publish app was not visible on the OAuth audience page.");
   }
@@ -557,6 +565,7 @@ async function addScopes(page, project) {
   const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes");
   await settle(page);
+  await scopesPageDrawn(page);
 
   const existing = await verifyScopesOnCurrentPage(page);
   if (existing.ok) {
@@ -692,10 +701,20 @@ async function verifyScopesOnCurrentPage(page) {
   };
 }
 
+// The Data Access page settles on its nav and a spinner before its scope tables draw: a read then
+// finds no scopes although they are saved. The page's own button says the tables are there.
+async function scopesPageDrawn(page) {
+  await visible(page.getByRole("button", { name: /Add or remove scopes/i }), 20000);
+}
+
 async function verifyScopes(page, project) {
   const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes verification");
   await settle(page);
+  await scopesPageDrawn(page);
+  for (const scope of GMAIL_SCOPES) {
+    await visible(page.getByText(scope.replace("https://www.googleapis.com", ""), { exact: false }), 5000);
+  }
   return verifyScopesOnCurrentPage(page);
 }
 
