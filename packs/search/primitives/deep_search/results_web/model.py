@@ -252,6 +252,7 @@ class NetworkOperator:
     gmail_interactions: int | None
     message_interactions: int | None = None
     gmail_account_details: tuple[GmailAccountDetail, ...] = ()
+    warmth: float | None = None  # this member's closeness to the person, 0-4
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,7 @@ class PersonAttribution:
     sources: tuple[NetworkSource, ...]
     operators: tuple[NetworkOperator, ...]
     total_interactions: int
+    warmth: float | None = None  # the highest among the members
 
 
 def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
@@ -273,9 +275,11 @@ def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
                                         tuple(row['channels']), row.get('gmail_interactions'),
                                         row.get('message_interactions'),
                                         tuple(GmailAccountDetail(account['email'], account['interactions'])
-                                              for account in row.get('gmail_account_details', [])))
+                                              for account in row.get('gmail_account_details', [])),
+                                        row.get('warmth'))
                         for row in raw['operators']),
         total_interactions=raw['total_interactions'],
+        warmth=raw.get('warmth'),
     )
 
 

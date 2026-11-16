@@ -372,6 +372,22 @@ describe("RunView", () => {
     expect(operators.getByText("Gmail · LinkedIn · 42 emails")).toBeTruthy()
   })
 
+  it("shows the highest warmth on the row and each person's own on hover, warmest first", () => {
+    renderEveryPond()
+    const name = "Warmth with Jordan Bravo"
+    const trigger = row("p-jordan").getByRole("button", { name })
+    expect(trigger.textContent).toBe("3.2")
+    fireEvent.click(trigger)
+    const popover = screen.getByRole("region", { name })
+    expect(within(popover).getAllByText("3.2 of 4 Close")).toHaveLength(2)
+    expect(within(popover).getByText("1.4 of 4 Distant")).toBeTruthy()
+    expect([...popover.querySelectorAll("li b")].map((b) => b.textContent)).toEqual([
+      "Emery Lima",
+      "Drew Kilo",
+    ])
+    expect(row("p-casey").queryByRole("button", { name: /^Warmth with/ })).toBeNull()
+  })
+
   it("flags a candidate from the drawer", () => {
     const { submit } = renderEveryPond()
     fireEvent.click(main("p-jordan"))

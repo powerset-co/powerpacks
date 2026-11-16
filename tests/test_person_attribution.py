@@ -101,7 +101,7 @@ class PersonAttributionTests(unittest.TestCase):
         ])
         self.assertEqual(person["operators"], [{
             "operator_id": "owner-1", "operator_name": "Jordan Bravo", "channels": ["gmail", "imessage", "linkedin"],
-            "gmail_interactions": 10, "message_interactions": 2, "gmail_account_details": [],
+            "gmail_interactions": 10, "message_interactions": 2, "gmail_account_details": [], "warmth": None,
         }])
         self.assertEqual(saved["p2"]["sources"], [])
         self.assertEqual(saved["p2"]["operators"][0]["operator_name"], "Jordan Bravo")

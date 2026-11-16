@@ -1,7 +1,6 @@
+import { WarmthBar } from "@/components/shared"
 import { label } from "@/lib/people/copy"
 import type { Person } from "@/types/people"
-
-const WARMTH_LEVELS = [1, 2, 3, 4] as const
 
 // Four bars and the number; a person never judged shows a dash.
 export function WarmthCell({ value }: { value: number | null }) {
@@ -11,14 +10,9 @@ export function WarmthCell({ value }: { value: number | null }) {
         —
       </div>
     )
-  const on = Math.round(value)
   return (
     <div role="cell" className="warmth-cell c-warmth" title={`Warmth ${value.toFixed(1)} of 4`}>
-      <span className="warmth-bar">
-        {WARMTH_LEVELS.map((level) => (
-          <i key={level} className={level <= on ? "on" : ""} />
-        ))}
-      </span>
+      <WarmthBar value={value} />
       {value.toFixed(1)}
     </div>
   )
