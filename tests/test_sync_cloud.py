@@ -127,6 +127,25 @@ class SyncCloudTest(unittest.TestCase):
             self.assertEqual([p["person_id"] for p in cloud.applied[0]["people"]], [P1])
             self.assertEqual(cloud.applied[0]["removed"], [P2])
 
+    def test_a_changed_vector_resends_the_person(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_root(Path(tmp))
+            cloud = FakeCloud()
+            sync_cloud.sync(root, cloud, log=lambda _: None)
+            cloud.applied.clear()
+            con = duckdb.connect(str(root / sync_cloud.INDEX_RELATIVE))
+            con.execute("UPDATE local_summaries SET vector = [0.3, 0.41]")
+            con.close()
+            result = sync_cloud.sync(root, cloud, log=lambda _: None)
+            self.assertEqual((result["upsert"], [p["person_id"] for p in cloud.applied[0]["people"]]), (1, [P1]))
+
+    def test_cli_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_root(Path(tmp))
+            with mock.patch.object(sync_cloud, "http_api", return_value=FakeCloud()), \
+                    mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                self.assertEqual(sync_cloud.main(["--root", str(root), "--dry-run"]), 0)
+
     def test_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:
             cloud = FakeCloud()

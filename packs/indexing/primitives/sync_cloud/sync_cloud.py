@@ -130,10 +130,31 @@ def read_people(con: Any, warmth: dict[str, float]) -> dict[str, dict[str, Any]]
     return people
 
 
+# Index tables a person's documents come from, with the column naming the person.
+HASHED_TABLES = (("local_person_profiles", "person_id"), ("local_people_positions", "base_id"),
+                 ("local_summaries", "base_id"), ("local_people_education", "base_id"))
+
+
+def row_hashes(con: Any) -> dict[str, str]:
+    """person_id -> one hash over all their index rows, computed inside DuckDB so vectors never reach Python."""
+    parts: dict[str, list[str]] = {}
+    for table, key in HASHED_TABLES:
+        columns = [row[0] for row in con.execute(f"DESCRIBE {table}").fetchall()]
+        # Vectors as text are most of the cost; DuckDB's native hash of the list is enough to see a change.
+        cells = [f'CAST(hash(t."{c}") AS VARCHAR)' if c == "vector" else f"""coalesce(CAST(t."{c}" AS VARCHAR), '\\N')"""
+                 for c in columns]
+        row = f"md5(concat_ws(chr(31), {', '.join(cells)}))"
+        rows = con.execute(f"""SELECT CAST("{key}" AS VARCHAR), md5(string_agg(h, ',' ORDER BY h))
+                               FROM (SELECT "{key}", {row} AS h FROM {table} t) GROUP BY 1""").fetchall()
+        for person_id, digest in rows:
+            parts.setdefault(person_id, []).append(f"{table}:{digest}")
+    return {person_id: "|".join(digests) for person_id, digests in parts.items()}
+
+
 def fingerprints(con: Any, people: dict[str, dict[str, Any]]) -> dict[str, str]:
     """One hash per person over their index rows and everything else sent about them."""
     ids = tuple(sorted(people))
-    index_hashes = local_index.person_hashes(con, ids)
+    index_hashes = row_hashes(con)
     out = {}
     for person_id in ids:
         person = people[person_id]
@@ -187,7 +208,7 @@ def batch_payload(con: Any, people: dict[str, dict[str, Any]], ids: list[str], h
 
 def pack_vector(vector: Any) -> str:
     """base64 little-endian float32: 8 KB for 1536 dims instead of ~30 KB of JSON numbers."""
-    floats = array.array("f", (float(v) for v in vector))
+    floats = array.array("f", vector)  # DuckDB hands back floats; converting one by one was most of the build
     if sys.byteorder != "little":
         floats.byteswap()
     return base64.b64encode(floats.tobytes()).decode()
@@ -272,8 +293,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--dry-run", action="store_true", help="Ask the cloud what would change; write nothing.")
     args = parser.parse_args(argv)
-    from packs.ingestion.primitives.deep_context_v2.openai import load_env
-    load_env(args.root / ".env")
     print(json.dumps(sync(args.root, http_api(args.root), dry_run=args.dry_run, log=lambda m: print(m, file=sys.stderr))))
     return 0
 
