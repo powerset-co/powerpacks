@@ -48,7 +48,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
-import postgres_client as pg  # noqa: E402
+from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -1199,14 +1199,12 @@ def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_f
     if ledger.get("mode")=="local_duckdb":
         from packs.search.primitives.deep_search.person_attribution import local_network_attribution
         return local_network_attribution(Path(ledger["duckdb"]), people), None
-    if not env_file:
-        return {}, "no env file: the set's Postgres lookup was not made"
-    scope=latest_step(state,"resolve_set_operators")
-    if not people or not scope.get("operator_ids"):
+    set_id=latest_step(state,"resolve_set_operators").get("set_id")
+    if not people or not set_id:
         return {}, None
     try:
-        return pg.fetch_network_attribution(people, env_file=Path(env_file), allowed_operator_ids=list(scope["operator_ids"])), None
-    except Exception as e:
+        return powerset_api.person_attribution(Path(env_file) if env_file else None, str(set_id), people), None
+    except (Exception, SystemExit) as e:  # a signed-out bearer_token() raises SystemExit
         error=f"{type(e).__name__}: {e}"
         print(f"search: network attribution lookup failed ({error}); the rows show no sources", file=sys.stderr, flush=True)
         return {}, error

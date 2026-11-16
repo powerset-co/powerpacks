@@ -1390,7 +1390,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
                     "created_at": "2026-10-16T00:00:00Z", "steps": {}, **({"mode": mode, "duckdb": "local.duckdb"} if mode else {}),
                     "artifacts": {"jsonl": ".powerpacks/runs/artifacts/founders/rows.jsonl",
                                   "profiles_path": ".powerpacks/runs/artifacts/founders/profiles.jsonl"}}))
-                with mock.patch.object(module.pg, "fetch_network_attribution", return_value=known) as fetch, \
+                with mock.patch.object(module.powerset_api, "person_attribution", return_value=known) as fetch, \
                         mock.patch("packs.search.primitives.deep_search.person_attribution.local_network_attribution", return_value=known) as local_fetch:
                     module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/founders.json",
                                              "status": "completed", "env_file": ".env"})
@@ -1401,11 +1401,11 @@ class PreviewFilterKeysTests(unittest.TestCase):
                         fetch.assert_not_called()
                         local_fetch.assert_called_once_with(Path("local.duckdb"), ["p1"])
                     else:
-                        fetch.assert_called_once_with(["p1"], env_file=Path(".env"), allowed_operator_ids=["op1"])
+                        fetch.assert_called_once_with(Path(".env"), "s1", ["p1"])
                         local_fetch.assert_not_called()
 
     def test_a_failed_attribution_lookup_is_recorded_in_the_run(self):
-        """The chat drops the pipeline's stderr, so a failed Postgres lookup must land in results.json."""
+        """The chat drops the pipeline's stderr, so a failed attribution lookup must land in results.json."""
         module = load_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1428,7 +1428,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
                 "created_at": "2026-10-16T00:00:00Z", "steps": {},
                 "artifacts": {"jsonl": ".powerpacks/runs/artifacts/founders/rows.jsonl",
                               "profiles_path": ".powerpacks/runs/artifacts/founders/profiles.jsonl"}}))
-            with mock.patch.object(module.pg, "fetch_network_attribution", side_effect=RuntimeError("pooler down")):
+            with mock.patch.object(module.powerset_api, "person_attribution", side_effect=RuntimeError("pooler down")):
                 module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/founders.json",
                                          "status": "completed", "env_file": ".env"})
             saved = json.loads((root / ".powerpacks/deep-search/founders/results.json").read_text())
