@@ -6,19 +6,15 @@ import { useFeatures, useUpdateFeatures } from "./features"
 
 function Controls() {
   const update = useUpdateFeatures()
-  return (
-    <button onClick={() => update.mutate({ sets: true, auto_reply: true, support: false, team: false })}>
-      Enable
-    </button>
-  )
+  return <button onClick={() => update.mutate({ support: true, team: true })}>Enable</button>
 }
 
 function Consumer() {
   const features = useFeatures()
   return (
     <p>
-      {features.sets ? "Sets enabled" : "Sets disabled"},{" "}
-      {features.auto_reply ? "Replies enabled" : "Replies disabled"}
+      {features.support ? "Support enabled" : "Support disabled"},{" "}
+      {features.team ? "Team enabled" : "Team disabled"}
     </p>
   )
 }
@@ -50,30 +46,30 @@ it("keeps both features off until local settings load", async () => {
     ),
   )
   mount()
-  expect(screen.getByText("Sets disabled, Replies disabled")).toBeTruthy()
-  finish(new Response(JSON.stringify({ sets: true, auto_reply: false })))
-  expect(await screen.findByText("Sets enabled, Replies disabled")).toBeTruthy()
+  expect(screen.getByText("Support disabled, Team disabled")).toBeTruthy()
+  finish(new Response(JSON.stringify({ support: true, team: false })))
+  expect(await screen.findByText("Support enabled, Team disabled")).toBeTruthy()
 })
 
 it("updates other consumers only after settings are saved", async () => {
   const fetch = vi
     .fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ sets: false, auto_reply: false })))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ sets: true, auto_reply: true })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ support: false, team: false })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ support: true, team: true })))
   vi.stubGlobal("fetch", fetch)
   mount()
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
   fireEvent.click(screen.getByText("Enable"))
-  expect(await screen.findByText("Sets enabled, Replies enabled")).toBeTruthy()
+  expect(await screen.findByText("Support enabled, Team enabled")).toBeTruthy()
   expect(fetch).toHaveBeenLastCalledWith("/api/features", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sets: true, auto_reply: true, support: false, team: false }),
+    body: JSON.stringify({ support: true, team: true }),
   })
 })
 
 it("keeps experiments off when settings cannot load", async () => {
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")))
   mount()
-  await waitFor(() => expect(screen.getByText("Sets disabled, Replies disabled")).toBeTruthy())
+  await waitFor(() => expect(screen.getByText("Support disabled, Team disabled")).toBeTruthy())
 })

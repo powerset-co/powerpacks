@@ -12,18 +12,15 @@ import urllib.error
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import nats
 from nats.js.errors import NotFoundError
 
-from packs.ingestion.primitives.deep_context_v2.db.store import open_store
-from packs.ingestion.primitives.share.web.sets import Member, Sets
-from packs.shared.web import asks_loop, features, server
+from packs.shared.web import asks_loop, server
 
 REAL_PULL = asks_loop.agent_inbox.pull
-REAL_SET_MEMBERS = asks_loop._set_members
 
 
 class AskLoopTests(unittest.IsolatedAsyncioTestCase):
@@ -76,11 +73,6 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.env_file = self.root / ".env"
-        self.owner = str(uuid4())
-        features.save(self.root, features.FeatureFlags(sets=True))
-        self.worker = Mock(return_value={})
-        self.enterContext(patch.dict(asks_loop.ANSWERED_HERE, {"debug_request": self.worker}))
-        self.members = self.enterContext(patch.object(asks_loop, "_set_members", return_value={self.owner}))
         self.pull = self.enterContext(patch.object(asks_loop.agent_inbox, "pull", return_value=[]))
         self.enterContext(patch.dict(asks_loop.STATUS, {"state": "offline"}))
         asks_loop.WAKE.clear()
@@ -92,29 +84,12 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
                 await asks_loop._poll(repo_root=self.root, env_file=self.env_file)
         return wait
 
-    def write_message(self, kind, **fields):
-        message = {"id": str(uuid4()), "kind": kind, "from": {"operator_id": self.owner}, **fields}
-        path = self.root / ".powerpacks" / "inbox" / f"{message['id']}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(message))
-        return path
-
-    async def test_inbox_polls_with_sets_off_without_reading_sets_or_answering_debug(self):
-        features.save(self.root, features.FeatureFlags(sets=False, support=False))
-        self.write_message("debug_request")
-        await self.poll(2)
-        self.assertEqual(self.pull.call_count, 2)
-        self.assertEqual(asks_loop.STATUS["state"], "connected")
-        self.members.assert_not_called()
-        self.worker.assert_not_called()
-
     async def test_success_polls_immediately_then_every_thirty_seconds(self):
         wait = await self.poll(2)
         self.assertEqual(self.pull.call_count, 2)
         self.pull.assert_called_with(repo_root=self.root, env_file=self.env_file)
         self.assertEqual([call.args[0] for call in wait.call_args_list], [30, 30])
         self.assertEqual(asks_loop.STATUS["state"], "connected")
-        self.assertEqual(self.members.call_count, 2)
 
     async def test_failed_pull_marks_offline_and_backs_off_then_resets_after_success(self):
         self.pull.side_effect = [ConnectionError(), ConnectionError(), [], ConnectionError()]
@@ -144,7 +119,6 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
                 wait = await self.poll()
                 wait.assert_called_once_with(300)
                 self.assertEqual(asks_loop.STATUS["state"], "signed_out")
-        self.members.assert_not_called()
 
     async def test_sign_in_wakes_signed_out_poll(self):
         self.pull.side_effect = [SystemExit("signed out"), []]
@@ -173,55 +147,13 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
                 asks_loop.WAKE.set()
                 await asyncio.gather(loop, return_exceptions=True)
 
-    async def test_ask_is_left_for_the_codex_recipient_loop(self):
-        path = self.write_message("ask")
-        await self.poll(2)
-        self.worker.assert_not_called()
-        self.assertNotIn("answered_at", json.loads(path.read_text()))
-
-    async def test_debug_request_is_answered_once_across_repeated_pulls(self):
-        path = self.write_message("debug_request")
-        self.write_message("set_invite")
-        await self.poll(2)
-        self.worker.assert_called_once()
-        self.assertIn("answered_at", json.loads(path.read_text()))
-
-    async def test_debug_request_from_outside_the_sets_is_refused(self):
-        path = self.write_message("debug_request", **{"from": {"operator_id": str(uuid4())}})
-        await self.poll(2)
-        self.worker.assert_not_called()
-        self.assertEqual(json.loads(path.read_text())["refused"], "not in a set")
-
-    async def test_failed_debug_answer_retries_on_the_next_pull(self):
-        path = self.write_message("debug_request")
-        self.worker.side_effect = [RuntimeError("unavailable"), {}]
-        with self.assertLogs(asks_loop.__name__, level="WARNING"):
-            await self.poll(3)
-        self.assertEqual(self.worker.call_count, 2)
-        self.assertIn("answered_at", json.loads(path.read_text()))
-
-    async def test_debug_failure_does_not_change_successful_http_status(self):
-        self.members.side_effect = RuntimeError("store unavailable")
-        with self.assertLogs(asks_loop.__name__, level="WARNING"):
-            await self.poll()
-        self.assertEqual(asks_loop.STATUS["state"], "connected")
-
-    def test_set_members_settles_before_reading_known_operators(self):
-        with patch.object(Sets, "settle") as settle, patch.object(Sets, "known_operators", return_value={self.owner}):
-            self.assertEqual(REAL_SET_MEMBERS(self.root, self.env_file), {self.owner})
-            settle.assert_called_once()
-
-    async def test_real_http_poll_persists_and_acks_invite_and_question_despite_nats_422(self):
-        sender, recipient, set_id, question_id = (str(uuid4()) for _ in range(4))
+    async def test_real_http_poll_persists_and_acks_messages_despite_nats_422(self):
+        sender = str(uuid4())
         created_at = "2026-10-12T12:00:00Z"
         messages = [
-            {"id": str(uuid4()), "kind": "set_invite", "from": {"operator_id": sender, "name": "Casey Delta"},
-             "created_at": created_at, "payload": {"set_id": set_id, "set_name": "Synthetic team", "from_email": "casey@example.com"}},
-            {"id": str(uuid4()), "kind": "set_question", "from": {"operator_id": sender, "name": "Casey Delta"},
-             "created_at": created_at, "payload": {"set_id": set_id, "search_id": "synthetic-search", "title": "Synthetic search",
-                 "conversation_id": str(uuid4()), "message": {"id": question_id, "request_id": question_id,
-                     "author_id": sender, "author_name": "Casey Delta", "recipient_id": recipient,
-                     "text": "Can Jordan Bravo help?", "created_at": created_at, "status": "queued"}}},
+            {"id": str(uuid4()), "kind": "support_result", "from": {"operator_id": sender, "name": "Casey Delta"},
+             "created_at": created_at, "payload": {"text": text, "thread_id": "synthetic-thread", "request_id": str(uuid4())}}
+            for text in ("First synthetic result", "Second synthetic result")
         ]
         acked = set()
         delivered = threading.Event()
@@ -290,7 +222,6 @@ class AskLoopTests(unittest.IsolatedAsyncioTestCase):
                     for message in messages:
                         path = self.root / ".powerpacks" / "inbox" / f"{message['id']}.json"
                         self.assertEqual(json.loads(path.read_text()), message)
-                    self.worker.assert_not_called()
                 finally:
                     loop.cancel()
                     asks_loop.WAKE.set()
@@ -339,48 +270,32 @@ class AskLoopServerTests(unittest.TestCase):
                     page.shutdown()
                     thread.join()
 
-    def test_fresh_store_routes_keep_sets(self):
-        for method, path in (("GET", "/api/people/sets"), ("GET", "/api/relay"),
-                             ("POST", "/api/relay/connect"), ("GET", "/api/collaboration")):
+    def test_relay_routes_open_a_fresh_store(self):
+        for method, path in (("GET", "/api/relay"), ("POST", "/api/relay/connect")):
             with self.subTest(method=method, path=path), tempfile.TemporaryDirectory() as directory:
-                self.check_fresh_store_routes(Path(directory), method, path)
-
-    def check_fresh_store_routes(self, root, method, path):
-        with patch.object(Sets, "me", return_value=Member("Casey", "casey@example.com", "owner", "synthetic-owner")), \
-                patch.object(Sets, "message") as sent:
-            with patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
-                    patch("packs.ingestion.primitives.share.web.logbook.default_paths",
-                          return_value={"gmail": root / "synthetic-gmail.sqlite"}), \
-                    ThreadingHTTPServer(("127.0.0.1", 0), server.persistent_handler(root)) as page:
-                thread = threading.Thread(target=page.serve_forever, daemon=True)
-                thread.start()
-
-                def request(method="GET", path="/api/review/page", body=None):
-                    client = http.client.HTTPConnection(*page.server_address, timeout=5)
-                    client.request(method, path, json.dumps(body) if body is not None else None)
-                    response = client.getresponse()
-                    payload = json.loads(response.read())
-                    client.close()
-                    self.assertEqual(response.status, 200, payload)
-                    return payload
-
-                try:
-                    self.assertFalse((root / server.STORE).exists())
-                    request(method, path)
-                    self.assertTrue((root / server.STORE).is_file())
-                    created = request("POST", "/api/people/sets", {"name": "Synthetic recruiting"})
-                    set_id = created["sets"][1]["set_id"]
-                    self.assertEqual(request("GET", "/api/people/sets")["sets"][1]["set_id"], set_id)
-                    self.assertEqual(request("GET", "/api/collaboration")["sets"][0]["set_id"], set_id)
-                    request()
-                    with open_store(root / server.STORE) as conn:
-                        self.assertEqual(conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 0)
-                        self.assertEqual(conn.execute("SELECT name FROM sets").fetchone()[0], "Synthetic recruiting")
-                    sent.assert_not_called()
-                finally:
-                    page.shutdown()
-                    thread.join()
-
+                root = Path(directory)
+                with patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
+                        patch("packs.ingestion.primitives.share.web.logbook.default_paths",
+                              return_value={"gmail": root / "synthetic-gmail.sqlite"}), \
+                        ThreadingHTTPServer(("127.0.0.1", 0), server.persistent_handler(root)) as page:
+                    thread = threading.Thread(target=page.serve_forever, daemon=True)
+                    thread.start()
+                    try:
+                        self.assertFalse((root / server.STORE).exists())
+                        client = http.client.HTTPConnection(*page.server_address, timeout=5)
+                        client.request(method, path)
+                        response = client.getresponse()
+                        payload = json.loads(response.read())
+                        client.close()
+                        self.assertEqual(response.status, 200, payload)
+                        self.assertTrue((root / server.STORE).is_file())
+                        client = http.client.HTTPConnection(*page.server_address, timeout=5)
+                        client.request("GET", "/api/people/sets")
+                        self.assertEqual(client.getresponse().status, 404)
+                        client.close()
+                    finally:
+                        page.shutdown()
+                        thread.join()
 
 
 class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
@@ -390,7 +305,6 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.device_id = asks_loop._device_id(self.root)
         self.env_file = self.root / ".env"
-        features.save(self.root, features.FeatureFlags(sets=True))
         self.operator_id = str(uuid4())
         self.subjects = {"tasks": f"set.synthetic.op.{self.operator_id}",
                          "presence": "set.synthetic.presence", "inbox": f"op.{self.operator_id}"}
@@ -427,8 +341,7 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
             first_pull.set()
 
         with patch.object(asks_loop, "_connection", return_value=self.connection), \
-                patch.object(asks_loop.agent_inbox, "pull", side_effect=pulled) as pull, \
-                patch.object(asks_loop, "_set_members", return_value=set()):
+                patch.object(asks_loop.agent_inbox, "pull", side_effect=pulled) as pull:
             loop = asyncio.create_task(asks_loop._run(repo_root=self.root, env_file=self.env_file,
                                                      device_id=self.device_id))
             try:
@@ -437,11 +350,6 @@ class AskLoopNatsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(beat["operator_id"], self.operator_id)
                 self.assertEqual(beat["device_id"], self.device_id)
                 self.assertIsNotNone(datetime.fromisoformat(beat["at"]).tzinfo)
-                presence_file = self.root / ".powerpacks/presence.json"
-                async with asyncio.timeout(2):
-                    while not presence_file.exists():
-                        await asyncio.sleep(0.01)
-                self.assertEqual(json.loads(presence_file.read_text()), {self.operator_id: beat["at"]})
                 consumer = await js.consumer_info("asks", self.device_id + "-inbox")
                 self.assertEqual(consumer.config.filter_subject, self.subjects["inbox"])
                 await js.publish(self.subjects["inbox"], b'{"kind":"message"}')

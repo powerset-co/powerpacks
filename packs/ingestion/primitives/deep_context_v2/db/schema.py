@@ -224,8 +224,8 @@ CREATE TABLE IF NOT EXISTS families (
 {PEOPLE_ROW_TRIGGERS_DDL}
 """
 
-# Schema 4 also added the sets the owner belongs to: the cloud's answer, kept locally so the People page
-# shows them without a round trip and the next sync starts from what was last seen.
+# Schema 4 also added local sets. Nothing reads or writes the table since 2026-11-16 (sets are the Powerset
+# API's); it stays so existing stores need no migration.
 SETS_DDL = """
 CREATE TABLE sets (
   set_id TEXT NOT NULL PRIMARY KEY,   -- made here by its owner; an invite carries it to members

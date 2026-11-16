@@ -41,17 +41,7 @@ using Powerpacks' Google OAuth client (`POWERPACKS_GOOGLE_CLIENT_ID` /
 shows a short code and opens `auth.openai.com/codex/device` in the browser; Codex polls for the
 approval and the app comes forward when `account/login/completed` arrives.
 
-## Search questions POC
-
-The existing native Searches view (`/agent`) keeps `@member` questions in the search's
-history. Select the audience set, mention a member, and their assistant's answer appears
-under the question. **Reply in thread** keeps follow-ups attached to that root question.
-Only the question, search title/brief, and thread replies are shared; the private Codex
-transcript stays local. Received searches appear in the existing search sidebar.
-
-The recipient explicitly chooses **Answer with my Codex**. A dedicated Codex thread reads
-cached local evidence with writes/network access disabled. Delivery retries reuse saved
-answers. The older shortlist **Ask the Set** worker is unchanged. Live inference is untested.
+## Bundling the runtime
 
 Build the web assets and commit them before bundling: the runtime archive uses `git archive
 HEAD`. Build with `scripts/bundle-runtime.sh` then `POWERPACKS_DEBUG_MENU=1 pnpm tauri build --bundles app` in

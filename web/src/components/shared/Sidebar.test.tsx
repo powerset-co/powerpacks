@@ -15,7 +15,7 @@ vi.mock("@/lib/api/update", () => ({
   UPDATE_INTERVAL_MS: 60_000,
 }))
 vi.mock("@/lib/api/relay", () => ({ connectRelay: vi.fn() }))
-vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: false, auto_reply: false }) }))
+vi.mock("@/lib/features", () => ({ useFeatures: () => ({ support: false, team: false }) }))
 vi.mock("@/hooks/useSetupDone", () => ({ useSetupDone: vi.fn(() => false) }))
 const install = vi.hoisted(() => ({ fetchInstall: vi.fn() }))
 vi.mock("@/lib/api/install", () => install)

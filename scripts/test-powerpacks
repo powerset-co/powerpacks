@@ -45,17 +45,13 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_context_v2_review_routes \
   tests.test_proposed_profiles \
   tests.test_people_page \
-  tests.test_people_sets \
   tests.test_people_worth \
   tests.test_settings_providers \
   tests.test_luna_signals \
   tests.test_signals_refresh \
   tests.test_agent_messages \
-  tests.test_agent_debug \
   tests.test_asks_loop \
   tests.test_remote_assist \
-  tests.test_ask_set \
-  tests.test_ask_worker \
   tests.test_install_coordinator \
   tests.test_candidate_judge_evidence \
   tests.test_candidate_judges \

@@ -104,8 +104,7 @@ function serve(url: string, init?: RequestInit): Promise<Response> {
     deleteOnServer(ids.map(String))
     return Promise.resolve(respond({ deleted: ids.length }))
   }
-  if (url.endsWith("/api/features"))
-    return Promise.resolve(respond({ sets: false, auto_reply: false, support: false, team: false }))
+  if (url.endsWith("/api/features")) return Promise.resolve(respond({ support: false, team: false }))
   if (url.includes("/person?")) return Promise.resolve(respond(DETAIL))
   if (url.endsWith("/logbook")) return Promise.resolve(respond(logbookStatus()))
   if (url.endsWith("/signals"))
@@ -299,7 +298,7 @@ describe("PeoplePage", () => {
       "fetch",
       vi.fn((url: string, init?: RequestInit) =>
         url.endsWith("/api/features")
-          ? Promise.resolve(respond({ sets: false, auto_reply: false, support: false, team: false }))
+          ? Promise.resolve(respond({ support: false, team: false }))
           : serve(url, init),
       ),
     )

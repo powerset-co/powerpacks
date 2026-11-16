@@ -431,7 +431,7 @@ class TeamTests(unittest.TestCase):
         root, base, operator_id, state, calls = self.team_page
         path = f"/api/team/thread?operator_id={operator_id}"
         assert team_http(base, path) == (200, {"messages": []})
-        features.save(root, features.FeatureFlags(sets=False, support=False))
+        features.save(root, features.FeatureFlags(support=False))
         with patch.object(jsonio, "datetime") as clock:
             clock.now.return_value = datetime.fromisoformat("2026-10-17T12:00:00+00:00")
             status, reply = team_http(base, "/api/team/ask", {"operator_id": operator_id, "text": "Fix setup"},

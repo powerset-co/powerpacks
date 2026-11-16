@@ -10,7 +10,7 @@ import { AgentPage } from "./AgentPage"
 
 // The page around the results pane: a signed-in desktop chat whose agent is running a search.
 vi.mock("@/lib/desktop", () => ({ isDesktop: () => true, invoke: vi.fn() }))
-vi.mock("@/lib/features", () => ({ useFeatures: () => ({ sets: false, auto_reply: false }) }))
+vi.mock("@/lib/features", () => ({ useFeatures: () => ({ support: false, team: false }) }))
 vi.mock("@/lib/agent/useCodexAccount", () => ({
   useCodexAccount: () => ({ status: { installed: true, account: { email: "me@example.com" } } }),
 }))
@@ -20,7 +20,6 @@ vi.mock("@/lib/agent/store", async (original) => ({
   ...(await original<Record<string, unknown>>()),
   useAgent: () => ({ ...EMPTY_AGENT, running: true, searchRun: openRun }),
 }))
-vi.mock("./collaboration/useCollaboration", () => ({ useCollaboration: () => ({ data: undefined }) }))
 vi.mock("./Composer", () => ({
   Composer: ({ draft, onDraftChange }: { draft: string; onDraftChange: (text: string) => void }) => (
     <textarea aria-label="Message" value={draft} onChange={(event) => onDraftChange(event.target.value)} />

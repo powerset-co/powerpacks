@@ -1,5 +1,5 @@
 // GET /api/relay and POST /api/relay/connect on the local server (packs/shared/web/server.py):
-// the Ask the Set daemon's inbox status, for the sidebar's status dot.
+// the inbox daemon's inbox status, for the sidebar's status dot.
 
 import { body, failure } from "@/lib/api/http"
 

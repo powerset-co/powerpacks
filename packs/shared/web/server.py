@@ -121,7 +121,6 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     from packs.search.primitives.deep_search.results_web.api import search_api
     from packs.search.primitives.deep_search.results_web.server import search_routes
     from packs.shared.web import asks_loop
-    from packs.shared.web.collaboration import Collaboration, CollaborationRoutes
 
     load_env()
     data_root: Path = root / ".powerpacks"
@@ -130,23 +129,16 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
     # written for one request at a time. It opens on the first store-backed request.
     store_lock = threading.Lock()
     network: dict[str, tuple[ReviewApi, Any]] = {}
-    collaboration: dict[str, CollaborationRoutes] = {}
 
     def network_routes() -> tuple[ReviewApi, Any]:
         """Called under the store lock."""
         if "routes" not in network:
             conn = open_store(root / STORE, shared=True)
             network["routes"] = (ReviewApi(conn, data_root), share_routes(conn, data_root))
-            collaboration["routes"] = CollaborationRoutes(Collaboration(network["routes"][1].sets, searches))
         return network["routes"]
 
-    class LazySets:
-        """Open the sets on the first ask; its routes hold the store lock already."""
-        def __getattr__(self, name: str) -> Any:
-            return getattr(network_routes()[1].sets, name)
-
     searches = search_routes(data_root / "deep-search", base="/searches")
-    searches_json = search_api(searches, LazySets(), store_lock)
+    searches_json = search_api(searches)
     accounts = AccountsApi()
     tasks = TasksApi(root)
 
@@ -173,7 +165,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             with store_lock:
                 routes = network_routes()
-                if not collaboration["routes"].get(self, parsed) and not routes[1].get(self, parsed):
+                if not routes[1].get(self, parsed):
                     routes[0].get(self, parsed)  # answers its own 404
 
         def do_POST(self) -> None:  # noqa: N802
@@ -188,7 +180,7 @@ def mounted_handler(root: Path) -> type[BaseHTTPRequestHandler]:
                 return
             with store_lock:
                 routes = network_routes()
-                if not collaboration["routes"].post(self, parsed) and not routes[1].post(self, parsed):
+                if not routes[1].post(self, parsed):
                     routes[0].post(self, parsed)
 
     return Handler
