@@ -398,20 +398,6 @@ and restart the host (skills are loaded once at startup).
 
 
 
-## Contracts
-
-Powerpacks treats Postgres and TurboPuffer schema as checked-in contracts, not
-something the agent should rediscover on each run:
-
-```bash
-uv run --project . python packs/search/primitives/contracts/contracts.py list
-uv run --project . python packs/search/primitives/contracts/contracts.py check-postgres --env-file .env
-uv run --project . python packs/search/primitives/contracts/contracts.py dump-postgres --env-file .env --out .powerpacks/schema-dumps/postgres-live.json
-```
-
-`dump-postgres` writes a diagnostic artifact. It does not mutate the checked-in
-contracts.
-
 ## Runtime Keys
 
 Provisioned users can populate a local `.env` without pasting raw secrets into

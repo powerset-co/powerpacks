@@ -147,7 +147,13 @@ class App:
         if spot["disabled"]:
             raise Failed(f"{target} is disabled")
         self.mark = self.js("performance.now()")
-        self._post("/click", {"x": spot["x"], "y": spot["y"]})
+        self._tap(spot["x"], spot["y"])
+
+    def _tap(self, x: float, y: float) -> None:
+        self._post("/click", {"x": x, "y": y})
+
+    def _press(self, **keys: str) -> None:
+        self._post("/type", keys)
 
     def reload(self) -> None:
         """A fresh page, with no view kept, for the next scenario."""
@@ -168,13 +174,13 @@ class App:
         self.focus()
         self.mark = self.js("performance.now()")
         for letter in text:
-            self._post("/type", {"text": letter})
+            self._press(text=letter)
             time.sleep(0.05)
 
     def key(self, name: str) -> None:
         self.focus()
         self.mark = self.js("performance.now()")
-        self._post("/type", {"key": name})
+        self._press(key=name)
 
     def shows(self, target: dict) -> bool:
         return bool(self.js(f"__qa.find({json.dumps(target)}).length > 0"))

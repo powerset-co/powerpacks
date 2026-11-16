@@ -14,7 +14,6 @@ import json
 import re
 import socket
 import tempfile
-import threading
 import unittest
 import urllib.parse
 from dataclasses import fields
@@ -64,7 +63,7 @@ class SearchJsonContractTest(unittest.TestCase):
                          created_at="2026-09-26T00:00:00Z", status="completed",
                          found_by=[{"run": "jordan-role", "pond": 1, "query": "Backend Engineer query"}])
         model.index_search(self.root, "jordan-role", json.loads((run / "manifest.json").read_text()))
-        api = search_api(search_routes(self.root, base="/searches"), mock.Mock(), threading.Lock())
+        api = search_api(search_routes(self.root, base="/searches"))
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -107,8 +106,6 @@ class SearchJsonContractTest(unittest.TestCase):
         self.assertNotIn("queries", payload["search"])
         self.assertEqual(self.get("/searches/api/search.json?run_id=missing"),
                          (404, {"error": "unknown search: missing"}))
-        self.assertEqual(self.get("/searches/api/search.json?run_id=missing&step=s1"),
-                         (404, {"error": "unknown search: missing"}))
         self.assertEqual(self.get("/searches/api/search.json"),
                          (400, {"error": "run_id is required"}))
         self.assertFalse(self.api.get(mock.Mock(), urllib.parse.urlparse("/searches/tags")))
@@ -122,8 +119,6 @@ class SearchJsonContractTest(unittest.TestCase):
         # Same fixture serialized by BASE 18f5f39, before step fields were added.
         self.assertEqual(hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
                          "62c21bb4dab3d32640ef0d0605c5937a9754f716e21979aa406fa72a53be7a31")
-        self.assertEqual(self.get("/searches/api/search.json?run_id=jordan-role&step=s1"),
-                         (404, {"error": "unknown step: s1"}))
 
     def test_step_rows_and_snapshot(self) -> None:
         original = self.root / "original.jsonl"
@@ -140,24 +135,15 @@ class SearchJsonContractTest(unittest.TestCase):
         model.select_quick_step(saved, saved["steps"][1])
         path.write_text(json.dumps(saved))
         before = path.read_bytes()
-        for query, people in (("", ["casey"]),
-                              ("&step=s1", ["jordan", "casey"]),
-                              ("&step=s2", ["casey"]),
-                              ("", ["casey"])):
-            with self.subTest(query=query):
-                with mock.patch.object(self.api.routes, "one", wraps=self.api.routes.one) as one:
-                    status, payload = self.get("/searches/api/search.json?run_id=quick" + query)
-                self.assertEqual(one.call_count, 0 if query else 1)
-                self.assertEqual(status, 200)
-                search = payload["search"]
-                self.assertEqual([row["person_id"] for row in search["candidates"]], people)
-                self.assertNotIn("criteria", search)
-                self.assertEqual(search["current_step"], "s2")
-                self.assertEqual(search["steps"], [{key: value for key, value in step.items() if key != "jsonl"}
-                                                  for step in saved["steps"]])
-                validate_snapshot({"schema_version": 1, "search": search, "tags": {"tags": [], "assignments": {}}})
-        self.assertEqual(self.get("/searches/api/search.json?run_id=quick&step=s9"),
-                         (404, {"error": "unknown step: s9"}))
+        status, payload = self.get("/searches/api/search.json?run_id=quick")
+        self.assertEqual(status, 200)
+        search = payload["search"]
+        self.assertEqual([row["person_id"] for row in search["candidates"]], ["casey"])
+        self.assertNotIn("criteria", search)
+        self.assertEqual(search["current_step"], "s2")
+        self.assertEqual(search["steps"], [{key: value for key, value in step.items() if key != "jsonl"}
+                                          for step in saved["steps"]])
+        validate_snapshot({"schema_version": 1, "search": search, "tags": {"tags": [], "assignments": {}}})
         self.assertEqual(path.read_bytes(), before)
         snapshot = export_snapshot(path.parent)
         self.assertEqual(snapshot["search"]["current_step"], "s2")
@@ -212,7 +198,7 @@ class CardEditsTest(unittest.TestCase):
         data = Path(temp.name)
         self.run_dir = data / "search" / "ab12-vp-finance"
         self.run_dir.mkdir(parents=True)
-        api = search_api(search_routes(data / "deep-search", base="/searches"), mock.Mock(), threading.Lock())
+        api = search_api(search_routes(data / "deep-search", base="/searches"))
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802

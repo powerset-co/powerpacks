@@ -332,3 +332,18 @@ html[data-desktop="mac"] [data-collapsed="true"] [data-sidebar-brand] {
   user-select: none !important;
   transition: none !important;
 }
+
+/* Warmth 0-4 as four bars (components/shared/WarmthBar). */
+.warmth-bar {
+  display: inline-flex;
+  gap: 2px;
+}
+.warmth-bar i {
+  width: 5px;
+  height: 10px;
+  border-radius: 1.5px;
+  background: var(--secondary);
+}
+.warmth-bar i.on {
+  background: var(--primary);
+}

@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -11,7 +12,6 @@ PRIMITIVES = ROOT / "packs/search/primitives"
 LIB = PRIMITIVES / "lib"
 SHARED = PRIMITIVES / "shared"
 LOCAL = PRIMITIVES / "local"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
 
 
 class SearchBackendImportBoundaryTests(unittest.TestCase):
@@ -30,50 +30,6 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
         if result.returncode != 0:
             self.fail(f"import boundary script failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
-    def test_turbopuffer_pipeline_imports_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import importlib
-            import os
-            import sys
-            from pathlib import Path
-
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-            sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
-
-            blocked = {{'duckdb', 'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            for module in [
-                'search_common',
-                'search_embeddings',
-                'search_result_merge',
-                'turbopuffer_search_backend',
-                'turbopuffer_resolve_companies',
-                'turbopuffer_resolve_education',
-                'execute_role_search',
-                'apply_prefilters',
-                'count_candidates',
-                'search_network_pipeline',
-            ]:
-                importlib.import_module(module)
-        """)
-        self.run_import_script(code)
-
     def test_local_pipeline_imports_without_turbopuffer_client_module(self) -> None:
         code = textwrap.dedent(f"""
             import importlib
@@ -83,11 +39,10 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
 
             os.environ['POWERPACKS_LOCAL_SEARCH_DB'] = '/var/tmp/powerpacks-boundary-import-test.duckdb'
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
+            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}]:
                 sys.path.insert(0, path)
             sys.path.insert(0, {str(PRIMITIVES / 'execute_role_search')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'apply_prefilters')!r})
-            sys.path.insert(0, {str(PRIMITIVES / 'count_candidates')!r})
             sys.path.insert(0, {str(PRIMITIVES / 'search_network_pipeline')!r})
 
             blocked = {{'turbopuffer', 'turbopuffer_search_backend', 'turbopuffer_resolve_companies', 'turbopuffer_resolve_education'}}
@@ -112,7 +67,6 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
                 'local_resolve_education',
                 'execute_role_search',
                 'apply_prefilters',
-                'count_candidates',
                 'search_network_pipeline',
             ]:
                 importlib.import_module(module)
@@ -130,7 +84,7 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
 
             sys.path.insert(0, {str(ROOT)!r})
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
+            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}]:
                 sys.path.insert(0, path)
             from tests.test_local_search_pipeline import write_local_search_db
 
@@ -185,7 +139,7 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
 
             sys.path.insert(0, {str(ROOT)!r})
 
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
+            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}]:
                 sys.path.insert(0, path)
             from tests.test_local_duckdb_backend import LocalDuckDBBackendTests
 
@@ -240,131 +194,25 @@ class SearchBackendImportBoundaryTests(unittest.TestCase):
         """)
         self.run_import_script(code)
 
-    def test_turbopuffer_runtime_works_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import os
-            import sys
-            from types import SimpleNamespace
-
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-
-            blocked = {{'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            import turbopuffer_search_backend as turbopuffer_client
-
-            class FakeNamespace:
-                def query(self, **kwargs):
-                    return SimpleNamespace(rows=[SimpleNamespace(id='person-1-1', base_id='person-1', position_title='Engineer')])
-
-            class FakeClient:
-                def namespace(self, name):
-                    return FakeNamespace()
-
-            turbopuffer_client.client = lambda: FakeClient()
-            rows = asyncio.run(turbopuffer_client.filter_only_rows(
-                ('id', 'NotEq', '__never__'),
-                ['base_id', 'position_title'],
-                page_size=5,
-                max_results=1,
-            ))
-            assert rows == [{{'id': 'person-1-1', 'base_id': 'person-1', 'position_title': 'Engineer'}}], rows
-        """)
-        self.run_import_script(code)
-
-    def test_turbopuffer_resolvers_run_without_local_backend_modules(self) -> None:
-        code = textwrap.dedent(f"""
-            import asyncio
-            import json
-            import os
-            import sys
-            from types import SimpleNamespace
-
-            os.environ.pop('POWERPACKS_LOCAL_SEARCH_DB', None)
-            for path in [{str(LIB)!r}, {str(SHARED)!r}, {str(LOCAL)!r}, {str(TURBOPUFFER)!r}]:
-                sys.path.insert(0, path)
-
-            blocked = {{'local_search_backend', 'local_search_verticals', 'local_resolve_companies', 'local_resolve_education', 'local_duckdb_store'}}
-            for name in list(sys.modules):
-                if name.split('.')[0] in blocked:
-                    sys.modules.pop(name, None)
-
-            class Blocker:
-                def find_spec(self, fullname, path=None, target=None):
-                    if fullname.split('.')[0] in blocked:
-                        raise ImportError(f'blocked local module: {{fullname}}')
-                    return None
-
-            sys.meta_path.insert(0, Blocker())
-            import turbopuffer_search_backend as turbopuffer_backend
-            import turbopuffer_resolve_companies as resolve_companies
-            import turbopuffer_resolve_education as resolve_education
-
-            class FakeNamespace:
-                def __init__(self, logical_name):
-                    self.logical_name = logical_name
-
-                def query(self, **kwargs):
-                    if self.logical_name == 'companies':
-                        rows = [SimpleNamespace(id='company-1', company_name='Acme AI', score=1.0)]
-                    elif self.logical_name == 'schools':
-                        rows = [SimpleNamespace(id='school-stanford', school_name='Stanford University', display_value='Stanford University', person_count=1000, score=1.0)]
-                    else:
-                        rows = []
-                    return SimpleNamespace(rows=rows)
-
-                def multi_query(self, **kwargs):
-                    return [self.query()]
-
-            class FakeClient:
-                def namespace(self, name):
-                    logical = 'companies' if 'compan' in name else 'schools'
-                    return FakeNamespace(logical)
-
-            turbopuffer_backend.client = lambda: FakeClient()
-            company_out = asyncio.run(resolve_companies.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({{'company_names': ['Acme AI']}}),
-                env_file=None,
-                name_top_k=5,
-                semantic_top_k=5,
-                page_size=1000,
-                max_companies=10,
-                max_soft_companies=10,
-                company_sector_strategy='hard_filter',
-                company_sector_min_results=20,
-                ce_threshold=999999,
-                no_ce=True,
-                ce_all=False,
-                ce_top_n=0,
-                ce_model='unused',
-                ce_batch_size=10,
-                ce_concurrency=1,
-            )))
-            assert 'company-1' in company_out['company_ids'], company_out
-            edu_out = asyncio.run(resolve_education.run(SimpleNamespace(
-                state=None,
-                payload_json=json.dumps({{'education_names': ['Stanford University']}}),
-                env_file=None,
-                max_rows_per_name=10,
-            )))
-            assert 'school-stanford' in edu_out['education_ids'], edu_out
-        """)
-        self.run_import_script(code)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class NoDirectCloudAccessTests(unittest.TestCase):
+    """Cloud data comes only through the Powerset API: no install reads Postgres or TurboPuffer."""
+
+    # The share-era upload writer stays for network-search-api's index refresh
+    # (scripts/powerset_v2/prepare_refreshed_indexes.py imports local_index); the app never runs it.
+    ALLOWED = {
+        "packs/indexing/primitives/upload_powerset/turbopuffer_writer.py",
+    }
+    FORBIDDEN = re.compile(r"^\s*(import|from)\s+(psycopg2|psycopg|turbopuffer|postgres_client)\b", re.MULTILINE)
+
+    def test_no_python_imports_a_database_or_turbopuffer_client(self) -> None:
+        offenders = []
+        for folder in ("packs", "scripts", "adapters", "automations", "bin", "desktop"):
+            for path in (ROOT / folder).rglob("*.py"):
+                relative = path.relative_to(ROOT).as_posix()
+                if "/node_modules/" in relative or "/target/" in relative or relative in self.ALLOWED:
+                    continue
+                if self.FORBIDDEN.search(path.read_text(encoding="utf-8", errors="ignore")):
+                    offenders.append(relative)
+        self.assertEqual(offenders, [])

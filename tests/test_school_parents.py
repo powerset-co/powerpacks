@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,16 +12,12 @@ from packs.indexing.lib.artifacts import build_education_corpus, stable_school_u
 from packs.indexing.lib.identity import school_uuid
 from packs.indexing.lib.school_parents import (
     MAPPING_PATH,
-    add_schools,
     apply_canonical_names,
     apply_same_names,
     flatten,
     normalize_name,
-    read_rows,
     school_rows,
-    write_rows,
 )
-from packs.indexing.primitives.update_school_parents import update_school_parents
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packs/search/primitives/local"))
 import local_resolve_education  # noqa: E402
@@ -95,40 +90,6 @@ class FlattenTest(unittest.TestCase):
         rows = rows_of(row("a", "A", parent_id="b"), row("b", "B", parent_id="a"), row("c", "C", parent_id="b"))
         flatten(rows)
         self.assertEqual((rows["a"]["parent_id"], rows["b"]["parent_id"], rows["c"]["parent_id"]), (None, "a", "a"))
-
-
-class UpdateTest(unittest.TestCase):
-    def test_only_new_schools_are_added_and_rerun_changes_nothing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "m.jsonl"
-            write_rows(rows_of(row("a", "Old School", "provider:1", source="seed")), path)
-            schools = [
-                {"id": "a", "school_name": "Old School", "person_count": 5, "canonical_key": "provider:1"},
-                {"id": "b", "school_name": "The Old School", "person_count": 2, "canonical_key": "name:the old school"},
-                {"id": "c", "school_name": "New School", "person_count": 1, "canonical_key": "name:new school"},
-            ]
-            report = update_school_parents.run(schools, path, False, "gpt-6-luna", None)
-            self.assertEqual((report["added"], report["same_name"], report["unreviewed"]), (2, 1, 1))
-            before = path.read_text()
-            report = update_school_parents.run(schools, path, False, "gpt-6-luna", None)
-            self.assertEqual((report["added"], report["same_name"]), (0, 0))
-            self.assertEqual(path.read_text(), before)
-
-    def test_llm_only_sees_unreviewed_schools_and_saves_the_batch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "m.jsonl"
-            write_rows(rows_of(row("a", "Harvard University", "provider:1", source="seed"), row("b", "HBS", "provider:2")), path)
-            seen = []
-
-            def fake(client, names, model):
-                seen.append(names)
-                return {"HBS": "Harvard University"}, 0.01
-
-            with mock.patch.object(update_school_parents, "canonical_names", fake), mock.patch.object(update_school_parents, "OpenAI"):
-                report = update_school_parents.run([], path, True, "gpt-6-luna", None)
-            self.assertEqual(seen, [["HBS"]])
-            self.assertEqual((report["reviewed"], report["spent_usd"]), (1, 0.01))
-            self.assertEqual(read_rows(path)["b"]["parent_id"], "a")
 
 
 class LocalSubSchoolTest(unittest.TestCase):

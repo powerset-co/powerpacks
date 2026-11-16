@@ -39,16 +39,17 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 The runner then executes without another gate:
 
 1. `task_state init` + record `expand_search_request` when needed
-2. `resolve_set_operators`
-3. relevant ID resolvers (`resolve_companies`, `resolve_education`, `resolve_investors`)
-4. `apply_prefilters`
-5. `execute_role_search` (defaults: `--limit 0 --top-k 10000` on Powerset,
-   `--top-k 1000` on local DuckDB; `limit=0` means keep the full retrieved
-   frontier locally)
-6. `hydrate_people`
-7. `llm_filter_candidates` (not on JD runs screened by Luna: the screen reads every hydrated row)
-8. `llm_rerank_candidates`
-9. `persist_search_results`
+2. Retrieval. A Powerset set: `cloud_search` (POST /v2/search/execute with the
+   card's filters, the set's people, up to 2,000). The local index:
+   `apply_prefilters` then `execute_role_search` on DuckDB (`--top-k 5000`).
+3. `hydrate_people` (POST /v2/hydrate for a set; DuckDB locally)
+4. `llm_filter_candidates` (not on JD runs screened by Luna: the screen reads every hydrated row)
+5. `llm_rerank_candidates`
+6. `persist_search_results`
+
+A set search never reads Postgres or TurboPuffer: `prepare` asks POST
+/v2/search/expand for the filters (the Powerset web app's own), and the run
+maps the card's names back to the expansion's ids.
 
 Use `--search-only` only when the user explicitly wants retrieval/hydration
 without LLM filtering/reranking, or when the deep loop owns downstream triage
@@ -64,7 +65,7 @@ loudly. `prepare` applies the pin to the prepared payload and threads the flag
 into the emitted `execute_command`; on `run` it requires a fresh
 `--query`/`--payload-json` start (it cannot retroactively apply to an existing
 `--state`). The `$search` deep-mode JD flow uses this to enforce the JD's
-seniority band at retrieval on both the TurboPuffer and local DuckDB paths.
+seniority band at retrieval on both the set (API) and local DuckDB paths.
 
 The orchestrator is intentionally Sales-Nav-like: it runs sub-primitives
 quietly, stores compact step summaries in the ledger, records artifact paths,

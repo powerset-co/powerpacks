@@ -43,6 +43,34 @@ class IndexDirectoryTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM families").fetchone()[0], 0)
             conn.close()
 
+    def test_an_imported_row_takes_the_photo_of_the_profile_fetched_since(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            conn = open_store(store_path(root))
+            source = dict.fromkeys(PEOPLE_SCHEMA_COLUMNS, "")
+            source.update(linkedin_url="https://www.linkedin.com/in/jordan-bravo", headline="Imported headline",
+                          profile_picture_url="https://media.licdn.com/old.jpg")
+            queries.upsert_candidates(conn, [("candidate:linkedin:42", "Jordan Bravo", 0, json.dumps(source), "now")])
+            conn.execute("INSERT INTO candidate_sources VALUES ('candidate:linkedin:42', 'linkedin')")
+            conn.execute("INSERT INTO candidate_parent (candidate_id, parent_id, reason, created_at) "
+                         "VALUES ('candidate:linkedin:42', 'li:42', 'singleton', 'now')")
+            conn.commit()
+            realize(root)
+            self.assertEqual(conn.execute("SELECT profile_picture_url FROM families").fetchone()[0],
+                             "https://media.licdn.com/old.jpg")
+            cache = root / "network-import/profile_cache_v2/jordan-bravo.json"
+            cache.parent.mkdir(parents=True)
+            cache.write_text(json.dumps({"raw_response": {}, "normalized_profile": {
+                "success": True, "profile_pic_url": "https://media.licdn.com/new.jpg"}}))
+            indexed = realize(root)
+            self.assertEqual(conn.execute("SELECT profile_picture_url FROM families").fetchone()[0],
+                             "https://media.licdn.com/new.jpg")
+            with indexed.open() as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual((row["profile_picture_url"], row["headline"]),
+                             ("https://media.licdn.com/new.jpg", "Imported headline"))
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

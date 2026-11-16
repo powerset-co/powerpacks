@@ -1,7 +1,6 @@
 """Company hydration for candidate judgments."""
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -12,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from packs.indexing.primitives.enrich_companies_checkpointed import rapidapi_company as rapidapi
-from packs.search.primitives.turbopuffer import turbopuffer_resolve_companies as company_search
+from packs.shared import powerset_api
 from packs.search.primitives.deep_search.fetch_jd import (
     JOB_BOARD_HOSTS, extract_linkedin_company_slug, fetch,
 )
@@ -57,36 +56,33 @@ def hiring_company_ref(name: Any, source_url: Any) -> dict[str, str]:
     }
 
 
+def company_search(name: str) -> list[dict[str, Any]]:
+    """Companies named like this one, as the Powerset API finds them (POST /v2/companies/search)."""
+    return powerset_api.call(None, "/v2/companies/search", {"name": name, "limit": 5}).get("companies") or []
+
+
 def resolve_hiring_company_ref(company: Mapping[str, Any], source_url: Any = None) -> dict[str, str]:
-    """Resolve the destination by website domain, else verified company name."""
+    """Resolve the destination by website domain (the site's own LinkedIn link), else verified company name."""
     name = _text(company.get("name"))
     website = _text(company.get("website_url"))
     if not hiring_company_ref(name, website)["domain"]:
         website = _text(source_url) or website
     ref = hiring_company_ref(name, website)
-    rows: list[dict[str, Any]] = []
     if ref["domain"]:
-        rows = asyncio.run(company_search.exact_domain_lookup(ref["domain"], top_k=5))
-        rows = [row for row in rows if _domain(row.get("website_domain")) == ref["domain"]]
         ref["resolution_basis"] = "website_domain"
         ref["verified_domain"] = ref["domain"]
-        if not rows or not _linkedin_slug(rows[0].get("linkedin_url")):
-            try:
-                raw_html, final_url = fetch(f"https://{ref['domain']}")
-                if _domain(final_url) == ref["domain"]:
-                    ref["slug"] = extract_linkedin_company_slug(raw_html, final_url)
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
-                pass
+        try:
+            raw_html, final_url = fetch(f"https://{ref['domain']}")
+            if _domain(final_url) == ref["domain"]:
+                ref["slug"] = extract_linkedin_company_slug(raw_html, final_url)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            pass
     elif name:
-        rows = asyncio.run(company_search.exact_name_lookup([name], None, top_k=5))
-        if not rows:
-            rows = asyncio.run(company_search.name_bm25_lookup([name], None, top_k=5))
-        rows = [row for row in rows if _name_key(row.get("company_name")) == _name_key(name)]
+        rows = [row for row in company_search(name) if _name_key(row.get("name")) == _name_key(name)]
         ref["resolution_basis"] = "verified_name"
         ref["verified_name"] = name
-    if rows:
-        row = rows[0]
-        ref["slug"] = _linkedin_slug(row.get("linkedin_url")) or ref["slug"]
+        if rows:
+            ref["slug"] = _linkedin_slug(rows[0].get("linkedin_url")) or ref["slug"]
     return ref
 
 

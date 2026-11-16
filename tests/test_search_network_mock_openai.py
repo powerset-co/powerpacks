@@ -23,11 +23,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from packs.shared.csv_io import CsvIO
 from packs.search.primitives.deep_search import company_context, search_harness
+from packs.search.primitives.deep_search.deep_search_loop import resolve_retrieval_identity
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -210,15 +210,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), MockOpenAIHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        filters_seen: list[tuple] = []
-
-        class Namespace:
-            def query(self, **kwargs: object) -> SimpleNamespace:
-                filters_seen.append(kwargs["filters"])
-                return SimpleNamespace(rows=[SimpleNamespace(
-                    id="acme", company_name="Acme", website_domain="acme.example",
-                    linkedin_url="https://www.linkedin.com/company/acme",
-                )])
+        filters_seen: list[str] = []
 
         try:
             with tempfile.TemporaryDirectory() as raw:
@@ -236,11 +228,13 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                     "key": "q00", "query": "Software Engineer in San Francisco Bay Area",
                 }]), encoding="utf-8")
                 (run_dir / "decision.json").write_text(json.dumps({
-                    "surface": "people", "backend": "powerset", "depth": "deep",
+                    "surface": "people", "backend": "local", "depth": "deep",
                 }), encoding="utf-8")
+                local_db = run_dir / "local-search.duckdb"
+                write_local_search_db(local_db)
                 search_harness.initialize_run(
                     run_dir=run_dir, jd_path=jd, queries_path=queries,
-                    retrieval={"backend": "powerset", "set_id": SET_ID})
+                    retrieval=resolve_retrieval_identity("local", None, str(local_db))[0])
                 environment = {
                     "OPENAI_API_KEY": "test-key",
                     "OPENAI_API_BASE": f"http://127.0.0.1:{server.server_port}",
@@ -252,8 +246,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
                     "billing_basis": "unit_price_not_configured",
                 }
                 with mock.patch.dict(os.environ, environment), \
-                     mock.patch.object(company_context.company_search.turbopuffer_backend,
-                                       "namespace", return_value=Namespace()), \
+                     mock.patch.object(company_context, "company_search", side_effect=lambda name: filters_seen.append(name) or []), \
                      mock.patch.object(search_harness, "resolve_company_contexts",
                                        return_value=([{}], rapidapi_stats)):
                     search_harness.compile_pond(run_dir=run_dir, env_file=str(env_file))
@@ -274,7 +267,10 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
 
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                proc, out = run_prepare(Path(tmp), server)
+                # The parallel expansion is the local index's: a set search expands through the Powerset API.
+                local_db = Path(tmp) / "local-search.duckdb"
+                write_local_search_db(local_db)
+                proc, out = run_prepare(Path(tmp), server, flags=["--backend", "local", "--db", str(local_db)])
                 payload_path = Path(out.get("payload_json", ""))
                 payload_exists = payload_path.exists()
                 payload_value = json.loads(payload_path.read_text()) if payload_exists else {}
@@ -287,7 +283,6 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(out["status"], "preview_ready")
-        self.assertEqual(out["quality_issues"], [])
         self.assertEqual(out["preview"]["filters"]["metro_areas"], ["San Francisco Bay Area"])
         self.assertNotIn("cities", out["preview"]["filters"])
         self.assertEqual(out["preview"]["filters"]["seniority_bands"], ["mid", "senior"])

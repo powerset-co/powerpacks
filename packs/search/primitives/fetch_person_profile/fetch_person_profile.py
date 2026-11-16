@@ -4,8 +4,7 @@
 Lookup order (cheapest first):
 1. Local RapidAPI profile cache (.powerpacks/network-import/profile_cache_v2)
 2. Local DuckDB search index (local_person_profiles + positions)
-3. Postgres persons.hydrated_context (when remote creds are available)
-4. RapidAPI get-profile-data-by-url (one `get_profile` client call; a keyless
+3. RapidAPI get-profile-data-by-url (one `get_profile` client call; a keyless
    install simply reports the miss)
 
 Output is a compact, source-agnostic profile summary $search deep mode
@@ -211,49 +210,6 @@ def lookup_local_duckdb(public_identifier: str, db_path: Path) -> dict[str, Any]
     return summary
 
 
-def lookup_postgres(public_identifier: str) -> dict[str, Any] | None:
-    try:
-        from postgres_client import connect, ensure_psycopg2  # noqa: PLC0415
-    except ImportError:
-        return None
-    try:
-        ensure_psycopg2()
-    except Exception:
-        return None
-    query = """
-        SELECT id::text, public_identifier, public_profile_url, full_name, headline,
-               location_raw, hydrated_context
-        FROM persons
-        WHERE lower(public_identifier) = lower(%s)
-          AND hydrated_context IS NOT NULL
-        LIMIT 1
-    """
-    try:
-        with connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (public_identifier,))
-                row = cur.fetchone()
-    except Exception:
-        return None
-    if not row:
-        return None
-    context = row[6]
-    if isinstance(context, str):
-        try:
-            context = json.loads(context)
-        except Exception:
-            context = {}
-    context = context if isinstance(context, dict) else {}
-    context.setdefault("public_identifier", row[1])
-    context.setdefault("linkedin_url", row[2])
-    context.setdefault("name", row[3])
-    context.setdefault("headline", row[4])
-    context.setdefault("location", row[5])
-    summary = summary_from_hydrated(context, source="postgres")
-    summary["person_id"] = str(row[0])
-    return summary
-
-
 def fetch_rapidapi(public_identifier: str, linkedin_url: str, cache_dir: Path) -> tuple[dict[str, Any] | None, str]:
     result = rapidapi_profile(
         public_identifier,
@@ -290,7 +246,6 @@ def resolve(args: argparse.Namespace) -> dict[str, Any]:
     tiers = [
         ("profile_cache", lambda: lookup_profile_cache(public_identifier, cache_dir)),
         ("local_duckdb", lambda: lookup_local_duckdb(public_identifier, db_path)),
-        ("postgres", lambda: lookup_postgres(public_identifier)),
     ]
     for name, fn in tiers:
         attempted.append(name)

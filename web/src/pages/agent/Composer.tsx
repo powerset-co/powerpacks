@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
-import { useFeatures } from "@/lib/features"
-import { isDesktop } from "@/lib/desktop"
-import { AutoReply } from "./AutoReply"
 import { ComposerToggle } from "./ComposerToggle"
 
 import { Button } from "@/components/ui/button"
@@ -39,7 +36,6 @@ export function Composer({
   onDraftChange,
   disabled = false,
 }: ComposerProps) {
-  const features = useFeatures()
   const [localText, setText] = useState(initialText)
   const text = draft ?? localText
   const box = useRef<HTMLTextAreaElement>(null)
@@ -105,12 +101,11 @@ export function Composer({
                 onChange={() => onFullAccess(!fullAccess)}
                 description={
                   fullAccess
-                    ? "Lets your Codex run commands without asking. Does not change permissions for shared replies."
+                    ? "Lets your Codex run commands without asking."
                     : "Your Codex works in the Powerpacks folder and asks before going outside it. Click for Full Access."
                 }
               />
             )}
-            {isDesktop() && features.auto_reply && <AutoReply />}
           </div>
           {running ? (
             <Button type="button" size="icon" shape="pill" onClick={onStop} aria-label="Stop">

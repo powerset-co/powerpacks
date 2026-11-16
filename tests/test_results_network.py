@@ -54,6 +54,18 @@ class NetworkResultsTest(unittest.TestCase):
             self.assertIn(text, html)
         self.assertEqual(search.candidate(fixtures.ResultsWebTest.UNGRADED).network_attribution, None)
 
+    def test_warmth_is_read_per_member_and_highest_per_person_and_absent_stays_unknown(self):
+        path = self.run / 'results.json'
+        payload = json.loads(path.read_text())
+        row = payload['person_attribution'][self.person]
+        self.assertIsNone(load_searches(self.root, self.run.name)[0].candidate(self.person).network_attribution.warmth)
+        row['warmth'], row['operators'][0]['warmth'] = 3.2, 3.2
+        path.write_text(json.dumps(payload))
+        search = search_from_snapshot(json.loads(json.dumps(export_snapshot(self.run))))
+        network = search.candidate(self.person).network_attribution
+        self.assertEqual(network.warmth, 3.2)
+        self.assertEqual([operator.warmth for operator in network.operators], [3.2, None])
+
     def test_old_operator_counts_stay_unknown_not_zero(self):
         snapshot = export_snapshot(self.run)
         for candidate in snapshot['search']['candidates']:

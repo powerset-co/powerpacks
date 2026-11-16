@@ -78,9 +78,10 @@ def _run(message: dict, repo_root: Path) -> str:
 
 
 def answer_pending(*, repo_root: Path, env_file: Path) -> None:
-    """Called by one worker; newly pulled requests wait on disk while Codex runs."""
-    if not account.is_team(account.read(repo_root)["email"]):
-        return
+    """Called by one worker; newly pulled requests wait on disk while Codex runs.
+
+    Any install answers once its owner turns remote assist on in Settings (on by default for a
+    @powerset.co account, features.py); only a @powerset.co sender is answered."""
     messages = [json.loads(path.read_text(encoding="utf-8"))
                 for path in (repo_root / ".powerpacks/inbox").glob("*.json")]
     for message in sorted(messages, key=lambda row: (row["created_at"], row["id"])):

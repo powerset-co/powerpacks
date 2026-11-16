@@ -47,7 +47,7 @@ An explicit request for another round can reopen a completed run.
 | Candidate judgments | `search_harness._annotate_candidate_judgments` | Capability ratings >=3, full profiles, JD, pond query, company context | Domain score, opportunity cap, overall score; per-candidate checkpoints |
 | Pin confidence | `search_harness._annotate_pin_confidence`, `pin_confidence.py` | Judged candidates, full profiles, JD, company context | `taste_score` for every judged candidate; `pin_confidence` and `pin_judgment` for overall 4/5; per-candidate checkpoints |
 | Team similarity | `team_department.Department.from_jd`, `team_similarity.prepare_team` | JD, hiring company domain | One cached Luna department choice; API roster and embeddings filtered to that department in `team-embeddings.json` and `team.json` |
-| Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; direct Postgres credentials | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
+| Network attribution | `person_attribution.HydratePersonAttribution` | Saved candidate IDs and exact searched set; the Powerset API (`POST /v2/sets/{id}/person-attribution`) | Source counts and operator names/channels in `results.json.person_attribution`; no account addresses or identifiers |
 | Decide | `search_harness.decide` | JD, current query, previous ponds, pool statistics, reviewed move cards | One pending query, a rerank-only payload, or `completed` |
 | Export | `search_harness._save` | Saved iterations, related same-JD results | Deduplicated summary; `shortlist.csv`, `relationship.csv` on completion |
 | Label | `results_web` | Saved candidates, human score and notes | Local `fit-labels.jsonl` and submission through the existing feedback API |
@@ -107,9 +107,9 @@ feedback remains unchanged. The standalone JD-fit evaluator reads older trait
 reviews; it ignores numeric score labels and search notes.
 
 Network badges and their popover read saved attribution, never a live viewer API.
-Powerset ponds fetch it after scoring using the search's Postgres credentials and
-set operator scope, not Auth0 or MCP. Local/offline searches do not query Postgres.
-Failed database reads leave attribution unavailable, not zero. Existing runs
+Powerset ponds fetch it after scoring from the Powerset API for the searched set
+(`POST /v2/sets/{id}/person-attribution`, as the signed-in user). Local/offline
+searches read the local index. Failed reads leave attribution unavailable, not zero. Existing runs
 can hydrate without repeating search or ranking:
 
 ```sh

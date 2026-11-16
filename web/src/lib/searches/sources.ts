@@ -3,6 +3,7 @@
 // and who each source came through.
 
 import { CHANNELS, toChannel, type Channel } from "@/lib/channels"
+import { warmthBucket } from "@/lib/people/facets"
 import type { NetworkOperator, PersonAttribution } from "@/types/searches"
 
 // The families counted in emails or messages; the others are connections with no count.
@@ -51,4 +52,9 @@ export function operatorDetail(operator: NetworkOperator): string {
       : "",
   ]
   return [...channels.map((channel) => CHANNELS[channel].title), ...counts].filter(Boolean).join(" · ")
+}
+
+/** Warmth as the person page words it: "1.4 of 4 Distant". */
+export function warmthText(warmth: number): string {
+  return `${warmth.toFixed(1)} of 4 ${warmthBucket(warmth)}`
 }

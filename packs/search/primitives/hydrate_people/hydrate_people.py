@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hydrate a Powerpacks frontier from the checked-in Postgres contract."""
+"""Hydrate a Powerpacks frontier: the local DuckDB index, or a set's people through the Powerset API (POST /v2/hydrate)."""
 
 from __future__ import annotations
 
@@ -20,11 +20,13 @@ PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
 SHARED_DIR = PRIMITIVES_DIR / "shared"
 LOCAL_DIR = PRIMITIVES_DIR / "local"
-TURBOPUFFER_DIR = PRIMITIVES_DIR / "turbopuffer"
-for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR, TURBOPUFFER_DIR]:
+for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
+ROOT = PRIMITIVES_DIR.parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from postgres_client import fetch_company_logos, fetch_interaction_counts, fetch_person_rows, fetch_source_attribution, load_env_file  # noqa: E402
+from packs.shared import powerset_api  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 
 
@@ -166,21 +168,6 @@ def step_output(state: dict[str, Any], step_id: str) -> dict[str, Any]:
         if step.get("id") == step_id:
             return step.get("output", {}) or {}
     return {}
-
-
-def allowed_operator_ids(state: dict[str, Any]) -> list[str] | None:
-    """In-scope operator IDs for the active Powerset set.
-
-    Read from the resolve_set_operators step that runs first in the search
-    pipeline (the same scope TurboPuffer uses to gate people). Returns None when
-    that step did not run (no scope info -> preserve legacy behavior); returns a
-    possibly-empty list when it did, so provenance is strictly scoped and fails
-    closed for a set with zero in-scope operators.
-    """
-    resolved = step_output(state, "resolve_set_operators")
-    if "operator_ids" not in resolved:
-        return None
-    return list(dict.fromkeys(str(op) for op in (resolved.get("operator_ids") or []) if op))
 
 
 def frontier_ids(state: dict[str, Any]) -> list[str]:
@@ -626,20 +613,38 @@ def attach_company_logos(conn: Any, position_rows: list[dict[str, Any]]) -> None
             row["company_logo_url"] = logo
 
 
-def attach_remote_company_logos(rows: list[dict[str, Any]], env_file: Path | None = None) -> None:
-    """Copy each position's company logo from the companies table (joined on company_id) onto
-    shared-network profiles whose positions carry none: the Postgres twin of attach_company_logos."""
-    positions = [
-        position
-        for row in rows
-        for position in (_dict_value(row.get("hydrated_context")).get("positions") or [])
-        if isinstance(position, dict) and position.get("company_id") and not position.get("company_logo_url")
-    ]
-    logos = fetch_company_logos(sorted({str(position["company_id"]) for position in positions}), env_file=env_file)
-    for position in positions:
-        logo = logos.get(str(position["company_id"]))
-        if logo:
-            position["company_logo_url"] = logo
+def load_env_file(path: Path | None) -> None:
+    if not path or not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def fetch_api_person_rows(person_ids: list[str], env_file: Path | None) -> list[dict[str, Any]]:
+    """A set's people as POST /v2/hydrate returns them, shaped like a persons row."""
+    rows = []
+    for batch in chunked(person_ids, 500):
+        profiles = powerset_api.call(env_file, "/v2/hydrate", {"person_ids": batch}).get("profiles") or {}
+        rows += [{"id": person_id, "hydrated_context": context, "inferred_birth_year": context.get("inferred_birth_year")}
+                 for person_id, context in profiles.items() if isinstance(context, dict)]
+    return rows
+
+
+def api_source_attribution(person_ids: list[str], env_file: Path | None, set_id: str | None) -> dict[str, dict[str, Any]]:
+    """Who in the set knows each person, and through what, strongest first (POST /v2/sets/{id}/person-attribution)."""
+    if not set_id or not person_ids:
+        return {}
+    out = {}
+    for person_id, row in powerset_api.person_attribution(env_file, set_id, person_ids).items():
+        channels = [source["channel"] for source in sorted(row.get("sources") or [], key=lambda source: -int(source.get("total_interactions") or 0))
+                    if source.get("total_interactions")]
+        operators = [operator["operator_name"] for operator in row.get("operators") or [] if operator.get("operator_name")]
+        out[person_id] = {"operators": operators, "channels": channels, "total_interactions": int(row.get("total_interactions") or 0),
+                          "primary_operator": operators[0] if operators else None, "primary_channel": channels[0] if channels else None}
+    return out
 
 
 def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[str, Any]]:
@@ -788,18 +793,12 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         return
 
     env_file = Path(args.env_file) if args.env_file else None
-    allowed_ops = allowed_operator_ids(state)
     rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
-        rows = fetch_person_rows(requested, env_file=env_file)
-        attach_remote_company_logos(rows, env_file=env_file)
-        interaction_counts = fetch_interaction_counts(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
-        source_attribution = fetch_source_attribution(requested, env_file=env_file, allowed_operator_ids=allowed_ops)
-        source = {
-            "type": "postgres_contract",
-            "backend": "postgres_supabase",
-            "env_file": str(env_file) if env_file else None,
-        }
+        rows = fetch_api_person_rows(requested, env_file)
+        source_attribution = api_source_attribution(requested, env_file, step_output(state, "execute_role_search").get("set_id"))
+        interaction_counts = {person_id: row["total_interactions"] for person_id, row in source_attribution.items() if row["total_interactions"]}
+        source = {"type": "powerset_api", "backend": "powerset_api", "env_file": str(env_file) if env_file else None}
     else:
         interaction_counts = {}
         source_attribution = {}
@@ -855,7 +854,7 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Hydrate Powerpacks candidate IDs through the Postgres/Supabase contract")
+    parser = argparse.ArgumentParser(description="Hydrate Powerpacks candidate IDs: the local DuckDB index, or a set's people through the Powerset API")
     parser.add_argument("--state", required=True)
     parser.add_argument("--env-file", default=str(DEFAULT_ENV_FILE))
     parser.add_argument("--limit", type=int)

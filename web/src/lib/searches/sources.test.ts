@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import type { NetworkOperator, PersonAttribution } from "@/types/searches"
 
-import { operatorDetail, sourceFamilies } from "./sources"
+import { operatorDetail, sourceFamilies, warmthText } from "./sources"
 
 function attribution(sources: [string, number][], operators: NetworkOperator[] = []): PersonAttribution {
   return {
@@ -14,6 +14,7 @@ function attribution(sources: [string, number][], operators: NetworkOperator[] =
     })),
     operators,
     total_interactions: 0,
+    warmth: null,
   }
 }
 
@@ -54,7 +55,15 @@ describe("operatorDetail", () => {
         gmail_interactions: 1234,
         message_interactions: 5,
         gmail_account_details: [],
+        warmth: null,
       }),
     ).toBe("Gmail · WhatsApp · X · 1,234 emails · 5 messages")
+  })
+})
+
+describe("warmthText", () => {
+  it("words warmth as the person page does", () => {
+    expect(warmthText(1.4)).toBe("1.4 of 4 Distant")
+    expect(warmthText(3.5)).toBe("3.5 of 4 Inner circle")
   })
 })

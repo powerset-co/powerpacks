@@ -5,8 +5,8 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
-  2026-11-09: SearchResult exposes `steps` and `current_step`; `load_search(step=)` reads
-      that step's rows while keeping the saved current step.
+  2026-11-16: `load_search` reads the current step only; nothing asked for another one.
+  2026-11-09: SearchResult exposes `steps` and `current_step`.
   2026-11-09: quick runs carry `steps` and `current_step`; `record_quick_search`
       writes s1 and `select_quick_step` repoints the readers at the current step.
   2026-11-03: positions carry the company's `logo_url` and candidates their `headline`, so the
@@ -23,7 +23,7 @@ import gzip
 import json
 import math
 import os
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -252,6 +252,7 @@ class NetworkOperator:
     gmail_interactions: int | None
     message_interactions: int | None = None
     gmail_account_details: tuple[GmailAccountDetail, ...] = ()
+    warmth: float | None = None  # this member's closeness to the person, 0-4
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,7 @@ class PersonAttribution:
     sources: tuple[NetworkSource, ...]
     operators: tuple[NetworkOperator, ...]
     total_interactions: int
+    warmth: float | None = None  # the highest among the members
 
 
 def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
@@ -273,9 +275,11 @@ def _person_attribution(raw: dict[str, Any] | None) -> PersonAttribution | None:
                                         tuple(row['channels']), row.get('gmail_interactions'),
                                         row.get('message_interactions'),
                                         tuple(GmailAccountDetail(account['email'], account['interactions'])
-                                              for account in row.get('gmail_account_details', [])))
+                                              for account in row.get('gmail_account_details', [])),
+                                        row.get('warmth'))
                         for row in raw['operators']),
         total_interactions=raw['total_interactions'],
+        warmth=raw.get('warmth'),
     )
 
 
@@ -747,24 +751,17 @@ def _searches(root: Path, payloads: dict[str, dict[str, Any]]) -> tuple[SearchRe
     return tuple(sorted(searches, key=lambda search: (search.created_at, search.run_id), reverse=True))
 
 
-def load_search(root: Path, run_id: str, step: str | None = None) -> SearchResult | None:
+def load_search(root: Path, run_id: str) -> SearchResult | None:
     """One run's search, with the runs its summary references loaded alongside."""
     payload = _payload(root / run_id / "results.json")
     if payload is None or not isinstance(payload.get("summary"), dict):
         return None
-    current_step = payload.get("current_step")
-    if step is not None:
-        selected = next((item for item in payload.get("steps", []) if item["id"] == step), None)
-        if selected is None:
-            raise ValueError(f"unknown step: {step}")
-        select_quick_step(payload, selected)
     payloads = {run_id: payload}
     for other in sorted(_referenced_runs(payload) - {run_id}):
         referenced = _payload(root / other / "results.json")
         if referenced is not None:
             payloads[other] = referenced
-    search = next(search for search in _searches(root, payloads) if search.run_id == run_id)
-    return replace(search, current_step=current_step)
+    return next(search for search in _searches(root, payloads) if search.run_id == run_id)
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:

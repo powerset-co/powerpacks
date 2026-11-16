@@ -13,10 +13,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from packs.ingestion.primitives.common.jsonio import write_json
-import postgres_client as pg
+from packs.shared import powerset_api
 
 
 def local_network_attribution(db_path: Path, person_ids: list[str]) -> dict[str, Any]:
@@ -94,10 +93,8 @@ class HydratePersonAttribution:
             if local:
                 rows = local_network_attribution(Path(retrieval["db_path"]), missing)
             else:
-                scope = pg.fetch_set_operator_ids(set_id=set_id, env_file=self.env_file)
-                rows = pg.fetch_network_attribution(missing, env_file=self.env_file,
-                                                    allowed_operator_ids=scope["operator_ids"])
-        except Exception as exc:
+                rows = powerset_api.person_attribution(self.env_file, set_id, missing)
+        except (Exception, SystemExit) as exc:  # a signed-out bearer_token() raises SystemExit
             return {"status": "failed", "error": f"Network attribution lookup failed ({type(exc).__name__})"}
 
         fetched = {person_id: {"person_id": person_id, "sources": [], "operators": [],

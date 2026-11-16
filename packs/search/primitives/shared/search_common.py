@@ -332,21 +332,8 @@ def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
     if explicit:
         return list(dict.fromkeys(str(value) for value in explicit if value))
 
-    # `set_id` is a Powerset set UUID, not a TurboPuffer operator id. Resolve it
-    # through Postgres before applying the `allowed_operator_ids` filter. A payload
-    # without one is unscoped here; the personal-set fallback lives in the
-    # resolve_set_operators primitive so import-time/unit-test filter construction
-    # never unexpectedly hits Postgres.
-    set_id = str(payload["set_id"]) if payload.get("set_id") else None
-    if not set_id:
-        return []
-    try:
-        from postgres_client import fetch_set_operator_ids  # type: ignore
-
-        resolved = fetch_set_operator_ids(set_id)
-        return list(dict.fromkeys(str(value) for value in resolved.get("operator_ids") or [] if value))
-    except RuntimeError:
-        raise
+    # A cloud set is searched through the Powerset API (cloud_search); nothing here resolves a set.
+    return []
 
 
 def detects_founder_shortcut(payload: dict[str, Any]) -> bool:
@@ -549,10 +536,6 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
     if isinstance(resolved_companies, dict) and resolved_companies.get("company_ids"):
         payload["company_ids"] = list(dict.fromkeys(str(cid) for cid in resolved_companies["company_ids"] if cid))
 
-    resolved_investors = latest_step_output(state, "resolve_investors")
-    if isinstance(resolved_investors, dict) and resolved_investors.get("investor_urns"):
-        payload["investors"] = list(dict.fromkeys(str(iid) for iid in resolved_investors["investor_urns"] if iid))
-
     resolved_education = latest_step_output(state, "resolve_education")
     if isinstance(resolved_education, dict) and resolved_education.get("education_ids"):
         payload["education_ids"] = list(dict.fromkeys(str(eid) for eid in resolved_education["education_ids"] if eid))
@@ -566,12 +549,6 @@ def role_payload_from_state(state: dict[str, Any]) -> dict[str, Any]:
         and prefilters.get("role_prefilter_ran", True)
     ):
         payload["base_candidate_ids"] = list(dict.fromkeys(str(pid) for pid in prefilters["base_candidate_ids"] if pid))
-
-    resolved_set = latest_step_output(state, "resolve_set_operators")
-    if isinstance(resolved_set, dict) and resolved_set.get("operator_ids"):
-        payload["operator_ids"] = list(dict.fromkeys(str(oid) for oid in resolved_set["operator_ids"] if oid))
-        if resolved_set.get("set_id") and not payload.get("set_id"):
-            payload["set_id"] = str(resolved_set["set_id"])
 
     payload.setdefault("search_mode", search_mode_for_payload(payload))
     return payload

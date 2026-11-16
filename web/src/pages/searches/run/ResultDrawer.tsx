@@ -89,7 +89,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
       </div>
       {ranked ? (
         <div className="review-scores">
-          <ScoreCell result={result} ranked={ranked} />
+          <ScoreCell result={result} />
           <JudgeBadges candidate={candidate} shown={labels} />
         </div>
       ) : null}

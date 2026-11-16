@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 
-import { SourcePill } from "@/components/shared"
+import { SourcePill, WarmthBar } from "@/components/shared"
 import { usePresence } from "@/hooks/usePresence"
 import { CHANNELS, toChannel, type Channel } from "@/lib/channels"
-import { sourceFamilies, type SourceFamily } from "@/lib/searches/sources"
+import { sourceFamilies, warmthText, type SourceFamily } from "@/lib/searches/sources"
 import type { NetworkOperator, PersonAttribution } from "@/types/searches"
 
 import { useFloatPanel } from "@/hooks/useFloatPanel"
@@ -23,12 +23,13 @@ interface NetworkSourcesProps {
 
 /**
  * rendering.py _network_sources: one pill per source family, busiest first, then the stack of
- * people the person came through. Each opens who brought that source, with their counts,
- * on hover or click.
+ * people the person came through, then the highest warmth any of them has with the person.
+ * Each opens who brought that source, with their counts (or each one's warmth), on hover or click.
  */
 export function NetworkSources({ attribution, name }: NetworkSourcesProps) {
   const families = sourceFamilies(attribution)
   const operators = attribution?.operators ?? []
+  const warmth = attribution?.warmth ?? null
   if (!families.length && !operators.length) return null
   return (
     <span className="result-network">
@@ -45,8 +46,24 @@ export function NetworkSources({ attribution, name }: NetworkSourcesProps) {
         ))}
       </span>
       {operators.length ? (
-        <NetworkTrigger label={`Source operators for ${name}`} panel={<ConnectedVia operators={operators} />}>
+        <NetworkTrigger
+          label={`Source operators for ${name}`}
+          mark="operators"
+          panel={<ConnectedVia operators={operators} />}
+        >
           <Operators operators={operators} />
+        </NetworkTrigger>
+      ) : null}
+      {warmth !== null ? (
+        <NetworkTrigger
+          label={`Warmth with ${name}`}
+          mark="warmth"
+          panel={<WarmthDetail warmth={warmth} operators={operators} />}
+        >
+          <span className="result-warmth">
+            <WarmthBar value={warmth} />
+            {warmth.toFixed(1)}
+          </span>
         </NetworkTrigger>
       ) : null}
     </span>
@@ -84,6 +101,26 @@ function SourceDetail({ family, operators }: SourceDetailProps) {
   )
 }
 
+// The highest warmth, then each person's own, warmest first.
+function WarmthDetail({ warmth, operators }: { warmth: number; operators: readonly NetworkOperator[] }) {
+  const scored = operators
+    .filter((operator) => typeof operator.warmth === "number")
+    .sort((a, b) => (b.warmth ?? 0) - (a.warmth ?? 0))
+  return (
+    <>
+      <p className="network-title">
+        <strong>Warmth</strong>
+        <small>{warmthText(warmth)}</small>
+      </p>
+      <ConnectedVia
+        operators={scored}
+        detail={(operator) => warmthText(operator.warmth ?? 0)}
+        accounts={false}
+      />
+    </>
+  )
+}
+
 /** An operator's count on one family: "42 emails", "7 messages", or nothing for a connection. */
 function share(operator: NetworkOperator, channel: Channel): string {
   const unit = UNIT[channel]
@@ -94,15 +131,17 @@ function share(operator: NetworkOperator, channel: Channel): string {
 
 interface NetworkTriggerProps {
   label: string
-  // The family the trigger stands for; none marks the operator stack.
+  // The family the trigger stands for.
   source?: Channel
+  // The operator stack or the warmth, which stand for no one family.
+  mark?: "operators" | "warmth"
   panel: ReactNode
   children: ReactNode
 }
 
 // The button around a pill or the stack, and its popover: the pointer opens it and it leaves
 // with the pointer; a click (or a key) keeps it until Escape, a press outside or a scroll.
-function NetworkTrigger({ label, source, panel, children }: NetworkTriggerProps) {
+function NetworkTrigger({ label, source, mark, panel, children }: NetworkTriggerProps) {
   const [pinned, setPinned] = useState(false)
   const unpin = useCallback(() => setPinned(false), [])
   const { anchor, panel: box, place, open, show, hide } = useFloatPanel(POPOVER_WIDTH, unpin)
@@ -134,7 +173,8 @@ function NetworkTrigger({ label, source, panel, children }: NetworkTriggerProps)
         aria-expanded={open}
         aria-label={label}
         data-source={source}
-        data-network-operators={source === undefined ? "" : undefined}
+        data-network-operators={mark === "operators" ? "" : undefined}
+        data-network-warmth={mark === "warmth" ? "" : undefined}
         onClick={click}
       >
         {children}

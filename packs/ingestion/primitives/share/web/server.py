@@ -1,4 +1,4 @@
-"""The People page's data routes: people, worth, tags, and upload progress.
+"""The People page's data routes: people, worth, tags and the logbook.
 
 POST /api/people/worth records human worth for every member of the selected families.
 POST /api/people/relationship records a human relationship choice, preserved by refresh.
@@ -6,12 +6,6 @@ POST /api/people/name {parent_id, name} records the human's name for the person,
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
 POST /api/people/delete {ids} hides each family for good (deleted_parents; no row is removed); returns `deleted`, the count.
-GET `/api/people/upload` reads progress; POST `/api/people/upload/check` previews;
-POST `/api/people/upload` confirms and starts one shared upload.
-GET `/api/people/sets` reads the sets on this machine (sets.py; no cloud set information);
-POST `/api/people/sets` {name} creates one; POST `/api/people/sets/delete` {set_id} deletes one.
-POST `/api/people/sets/invite` {set_id, email} sends an invite over the relay; POST `/api/people/sets/answer`
-{invite_id, accepted} answers one (sets.py).
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 GET `/api/people/page?offset=&limit=&tab=&q=&sort=&dir=&filter.<facet>=&show=` is the page's list: one slice in the
@@ -19,6 +13,8 @@ view's order, how many match, the tab totals and relationship counts; `ids=1` an
 GET `/api/people/rows` is every row at once, for the agent acting on a set.
 
 Changelog:
+  2026-11-16: the local sets routes are gone (networks upload to the cloud; sets are the Powerset API's).
+  2026-11-12: the share upload routes are gone (sharing was dropped).
   2026-11-03: GET /api/people/page: the list as a SELECT over the families table, one slice at a time.
   2026-10-19: delete hides the family instead of removing its rows; an import or a rerun keeps it hidden.
   2026-10-16: POST /api/people/delete.
@@ -44,10 +40,8 @@ from typing import Any, Callable
 from packs.ingestion.primitives.common.jsonio import now_iso
 from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import TagRow
-from packs.ingestion.primitives.deep_context_v2.db.store import store_path
-from packs.ingestion.primitives.deep_context_v2.realize.realize import PEOPLE_CSV_RELATIVE_PATH
 from packs.ingestion.primitives.share.questions import CHOICE_QUESTIONS
-from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags, share_rows
+from packs.ingestion.primitives.share.store import TAG_VOCABULARY, TagStore, join_tags
 from packs.ingestion.primitives.logbook.logbook_common import LOGBOOK_ROOT
 from packs.ingestion.primitives.share.web.logbook import PeopleLogbook
 from packs.ingestion.primitives.share.web.signals import PeopleSignals
@@ -55,9 +49,6 @@ from packs.ingestion.primitives.share.web.logbook_archive import (
     LogbookArchive, conversation_payload, entries_payload, entry_payload,
 )
 from packs.ingestion.primitives.share.web.model import PeopleQuery, SharePeople, SharePerson, page_payload, people_payload
-from packs.ingestion.primitives.share.web.sets import CloudError, NeedsSignIn, Sets, payload as sets_payload
-from packs.ingestion.primitives.share.web.upload import ShareUpload
-from packs.indexing.primitives.upload_powerset.upload_powerset import DEFAULT_DB, DEFAULT_OUT_DIR
 from packs.shared.web.app import AppRoutes
 
 API_PREFIX = "/api/people/"
@@ -204,29 +195,23 @@ class ShareRoutes:
     """The People page's data GET and POST routes, mountable in any stdlib handler."""
 
     def __init__(self, conn: sqlite3.Connection, people: SharePeople,
-                 load: Callable[[], tuple[SharePerson, ...]], upload: ShareUpload, *,
+                 load: Callable[[], tuple[SharePerson, ...]], *,
                  logbook_root: Path = LOGBOOK_ROOT, logbook_stores: dict[str, Path] | None = None,
                  env_file: Path = Path(".env")) -> None:
         self.conn = conn
         self.people = people
         self.load = load
-        self.upload = upload
         self.logbook = PeopleLogbook(conn, root=logbook_root, stores=logbook_stores)
         self.signals = PeopleSignals(Path(conn.execute("PRAGMA database_list").fetchone()[2]), people.data_root)
-        self.sets = Sets(conn, env_file)
         self.archive = LogbookArchive(conn, logbook_root, gmail_store=self.logbook.stores["gmail"])
 
     def get(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
         query = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == f"{API_PREFIX}sets":
-            self._answer_sets(handler, lambda: None)  # a read: nothing to change
-        elif parsed.path == f"{API_PREFIX}rows":
+        if parsed.path == f"{API_PREFIX}rows":
             self._send_json(handler, people_payload(self.load()))
         elif parsed.path == f"{API_PREFIX}page":
             logbooks = frozenset(entry.parent_id for entry in self.archive.entries() if entry.parent_id)
             self._send_json(handler, page_payload(self.people.page(PeopleQuery.parse(query), logbooks)))
-        elif parsed.path == f"{API_PREFIX}upload":
-            self._send_json(handler, self.upload.status())
         elif parsed.path == f"{API_PREFIX}logbook":
             self._send_json(handler, self.logbook.status())
         elif parsed.path == f"{API_PREFIX}signals":
@@ -246,9 +231,8 @@ class ShareRoutes:
         return True
 
     def post(self, handler: BaseHTTPRequestHandler, parsed: urllib.parse.ParseResult) -> bool:
-        if parsed.path not in {f"{API_PREFIX}relationship", f"{API_PREFIX}name", f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete", f"{API_PREFIX}upload", f"{API_PREFIX}upload/check",
-                               f"{API_PREFIX}logbook", f"{API_PREFIX}sets", f"{API_PREFIX}sets/delete",
-                               f"{API_PREFIX}sets/invite", f"{API_PREFIX}sets/answer",
+        if parsed.path not in {f"{API_PREFIX}relationship", f"{API_PREFIX}name", f"{API_PREFIX}worth", f"{API_PREFIX}tags", f"{API_PREFIX}delete",
+                               f"{API_PREFIX}logbook",
                                f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
             return False
         origin = (handler.headers.get("Origin") or "").strip()
@@ -264,41 +248,6 @@ class ShareRoutes:
             return True
         if parsed.path in {f"{API_PREFIX}signals", f"{API_PREFIX}signals/check"}:
             self._refresh_signals(handler, check=parsed.path.endswith("/check"))
-            return True
-        if parsed.path.startswith(f"{API_PREFIX}sets"):
-            length = min(int(handler.headers.get("Content-Length", "0")), MAX_TAGS_REQUEST_BYTES)
-            form = json.loads(handler.rfile.read(length).decode("utf-8") or "{}")
-            if parsed.path.endswith("/invite"):
-                set_id, email = str(form.get("set_id") or ""), str(form.get("email") or "").strip()
-                self._answer_sets(handler, lambda: self.sets.invite(set_id, email))
-            elif parsed.path.endswith("/answer"):
-                invite_id, accepted = str(form.get("invite_id") or ""), bool(form.get("accepted"))
-                self._answer_sets(handler, lambda: self.sets.answer(invite_id, accepted))
-            elif parsed.path.endswith("/delete"):
-                self._answer_sets(handler, lambda: self.sets.delete(str(form.get("set_id") or "")))
-            else:
-                name = str(form.get("name") or "").strip()
-                if not name:
-                    self._send(handler, json.dumps({"error": "give the set a name"}).encode(), "application/json; charset=utf-8",
-                               status=HTTPStatus.BAD_REQUEST)
-                    return True
-                self._answer_sets(handler, lambda: self.sets.create(name))
-            return True
-        if parsed.path in {f"{API_PREFIX}upload", f"{API_PREFIX}upload/check"}:
-            length = int(handler.headers.get("Content-Length") or 0)
-            try:
-                body = json.loads(handler.rfile.read(length) or b"{}")
-            except json.JSONDecodeError:
-                self._send_json(handler, {"error": "request body must be JSON"}, status=HTTPStatus.BAD_REQUEST)
-                return True
-            checked = body.get("checked") if isinstance(body, dict) else None
-            try:
-                upload_status = self.upload.start(dry_run=parsed.path.endswith("/check"),
-                                                  checked=checked if isinstance(checked, str) else None)
-            except ValueError as exc:
-                self._send_json(handler, {"error": str(exc)}, status=HTTPStatus.CONFLICT)
-            else:
-                self._send_json(handler, upload_status)
             return True
         length = int(handler.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_TAGS_REQUEST_BYTES:
@@ -408,22 +357,6 @@ class ShareRoutes:
         else:
             self._send_json(handler, payload)
 
-    def _answer_sets(self, handler: BaseHTTPRequestHandler, change: Callable[[], None]) -> None:
-        """Make the change, then answer the sets payload; a missing sign-in is 401 with status needs_auth
-        (the page offers the sign-in)."""
-        try:
-            change()
-            answer = sets_payload(self.sets, len(share_rows(self.signals.db_path)))
-        except NeedsSignIn as error:
-            self._send(handler, json.dumps({"status": "needs_auth", "error": str(error)}).encode(),
-                       "application/json; charset=utf-8", status=HTTPStatus.UNAUTHORIZED)
-            return
-        except CloudError as error:
-            self._send(handler, json.dumps({"error": str(error)}).encode(), "application/json; charset=utf-8",
-                       status=HTTPStatus.BAD_GATEWAY)
-            return
-        self._send(handler, json.dumps(answer, ensure_ascii=False).encode(), "application/json; charset=utf-8")
-
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str = "text/html; charset=utf-8",
               status: int = HTTPStatus.OK, *, cache: str = "no-store") -> None:
@@ -446,17 +379,14 @@ class ShareRoutes:
                    "application/json; charset=utf-8", status=status)
 
 
-def share_routes(conn: sqlite3.Connection, data_root: Path, *, upload_db: Path | None = None,
-                 upload_dir: Path | None = None, logbook_root: Path | None = None,
+def share_routes(conn: sqlite3.Connection, data_root: Path, *, logbook_root: Path | None = None,
                  logbook_stores: dict[str, Path] | None = None) -> ShareRoutes:
     """The routes over one store, rows re-read whenever the store changes."""
     people = SharePeople(conn, data_root)
     def load() -> tuple[SharePerson, ...]:
         return people.load()
 
-    upload = ShareUpload(store_path(data_root), data_root / PEOPLE_CSV_RELATIVE_PATH, index_db=upload_db or DEFAULT_DB,
-                         out_dir=upload_dir or DEFAULT_OUT_DIR)
-    return ShareRoutes(conn, people, load, upload, logbook_root=logbook_root or data_root / "logbook",
+    return ShareRoutes(conn, people, load, logbook_root=logbook_root or data_root / "logbook",
                        logbook_stores=logbook_stores, env_file=data_root.parent / ".env")
 
 

@@ -158,19 +158,6 @@
 .warmth-cell.dim {
   color: var(--faint);
 }
-.warmth-bar {
-  display: inline-flex;
-  gap: 2px;
-}
-.warmth-bar i {
-  width: 5px;
-  height: 10px;
-  border-radius: 1.5px;
-  background: var(--secondary);
-}
-.warmth-bar i.on {
-  background: var(--primary);
-}
 .cell-num {
   font-size: 12px;
   font-variant-numeric: tabular-nums;

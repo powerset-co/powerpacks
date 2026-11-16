@@ -180,6 +180,15 @@
   gap: 4px;
   min-width: 0;
 }
+/* The highest warmth among the people it came through: the People table's bars and number. */
+.result-warmth {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 .network-attribution {
   display: inline-flex;
   min-width: 0;

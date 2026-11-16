@@ -1,5 +1,6 @@
-// The checklist Set up and Import share: the golden rows the run plans (status.json),
-// the running row's line and time left, and a stop's way out.
+// The checklist Set up and Import share: the golden rows the run plans (status.json), each under
+// its one name from start to finish, the running row's line and time left, a finished row's
+// result beside its name, and a stop's way out.
 
 import { CheckIcon, Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
@@ -36,7 +37,7 @@ function standingOf(data: InstallStatus, row: Row, ahead: boolean): Standing {
   return "next"
 }
 
-/** A finished row says the record's line for its last planned step. */
+/** A finished row keeps its name; the record's line for its last planned step sits beside it. */
 function finishedLine(data: InstallStatus, row: Row): string {
   const last = planned(data, row).at(-1)
   return last ? (data.steps[last]?.message ?? row.label) : row.label
@@ -107,9 +108,12 @@ export function Checklist({ run, controls = true }: { run: Run; controls?: boole
                       />
                     )}
                   </span>
-                  <span className={cn(live && "font-semibold")}>
-                    {standing === "done" ? finishedLine(data, row) : row.label}
-                  </span>
+                  <span className={cn(live && "font-semibold")}>{row.label}</span>
+                  {standing === "done" && finishedLine(data, row) !== row.label ? (
+                    <span className="ml-auto text-right text-xs text-muted-foreground">
+                      {finishedLine(data, row)}
+                    </span>
+                  ) : null}
                 </div>
                 {live ? (
                   <div className="flex flex-col gap-2 pl-8">

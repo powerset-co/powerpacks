@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import urllib.request
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -12,7 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys
+from packs.shared import powerset_api
 from packs.search.primitives.local import local_resolve_companies as resolver
 from packs.shared.web.search_scope import LOCAL_INDEX
 
@@ -56,16 +54,7 @@ def _local_index():
 
 
 def _proxy(path: str, body: dict) -> dict:
-    env_file = Path.cwd() / '.env'
-    request = urllib.request.Request(
-        pull_runtime_keys.api_base(env_file) + '/v2/companies/' + path,
-        data=json.dumps(body).encode(),
-        headers={'Authorization': f'Bearer {pull_runtime_keys.bearer_token(env_file)}',
-                 'Content-Type': 'application/json'},
-        method='POST',
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read())
+    return powerset_api.call(Path.cwd() / '.env', '/v2/companies/' + path, body, timeout=30)
 
 
 def search(body: dict) -> dict:
@@ -131,14 +120,16 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
     else:
         # No name lists every company, most local people first. One query cuts the page and counts
         # every match, so a long list costs one page of rows. Only companies with a LinkedIn page
-        # are listed; a typed-in name without one is not a company to open.
+        # are listed; a typed-in name without one is not a company to open. The same query counts
+        # each company's people, so the list reads no positions.
         listed = ('linkedin_url', 'Gt', '')
         rows, total = resolver.name_directory_lookup(request.name or '', listed, top_k=request.limit, offset=request.offset,
-                                                     store=store, sort=request.sort, direction=request.dir)
+                                                     store=store, sort=request.sort, direction=request.dir,
+                                                     current_only=request.position_type == 'current')
     company_ids = [row['id'] for row in rows]
     groups = defaultdict(lambda: defaultdict(list))
     profiles = {}
-    if company_ids:
+    if company_ids and (request.id or request.include_people):
         filters = ('company_id', 'In', company_ids)
         if request.position_type == 'current':
             filters = ('And', [filters, ('is_current', 'Eq', True)])
@@ -154,6 +145,7 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
     companies = []
     for row in rows:
         people_groups = groups[row['id']]
+        people_count = row.get('people_count', len(people_groups))
         company = {
             'id': row['id'], 'name': row.get('company_name'),
             'description': row.get('description'),
@@ -162,11 +154,11 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
             'funding_total': row.get('funding_total'),
             'city': row.get('city'), 'state': row.get('state'), 'country': row.get('country'),
             'logo_url': row.get('logo_url'), 'linkedin_url': row.get('linkedin_url'),
-            'investors': [], 'network': [], 'people_count': len(people_groups),
+            'investors': [], 'network': [], 'people_count': people_count,
             'people_offset': request.people_offset, 'people_limit': request.people_limit,
             'people_sort': 'current' if request.people_sort == 'status' else request.people_sort,
             'people_dir': request.people_dir,
-            'people_has_more': request.people_offset + request.people_limit < len(people_groups),
+            'people_has_more': request.people_offset + request.people_limit < people_count,
         }
         if request.include_people:
             people = [_person(positions, profiles.get(person_id, {})) for person_id, positions in people_groups.items()]

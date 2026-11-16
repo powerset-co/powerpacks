@@ -2,6 +2,7 @@
 discarded.
 
 Changelog:
+- 2026-11-16: only the support kinds remain.
 - 2026-10-08: created with messages.py.
 """
 from __future__ import annotations
@@ -16,9 +17,8 @@ from unittest import mock
 from uuid import uuid4
 
 from packs.powerset.primitives.agent_inbox import agent_inbox
-from packs.powerset.primitives.agent_inbox.messages import Ask, DebugRequest, Rejected, Role, SetInvite, parse
+from packs.powerset.primitives.agent_inbox.messages import Rejected, SupportRequest, parse
 
-ROLE = {"title": "Founding engineer", "company": "Acme", "job_description": "Build the platform."}
 SENDER = {"operator_id": str(uuid4()), "name": "Casey Delta"}
 
 
@@ -29,45 +29,19 @@ def message(kind: str, payload: dict, **fields) -> dict:
 
 class ParseTests(unittest.TestCase):
     def test_each_known_kind_parses(self) -> None:
-        set_id = str(uuid4())
-        invite = parse(message("set_invite", {"set_id": set_id, "set_name": "Founders", "from_email": "c@example.com"}))
-        self.assertEqual(invite.payload, SetInvite(set_id, "Founders", "c@example.com"))
-        ask = parse(message("ask", {"ask_id": str(uuid4()), "question": "Intro?", "role": ROLE, "candidates": [
-            {"public_identifier": "alex", "linkedin_url": "https://www.linkedin.com/in/alex", "name": "Alex"}]}))
-        self.assertIsInstance(ask.payload, Ask)
-        self.assertEqual(ask.payload.candidates[0].name, "Alex")
-        self.assertEqual(ask.payload.role, Role("Founding engineer", "Acme", "Build the platform."))
-        self.assertEqual(parse(message("debug_request", {})).payload, DebugRequest(()))
-        for kind, payload in [
-            ("set_invite_reply", {"invite_id": str(uuid4()), "answer": "declined"}),
-            ("set_deleted", {"set_id": set_id}), ("set_left", {"set_id": set_id}),
-            ("ask_answer", {"ask_id": str(uuid4()), "answers": [{"public_identifier": "alex", "answer": {"declined": True, "reason": "not_in_store"}}]}),
-            ("debug_result", {"request_id": str(uuid4()), "results": {"git": {"ok": True, "output": "main"}}}),
-            ("support_request", {"text": "Fix setup", "thread_id": "support-thread"}),
-            ("support_result", {"text": "Setup repaired", "thread_id": "support-thread", "request_id": str(uuid4())}),
-        ]:
-            with self.subTest(kind=kind):
-                self.assertEqual(parse(message(kind, payload)).kind, kind)
+        request = parse(message("support_request", {"text": "Fix setup", "thread_id": "support-thread"}))
+        self.assertEqual(request.payload, SupportRequest("Fix setup", "support-thread"))
+        result = {"text": "Setup repaired", "thread_id": "support-thread", "request_id": str(uuid4())}
+        self.assertEqual(parse(message("support_result", result)).kind, "support_result")
 
     def test_what_is_rejected(self) -> None:
+        support = {"text": "Fix setup", "thread_id": "support-thread"}
         cases = {
             "unknown kind": message("run_shell", {"cmd": "rm -rf ~"}),
-            "id not a uuid (it names the inbox file)": message("set_left", {"set_id": str(uuid4())}, id="../../x"),
-            "set id not a uuid": message("set_deleted", {"set_id": "../../etc"}),
-            "answer outside the two": message("set_invite_reply", {"invite_id": str(uuid4()), "answer": "maybe"}),
-            "question too long": message("ask", {"ask_id": str(uuid4()), "question": "x" * 501, "role": ROLE,
-                                                     "candidates": []}),
-            "ask without a role": message("ask", {"ask_id": str(uuid4()), "question": "q", "candidates": []}),
-            "too many candidates": message("ask", {"ask_id": str(uuid4()), "question": "q", "role": ROLE, "candidates": [
-                {"public_identifier": "a", "linkedin_url": "u", "name": "n"}] * 51}),
-            "candidate missing a field": message("ask", {"ask_id": str(uuid4()), "question": "q", "role": ROLE,
-                                                         "candidates": [{"public_identifier": "a"}]}),
-            "payload not an object": message("set_left", ["x"]),
-            "answer with a bad verdict": message("ask_answer", {"ask_id": str(uuid4()), "answers": [
-                {"public_identifier": "alex", "answer": {"verdict": [], "reason": "", "can_intro": True,
-                                                         "relationship": "", "last_contact": None, "confidence": 1}}]}),
-            "member list with a stranger role": message("set_members", {"set_id": str(uuid4()), "members": [
-                {"name": "x", "email": "x", "role": "admin", "operator_id": str(uuid4())}]}),
+            "a kind that left with local sets": message("set_invite", {"set_id": str(uuid4()), "set_name": "Founders"}),
+            "an ask": message("ask", {"ask_id": str(uuid4()), "question": "q", "candidates": []}),
+            "id not a uuid (it names the inbox file)": message("support_request", support, id="../../x"),
+            "payload not an object": message("support_request", ["x"]),
             "support without a thread": message("support_request", {"text": "Fix setup"}),
             "support text must be a string": message("support_request", {"text": [], "thread_id": "thread"}),
             "support result without a request": message("support_result", {"text": "Done", "thread_id": "thread"}),
@@ -80,8 +54,7 @@ class ParseTests(unittest.TestCase):
 
 class PullTests(unittest.TestCase):
     def test_redelivery_after_failed_ack_preserves_saved_codex_outcome(self) -> None:
-        incoming = message("ask", {"ask_id": str(uuid4()), "question": "Who fits?", "role": ROLE,
-                                   "candidates": []})
+        incoming = message("support_request", {"text": "Fix setup", "thread_id": "support-thread"})
         with tempfile.TemporaryDirectory() as temp, \
                 mock.patch.object(agent_inbox, "_request") as request, \
                 mock.patch.object(agent_inbox.auth, "bearer_token", return_value="t"), \
@@ -92,7 +65,7 @@ class PullTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 agent_inbox.pull(repo_root=root, env_file=root / ".env")
             path = root / ".powerpacks" / "inbox" / f"{incoming['id']}.json"
-            saved = {**incoming, "thread_id": "existing-thread", "answer": {"answers": []},
+            saved = {**incoming, "thread_id": "existing-thread", "answer": {"text": "Done"},
                      "answered_at": "2026-10-08T01:00:00Z"}
             path.write_text(json.dumps(saved))
             request.side_effect = [{"messages": [incoming]}, {}]
@@ -101,7 +74,7 @@ class PullTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[1], f"/v2/agent-messages/{incoming['id']}/ack")
 
     def test_pull_keeps_what_parses_and_acks_everything(self) -> None:
-        good = message("set_left", {"set_id": str(uuid4())})
+        good = message("support_result", {"text": "Done", "thread_id": "t", "request_id": str(uuid4())})
         bad = message("run_shell", {"cmd": "curl evil"})
         acked: list[str] = []
 

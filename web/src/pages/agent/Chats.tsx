@@ -9,14 +9,12 @@ import { newChat, openChat, openSearch, useAgent } from "@/lib/agent/store"
 import { useCodexAccount } from "@/lib/agent/useCodexAccount"
 import { THREADS_KEY, useThreads } from "@/lib/agent/useThreads"
 import { archiveThread } from "@/lib/api/codex"
-import { useFeatures } from "@/lib/features"
 import { AGENT } from "@/lib/nav"
 import { runDate } from "@/lib/searches/copy"
 import { readStored } from "@/lib/storage"
 import { cn } from "@/lib/utils"
 import { useCatalog } from "@/pages/searches/hooks/useCatalog"
 
-import { useSharedSearches } from "./collaboration/useCollaboration"
 import { ComposeIcon } from "./icons"
 
 /** The side nav's chats once Codex is signed in (the Searches page's own gate), headed Searches:
@@ -33,10 +31,8 @@ function ChatList({ rail }: { rail: boolean }) {
   const client = useQueryClient()
   const navigate = useNavigate()
   const here = useMatch(AGENT.href) !== null
-  const features = useFeatures()
   const threads = useThreads()
   const searches = useCatalog()
-  const shared = useSharedSearches(features.sets)
 
   // A chat appears once its first turn starts, and moves up when a turn ends.
   useEffect(() => {
@@ -127,22 +123,6 @@ function ChatList({ rail }: { rail: boolean }) {
             </ul>
           </section>
         ))}
-        {shared
-          .filter(
-            (item, index) =>
-              !searches.data?.some((card) => card.run_id === item.search_id) &&
-              shared.findIndex((other) => other.search_id === item.search_id) === index,
-          )
-          .map((item) => (
-            <button
-              key={item.search_id}
-              type="button"
-              onClick={() => pick(() => openSearch(item.search_id))}
-              className="block w-full truncate rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-2 text-left text-[13px] hover:bg-secondary"
-            >
-              {item.title}
-            </button>
-          ))}
         {unlinked.length ? (
           <section className="mb-2">
             <h2 className="m-0 px-2.5 pb-1 pt-3 text-[11px] font-semibold text-faint">Saved searches</h2>

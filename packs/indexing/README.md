@@ -9,7 +9,6 @@ database used by `$search local`.
 | --- | --- | --- | --- |
 | Install skill plus Modal | Standard product setup. Import and enrich LinkedIn, merge sources, build the index, and download it. | Profile enrichment and indexing run in Modal; source fan-in and final validation run locally. | LinkedIn `Connections.csv` plus imported sources. |
 | `$build-local-search-index` | Develop, inspect, or rebuild from an existing canonical merged CSV without using Modal. | The processing pipeline and DuckDB build run on the local machine. | `.powerpacks/network-import/merged/people.csv`. |
-| `upload_powerset` (`$deep-context` step 9) | Push the worth-yes slice of a built index to Powerset — TurboPuffer + Postgres — after the worth refresh. Dry-run by default. | The laptop, with `.env` creds — after a Modal build, `download` has already brought the DuckDB home. | The canonical store's worth and tags + `local-search.duckdb`. |
 
 Read the canonical [LinkedIn and Modal indexing pipeline](docs/linkedin-modal-pipeline.md)
 for the product flow, diagrams, data boundaries, shared-cache behavior, and
@@ -23,31 +22,10 @@ misspelled name to the main one. `build_education_corpus` applies it, so every
 build writes the parent into `canonical_education_id`. Rows already in
 TurboPuffer change only when they are published again.
 
-To bring the mapping up to date, run this from a checkout and commit the file:
-
-```bash
-uv run python packs/indexing/primitives/update_school_parents/update_school_parents.py
-```
-
-It reads `aleph_education_v3` (or `--schools file.jsonl`), adds schools it has
-not seen, and rolls name-keyed schools into a school with the same name for free.
-It then prints how many schools nobody has reviewed and what reviewing them
-costs. `--llm` spends that; `--limit N` tries the largest N first. Each batch is
-saved as it finishes, and reviewed rows are never asked again. To correct a row
-by hand, edit it and set `"source": "manual"`.
-
-To apply the mapping to published rows without rebuilding them:
-
-```bash
-ALEPH_ENV=dev uv run python packs/indexing/primitives/republish_school_parents/republish_school_parents.py
-```
-
-Every school keeps its own doc in `aleph_education_v3` under its own name; a
-child's doc carries `parent_id` and a parent's `person_count` covers its
-children. People rows stay as they are: search finds a parent, then filters
-`education_id` on the parent and its children. It prints counts until `--apply`,
-which backs the school docs up first. `ALEPH_ENV` picks the family: unset is
-prod, `dev` is `_dev`. Correcting the mapping and rerunning undoes a merge.
+Edit the file by hand and commit it; set `"source": "manual"` on a corrected row.
+Refreshing it from the published schools, and republishing parents to
+TurboPuffer, are maintainer jobs for network-search-api: an install never
+reads or writes TurboPuffer.
 
 ### Keeping the mapping right
 
@@ -172,3 +150,18 @@ Search commands take the result as `--backend local --db .powerpacks/search-inde
 `.powerpacks/search-index/local-search.duckdb` artifact. Fan-in retains contact
 and source provenance as CSVs under `.powerpacks/network-import/merged/`; it does
 not build a second DuckDB.
+
+## Taste scores
+
+When you're signed in to Powerset, each index build saves the Powerset team's
+Taste scores: people into `local_person_taste` (LinkedIn URL, `employee` or
+`founder` mode, score, model, date) and companies into `local_company_taste`
+(website domain, overall, team, momentum, investors, product_market).
+`fetch_taste_scores` asks the Powerset API (`POST /v2/taste/people` and
+`/v2/taste/companies`), which only read scores already saved and never start a
+paid scoring run. Signed out, or the API refusing, skips it and the build still
+succeeds. Run it by hand with:
+
+```bash
+uv run python packs/indexing/primitives/fetch_taste_scores/fetch_taste_scores.py
+```

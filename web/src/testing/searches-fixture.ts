@@ -264,6 +264,7 @@ export const RUN: SearchRunPayload = {
               gmail_interactions: 42,
               message_interactions: null,
               gmail_account_details: [],
+              warmth: 1.4,
             },
             {
               operator_id: "op-2",
@@ -272,9 +273,11 @@ export const RUN: SearchRunPayload = {
               gmail_interactions: null,
               message_interactions: null,
               gmail_account_details: [],
+              warmth: 3.2,
             },
           ],
           total_interactions: 42,
+          warmth: 3.2,
         },
       }),
       // Sources the People page has no row for: X and a contacts export.
@@ -287,6 +290,7 @@ export const RUN: SearchRunPayload = {
           ],
           operators: [],
           total_interactions: 0,
+          warmth: null,
         },
       }),
       candidate(MORGAN),
@@ -434,6 +438,7 @@ export function operator(operator_id: string, operator_name: string): NetworkOpe
     gmail_interactions: 3,
     message_interactions: null,
     gmail_account_details: [],
+    warmth: null,
   }
 }
 
@@ -462,7 +467,7 @@ export function resultRow(person_id: string, name: string, fields: RowFields = {
       linkedin_url: pondRow.linkedin_url,
       human_score: fields.human ?? null,
       network_attribution: operators.length
-        ? { person_id, sources: [], operators, total_interactions: 3 }
+        ? { person_id, sources: [], operators, total_interactions: 3, warmth: null }
         : null,
     }),
     overall: fields.overall ?? null,
