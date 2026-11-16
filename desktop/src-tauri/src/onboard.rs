@@ -33,6 +33,10 @@ pub enum Setup {
     New,
     /// Started and not done: running, waiting on the user, or failed.
     Paused,
+    /// Cut off mid-run (the app quit, the Mac restarted, a crash): the record is still the run's
+    /// and its process is gone. The launch continues it. A stop the person asked for is written
+    /// as `install.stopped` (controller.cancel) and waits for their click like any failure.
+    Stopped,
     Done,
 }
 
@@ -56,8 +60,16 @@ pub fn setup(root: &Path) -> Setup {
     }
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
+        ("running", _) if !crate::children::is_alive(installer_pid(&manifest)) => Setup::Stopped,
         _ => Setup::Paused,
     }
+}
+
+fn installer_pid(manifest: &serde_json::Value) -> u32 {
+    manifest
+        .get("installer_pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0) as u32
 }
 
 /// Skip setup on later launches, or stop skipping it.
@@ -139,11 +151,7 @@ pub fn is_running(root: &Path) -> bool {
     };
     let manifest: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
     let running = manifest.get("status").and_then(serde_json::Value::as_str) == Some("running");
-    let pid = manifest
-        .get("installer_pid")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    running && pid != 0 && crate::children::is_alive(pid as u32)
+    running && crate::children::is_alive(installer_pid(&manifest))
 }
 
 /// Stop the setup process recorded in the manifest, if any: before a new run (its lock would
@@ -254,6 +262,27 @@ mod tests {
         std::os::unix::fs::symlink(own.join(".powerpacks"), imported.join(".powerpacks")).unwrap();
         assert_eq!(setup(&imported), Setup::Done);
         fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn a_run_cut_off_mid_step_is_stopped_and_a_written_stop_is_paused() {
+        let root =
+            std::env::temp_dir().join(format!("powerpacks-setup-stopped-{}", std::process::id()));
+        fs::create_dir_all(root.join(MANIFEST).parent().unwrap()).unwrap();
+        let write = |record: serde_json::Value| fs::write(root.join(MANIFEST), record.to_string()).unwrap();
+        // The run's own record, its process gone: the app quit or the Mac restarted mid-import.
+        write(serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": 999_999_999 }));
+        assert_eq!(setup(&root), Setup::Stopped);
+        // The same record while the run lives.
+        write(serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": std::process::id() }));
+        assert_eq!(setup(&root), Setup::Paused);
+        // The person stopped it (controller.cancel), or it failed: their click.
+        write(serde_json::json!({ "status": "failed", "step": "gmail_sync", "event": "install.stopped", "installer_pid": 0 }));
+        assert_eq!(setup(&root), Setup::Paused);
+        // A run waiting on the person keeps waiting.
+        write(serde_json::json!({ "status": "waiting", "step": "gmail_login", "installer_pid": 0 }));
+        assert_eq!(setup(&root), Setup::Paused);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

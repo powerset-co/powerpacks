@@ -1,6 +1,10 @@
 """msgvault sync for Gmail discovery: last-sync inference and account sync.
 
 Changelog:
+  2026-11-15 (sleep): a sync that ends on a dead connection (the laptop slept, the Wi-Fi
+    dropped) is run again once the network answers — msgvault skips what it already stored,
+    so the rerun carries on from the drop. Reruns that store nothing are bounded; a sleep
+    costs none of them. `msgvault_connection_lost`, `wait_for_network`, `_run_until_connected`.
   2026-11-16 (count): the page's "N of M messages" gets its total from Gmail itself
     (`gmail_token.count_messages` over the same window and query) before the sync starts. The
     bundled msgvault syncs through its daemon and never prints a total, so the log line the
@@ -36,8 +40,10 @@ from typing import Any
 import json
 import shlex
 import shutil
+import socket
 import sqlite3
 import subprocess
+import time
 from collections.abc import Callable
 from contextlib import closing
 import threading
@@ -63,6 +69,24 @@ MSGVAULT_REAUTH_ERROR_MARKERS = (
     "missing token",
     "token is missing",
 )
+# What Go's net stack says when the connection died under msgvault: the laptop slept, the
+# Wi-Fi dropped, the proxy went away. Auth, disk and logic errors say none of these.
+MSGVAULT_CONNECTION_ERROR_MARKERS = (
+    "dial tcp",
+    "no such host",
+    "i/o timeout",
+    "connection refused",
+    "connection reset",
+    "network is unreachable",
+    "no route to host",
+    "tls handshake timeout",
+    "unexpected eof",
+    "broken pipe",
+)
+# A rerun that stored nothing new counts against this; a sleep, however long, costs nothing.
+RECONNECT_RUNS_WITHOUT_PROGRESS = 5
+_NETWORK_PROBE = ("www.googleapis.com", 443)
+_NETWORK_POLL_SECONDS = 15
 # Epoch values above this are milliseconds, not seconds (10^10 s is year 2286).
 _EPOCH_MILLISECONDS_THRESHOLD = 10_000_000_000
 
@@ -212,6 +236,53 @@ def msgvault_reauthorization_required(payload: dict[str, Any], stderr: str) -> b
     return any(marker in error_text for marker in MSGVAULT_REAUTH_ERROR_MARKERS)
 
 
+def msgvault_connection_lost(payload: dict[str, Any], stderr: str) -> bool:
+    error_text = "\n".join((stderr, json.dumps(payload, default=str))).lower()
+    return any(marker in error_text for marker in MSGVAULT_CONNECTION_ERROR_MARKERS)
+
+
+def wait_for_network() -> None:
+    """Blocks until Google answers a TCP connect: the laptop is awake and on a network again."""
+    while True:
+        try:
+            with socket.create_connection(_NETWORK_PROBE, timeout=5):
+                return
+        except OSError:
+            time.sleep(_NETWORK_POLL_SECONDS)
+
+
+def _stored_messages(db: str, email: str) -> int:
+    """How many of the account's messages the store holds; -1 when it cannot be read."""
+    try:
+        with closing(sqlite3.connect(f"file:{Path(db).expanduser()}?mode=ro", uri=True, timeout=1)) as con:
+            row = con.execute(
+                "SELECT count(*) FROM messages m JOIN sources s ON s.id = m.source_id WHERE s.identifier = ?",
+                (email,)).fetchone()
+    except sqlite3.Error:
+        return -1
+    return int(row[0]) if row else -1
+
+
+def _run_until_connected(cmd: list[str], db: str, email: str) -> tuple[int, dict[str, Any], str]:
+    """`run_cmd`, run again after each dead connection once the network is back. msgvault skips
+    the messages it already stored, so a rerun carries on from the drop. Reruns that stored
+    nothing new are bounded (RECONNECT_RUNS_WITHOUT_PROGRESS); any other failure returns at once."""
+    stored = _stored_messages(db, email)
+    runs_without_progress = 0
+    while True:
+        code, payload, stderr = run_cmd(cmd)
+        if code == 0 or not msgvault_connection_lost(payload, stderr):
+            return code, payload, stderr
+        now = _stored_messages(db, email)
+        runs_without_progress = 0 if now > stored else runs_without_progress + 1
+        stored = now
+        if runs_without_progress >= RECONNECT_RUNS_WITHOUT_PROGRESS:
+            return code, payload, stderr
+        emit_progress(f"Gmail sync for {email} lost its connection; waiting for the network, then continuing.")
+        wait_for_network()
+        emit_progress(f"Network is back; continuing Gmail sync for {email}.")
+
+
 def msgvault_reauthorize_command(email: str) -> str:
     return (
         "uv run --project . python "
@@ -326,7 +397,7 @@ def sync_msgvault_account(
     if watcher:
         watcher.start()
     try:
-        code, payload, stderr = run_cmd(cmd)
+        code, payload, stderr = _run_until_connected(cmd, db, email)
     finally:
         if watcher:
             watcher.stop()

@@ -304,7 +304,13 @@ def watch_run(read: Callable[[], dict | None], timeout_s: int = 7200) -> dict | 
     deadline = time.time() + timeout_s
     last: dict | None = None
     while time.time() < deadline:
-        payload = read()
+        try:
+            payload = read()
+        except OSError as error:
+            # The laptop slept or lost its network; the run goes on server-side. Keep asking.
+            print(f"status check failed ({error}); asking again", flush=True)
+            time.sleep(30)
+            continue
         if payload:
             if payload != last:
                 last = payload

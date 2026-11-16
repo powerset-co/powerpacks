@@ -358,7 +358,7 @@ class OnboardingTests(unittest.TestCase):
 
 
 class StopTests(unittest.TestCase):
-    def test_a_stop_signal_records_the_import_as_stopped(self) -> None:
+    def test_a_stop_signal_leaves_the_record_to_the_run(self) -> None:
         root = Path(tempfile.mkdtemp())
         status = InstallStatus(root)
         status.directory.mkdir(parents=True)
@@ -370,8 +370,10 @@ class StopTests(unittest.TestCase):
             main()
         self.assertEqual(stop.exception.code, 1)
         self.assertIn("STOPPED", out.getvalue())
-        record = status.read()
-        self.assertEqual((record["status"], record["installer_pid"], record["event"]), ("failed", 0, "install.stopped"))
+        # The file is the run's: once its process is gone it reads as stopped (test_install_status),
+        # and the app continues it at the next launch. Only the page's Stop writes install.stopped.
+        record = json.loads(status.manifest_path.read_text())
+        self.assertEqual((record["status"], record["event"], record["installer_pid"]), ("running", "discover.reading", os.getpid()))
         self.assertEqual(record["retry_command"], "bin/onboard --refresh")
 
 
