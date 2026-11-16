@@ -20,8 +20,6 @@ from packs.ingestion.primitives.share.web.sets import NeedsSignIn, Sets, payload
 ACCOUNTS = {"jordan": {"email": "jordan@example.com", "operator_id": "op-jordan"},
             "casey": {"email": "casey@example.com", "operator_id": "op-casey"},
             "riley": {"email": "riley@example.com", "operator_id": "op-riley"}}
-# People each operator shared into share_v1; a set's people are its members' union.
-SHARED = {"op-jordan": 5, "op-casey": 5, "op-riley": 5}
 
 
 class FamiliesTableTests(unittest.TestCase):
@@ -99,9 +97,6 @@ class RelayInviteTests(unittest.TestCase):
         self.jordan = self.side("jordan")
         self.casey = self.side("casey")
         self.riley = self.side("riley")
-        people = mock.patch.object(Sets, "people", lambda sets, ids: sum(SHARED.get(i, 0) for i in ids))
-        people.start()
-        self.addCleanup(people.stop)
 
     def side(self, name: str) -> Sets:
         root = Path(self.tmp.name) / name
@@ -132,8 +127,9 @@ class RelayInviteTests(unittest.TestCase):
             self.jordan.create("Founders")
             set_id = self.jordan.kept()[0].set_id
             mine = payload(self.jordan, 0)
-            self.assertEqual([(s["name"], s["member_count"], s["person_count"]) for s in mine["sets"]],
-                             [("Personal network", 1, 0), ("Founders", 1, 5)])
+            self.assertEqual([(s["name"], s["member_count"]) for s in mine["sets"]],
+                             [("Personal network", 1), ("Founders", 1)])
+            self.assertNotIn("person_count", mine["sets"][1])
 
             self.jordan.invite(set_id, "casey@example.com")
             self.assertEqual((self.sent[0]["to"], self.sent[0]["payload"]),
@@ -150,15 +146,14 @@ class RelayInviteTests(unittest.TestCase):
             theirs = payload(self.casey, 0)
             self.assertEqual(theirs["invites"], [])
             joined = theirs["sets"][1]
-            self.assertEqual((joined["set_id"], joined["role"], joined["person_count"]), (set_id, "member", 10))
+            self.assertEqual((joined["set_id"], joined["role"]), (set_id, "member"))
             self.assertEqual([m["email"] for m in joined["members"]], ["jordan@example.com", "casey@example.com"])
 
             self.deliver(self.jordan, ("op-casey", "Casey Delta"))
             mine = payload(self.jordan, 0)
         founders = mine["sets"][1]
-        self.assertEqual((founders["member_count"], founders["person_count"], founders["invited"]), (2, 10, []))
+        self.assertEqual((founders["member_count"], founders["invited"]), (2, []))
         self.assertEqual(founders["members"][-1]["name"], "Casey Delta")
-        self.assertEqual([m["person_count"] for m in founders["members"]], [5, 5])
         json.dumps(mine)
 
     def deliver_to(self, to: Sets, sender: tuple[str, str], index: int) -> None:
@@ -187,7 +182,6 @@ class RelayInviteTests(unittest.TestCase):
         everyone = ["jordan@example.com", "casey@example.com", "riley@example.com"]
         self.assertEqual(sorted(m["email"] for m in casey_view["members"]), sorted(everyone))
         self.assertEqual(sorted(m["email"] for m in riley_view["members"]), sorted(everyone))
-        self.assertEqual(casey_view["person_count"], 15)
 
     def test_a_member_list_from_someone_else_changes_nothing(self) -> None:
         with mock.patch.object(Sets, "_call", lambda sets, *args: self.relay(sets, *args)):

@@ -347,7 +347,7 @@ class AskLoopServerTests(unittest.TestCase):
 
     def check_fresh_store_routes(self, root, method, path):
         with patch.object(Sets, "me", return_value=Member("Casey", "casey@example.com", "owner", "synthetic-owner")), \
-                patch.object(Sets, "people", return_value=0), patch.object(Sets, "message") as sent:
+                patch.object(Sets, "message") as sent:
             with patch("packs.ingestion.primitives.deep_context_v2.openai.load_env"), \
                     patch("packs.ingestion.primitives.share.web.logbook.default_paths",
                           return_value={"gmail": root / "synthetic-gmail.sqlite"}), \

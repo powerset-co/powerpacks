@@ -55,7 +55,6 @@ class AskSetTests(unittest.TestCase):
         self.assertEqual([(c["name"], [o["name"] for o in c["owners"]]) for c in preview["candidates"]],
                          [("Alex Foxtrot", ["Casey Delta", "Riley Echo"]), ("Sam Golf", ["Casey Delta", "Riley Echo"])])
         self.assertEqual({o["name"]: o["candidates"] for o in preview["operators"]}, {"Casey Delta": 2, "Riley Echo": 2})
-        self.sets.shared_by.assert_not_called()
         self.assertEqual(self.sent, [])
 
     def test_send_is_one_message_per_member_with_every_candidate(self) -> None:

@@ -9,11 +9,12 @@ The asks loop pulls both kinds into `.powerpacks/inbox/<id>.json`; the owner's s
 `.powerpacks/invites/<id>.json`, keyed by the invite message's id. Presence is `.powerpacks/presence.json`,
 the last relay heartbeat per operator, written by the asks loop.
 
-A set's people are the shared people of its members: the share_v1 summaries documents (one per person)
-whose allowed_operator_ids hold any member's operator id.
+A set's people are its members' whole networks: Ask your set asks every member (ask_set.py).
 
 Created: 2026-10-08
 Changelog:
+- 2026-11-16: no TurboPuffer: a set's people count (read from the share namespace) is gone; sets talk
+  only to the Powerset API (/v2/team/me, /v2/agent-messages).
 - 2026-11-12: shared_by is gone (Ask your set asks every member).
 - 2026-11-12: share_namespace lives here; the share upload that wrote the namespace was removed.
 - 2026-10-09: spell out owner collection in settle.
@@ -28,9 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
-import time
 import urllib.error
 import urllib.request
 import uuid
@@ -38,15 +37,11 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import re
-
-import turbopuffer
 
 from packs.ingestion.primitives.common.jsonio import write_json
 from packs.ingestion.primitives.deep_context_v2.db import queries_share
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso
 from packs.powerset.primitives.pull_runtime_keys.pull_runtime_keys import api_base, bearer_token
-from packs.search.primitives.lib.powerpacks_contracts import TURBOPUFFER_NAMESPACES
 
 ME_PATH = "/v2/team/me"
 MESSAGES_PATH = "/v2/agent-messages"
@@ -62,19 +57,7 @@ OWNER = "owner"
 MEMBER = "member"
 PERSONAL_ID = "personal"
 TIMEOUT_SECONDS = 30
-# A count moves only when someone shares; the page asks every 10 s, so it reads this cache.
-COUNT_SECONDS = 3600
 _LOG = logging.getLogger(__name__)
-
-
-def share_namespace(logical: str) -> str:
-    """The share TurboPuffer namespace for a logical name, e.g. powerpacks_summaries_v1 (moved here from the
-    removed share upload; POWERPACKS_SHARE_INDEX_VERSION picks the version, v1 by default)."""
-    version = os.environ.get("POWERPACKS_SHARE_INDEX_VERSION", "v1").strip().lower()
-    if not re.fullmatch(r"v[1-9][0-9]*", version):
-        raise ValueError(f"Invalid POWERPACKS_SHARE_INDEX_VERSION: {version!r}")
-    name = TURBOPUFFER_NAMESPACES[logical].removeprefix("aleph_").removesuffix("_v1")
-    return f"powerpacks_{name}_{version}"
 
 
 class NeedsSignIn(Exception):
@@ -107,8 +90,6 @@ class Sets:
         self.env_file = env_file
         self.data_root = env_file.parent / ".powerpacks"
         self._me: Member | None = None
-        self._turbopuffer: turbopuffer.Turbopuffer | None = None
-        self._counts: dict[frozenset[str], tuple[float, int]] = {}  # operator ids -> (counted at, people)
 
     # ---- the relay
 
@@ -294,58 +275,26 @@ class Sets:
 
     # ---- the shared network
 
-    def _client(self) -> turbopuffer.Turbopuffer:
-        if self._turbopuffer is None:
-            self._turbopuffer = turbopuffer.Turbopuffer(api_key=os.environ["TURBOPUFFER_API_KEY"],
-                                                        region=os.environ.get("TURBOPUFFER_REGION", "gcp-us-central1"))
-        return self._turbopuffer
 
-    def people(self, operator_ids: list[str]) -> int:
-        """People shared by any of these operators: share_v1 summaries documents, one per person, counted
-        at most once per COUNT_SECONDS for the same operators."""
-        key = frozenset(operator_ids)
-        held = self._counts.get(key)
-        if held is not None and time.monotonic() - held[0] < COUNT_SECONDS:
-            return held[1]
-        try:
-            response = self._client().namespace(share_namespace("summaries")).query(
-                filters=("allowed_operator_ids", "ContainsAny", operator_ids), aggregate_by={"people": ("Count",)})
-            aggregations: dict[str, Any] = response.aggregations or {}
-            count = int(aggregations["people"])
-        except turbopuffer.NotFoundError:
-            count = 0  # nobody has shared into share_v1 yet
-        self._counts[key] = (time.monotonic(), count)
-        return count
-
-
-def _member(member: Member, seen: dict[str, str], shared: dict[str, int]) -> dict[str, Any]:
-    return {**asdict(member), "last_seen_at": seen.get(member.operator_id, ""),
-            "person_count": shared.get(member.operator_id, 0)}
+def _member(member: Member, seen: dict[str, str]) -> dict[str, Any]:
+    return {**asdict(member), "last_seen_at": seen.get(member.operator_id, "")}
 
 
 def payload(sets: Sets, shared: int) -> dict[str, Any]:
-    """The page's answer: the personal network, the sets here (each with its members, their presence, the
-    invites still open and its people), the invites waiting for an answer, and how many people the owner shares."""
+    """The page's answer: the personal network, the sets here (each with its members, their presence and the
+    invites still open), the invites waiting for an answer, and how many people the owner keeps."""
     sets.settle()
     seen = sets.presence()
     sent = sets.sent()
     me = sets.me()
-    contributed: dict[str, int] = {}  # people each member shares, one count per operator per answer
-
-    def counted(held: Member) -> dict[str, Any]:
-        if held.operator_id not in contributed:
-            contributed[held.operator_id] = sets.people([held.operator_id])
-        return _member(held, seen, contributed)
-
     items: list[dict[str, Any]] = [{"set_id": PERSONAL_ID, "name": "Personal network", "role": OWNER,
                                     "is_personal": True, "member_count": 1, "person_count": shared,
-                                    "members": [_member(me, seen, {me.operator_id: shared})], "invited": []}]
+                                    "members": [_member(me, seen)], "invited": []}]
     for view in sets.kept():
         members = sets.members(view)
         items.append({"set_id": view.set_id, "name": view.name, "role": view.role, "is_personal": False,
                       "member_count": len(members),
-                      "person_count": sets.people([member.operator_id for member in members]),
-                      "members": [counted(held) for held in members],
+                      "members": [_member(held, seen) for held in members],
                       "invited": [{"id": invite["id"], "email": invite["email"], "status": invite["status"]}
                                   for invite in sent if invite["set_id"] == view.set_id and invite["status"] != ACCEPTED]})
     invites = [{"id": invite["id"], "set_name": invite["payload"]["set_name"], "from": invite["from"]["name"],
