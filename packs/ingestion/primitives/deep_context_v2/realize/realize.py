@@ -13,6 +13,10 @@ The search index is built from this people.csv by the indexing pipeline, which m
 prints its command.
 
 Created: 2026-10-07
+
+Change log:
+- 2026-11-13: an imported LinkedIn row takes its photo link from the cached profile when there is one;
+  the import's link can be older, and the gateway only serves the photos it has stored.
 """
 from __future__ import annotations
 
@@ -171,19 +175,22 @@ class Realize(Node):
                 row["linkedin_url"] = key
                 row["public_identifier"] = extract_public_identifier(key)
                 source = imported.get(parent_id)
+                record: dict[str, Any] | None = read_usable_cached_profile(
+                    profile_cache_path(cache_dir, row["public_identifier"]))
                 if source is not None:
                     for column in PEOPLE_SCHEMA_COLUMNS:
                         if column != "id" and column not in CONTACT_CARRY_COLUMNS:
                             row[column] = source[column]
+                    # The import's copy of the profile can be older than the one fetched since, and an
+                    # older photo link is one the gateway may never have stored: the photo is the newest.
+                    if record is not None and record["normalized_profile"].get("profile_pic_url"):
+                        row["profile_picture_url"] = record["normalized_profile"]["profile_pic_url"]
                     counts["profiles_filled"] += 1
+                elif record is None:
+                    counts["profiles_missing"] += 1
                 else:
-                    record: dict[str, Any] | None = read_usable_cached_profile(
-                        profile_cache_path(cache_dir, row["public_identifier"]))
-                    if record is None:
-                        counts["profiles_missing"] += 1
-                    else:
-                        fill_profile(row, record)
-                        counts["profiles_filled"] += 1
+                    fill_profile(row, record)
+                    counts["profiles_filled"] += 1
 
             # A confirmed research representation can add context to the same verified LinkedIn.
             if key and not key.startswith(SYNTHETIC_PROFILE_PREFIX):
