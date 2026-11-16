@@ -68,6 +68,17 @@ def _json(value: Any) -> Any:
     return value
 
 
+def _cell(value: Any) -> str:
+    """A DuckDB value as the CSV text LocalPerson parses: lists (source_channels) comma-joined, maps as JSON."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v) for v in value)
+    return json.dumps(value, default=str)
+
+
 def ordinals(person_id: str, work_experiences: Any) -> dict[str, int]:
     """Local position id -> the position's index in the profile, the way build_roles numbers them;
     the cloud names a position {person_id}-{index}."""
@@ -95,8 +106,7 @@ def read_people(con: Any, warmth: dict[str, float]) -> dict[str, dict[str, Any]]
     people = {}
     for values in rows.fetchall():
         row = dict(zip(columns, values))
-        local = LocalPerson.from_csv_row({k: "" if v is None else (v if isinstance(v, str) else json.dumps(v, default=str))
-                                          for k, v in row.items()} | {"id": str(row["person_id"])})
+        local = LocalPerson.from_csv_row({k: _cell(v) for k, v in row.items()} | {"id": str(row["person_id"])})
         profile = PersonProfile.from_db_row(row)
         sources = [{"source_channel": channel,
                     "source_identifier": local.source_identifier(channel).lower() if channel == "gmail"
@@ -159,7 +169,7 @@ def batch_payload(con: Any, people: dict[str, dict[str, Any]], ids: list[str], h
             if isinstance(row.get("vector"), (list, tuple)):
                 row["vector"] = pack_vector(row["vector"])
         entities[logical] = rows
-    hydrated = dict(con.execute("SELECT person_id, hydrated_context FROM local_person_profiles WHERE person_id = ANY(?)",
+    hydrated = dict(con.execute("SELECT person_id, hydrated_context FROM local_person_profiles WHERE CAST(person_id AS VARCHAR) = ANY(?)",
                                 [list(ids)]).fetchall())
     out = []
     for pid in ids:

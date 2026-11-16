@@ -163,6 +163,27 @@ class SyncCloudTest(unittest.TestCase):
             self.assertEqual(result["batches"], 2)
             self.assertEqual(sum(len(b["companies"]) for b in cloud.applied), 1)
 
+    def test_real_index_column_types(self):
+        """Indexes in the wild: UUID company ids beside blank VARCHAR position company_ids, list source_channels."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_root(Path(tmp))
+            con = duckdb.connect(str(root / sync_cloud.INDEX_RELATIVE))
+            company = "00000000-0000-0000-0000-0000000000c1"
+            con.execute("DROP TABLE local_companies")
+            con.execute("CREATE TABLE local_companies (id UUID, company_name VARCHAR, vector FLOAT[])")
+            con.execute("INSERT INTO local_companies VALUES (?, 'Acme', [1.0, 0.0])", [company])
+            con.execute("UPDATE local_people_positions SET company_id = ? WHERE position_title = 'CTO'", [company])
+            con.execute("UPDATE local_people_positions SET company_id = '' WHERE position_title = 'Engineer'")
+            con.execute("ALTER TABLE local_person_profiles ALTER source_channels TYPE VARCHAR[] "
+                        "USING string_split(source_channels, ',')")
+            con.close()
+            cloud = FakeCloud()
+            sync_cloud.sync(root, cloud, log=lambda _: None)
+            body = cloud.applied[0]
+            ada = next(p for p in body["people"] if p["person_id"] == P1)
+            self.assertEqual(sorted(s["source_channel"] for s in ada["sources"]), ["gmail", "linkedin"])
+            self.assertEqual([c["id"] for c in body["companies"]], [company])
+
     def test_transient_failures_are_retried_and_client_errors_are_not(self):
         import urllib.error
 

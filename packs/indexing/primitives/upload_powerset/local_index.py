@@ -39,7 +39,7 @@ def _person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
                        ("local_people_positions", "base_id"),
                        ("local_summaries", "base_id"),
                        ("local_people_education", "base_id")):
-        rows = con.execute(f'SELECT * FROM {table} WHERE "{key}" = ANY(?)',
+        rows = con.execute(f'SELECT * FROM {table} WHERE CAST("{key}" AS VARCHAR) = ANY(?)',
                            [list(person_ids)])
         columns = [column[0] for column in rows.description]
         for values in rows.fetchall():
@@ -54,7 +54,7 @@ def _person_hashes(con: Any, person_ids: tuple[str, ...]) -> dict[str, str]:
 def people_with_positions(con: Any, person_ids: tuple[str, ...]) -> frozenset[str]:
     if not person_ids:
         return frozenset()
-    rows = con.execute("SELECT DISTINCT base_id FROM local_people_positions WHERE base_id = ANY(?)",
+    rows = con.execute("SELECT DISTINCT base_id FROM local_people_positions WHERE CAST(base_id AS VARCHAR) = ANY(?)",
                        [list(person_ids)]).fetchall()
     return frozenset(str(row[0]) for row in rows)
 
@@ -63,14 +63,14 @@ def entity_ids_by_person(con: Any, logical: str, person_ids: list[str]) -> dict[
     if logical == "companies":
         sql = """
             SELECT p.base_id, p.company_id FROM local_people_positions p
-            JOIN local_companies c ON c.id = p.company_id
-            WHERE p.base_id = ANY(?)
+            JOIN local_companies c ON CAST(c.id AS VARCHAR) = CAST(p.company_id AS VARCHAR)
+            WHERE CAST(p.base_id AS VARCHAR) = ANY(?)
         """
     else:
         sql = """
             SELECT e.base_id, e.canonical_education_id FROM local_people_education e
-            JOIN local_education s ON s.id = e.canonical_education_id
-            WHERE e.base_id = ANY(?) AND e.canonical_education_id IS NOT NULL
+            JOIN local_education s ON CAST(s.id AS VARCHAR) = CAST(e.canonical_education_id AS VARCHAR)
+            WHERE CAST(e.base_id AS VARCHAR) = ANY(?) AND e.canonical_education_id IS NOT NULL
         """
     by_person: dict[str, set[str]] = {}
     for person_id, entity_id in con.execute(sql, [person_ids]).fetchall():
@@ -82,8 +82,8 @@ def count_missing_companies(con: Any, person_ids: tuple[str, ...]) -> int:
     return int(con.execute("""
         SELECT COUNT(DISTINCT p.company_id)
         FROM local_people_positions p
-        LEFT JOIN local_companies c ON c.id = p.company_id
-        WHERE p.base_id = ANY(?) AND p.company_id IS NOT NULL AND c.id IS NULL
+        LEFT JOIN local_companies c ON CAST(c.id AS VARCHAR) = CAST(p.company_id AS VARCHAR)
+        WHERE CAST(p.base_id AS VARCHAR) = ANY(?) AND p.company_id IS NOT NULL AND c.id IS NULL
     """, [list(person_ids)]).fetchone()[0])
 
 
@@ -91,14 +91,14 @@ def count_missing_schools(con: Any, person_ids: tuple[str, ...]) -> int:
     return int(con.execute("""
         SELECT COUNT(DISTINCT e.canonical_education_id)
         FROM local_people_education e
-        LEFT JOIN local_education s ON s.id = e.canonical_education_id
-        WHERE e.base_id = ANY(?) AND e.canonical_education_id IS NOT NULL AND s.id IS NULL
+        LEFT JOIN local_education s ON CAST(s.id AS VARCHAR) = CAST(e.canonical_education_id AS VARCHAR)
+        WHERE CAST(e.base_id AS VARCHAR) = ANY(?) AND e.canonical_education_id IS NOT NULL AND s.id IS NULL
     """, [list(person_ids)]).fetchone()[0])
 
 
 def person_profiles(con: Any, person_ids: tuple[str, ...]) -> list[PersonProfile]:
     rows = con.execute(
-        "SELECT * FROM local_person_profiles WHERE person_id = ANY(?) ORDER BY person_id",
+        "SELECT * FROM local_person_profiles WHERE CAST(person_id AS VARCHAR) = ANY(?) ORDER BY person_id",
         [list(person_ids)],
     )
     columns = [column[0] for column in rows.description]
@@ -124,7 +124,7 @@ def namespace_rows(con: Any, logical: str, ids: tuple[str, ...],
     key = "base_id" if namespace.person_grain else "id"
     person_key = f', t."{key}" AS "_person_key"' if namespace.person_grain else ""
     rows = con.execute(
-        f'SELECT {select}{person_key} FROM {namespace.table} t WHERE t."{key}" = ANY(?) ORDER BY t."id"',
+        f'SELECT {select}{person_key} FROM {namespace.table} t WHERE CAST(t."{key}" AS VARCHAR) = ANY(?) ORDER BY t."id"',
         [list(ids)],
     )
     names = [column[0] for column in rows.description]
