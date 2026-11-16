@@ -114,7 +114,8 @@ function spinning(page) {
   return page.evaluate(() => [...document.querySelectorAll(
     '[role="progressbar"], mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, cfc-progress-spinner, cfc-loader',
   )].some((node) => {
-    if (node.getAttribute("aria-hidden") === "true" || node.hasAttribute("aria-valuenow")) return false;
+    // Not aria-hidden: the Console's first, full-pane spinner (.pcc-loading-overlay) carries it.
+    if (node.hasAttribute("aria-valuenow")) return false;
     const box = node.getBoundingClientRect();
     const style = getComputedStyle(node);
     return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0;

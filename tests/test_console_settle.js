@@ -28,8 +28,8 @@ const server = http.createServer((incoming, response) => {
   response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   response.end(`<nav>Overview Branding Audience Clients Data Access</nav>
     <div id="main">${url.searchParams.get("hidden")
-      ? '<div role="progressbar" aria-hidden="true" style="width:40px;height:40px"></div><p>ready</p>'
-      : '<div role="progressbar" style="width:40px;height:40px"></div>'}</div>
+      ? '<div role="progressbar" style="display:none;width:40px;height:40px"></div><p>ready</p>'
+      : '<div class="pcc-loading-overlay"><div role="progressbar" aria-hidden="true" style="width:40px;height:40px"></div></div>'}</div>
     <script>if (${ms}) setTimeout(() => { document.getElementById("main").innerHTML =
       "<table><tr><td>.../auth/gmail.readonly</td></tr></table>"; }, ${ms});</script>`);
 });
