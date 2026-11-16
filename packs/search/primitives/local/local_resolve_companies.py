@@ -356,8 +356,11 @@ DIRECTORY_ORDERS = {
 
 def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None, store: LocalDuckDBSearchStore,
                           offset: int = 0, include_attributes: list[str] = COMPANY_INCLUDE_ATTRIBUTES,
-                          sort: str = "people", direction: str = "desc") -> tuple[list[dict[str, Any]], int]:
+                          sort: str = "people", direction: str = "desc",
+                          current_only: bool = False) -> tuple[list[dict[str, Any]], int]:
     """Match directory tiers, then order by `sort` (distinct local people, company headcount or name).
+    Each row carries `people_count`, the people it was ordered by: everyone who held a position there,
+    or with `current_only` those who hold one now.
 
     Two narrow reads: the tiers and the order run over ids, names, domains and headcounts alone,
     with `total` counting every match, and the page's attributes come by id afterwards; the
@@ -369,7 +372,7 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None
         "companies",
         r"""WITH people AS (
             SELECT company_id, count(DISTINCT person_id) AS people_count
-            FROM local_people_positions GROUP BY company_id
+            FROM local_people_positions""" + (" WHERE is_current" if current_only else "") + r""" GROUP BY company_id
         ), ranked AS (
             SELECT filtered.*, coalesce(people.people_count, 0) AS people_count, CASE
                 WHEN ? <> '' AND (lower(company_name) = ? OR lower(website_domain) = ?
@@ -388,13 +391,13 @@ def name_directory_lookup(name: str, filters: tuple | None, *, top_k: int | None
         # The query and the pattern bind as constants, each where it is used: a CROSS JOIN'd value is a
         # column, and a regex given as a column is compiled again for every row (120 ms at 50k).
         [*[query] * 6, r"(^|\W)" + re.escape(query), query, query, top_k, offset],
-        filters=filters, include_attributes=["company_name", "headcount", "website_domain"], carry=("total",),
+        filters=filters, include_attributes=["company_name", "headcount", "website_domain"], carry=("total", "people_count"),
     )
     if not page:
         return [], 0
     ids = [row["id"] for row in page]
     by_id = {row["id"]: row for row in store.filter_only_rows_for_namespace("companies", ("id", "In", ids), include_attributes)}
-    return [by_id[company_id] for company_id in ids], int(page[0]["total"])
+    return [dict(by_id[row["id"]], people_count=int(row["people_count"])) for row in page], int(page[0]["total"])
 
 
 def dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

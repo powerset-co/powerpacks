@@ -104,6 +104,11 @@ class RefineTest(unittest.TestCase):
         self.env = dict(os.environ)
         for key in ("OPENAI_API_KEY", "OPENAI_API_BASE", "OPENAI_BASE_URL", "POWERPACKS_USAGE_LOG", "OPENAI_SERVICE_TIER"):
             self.env.pop(key, None)
+        # The calls' usage rows go beside the run, never into the checkout's own log.
+        self.env["POWERPACKS_USAGE_LOG"] = str(self.run / "usage.jsonl")
+        in_process = patch.dict(os.environ, {"POWERPACKS_USAGE_LOG": self.env["POWERPACKS_USAGE_LOG"]})
+        in_process.start()
+        self.addCleanup(in_process.stop)
 
     def cli(self, *args, run_dir=None, expected=0):
         proc = subprocess.run([sys.executable, str(PIPELINE), "rerank", "--run-dir", str(run_dir or self.run),

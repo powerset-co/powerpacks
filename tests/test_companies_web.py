@@ -98,8 +98,20 @@ def test_no_name_orders_by_people_then_headcount(local_index):
             ('big', 'Zeta Defense', 'zeta.example', 90000, 'https://www.linkedin.com/company/zeta')""")
         conn.execute("""INSERT INTO local_people_positions (id, person_id, company_id) VALUES
             ('x1', 'x', 'blank'), ('z1', 'z', 'big')""")
-    rows = companies.search({'scope': 'local'})['companies']
+    rows = companies.search({'scope': 'local', 'position_type': 'all'})['companies']
     assert [row['id'] for row in rows] == ['stripe', 'big', 'blank', 'atlas', 'stripe-copy', 'domain']
+
+
+def test_the_list_counts_and_orders_by_the_people_it_shows(local_index):
+    # Three people left Atlas Labs: they count with "all positions", and not among the current.
+    with duckdb.connect(str(local_index)) as conn:
+        conn.execute("""INSERT INTO local_people_positions (id, person_id, company_id, is_current) VALUES
+            ('p1', 'p1', 'atlas', false), ('p2', 'p2', 'atlas', false), ('p3', 'p3', 'atlas', false)""")
+    current = companies.search({'scope': 'local'})['companies']
+    everyone = companies.search({'scope': 'local', 'position_type': 'all'})['companies']
+    assert current[0]['id'] == 'stripe' and everyone[0]['id'] == 'atlas'
+    counts = {row['id']: row['people_count'] for row in current}
+    assert everyone[0]['people_count'] == counts['atlas'] + 3
 
 
 @pytest.mark.parametrize(('sort', 'direction', 'expected'), [
@@ -153,7 +165,8 @@ def test_directory_tiers_and_distinct_people_ties(local_index):
             ('t1', 'a', 'micro-tools'),
             ('w1', 'a', 'word'), ('w2', 'b', 'word'), ('w3', 'c', 'word')""")
     expected = ['micro', 'microsoft', 'micro-labs', 'micro-tools', 'word', 'typo']
-    assert [row['id'] for row in companies.search({'scope': 'local', 'name': 'MICRO'})['companies']] == expected
+    found = companies.search({'scope': 'local', 'name': 'MICRO', 'position_type': 'all'})['companies']
+    assert [row['id'] for row in found] == expected
 
 
 def test_directory_prefix_without_exact_match(local_index):
