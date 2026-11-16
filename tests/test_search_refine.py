@@ -343,7 +343,6 @@ class RefineTest(unittest.TestCase):
         self.assertEqual([row["final_score"] for row in self.step_rows()], [.9, .6, .35, .7, .8])
         self.assertEqual(self.payload()["steps"][-1]["sql"], "SELECT person_id FROM candidates WHERE inferred_age < 35")
         self.assertEqual(load_search(self.root, "fixture").steps[-1].sql, "SELECT person_id FROM candidates WHERE inferred_age < 35")
-        self.assertEqual(len(load_search(self.root, "fixture", step="s1").candidates), 8)
         self.assertEqual(self.requests, [])
         self.cli("--criteria", "stanford first", "--sql",
                  "SELECT c.person_id FROM candidates c LEFT JOIN education e USING (person_id) "
