@@ -31,13 +31,10 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-SEARCH_LIB = ROOT / "packs" / "search" / "primitives" / "lib"
-if str(SEARCH_LIB) not in sys.path:
-    sys.path.insert(0, str(SEARCH_LIB))
 
 import duckdb  # noqa: E402
 
-import postgres_client  # noqa: E402
+from packs.shared import powerset_api  # noqa: E402
 from packs.powerset.primitives.pull_runtime_keys import pull_runtime_keys  # noqa: E402
 
 TABLE = "local_person_taste"
@@ -131,7 +128,7 @@ def refresh(con: duckdb.DuckDBPyConnection, values: list[str], fetch, post: Post
 
 
 def run(root: Path, db_path: Path, post: Post | None = None) -> dict[str, Any]:
-    if post is None and not postgres_client.credentials_subject():
+    if post is None and not powerset_api.signed_in_subject():
         return {"status": "skipped", "reason": "signed_out"}
     if not db_path.is_file():
         return {"status": "skipped", "reason": "missing_duckdb"}
