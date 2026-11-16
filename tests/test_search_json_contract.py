@@ -14,7 +14,6 @@ import json
 import re
 import socket
 import tempfile
-import threading
 import unittest
 import urllib.parse
 from dataclasses import fields
@@ -64,7 +63,7 @@ class SearchJsonContractTest(unittest.TestCase):
                          created_at="2026-09-26T00:00:00Z", status="completed",
                          found_by=[{"run": "jordan-role", "pond": 1, "query": "Backend Engineer query"}])
         model.index_search(self.root, "jordan-role", json.loads((run / "manifest.json").read_text()))
-        api = search_api(search_routes(self.root, base="/searches"), mock.Mock(), threading.Lock())
+        api = search_api(search_routes(self.root, base="/searches"))
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -212,7 +211,7 @@ class CardEditsTest(unittest.TestCase):
         data = Path(temp.name)
         self.run_dir = data / "search" / "ab12-vp-finance"
         self.run_dir.mkdir(parents=True)
-        api = search_api(search_routes(data / "deep-search", base="/searches"), mock.Mock(), threading.Lock())
+        api = search_api(search_routes(data / "deep-search", base="/searches"))
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
