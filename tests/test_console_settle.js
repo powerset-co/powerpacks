@@ -27,11 +27,11 @@ const server = http.createServer((incoming, response) => {
   const ms = Number(url.searchParams.get("ms") || 0);
   response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   response.end(`<nav>Overview Branding Audience Clients Data Access</nav>
-    <div id="main">${url.searchParams.get("hidden")
-      ? '<div role="progressbar" style="display:none;width:40px;height:40px"></div><p>ready</p>'
+    <div id="main">${url.searchParams.get("bare") ? "" : url.searchParams.get("hidden")
+      ? '<div role="progressbar" style="display:none;width:40px;height:40px"></div><p>' + "ready ".repeat(60) + '</p>'
       : '<div class="pcc-loading-overlay"><div role="progressbar" aria-hidden="true" style="width:40px;height:40px"></div></div>'}</div>
     <script>if (${ms}) setTimeout(() => { document.getElementById("main").innerHTML =
-      "<table><tr><td>.../auth/gmail.readonly</td></tr></table>"; }, ${ms});</script>`);
+      "<table><tr><td>.../auth/gmail.readonly " + "x ".repeat(120) + "</td></tr></table>"; }, ${ms});</script>`);
 });
 let browser = null;
 const base = () => `http://127.0.0.1:${server.address().port}`;
@@ -73,5 +73,17 @@ test("a spinner that never goes costs its cap, not the whole settle", { skip }, 
   await settle(page, "settle", Date.now() + 90000, 3000);
   const took = Date.now() - start;
   assert.ok(took >= 2500 && took < 8000, `took ${took}ms`);
+  await page.close();
+});
+
+test("a frame with no spinner and no content yet is still loading", { skip }, async () => {
+  process.env.POWERPACKS_TEST_CONSOLE = "1";
+  const page = await browser.newPage();
+  await page.goto(`${base()}/?ms=2500&bare=1`);
+  const start = Date.now();
+  await settle(page);
+  delete process.env.POWERPACKS_TEST_CONSOLE;
+  assert.ok(Date.now() - start >= 2000, "returned on the bare frame");
+  assert.match(await page.locator("body").innerText(), /gmail\.readonly/);
   await page.close();
 });

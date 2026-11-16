@@ -103,15 +103,26 @@ async function settle(page, label = "settle", until = Date.now() + 90000, spinne
   // A Console page draws its frame, then a spinner while it fetches its content: two reads of
   // that agree, so it "settled" with nothing on it and a check read saved work as missing. A
   // spinner on screen is still loading; once it goes, settle again on what replaced it.
+  // The spinner is Google's markup and there are stretches without one, so the positive sign
+  // counts too: a Console page whose text is only its frame (top bar and nav, 96 characters
+  // measured) has not drawn yet.
   const spinnerUntil = Math.min(until, Date.now() + spinnerMs);
   let spun = false;
-  while (await spinning(page) && Date.now() < spinnerUntil) {
+  while (Date.now() < spinnerUntil && (await spinning(page) || await bare(page))) {
     spun = true;
     await page.waitForTimeout(250);
   }
   if (spun) stable = await settled(page, until);
-  log(`${label}: waited ${Date.now() - start}ms${spun ? " (spinner)" : ""}${stable === null ? " (not settled)" : ""}`);
+  log(`${label}: waited ${Date.now() - start}ms${spun ? " (loading)" : ""}${stable === null ? " (not settled)" : ""}`);
   await snapshot(page);
+}
+
+// Whether a Console page shows only its frame. Other sites (Google's sign-in) are never bare.
+const FRAME_CHARS = 200;
+async function bare(page) {
+  if (!page.url().startsWith("https://console.cloud.google.com/") && !process.env.POWERPACKS_TEST_CONSOLE) return false;
+  const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => null);
+  return text !== null && text.trim().length < FRAME_CHARS;
 }
 
 // Whether the Console shows a loading spinner: an indeterminate progress indicator with a size.
