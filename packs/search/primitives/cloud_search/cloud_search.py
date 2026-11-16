@@ -116,6 +116,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     candidates = [{"person_id": row["person_id"], "score": row.get("final_score"),
                    "vertical_sources": row.get("vertical_sources") or [], "tags": row.get("tags") or []}
                   for row in response.get("results") or [] if row.get("status") != "llm_filtered"]
+    if args.limit:  # the API can return more than it was asked for (its maybe and hail-mary buckets)
+        candidates = candidates[:args.limit]
     output = {"set_id": set_id, "backend": "powerset_api", "total_count": response.get("total_count"),
               "candidate_count": len(candidates), "candidate_ids": [row["person_id"] for row in candidates],
               "candidates": candidates, "request": request}

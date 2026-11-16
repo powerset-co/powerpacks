@@ -57,6 +57,16 @@ class CloudSearchTests(unittest.TestCase):
         self.assertNotIn("company_names", request)
         self.assertEqual(len(calls), 2)
 
+    def test_run_keeps_at_most_the_limit(self) -> None:
+        results = [{"person_id": f"p{i}", "status": "good"} for i in range(5)]
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state.json"
+            state.write_text(json.dumps({"query": "q", "steps": [{"id": "expand_search_request", "output": {}}]}))
+            with mock.patch.object(cloud_search.powerset_api, "call", return_value={"results": results}):
+                out = cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=2,
+                                                       timeout=60, write_state=False))
+        self.assertEqual(out["candidate_count"], 2)
+
     def test_run_and_hydrate_read_only_the_api(self) -> None:
         responses = {
             "/v2/search/execute": {"total_count": 2, "results": [
