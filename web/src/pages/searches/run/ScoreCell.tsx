@@ -3,22 +3,8 @@ import { scoreBand, type ResultRow, type ScoreBand } from "@/lib/searches/rankin
 
 const BAND_VARIANT = { high: "ok", medium: "warn", low: "bad" } as const satisfies Record<ScoreBand, string>
 
-interface ScoreCellProps {
-  result: ResultRow
-  // Ranked runs show the overall 1–5; a pond table shows the pond's own 0–1 score.
-  ranked: boolean
-}
-
-// A missing overall shows what happened instead ("Not judged"), never a zero.
-export function ScoreCell({ result, ranked }: ScoreCellProps) {
-  if (!ranked) {
-    const score = result.row.final_score
-    return (
-      <span className="result-score">
-        <Badge variant={BAND_VARIANT[scoreBand(score)]}>{Math.round(score * 100)}%</Badge>
-      </span>
-    )
-  }
+// A ranked run's overall 1–5. A missing overall shows what happened instead ("Not judged"), never a zero.
+export function ScoreCell({ result }: { result: ResultRow }) {
   if (result.overall === null) {
     return (
       <span className="result-score">

@@ -157,7 +157,7 @@ function Score({ result, ranked, labels, refined }: ScoreProps) {
   const unscored = result.overall === null
   return (
     <div className="result-overall">
-      {unscored ? null : <ScoreCell result={result} ranked={ranked} />}
+      {unscored ? null : <ScoreCell result={result} />}
       <div className="result-reason">
         <p className={unscored ? "result-noscore" : undefined}>{result.reason}</p>
         <JudgeBadges candidate={result.candidate} shown={labels} />

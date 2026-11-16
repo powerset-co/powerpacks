@@ -673,7 +673,7 @@ describe("RunView, a refined run", () => {
     expect(chat.send).not.toHaveBeenCalled()
 
     // The command's item finishing reads the run once.
-    const before = reads.filter((url) => !url.includes("&step=")).length
+    const before = reads.length
     const command: Entry = {
       kind: "command",
       id: "cmd-1",
@@ -685,7 +685,7 @@ describe("RunView, a refined run", () => {
     }
     setChat({ ...EMPTY_AGENT, threadId: "thread-1", entries: [command] })
     setChat({ ...EMPTY_AGENT, threadId: "thread-1", entries: [{ ...command, status: "done", exitCode: 0 }] })
-    await waitFor(() => expect(reads.filter((url) => !url.includes("&step=")).length).toBe(before + 1))
+    await waitFor(() => expect(reads.length).toBe(before + 1))
     expect(reads.at(-1)).toBe("/searches/api/search.json?run_id=jordan-role")
   })
 
@@ -701,9 +701,9 @@ describe("RunView, a refined run", () => {
   it("reads the run again when a turn ends", async () => {
     setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: true })
     renderStepped()
-    const before = reads.filter((url) => !url.includes("&step=")).length
+    const before = reads.length
     setChat({ ...EMPTY_AGENT, threadId: "thread-1", running: false })
-    await waitFor(() => expect(reads.filter((url) => !url.includes("&step=")).length).toBe(before + 1))
+    await waitFor(() => expect(reads.length).toBe(before + 1))
   })
 
   it("reads the run once when its card finishes, but not when it stays completed", async () => {
@@ -737,7 +737,5 @@ describe("RunView, a refined run", () => {
     expect(row("p-jordan").getByText("Rerank Insight")).toBeTruthy()
     expect(row("p-jordan").getByText("Leads the current reliability platform.")).toBeTruthy()
     expect(row("p-jordan").getByText("Backend depth:")).toBeTruthy()
-    // No other step is read for the rows.
-    expect(reads.filter((url) => url.includes("&step="))).toHaveLength(0)
   })
 })
