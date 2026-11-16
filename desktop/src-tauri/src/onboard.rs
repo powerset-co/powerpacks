@@ -60,7 +60,13 @@ pub fn setup(root: &Path) -> Setup {
     }
     match (field("status"), field("step")) {
         ("completed", "ready") => Setup::Done,
-        ("running", _) if !crate::children::is_alive(installer_pid(&manifest)) => Setup::Stopped,
+        // Only a run's own record (pid > 0) can be cut off; the app's pid-0 install events cannot.
+        ("running", _)
+            if installer_pid(&manifest) > 0
+                && !crate::children::is_alive(installer_pid(&manifest)) =>
+        {
+            Setup::Stopped
+        }
         _ => Setup::Paused,
     }
 }
@@ -269,18 +275,30 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("powerpacks-setup-stopped-{}", std::process::id()));
         fs::create_dir_all(root.join(MANIFEST).parent().unwrap()).unwrap();
-        let write = |record: serde_json::Value| fs::write(root.join(MANIFEST), record.to_string()).unwrap();
+        let write =
+            |record: serde_json::Value| fs::write(root.join(MANIFEST), record.to_string()).unwrap();
         // The run's own record, its process gone: the app quit or the Mac restarted mid-import.
-        write(serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": 999_999_999 }));
+        write(
+            serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": 999_999_999 }),
+        );
         assert_eq!(setup(&root), Setup::Stopped);
         // The same record while the run lives.
-        write(serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": std::process::id() }));
+        write(
+            serde_json::json!({ "status": "running", "step": "gmail_sync", "installer_pid": std::process::id() }),
+        );
         assert_eq!(setup(&root), Setup::Paused);
         // The person stopped it (controller.cancel), or it failed: their click.
-        write(serde_json::json!({ "status": "failed", "step": "gmail_sync", "event": "install.stopped", "installer_pid": 0 }));
+        write(
+            serde_json::json!({ "status": "failed", "step": "gmail_sync", "event": "install.stopped", "installer_pid": 0 }),
+        );
         assert_eq!(setup(&root), Setup::Paused);
         // A run waiting on the person keeps waiting.
-        write(serde_json::json!({ "status": "waiting", "step": "gmail_login", "installer_pid": 0 }));
+        write(
+            serde_json::json!({ "status": "waiting", "step": "gmail_login", "installer_pid": 0 }),
+        );
+        assert_eq!(setup(&root), Setup::Paused);
+        // The app's own install events carry pid 0 and are never a cut-off run.
+        write(serde_json::json!({ "status": "running", "step": "runtime", "installer_pid": 0 }));
         assert_eq!(setup(&root), Setup::Paused);
         fs::remove_dir_all(root).unwrap();
     }
