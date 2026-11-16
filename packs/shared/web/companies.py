@@ -131,14 +131,16 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
     else:
         # No name lists every company, most local people first. One query cuts the page and counts
         # every match, so a long list costs one page of rows. Only companies with a LinkedIn page
-        # are listed; a typed-in name without one is not a company to open.
+        # are listed; a typed-in name without one is not a company to open. The same query counts
+        # each company's people, so the list reads no positions.
         listed = ('linkedin_url', 'Gt', '')
         rows, total = resolver.name_directory_lookup(request.name or '', listed, top_k=request.limit, offset=request.offset,
-                                                     store=store, sort=request.sort, direction=request.dir)
+                                                     store=store, sort=request.sort, direction=request.dir,
+                                                     current_only=request.position_type == 'current')
     company_ids = [row['id'] for row in rows]
     groups = defaultdict(lambda: defaultdict(list))
     profiles = {}
-    if company_ids:
+    if company_ids and (request.id or request.include_people):
         filters = ('company_id', 'In', company_ids)
         if request.position_type == 'current':
             filters = ('And', [filters, ('is_current', 'Eq', True)])
@@ -154,6 +156,7 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
     companies = []
     for row in rows:
         people_groups = groups[row['id']]
+        people_count = row.get('people_count', len(people_groups))
         company = {
             'id': row['id'], 'name': row.get('company_name'),
             'description': row.get('description'),
@@ -162,11 +165,11 @@ def _search_local(request: _SearchRequest, store: resolver.LocalDuckDBSearchStor
             'funding_total': row.get('funding_total'),
             'city': row.get('city'), 'state': row.get('state'), 'country': row.get('country'),
             'logo_url': row.get('logo_url'), 'linkedin_url': row.get('linkedin_url'),
-            'investors': [], 'network': [], 'people_count': len(people_groups),
+            'investors': [], 'network': [], 'people_count': people_count,
             'people_offset': request.people_offset, 'people_limit': request.people_limit,
             'people_sort': 'current' if request.people_sort == 'status' else request.people_sort,
             'people_dir': request.people_dir,
-            'people_has_more': request.people_offset + request.people_limit < len(people_groups),
+            'people_has_more': request.people_offset + request.people_limit < people_count,
         }
         if request.include_people:
             people = [_person(positions, profiles.get(person_id, {})) for person_id, positions in people_groups.items()]
