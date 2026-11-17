@@ -9,6 +9,8 @@ import { Career } from "./Career"
 import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
+import { useMutuals } from "../hooks/useMutuals"
+import { MutualsLine, MutualsSection } from "./Mutuals"
 import { ConnectedVia } from "./Operators"
 import { RoleLine } from "./ResultRow"
 import type { RowContext } from "./RowActions"
@@ -26,7 +28,7 @@ interface ResultDrawerProps {
 
 // One candidate in the shared drawer: who they are (as the row shows them), the feedback flag and Close, the saved
 // overall and the judges' labels, then the evidence, their career, who they came through and
-// their team likeness.
+// their team likeness. Get mutuals (LinkedIn) sits under their location; its people list under the header.
 export function ResultDrawer({ result, open, ranked, labels, context, onClose }: ResultDrawerProps) {
   const swap = useDrawerSwap(result?.key ?? null, result, open)
   const shown = swap.content
@@ -59,6 +61,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
   const role = roleLine(current)
   const headline = shownHeadline(row, current)
   const similarity = candidate?.team_similarity
+  const mutuals = useMutuals(row.linkedin_url)
   return (
     <>
       <div className="drawer-top">
@@ -73,6 +76,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
           </div>
           {headline ? <div className="sub review-headline">{headline}</div> : null}
           {row.location ? <div className="sub review-location">{row.location}</div> : null}
+          {row.linkedin_url ? <MutualsLine mutuals={mutuals} /> : null}
         </div>
         <span className="review-tools">
           {candidate ? (
@@ -87,6 +91,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
           <DrawerClose onClose={onClose} />
         </span>
       </div>
+      <MutualsSection mutuals={mutuals} />
       {ranked ? (
         <div className="review-scores">
           <ScoreCell result={result} />

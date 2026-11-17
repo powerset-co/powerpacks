@@ -723,3 +723,68 @@ section.review-sections {
     order: 1;
   }
 }
+/* Get mutuals: a quiet link under the location, then the people under the header as
+   the rows show them (or, on the line, why there are none). */
+.mutuals-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+button.mutuals-line {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.mutuals-line:hover:not(:disabled) {
+  color: var(--foreground);
+}
+button.mutuals-line:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+.mutuals-line svg {
+  width: 12px;
+  height: 12px;
+  color: #60a5fa;
+}
+.mutuals-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mutuals-list li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.mutuals-list a,
+.mutuals-list b,
+.mutuals-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mutuals-list a,
+.mutuals-list b {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.mutuals-list a:hover {
+  text-decoration: underline;
+}
+.mutuals-list small {
+  color: var(--muted);
+  font-size: 12px;
+}
