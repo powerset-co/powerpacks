@@ -10,6 +10,7 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-17: a page that hangs up before its answer is no longer logged (and reported) as a failed request.
 - 2026-11-12: a set action whose Powerset API call fails answers 502 with the reason (a non-JSON error
   body or an unreachable API used to drop the request, so the page said "Failed to fetch").
 - 2026-11-11: GET /api/search/set?set_id=, POST /api/search/sets, /api/search/set/delete and /api/search/set/invite:
@@ -215,9 +216,12 @@ def persistent_handler(root: Path) -> type[BaseHTTPRequestHandler]:
         warm = staticmethod(mount_now)
 
         def handle(self) -> None:
-            # A request that throws is logged, so it reports itself (report.py).
+            # A request that throws is logged, so it reports itself (report.py). A page that hung up
+            # before its answer (it picked another search, left the page) is not one: nothing failed.
             try:
                 super().handle()
+            except ConnectionError:
+                pass
             except Exception:
                 logging.getLogger(__name__).exception("Request failed: %s", getattr(self, "path", ""))
 
