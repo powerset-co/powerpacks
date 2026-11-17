@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import openai
+
 
 PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
@@ -110,7 +112,8 @@ def _refused(answers: list[decisions.Answer]) -> bool:
 
 async def matching_companies(description: str, rows: list[dict[str, Any]], cache_dir: Path) -> list[dict[str, Any]]:
     """The rows Luna says match the description (Decisions API, answers saved under `cache_dir`).
-    A company Luna refuses to answer for is kept."""
+    A company Luna refuses to answer for is kept; so is every row when a request still fails after
+    its retries (decisions.MAX_RETRIES), and the answers that did arrive stay saved."""
     question = company_question(description)
     digests: list[str] = []
     requests: dict[str, dict[str, Any]] = {}
@@ -121,8 +124,12 @@ async def matching_companies(description: str, rows: list[dict[str, Any]], cache
         digest = decisions.request_digest(COMPANY_QUESTION_VERSION, request)
         digests.append(digest)
         requests[digest] = request
-    answers = await decisions.decide_all(requests, cache_dir, cache_only=False, stage="resolve_companies",
-                                         on_progress=lambda done, total: None, refused=_refused)
+    try:
+        answers = await decisions.decide_all(requests, cache_dir, cache_only=False, stage="resolve_companies",
+                                             on_progress=lambda done, total: None, refused=_refused)
+    except openai.OpenAIError as e:
+        print(f"[resolve_companies] Luna's company match failed, keeping every company: {e}", file=sys.stderr)
+        return rows
     return [row for row, digest in zip(rows, digests)
             if _refused(answers[digest]) or answers[digest][0]["probability"] >= KEEP_PROBABILITY]
 

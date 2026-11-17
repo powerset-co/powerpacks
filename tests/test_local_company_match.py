@@ -56,6 +56,18 @@ class MatchingCompaniesTests(unittest.TestCase):
         self.assertEqual(question["type"], "predicate")
         self.assertIn('"mining industry mineral extraction"', question["instructions"])
 
+    def test_keeps_every_company_when_luna_cannot_be_reached(self):
+        rows = [{"id": "a", "company_name": "A"}, {"id": "b", "company_name": "B"}]
+
+        async def decide_all(requests, cache_dir, **kwargs):
+            raise resolve_companies.openai.APIConnectionError(request=mock.Mock())
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(resolve_companies.decisions, "decide_all", decide_all):
+            kept = asyncio.run(resolve_companies.matching_companies("mining", rows, Path(tmp)))
+
+        self.assertEqual(kept, rows)
+
 
 if __name__ == "__main__":
     unittest.main()
