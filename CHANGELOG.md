@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.63.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.62.0...powerpacks-v3.63.0) (2026-11-17)
+
+
+### Features
+
+* **search:** Get mutuals in the search result drawer ([#1178](https://github.com/powerset-co/powerpacks/issues/1178)) ([2a32f0b](https://github.com/powerset-co/powerpacks/commit/2a32f0ba91419e721c6b35dd9392af8f1e92251e))
+
+
+### Bug Fixes
+
+* **gmail:** setup accepts the Google Cloud Terms, waits out slow Console loads, and finishes Gmail consent by itself ([#1203](https://github.com/powerset-co/powerpacks/issues/1203)) ([8b8a462](https://github.com/powerset-co/powerpacks/commit/8b8a462b13607e94840d2a16ee56da708ff45238))
+
 ## [3.62.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.61.1...powerpacks-v3.62.0) (2026-11-17)
 
 
