@@ -721,7 +721,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "threshold": ce_result.get("threshold"),
             "mean_score": ce_result.get("mean_score"),
             "std_score": ce_result.get("std_score"),
-            "score_distribution": ce_result["score_distribution"],
+            # Absent when the cross-encoder was skipped for want of a key and passed every company through.
+            "score_distribution": ce_result.get("score_distribution"),
         }
     if matched:
         result["company_match"] = matched
