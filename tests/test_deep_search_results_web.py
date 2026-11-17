@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -359,7 +360,12 @@ class ResultsWebTest(unittest.TestCase):
             people = load_bad(root, "recruiters")
             # A failure is reported until a later try's rows are in; a download that died says so.
             rows.rename(waiting)
-            with patch("packs.search.primitives.deep_search.results_web.model.time.time", return_value=waiting.stat().st_mtime + 301):
+            pid = base / "pid"
+            record_quick_search(root, "recruiters", **run, status="completed",
+                                bad_results={**turned_down, "error": str(error), "pid": str(pid), "count": 1})
+            pid.write_text(str(os.getpid()))
+            running = load_bad(root, "recruiters")
+            with patch("packs.search.primitives.deep_search.results_web.model.os.kill", side_effect=ProcessLookupError):
                 died = load_bad(root, "recruiters")
             error.write_text("RuntimeError: downloaded 10 of the 501 bad results")
             failed = load_bad(root, "recruiters")
@@ -371,7 +377,7 @@ class ResultsWebTest(unittest.TestCase):
         self.assertIsNone(still_downloading)
         self.assertEqual([(row.title, row.company, row.final_score) for row in people][:1], [("Account Executive", "Example Labs", 0.1)])
         self.assertEqual(failed, "RuntimeError: downloaded 10 of the 501 bad results")
-        self.assertEqual((died, isinstance(retried, tuple)), ("the download stopped", True))
+        self.assertEqual((running, died, isinstance(retried, tuple)), (None, "the download stopped", True))
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:

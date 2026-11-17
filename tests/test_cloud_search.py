@@ -68,17 +68,15 @@ class CloudSearchTests(unittest.TestCase):
                                                        timeout=60, write_state=False, rerank=False, rerank_rest=False))
         self.assertEqual(out["candidate_count"], 2)
 
-    def _api(self, good, bad, saved, sent, *, answer=None):
-        """The API of one ranked search: `saved` is how many results it has stored at each count check."""
-        counts = iter(saved)
-
+    def _api(self, good, bad, sent, *, answer=None):
+        """The API of one ranked search, which answers only once its results are saved."""
         def api(env_file, path, body=None, **kwargs):
             sent.append((path, body))
             if path == "/v2/conversations":
                 return {"id": "c1"}
             if path == "/v2/search/execute":
                 # Its own first 50 come in another shape; nothing reads them.
-                return {"total_count": len(good) + len(bad), "good_count": len(good), "bad_count": len(bad),
+                return {"total_count": len(good) + len(bad), "good_count": len(good), "bad_count": len(bad), "results_saved": True,
                         "results": answer or [{"person_id": "from-the-answer", "status": "good", "final_score": 1.0}]}
             if path == "/v2/hydrate":
                 raise AssertionError("a ranked search's people come from the downloaded file")
@@ -86,8 +84,7 @@ class CloudSearchTests(unittest.TestCase):
                 return []
             query = dict(pair.split("=") for pair in path.split("?")[1].split("&"))
             if "filter" not in query:
-                count = next(counts)
-                return {"good_count": min(count, len(good)), "bad_count": max(count - len(good), 0), "results": []}
+                raise AssertionError("nothing polls the saved count")
             rows, offset = (good if query["filter"] == "good" else bad), int(query.get("offset", 0))
             return {"results": rows[offset:offset + int(query["limit"])], "has_more": offset + int(query["limit"]) < len(rows),
                     "good_count": len(good), "bad_count": len(bad)}
@@ -119,10 +116,10 @@ class CloudSearchTests(unittest.TestCase):
             args = dict(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60, write_state=True, rerank=True)
             hydrate = SimpleNamespace(state=str(state), env_file=None, limit=0, dry_run=False, local_db=None, local_workers=None,
                                       local_batch_size=None, no_compress_profiles=False, dump_profiles=False, write_state=True)
-            # 300 saved, then 500 good: enough for the first page. Then everything.
-            with mock.patch("packs.shared.powerset_api.call", side_effect=self._api(good, bad, [300, 500, 502], sent)), \
+            with mock.patch("packs.shared.powerset_api.call", side_effect=self._api(good, bad, sent)), \
                     mock.patch.object(cloud_search.time, "sleep"), \
                     mock.patch.object(cloud_search.subprocess, "Popen") as background:
+                background.return_value.pid = 4242
                 first = cloud_search.run(SimpleNamespace(**args, rerank_rest=False))
                 hydrate_people.cmd_hydrate(hydrate)
                 first_rows = results_io.result_rows(json.loads(state.read_text()))
@@ -144,12 +141,13 @@ class CloudSearchTests(unittest.TestCase):
             self.assertEqual(cloud_search.read_results(Path(out["results_path"])), good)
         results = "/v2/conversations/c1/results?"
         self.assertEqual([path for path, _ in sent if "attribution" not in path], [
-            "/v2/conversations", "/v2/search/execute", results + "limit=1", results + "limit=1",
+            "/v2/conversations", "/v2/search/execute",
             results + "filter=good&limit=500&offset=0",
-            results + "limit=1", results + "filter=good&limit=500&offset=0", results + "filter=good&limit=500&offset=500",
+            results + "filter=good&limit=500&offset=0", results + "filter=good&limit=500&offset=500",
             results + "filter=bad&limit=500&offset=0"])
         request = sent[1][1]
-        self.assertEqual((request["rerank"], request["skip_llm_filter"], request["conversation_id"]), (True, False, "c1"))
+        self.assertEqual((request["rerank"], request["skip_llm_filter"], request["conversation_id"], request["save_before_response"]),
+                         (True, False, "c1", True))
         self.assertEqual((first["candidate_count"], first["partial"], [row["person_id"] for row in first_rows]),
                          (500, True, [row["person_id"] for row in good[:500]]))
         self.assertEqual((out["candidate_count"], out["partial"], out["bad_results"]["count"]), (501, False, 1))
@@ -169,7 +167,8 @@ class CloudSearchTests(unittest.TestCase):
 
     def test_a_download_is_whole_or_it_is_not_there(self) -> None:
         """A page that fails is asked for again; a download that comes up short of the API's count is
-        done again; one that stays short leaves no file. A person on two pages is written once."""
+        done again; one that stays short leaves no file. A person on two pages is written once.
+        Nothing sleeps between tries of a whole download."""
         import urllib.error
 
         rows = [{"person_id": f"p{i}"} for i in range(501)]
@@ -203,29 +202,15 @@ class CloudSearchTests(unittest.TestCase):
                 self.assertEqual(cloud_search.main(["--bad-for", "c1", "--out", str(Path(directory) / "bad"), "--env-file", ""]), 1)
             self.assertIn("RuntimeError", (Path(directory) / "bad" / "error.txt").read_text())
 
-    def test_a_pause_in_the_api_saving_is_not_taken_for_all_of_it(self) -> None:
-        counts = iter([50, 50, 50, 50, 50, 1000])
-        with mock.patch("packs.shared.powerset_api.call",
-                        side_effect=lambda *a, **k: {"good_count": next(counts), "bad_count": 0}), \
-                mock.patch.object(cloud_search.time, "sleep") as slept:
-            cloud_search.wait_saved(None, "c1", 1000)
-        self.assertEqual(slept.call_count, 5)
-
-    def test_rerank_fails_when_the_api_never_saves_the_results(self) -> None:
+    def test_a_ranked_search_needs_an_api_that_saves_before_it_answers(self) -> None:
         def api(env_file, path, body=None, **kwargs):
-            if path == "/v2/conversations":
-                return {"id": "c1"}
-            if path == "/v2/search/execute":
-                return {"good_count": 3, "bad_count": 0, "results": []}
-            return {"good_count": 0, "bad_count": 0, "results": []}
+            return {"id": "c1"} if path == "/v2/conversations" else {"good_count": 3, "bad_count": 0, "results": []}
 
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
             state.write_text(json.dumps({"query": "q", "steps": [{"id": "expand_search_request", "output": {}}]}))
             with mock.patch("packs.shared.powerset_api.call", side_effect=api), \
-                    mock.patch.object(cloud_search.time, "sleep"), \
-                    mock.patch.object(cloud_search.time, "time", side_effect=[0, 0, 0, 200, 200]), \
-                    self.assertRaisesRegex(RuntimeError, "saved 0 of 3 results and then stopped"):
+                    self.assertRaisesRegex(RuntimeError, "answered before saving the results"):
                 cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60,
                                                  write_state=True, rerank=True, rerank_rest=False))
 

@@ -23,7 +23,6 @@ import gzip
 import json
 import math
 import os
-import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -771,9 +770,6 @@ def load_search(root: Path, run_id: str) -> SearchResult | None:
     return next(search for search in _searches(root, payloads) if search.run_id == run_id)
 
 
-BAD_STALLED_SECONDS = 300
-
-
 def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None | str:
     """The people a Powerset-ranked search turned down, read from the same artifacts and by the same
     loader as the run's own people; None while they are still downloading, the error text when the
@@ -784,12 +780,17 @@ def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None | str:
         return _pond_candidates(root, {"arm": {"artifacts": bad}})
     if error is not None and error.exists():
         return error.read_text()
-    if rows is None:
+    # Still downloading while its process lives; one that died without rows or an error stopped.
+    pid = _artifact_path(root, bad.get("pid"))
+    if pid is None or not pid.exists():
         return None
-    # The download writes to its folder page by page; one untouched this long has died.
-    touched = [path.stat().st_mtime for path in (rows.parent, *rows.parent.glob("*"))] if rows.parent.exists() \
-        else [(root / run_id / "results.json").stat().st_mtime]
-    return "the download stopped" if time.time() - max(touched) > BAD_STALLED_SECONDS else None
+    try:
+        os.kill(int(pid.read_text()), 0)
+    except (ProcessLookupError, ValueError):
+        return "the download stopped"
+    except PermissionError:  # alive, another user's
+        pass
+    return None
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:

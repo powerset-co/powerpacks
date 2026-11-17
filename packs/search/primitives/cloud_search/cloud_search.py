@@ -11,9 +11,9 @@ the only source of a ranked run's people: each row carries the score and the who
 search's own answer and /v2/hydrate are not read, and good and bad go through the same functions
 into the same artifacts. Nothing is scored on this Mac.
 
-The good ones arrive in two steps so the page has people at once: --rerank downloads the best 500
-as soon as the API has saved that many, and --rerank-rest replaces the file with all of them once
-every result is saved. The bad ones follow in a background process (--bad-for); the results page
+The search asks the API to answer only once every result is saved (save_before_response), so
+nothing here waits on a clock or polls a count. The good ones arrive in two steps so the page has
+people at once: --rerank downloads the best 500 and --rerank-rest replaces the file with all of them. The bad ones follow in a background process (--bad-for); the results page
 reads them only when asked, and shows them loading until their rows file exists. Without --rerank
 (a job-description run) the people come back unranked for the local screen. No Postgres, no
 TurboPuffer.
@@ -114,7 +114,8 @@ def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, s
     return {**request, "query": query[:500], "traits": payload.get("traits") or [],
             "has_domain_intent": bool(payload.get("has_domain_intent")), "set_id": set_id,
             "limit": min(limit or LIMIT, LIMIT), "rerank": bool(conversation_id), "skip_llm_filter": not conversation_id,
-            "conversation_id": conversation_id}
+            # A ranked search is answered only once every result is saved, so there is no saving to wait for.
+            "conversation_id": conversation_id, "save_before_response": bool(conversation_id)}
 
 
 def record(state_path: Path, step_id: str, output: dict[str, Any], elapsed_ms: int) -> None:
@@ -156,31 +157,13 @@ def get(env_file: Path | None, path: str, *, tries: int = 3) -> dict[str, Any]:
     raise AssertionError("unreachable")
 
 
-def wait_saved(env_file: Path | None, conversation_id: str, expected: int, *, good_only: bool = False,
-               stalled: int = 120, pause: float = 2.0) -> None:
-    """Return once the conversation holds `expected` results (good ones, with good_only): the API
-    saves them, 50 at a time, after it answers. A count that stops growing for `stalled` seconds
-    short of that is a failed save, never taken for the whole result."""
-    seen, grew = -1, time.time()
-    while expected:
-        page = get(env_file, f"/v2/conversations/{conversation_id}/results?limit=1")
-        count = int(page.get("good_count") or 0) + (0 if good_only else int(page.get("bad_count") or 0))
-        if count >= expected:
-            return
-        if count > seen:
-            seen, grew = count, time.time()
-        elif time.time() - grew > stalled:
-            raise RuntimeError(f"the Powerset API saved {count} of {expected} results and then stopped; run the search again")
-        time.sleep(pause)
-
-
 def download(env_file: Path | None, conversation_id: str, kind: str, out: Path, *, first_page: bool = False,
              tries: int = 3) -> int:
     """The conversation's good or bad results into the gzip `out`, best first, 500 a request, one
     JSON row a line exactly as the API returned it. Each person is written once. The file appears
     only when whole (written beside itself, then renamed), and a whole download holds as many
-    people as the API counts, else it is downloaded again: a page that moved while the API was
-    still saving never leaves a short or doubled file. first_page stops after the best 500."""
+    people as the API counts, else it is downloaded again, so a short or doubled file is never
+    left behind. first_page stops after the best 500."""
     out.parent.mkdir(parents=True, exist_ok=True)
     part = out.with_name(out.name + ".part")
     for attempt in range(1, tries + 1):
@@ -201,8 +184,6 @@ def download(env_file: Path | None, conversation_id: str, kind: str, out: Path, 
         if first_page or len(seen) == expected:
             os.replace(part, out)
             return len(seen)
-        if attempt < tries:
-            time.sleep(attempt)
     part.unlink(missing_ok=True)
     raise RuntimeError(f"downloaded {len(seen)} of the {expected} {kind} results the Powerset API counts; run the search again")
 
@@ -248,15 +229,17 @@ def _record_ranked(args: argparse.Namespace, state_path: Path, results_path: Pat
 
 def run_ranked(args: argparse.Namespace, state_path: Path, state: dict[str, Any], env_file: Path | None,
                payload: dict[str, Any], set_id: str | None, started: float) -> dict[str, Any]:
-    """The API searches, filters, ranks and saves; the best 500 good results are downloaded as soon
-    as it has saved that many, so the page has people to show. --rerank-rest brings the rest.
-    The people in the search's own answer are not used: every row comes from the download."""
+    """The API searches, filters, ranks and saves, and answers only once every result is saved;
+    the best 500 good results are then downloaded at once, so the page has people to show.
+    --rerank-rest brings the rest. The people in the search's own answer are not used: every row
+    comes from the download."""
     query = str(state.get("query") or "")
     conversation_id = str(powerset_api.call(env_file, "/v2/conversations", {"title": query[:200] or "Search", "set_id": set_id})["id"])
     request = api_request(env_file, payload, query=query, set_id=set_id, limit=args.limit, conversation_id=conversation_id)
     response = powerset_api.call(env_file, "/v2/search/execute", request, timeout=args.timeout)
+    if not response.get("results_saved"):
+        raise RuntimeError("the Powerset API answered before saving the results (it does not know save_before_response yet)")
     good_count, bad_count = int(response.get("good_count") or 0), int(response.get("bad_count") or 0)
-    wait_saved(env_file, conversation_id, min(good_count, PAGE), good_only=True)
     results_path = _out_dir(state_path, state) / "good_results.jsonl.gz"
     download(env_file, conversation_id, "good", results_path, first_page=True)
     return _record_ranked(args, state_path, results_path, {
@@ -266,25 +249,26 @@ def run_ranked(args: argparse.Namespace, state_path: Path, state: dict[str, Any]
 
 def run_ranked_rest(args: argparse.Namespace, state_path: Path, state: dict[str, Any], env_file: Path | None,
                     started: float) -> dict[str, Any]:
-    """Every good result of the search --rerank started, once the API has saved them all; the bad
-    ones follow in a background process, since the search is done without them."""
+    """Every good result of the search --rerank started; the bad ones follow in a background
+    process, since the search is done without them."""
     searched = next(step["output"] for step in reversed(state["steps"]) if step.get("id") == "execute_role_search")
     conversation_id, bad_count = searched["conversation_id"], int(searched.get("bad_count") or 0)
-    wait_saved(env_file, conversation_id, int(searched.get("good_count") or 0) + bad_count)
     out_dir = _out_dir(state_path, state)
     good_count = download(env_file, conversation_id, "good", out_dir / "good_results.jsonl.gz")
     bad_dir = out_dir / "bad"
-    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--bad-for", conversation_id, "--out", str(bad_dir),
-                      "--state", str(state_path), "--env-file", str(env_file) if env_file else ""],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    worker = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--bad-for", conversation_id, "--out", str(bad_dir),
+                               "--state", str(state_path), "--env-file", str(env_file) if env_file else ""],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    bad_dir.mkdir(parents=True, exist_ok=True)
+    (bad_dir / BAD_PID).write_text(str(worker.pid))  # the page tells a download still running from one that died
     return _record_ranked(args, state_path, out_dir / "good_results.jsonl.gz", {
         **{key: searched.get(key) for key in ("set_id", "conversation_id", "total_count", "request")},
         "good_count": good_count, "bad_count": bad_count, "partial": False,
         "bad_results": {"jsonl": str(bad_dir / BAD_ROWS), "profiles_path": str(bad_dir / "profiles.jsonl.gz"),
-                        "error": str(bad_dir / BAD_ERROR), "count": bad_count}}, started)
+                        "error": str(bad_dir / BAD_ERROR), "pid": str(bad_dir / BAD_PID), "count": bad_count}}, started)
 
 
-BAD_ROWS, BAD_ERROR = "bad_results.jsonl", "error.txt"
+BAD_ROWS, BAD_ERROR, BAD_PID = "bad_results.jsonl", "error.txt", "pid"
 
 
 def export_bad(env_file: Path | None, conversation_id: str, out_dir: Path, state: dict[str, Any]) -> int:
