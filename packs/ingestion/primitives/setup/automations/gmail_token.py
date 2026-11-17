@@ -16,7 +16,11 @@ refresh token valid.
 `None` means this module can't decide (no token file, an unknown client, a token kept by a
 command), and the caller asks msgvault instead.
 
+`count_messages` asks Gmail how many messages a search matches, with the same saved grant: the
+total a sync counts toward, which msgvault never reports (its own estimate is unreliable).
+
 Changelog:
+  2026-11-16: `count_messages`, the total for the sync count on the page.
   2026-11-04: created, so the Accounts and Connect sign-in check never opens the archive.
 """
 
@@ -38,6 +42,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # A token this close to expiring counts as expired: it could lapse before the next sync uses it.
 EXPIRY_MARGIN = timedelta(minutes=2)
 REFRESH_TIMEOUT_SECONDS = 15
+GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 
 Verdict = Literal["healthy", "reauthorization_required", "transient_error"]
 
@@ -61,6 +66,38 @@ def check_token(home: Path, email: str, *, now: datetime | None = None) -> Token
         return None
     client_id, client_secret, token_url = client
     return _refresh(token_url, client_id, client_secret, str(token["refresh_token"]))
+
+
+def count_messages(home: Path, email: str, query: str) -> int | None:
+    """How many of the mailbox's messages match `query` (Gmail search syntax), counted by listing
+    their ids 500 to a page: Gmail's own estimate stops at a few hundred. A year of one mailbox
+    is some tens of pages. None when Google can't be asked (no token file, offline, over quota):
+    the sync runs the same, without a count."""
+    token = _read_json(tokens_dir(home) / f"{_safe_email(email)}.json") or {}
+    client = _client_for(home, str(token.get("client_id") or ""))
+    if client is None or not token.get("refresh_token"):
+        return None
+    client_id, client_secret, token_url = client
+    grant = urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": client_id,
+                                    "client_secret": client_secret, "refresh_token": token["refresh_token"]}).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(token_url, data=grant, method="POST"),
+                                    timeout=REFRESH_TIMEOUT_SECONDS) as response:
+            headers = {"Authorization": f"Bearer {json.loads(response.read())['access_token']}"}
+        total, page = 0, ""
+        while True:
+            params = {"q": query, "maxResults": "500", "fields": "nextPageToken,messages/id",
+                      **({"pageToken": page} if page else {})}
+            url = f"{GMAIL_MESSAGES_URL}?{urllib.parse.urlencode(params)}"
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                        timeout=REFRESH_TIMEOUT_SECONDS) as response:
+                listing = json.loads(response.read())
+            total += len(listing.get("messages", []))
+            page = listing.get("nextPageToken", "")
+            if not page:
+                return total
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, KeyError):
+        return None
 
 
 def tokens_dir(home: Path) -> Path:

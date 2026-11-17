@@ -80,8 +80,28 @@ class GmailTokenTest(unittest.TestCase):
         self.token(client_id="someone-else.apps.googleusercontent.com")
         self.assertIsNone(self.check())  # issued by a client config.toml doesn't name
 
+    def test_count_messages_adds_up_the_pages_of_the_search(self):
+        self.token()
+        pages = [b'{"access_token": "new"}',
+                 json.dumps({"messages": [{"id": str(n)} for n in range(500)], "nextPageToken": "p2"}).encode(),
+                 json.dumps({"messages": [{"id": "x"}] * 37}).encode()]
+        with patch("urllib.request.urlopen", side_effect=[_Response(page) for page in pages]) as calls:
+            total = gmail_token.count_messages(self.home, "casey@example.com", "after:2025-11-16 -category:social")
+        self.assertEqual(total, 537)
+        first, second = (call.args[0].full_url for call in calls.call_args_list[1:])
+        self.assertIn("q=after%3A2025-11-16+-category%3Asocial", first)
+        self.assertNotIn("pageToken", first)
+        self.assertIn("pageToken=p2", second)
+
+    def test_count_messages_is_none_when_google_refuses(self):
+        self.token()
+        refused = urllib.error.HTTPError(gmail_token.GMAIL_MESSAGES_URL, 403, "Forbidden", None, io.BytesIO(b"{}"))
+        with patch("urllib.request.urlopen", side_effect=[_Response(b'{"access_token": "new"}'), refused]):
+            self.assertIsNone(gmail_token.count_messages(self.home, "casey@example.com", ""))
+        self.assertIsNone(gmail_token.count_messages(self.home, "nobody@example.com", ""))
+
     def test_check_account_uses_the_token_and_never_runs_msgvault(self):
-        self.token(expiry="2026-11-04T23:00:00Z")
+        self.token(expiry="2099-01-01T00:00:00Z")
         with patch.object(accounts, "run_msgvault") as msgvault:
             verdict = accounts.check_account(self.home, "casey@example.com", stored=True)
         self.assertEqual(verdict.status, "healthy")

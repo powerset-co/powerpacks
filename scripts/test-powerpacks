@@ -67,6 +67,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_deep_search_catalog \
   tests.test_deep_search_results_web \
   tests.test_discover \
+  tests.test_gmail_token \
   tests.test_enrich_primitives \
   tests.test_extract_imessage_failures \
   tests.test_fetch_job_posting \
