@@ -54,7 +54,15 @@ async function fixture(mode) {
         const email = mode.includes("wrong-account") ? "other@example.com" : "casey@example.com";
         const permission = mode === "broad-scope" ? "Read, compose, send, and permanently delete all your email from Gmail" :
           "Read, compose, and send emails from your Gmail account";
-        body = `<h1>local-msg-vault wants access to your Google Account</h1><p>${email}</p>
+        // What Google serves today: boxes named through aria-labelledby, each with a details link.
+        body = mode === "labelled-by" ? `<h1>local-msg-vault wants access to your Google Account</h1><p>${email}</p>
+          <input type=checkbox aria-labelledby="all"><span id="all">Select all</span>
+          <input type=checkbox aria-labelledby="view" onclick="fixtureClicked('view')">
+          <div id="view">View your email messages and settings. <a href="#">See access details</a></div>
+          <input type=checkbox aria-labelledby="send" onclick="fixtureClicked('send')">
+          <div id="send">${permission}. <a href="#">See access details</a></div>
+          <button onclick="fixtureClicked('continue');location.href='${callback}'">Continue</button>` :
+        `<h1>local-msg-vault wants access to your Google Account</h1><p>${email}</p>
           <label><input type=checkbox aria-label="View your email messages and settings">View your email messages and settings</label>
           <label><input type=checkbox aria-label="${permission}">${permission}</label>
           <button onclick="fixtureClicked('continue');location.href='${callback}'">Continue</button>`;
@@ -97,6 +105,13 @@ test("the observed test-app Continue reaches account-checked Gmail consent", asy
   const wrongAccount = await fixture("test-app-warning-wrong-account");
   assert.equal(wrongAccount.result.status, "needs_user_action");
   assert.equal(wrongAccount.clicked.includes("continue"), false);
+});
+
+test("consent boxes named through aria-labelledby with a details link are ticked headlessly", async () => {
+  const result = await fixture("labelled-by");
+  assert.equal(result.result.status, "ok");
+  assert.deepEqual(result.launches, [true]);
+  assert.deepEqual(result.clicked, ["account", "view", "send", "continue"]);
 });
 
 test("the observed prior grant renews two Gmail permissions without new checkboxes", async () => {

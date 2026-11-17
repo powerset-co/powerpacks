@@ -42,6 +42,10 @@ test("known account consent and only known Gmail checkboxes can be clicked", () 
   assert.deepEqual(consentAction(consent, request), { kind: "button", name: "Continue" });
   assert.deepEqual(consentAction({ ...consent, checkboxes: [{ name: "See your email messages and settings", checked: false }] }, request),
     { kind: "checkbox", name: "See your email messages and settings" });
+  const detailed = { name: "Read, compose, and send emails from your Gmail account. See access details", checked: false, index: 2 };
+  assert.deepEqual(consentAction({ ...consent, checkboxes: [{ name: "Select all", checked: false, index: 0 }, detailed] }, request),
+    { kind: "checkbox", name: detailed.name, index: 2 });
+  assert.equal(consentAction({ ...consent, checkboxes: [{ name: "", checked: false, index: 0 }] }, request).kind, "human");
   const box = { name: "Read, compose, send, and permanently delete all your email from Gmail", checked: false };
   assert.equal(consentAction({ ...consent, checkboxes: [box] }, request).kind, "human");
 });
