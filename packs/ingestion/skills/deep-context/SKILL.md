@@ -15,7 +15,7 @@ Changelog:
 
 This is the one processing skill after setup (the install skill), `$import-gmail`, or
 `$import-messages`. Everything below runs from the Powerpacks checkout
-(`$POWERPACKS_REPO_ROOT`, otherwise `~/powerpacks`, otherwise `~/workspace/powerpacks`).
+(the app's folder, `~/.powerpacks/app`; `$POWERPACKS_REPO_ROOT` when set).
 
 The flow is:
 

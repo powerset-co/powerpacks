@@ -3,9 +3,8 @@
   "description": "Powerpacks local state path contract. Product setup/import/enrichment/index state belongs under the canonical non-.codex Powerpacks repo unless explicitly marked external.",
   "canonical_repo_candidates": [
     "$POWERPACKS_REPO_ROOT",
-    "$PWD",
-    "~/powerpacks",
-    "~/workspace/powerpacks"
+    "~/.powerpacks/app",
+    "$PWD"
   ],
   "legacy_state_sources": [
     "~/.codex/powerpacks",

@@ -29,14 +29,11 @@ explicit request to change Powerpacks code, read `docs/development.md`.
 
 ## Find the installation
 
-A fresh install needs no selected project or manual clone. Bootstrap downloads
-Powerpacks into `~/powerpacks`, reusing an existing supported installation when
-available. Codex skills live in `~/.agents/skills`; Claude Code skills live in
-`~/.claude/skills`; Pi skills live in `~/.pi/agent/skills`.
-
-Installed skills identify the checkout they came from. Run their commands from
-that checkout, regardless of the chat's directory. Configuration is its `.env`;
-workflow data is its `.powerpacks/`. A copied skill bundle is not a data root.
+Powerpacks is installed by the desktop app at `~/.powerpacks/app`. Run
+Powerpacks commands from that folder, regardless of the chat's directory:
+configuration is its `.env`; workflow data is its `.powerpacks/`. Codex skills live in `~/.agents/skills`;
+Claude Code skills live in `~/.claude/skills`; Pi skills live in
+`~/.pi/agent/skills`. A copied skill bundle is not a data root.
 Do not write Powerpacks state into an unrelated project or the skills folder.
 
 Never print secret values.
@@ -46,7 +43,7 @@ Never print secret values.
 Load the matching `SKILL.md` and follow it. The skill owns its sequence,
 permissions, recovery, and verification. Don't ask the user to choose a skill
 when their intent is clear, or inspect product source on the happy path.
-Paths below are relative to the installed checkout.
+Paths below are relative to `~/.powerpacks/app`.
 
 | User intent | Skill |
 | --- | --- |

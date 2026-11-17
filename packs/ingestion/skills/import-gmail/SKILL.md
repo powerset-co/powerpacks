@@ -107,7 +107,7 @@ paths and rely on the primitives — don't pre-delete or invent folders.
 
 ```bash
 resolve_powerpacks_root() {
-  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$PWD" "$HOME/powerpacks" "$HOME/workspace/powerpacks"; do
+  for candidate in "${POWERPACKS_REPO_ROOT:-}" "$HOME/.powerpacks/app" "$PWD"; do
     [[ -n "$candidate" ]] || continue
     [[ "$candidate" != */.codex/powerpacks && "$candidate" != */skills/*/powerpacks ]] || continue
     if [[ -x "$candidate/bin/update-codex" && -d "$candidate/packs" ]]; then
@@ -116,7 +116,7 @@ resolve_powerpacks_root() {
   done
   return 1
 }
-REPO="$(resolve_powerpacks_root)" || { echo "Install Powerpacks to ~/powerpacks first." >&2; exit 1; }
+REPO="$(resolve_powerpacks_root)" || { echo "Open the Powerpacks app once; it installs Powerpacks at ~/.powerpacks/app." >&2; exit 1; }
 cd "$REPO"
 ```
 
