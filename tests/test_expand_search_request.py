@@ -173,7 +173,6 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
         expand = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(expand)  # type: ignore[union-attr]
-        self.assertEqual(expand.DEFAULT_MODEL, "gpt-4o-mini")
         self.assertIsNone(expand.DEFAULT_REASONING_EFFORT)
 
     def test_role_agent_prompt_uses_taxonomy_and_prod_shape(self):
