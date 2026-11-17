@@ -97,7 +97,17 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertIn(f'client_secrets = "{Path(tmp) / "default.json"}"', text)
             self.assertIn("[oauth.apps.acme]", text)
             self.assertIn(f'client_secrets = "{Path(tmp) / "acme.json"}"', text)
-            self.assertIn("[sync]", text)
+            self.assertIn("[sync]\nrate_limit_qps = 0\n", text)
+
+    def test_pace_gmail_sync_replaces_the_pace_an_older_app_wrote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.toml"
+            config.write_text('[oauth]\nclient_secrets = "x.json"\n\n[sync]\nrate_limit_qps = 5\n', encoding="utf-8")
+            msgvault_home.pace_gmail_sync(Path(tmp))
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                '[oauth]\nclient_secrets = "x.json"\n\n[sync]\nrate_limit_qps = 0\n',
+            )
 
     def test_parse_json_fragment_skips_msgvault_log_lines(self):
         text = 'time=2026 level=INFO msg="startup"\n[{"email":"me@example.com"}]\ntime=2026 level=INFO msg="exit"\n'

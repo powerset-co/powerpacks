@@ -53,6 +53,7 @@ if str(_REPO_ROOT) not in sys.path:
 from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB  # noqa: E402
 from packs.ingestion.primitives.common.proc import emit_progress, run_cmd  # noqa: E402
 from packs.ingestion.primitives.setup.automations.gmail_token import count_messages  # noqa: E402
+from packs.ingestion.primitives.setup.automations.msgvault_home import pace_gmail_sync  # noqa: E402
 
 
 MSGVAULT_REAUTH_ERROR_MARKERS = (
@@ -320,6 +321,8 @@ def sync_msgvault_account(
                                         f"before:{sync_before}" if sync_before else "", query) if part)
     total = count_messages(db_home, email, window) if on_progress else None
     watcher = _SyncWatcher(db, email, total, on_progress) if on_progress and total else None
+    # An archive set up by an older app still holds the pace Gmail refuses.
+    pace_gmail_sync(db_home)
     if watcher:
         watcher.start()
     try:

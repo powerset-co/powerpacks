@@ -363,8 +363,8 @@ def configured_client_secret(home: Path, app_name: str) -> dict[str, Any] | None
     }
 
 
-def set_toml_value(text: str, table: str, key: str, value: str) -> str:
-    """Set key = "value" inside a TOML table, appending the table when absent."""
+def set_toml_value(text: str, table: str, key: str, value: str | int) -> str:
+    """Set key = value inside a TOML table, appending the table when absent."""
     lines = text.splitlines()
     header = f"[{table}]"
     quoted = json.dumps(value)
@@ -394,18 +394,31 @@ def set_toml_value(text: str, table: str, key: str, value: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+# msgvault paces Gmail by its own price list, where downloading a message costs 5 units. Gmail
+# charges 60, against 6,000 a minute for one person: 100 messages a minute. The setting is a whole
+# number and 1 is 600 messages a minute, so 0, which msgvault raises to its floor of 0.1: 60 a
+# minute, measured 2026-11-16 on msgvault 0.22.0 with no refusal. At 5 Gmail refused the sync
+# every minute and ended it after five refusals of one request. Read msgvault's
+# internal/gmail/ratelimit.go again when desktop/scripts/bundle-runtime.sh moves its version.
+GMAIL_RATE_LIMIT_QPS = 0
+
+
 def write_msgvault_config(path: Path, client_secret_path: Path, app_name: str = "") -> None:
     """Point config.toml's [oauth] (or [oauth.apps.<name>]) client_secrets at the file, chmod 600."""
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     table = "oauth" if not app_name else f"oauth.apps.{app_name}"
     text = set_toml_value(text, table, "client_secrets", str(client_secret_path))
-    if "[sync]" not in text:
-        if text and not text.endswith("\n\n"):
-            text = text.rstrip() + "\n\n"
-        text += "[sync]\nrate_limit_qps = 5\n"
+    text = set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS)
     path.write_text(text, encoding="utf-8")
     os.chmod(path, 0o600)
+
+
+def pace_gmail_sync(home: Path) -> None:
+    """Set msgvault's Gmail pace in the home's config.toml, whatever it held before."""
+    path = config_path(home)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    path.write_text(set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS), encoding="utf-8")
 
 
 def init_db(home: Path) -> dict[str, Any]:
