@@ -1,4 +1,5 @@
-"""Plain searches publish screening before LLM ranking; JD score exports stay native."""
+"""Plain local searches publish screening before LLM ranking; JD score exports stay native.
+A set search is ranked by the Powerset API (tests/test_cloud_search.py)."""
 import contextlib
 import io
 import json
@@ -101,17 +102,17 @@ class PlainSearchPipelineTests(unittest.TestCase):
             self.assertNotIn("--cross-encoder", output["execute_command"])
 
     def test_screened_catalog_running_then_completed_with_1434_ranked_people(self):
-        for backend in ("powerset", "local"):
+        for backend in ("local",):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
                 self._run_plain_fixture(Path(directory), backend)
 
     def test_ranking_failure_marks_screened_catalog_failed(self):
-        for backend in ("powerset", "local"):
+        for backend in ("local",):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
                 self._run_plain_fixture(Path(directory), backend, ranking_fails=True)
 
     def test_forced_rerun_keeps_previous_ranked_results_until_ranking_finishes(self):
-        for backend in ("powerset", "local"):
+        for backend in ("local",):
             for flag in ("--force", "--force-llm"):
                 for rerank_done in (True, False):
                     with self.subTest(backend=backend, flag=flag, rerank_done=rerank_done), \

@@ -3,12 +3,14 @@
 Everything cloud in powerpacks goes through here: no install reads Postgres or TurboPuffer.
 
 Changelog:
+  2026-11-17: asks for gzip, so a page of profiles crosses the wire at about a quarter of its size.
   2026-11-16: created; the cloud's people, sets, attribution and companies come only from the API.
 """
 
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import urllib.parse
@@ -25,11 +27,14 @@ def call(env_file: Path | None, path: str, body: Any = None, *, method: str | No
         pull_runtime_keys.api_base(env_file) + path,
         data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": f"Bearer {pull_runtime_keys.bearer_token(env_file)}",
-                 "Content-Type": "application/json"},
+                 "Content-Type": "application/json", "Accept-Encoding": "gzip"},
         method=method,
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read() or b"{}")
+        raw = response.read()
+        if response.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+        return json.loads(raw or b"{}")
 
 
 def quote(value: str) -> str:

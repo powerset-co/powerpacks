@@ -2,11 +2,17 @@
 """Search a Powerset set through the Powerset API, the same search the Powerset web app runs.
 
 prepare: POST /v2/search/expand turns the query into the API's filters; the card shows them under
-its own keys (card_filters). run: the card's filters go back to the API's (api_request), POST
-/v2/search/execute returns the set's people, and POST /v2/hydrate their profiles. The local LLM
-filter and rerank then read those profiles like any other run's. No Postgres, no TurboPuffer.
+its own keys (card_filters). run: the card's filters go back to the API's (api_request) and POST
+/v2/search/execute searches the set. With --rerank the API also filters and ranks the people and
+saves them to a conversation, and this downloads them back from GET /v2/conversations/{id}/results,
+500 a request, gzipped on the wire: the good ones (score 0.3 and up with no zero trait, the API's
+own split) are the run's ranking, so nothing is scored on this Mac; the bad ones go page by page into
+bad_results.jsonl.gz, which the results page never reads. Without --rerank (a job-description run)
+the people come back unranked for the local screen. No Postgres, no TurboPuffer.
 
 Changelog:
+  2026-11-17: --rerank: the API filters, ranks and stores a set search and the app downloads the
+      result back in pages, good and bad apart; the app no longer filters or ranks a set search.
   2026-11-16: created; replaces the direct TurboPuffer/Postgres set search (resolve_set_operators,
       resolve_companies/education/investors, apply_prefilters, execute_role_search, Postgres hydration).
 """
@@ -14,6 +20,8 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import csv
+import gzip
 import json
 import sys
 import time
@@ -36,6 +44,7 @@ LOOKUPS = {"company_ids": "companies", "education_ids": "schools"}
 # Card-only keys with no API field.
 CARD_ONLY = {"bm25_queries", "set_id", "is_current_company"}
 LIMIT = 2000  # /v2/search/execute caps a page at 2000
+PAGE = 500  # GET /v2/conversations/{id}/results caps a page at 500
 
 
 def _label(item: Any) -> Any:
@@ -77,7 +86,8 @@ def _resolve(env_file: Path | None, key: str, names: list[Any], expanded: list[A
     return ids
 
 
-def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, set_id: str | None, limit: int) -> dict[str, Any]:
+def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, set_id: str | None, limit: int,
+                conversation_id: str | None = None) -> dict[str, Any]:
     """The card's filters as a /v2/search/execute request; names map back to the expansion's ids."""
     expanded = payload.get("api_filters") or {}
     request: dict[str, Any] = {}
@@ -91,7 +101,8 @@ def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, s
         request.pop("role_semantic_query")  # the API takes a role query only with its patterns
     return {**request, "query": query[:500], "traits": payload.get("traits") or [],
             "has_domain_intent": bool(payload.get("has_domain_intent")), "set_id": set_id,
-            "limit": min(limit or LIMIT, LIMIT), "rerank": False, "skip_llm_filter": True}
+            "limit": min(limit or LIMIT, LIMIT), "rerank": bool(conversation_id), "skip_llm_filter": not conversation_id,
+            "conversation_id": conversation_id}
 
 
 def record(state_path: Path, step_id: str, output: dict[str, Any], elapsed_ms: int) -> None:
@@ -103,6 +114,84 @@ def record(state_path: Path, step_id: str, output: dict[str, Any], elapsed_ms: i
     state_path.write_text(json.dumps(state, indent=2, sort_keys=True))
 
 
+RANKED_FIELDS = ("person_id", "result_index", "matched_position_indexes", "final_score", "trait_scores",
+                 "overall_reasoning", "vertical_sources")
+
+
+def write_ranking(path: Path, rows: list[dict[str, Any]]) -> None:
+    """The API's ranking in the columns the local rerank writes (query_results.csv)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=RANKED_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: json.dumps(row.get(key), sort_keys=True) if isinstance(row.get(key), (dict, list)) else row.get(key)
+                             for key in RANKED_FIELDS})
+
+
+def wait_saved(env_file: Path | None, conversation_id: str, expected: int, *, timeout: int = 120, pause: float = 2.0) -> None:
+    """Return once the conversation holds the search's results: the API saves them, 50 at a time,
+    after it answers. Saved means the count it answered with, or (it drops duplicates) a count that
+    has not grown over three checks."""
+    seen, still, deadline = -1, 0, time.time() + timeout
+    while expected:
+        page = powerset_api.call(env_file, f"/v2/conversations/{conversation_id}/results?limit=1")
+        count = int(page.get("good_count") or 0) + int(page.get("bad_count") or 0)
+        still = still + 1 if count and count == seen else 0
+        if count >= expected or still == 3:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(f"the Powerset API saved {count} of {expected} results in {timeout}s; run the search again")
+        seen = count
+        time.sleep(pause)
+
+
+def saved_results(env_file: Path | None, conversation_id: str, kind: str):
+    """The conversation's good or bad results, best first, a page of 500 at a time."""
+    offset = 0
+    while True:
+        page = powerset_api.call(env_file, f"/v2/conversations/{conversation_id}/results?filter={kind}&limit={PAGE}&offset={offset}")
+        yield page.get("results") or []
+        if not page.get("has_more"):
+            return
+        offset += PAGE
+
+
+def run_ranked(args: argparse.Namespace, state_path: Path, state: dict[str, Any], env_file: Path | None,
+               payload: dict[str, Any], set_id: str | None, started: float) -> dict[str, Any]:
+    """The API searches, filters, ranks and saves; the good results come back as this run's ranking
+    and the bad ones as their own gzip."""
+    query = str(state.get("query") or "")
+    conversation_id = str(powerset_api.call(env_file, "/v2/conversations", {"title": query[:200] or "Search", "set_id": set_id})["id"])
+    request = api_request(env_file, payload, query=query, set_id=set_id, limit=args.limit, conversation_id=conversation_id)
+    response = powerset_api.call(env_file, "/v2/search/execute", request, timeout=args.timeout)
+    wait_saved(env_file, conversation_id, int(response.get("good_count") or 0) + int(response.get("bad_count") or 0))
+    good = [row for page in saved_results(env_file, conversation_id, "good") for row in page]
+    if args.limit:
+        good = good[:args.limit]
+    out_dir = state_path.parent / "artifacts" / str(state.get("task_id") or state_path.stem) / "cloud_search"
+    ranking, bad_path = out_dir / "query_results.csv", out_dir / "bad_results.jsonl.gz"
+    write_ranking(ranking, good)
+    bad_count = 0
+    with gzip.open(bad_path, "wt") as handle:
+        for page in saved_results(env_file, conversation_id, "bad"):
+            handle.writelines(json.dumps(row) + "\n" for row in page)
+            bad_count += len(page)
+    ids = [row["person_id"] for row in good]
+    output = {"set_id": set_id, "backend": "powerset_api", "conversation_id": conversation_id,
+              "total_count": response.get("total_count"), "candidate_count": len(ids), "candidate_ids": ids,
+              "candidates": [{"person_id": row["person_id"], "score": row.get("final_score"),
+                              "vertical_sources": row.get("vertical_sources") or []} for row in good],
+              "bad_count": bad_count, "bad_results_path": str(bad_path), "request": request}
+    if args.write_state:
+        elapsed_ms = int((time.time() - started) * 1000)
+        record(state_path, "execute_role_search", output, elapsed_ms)
+        record(state_path, "llm_rerank_candidates", {
+            "model": "powerset_api", "conversation_id": conversation_id, "ranked_count": len(ids),
+            "ranked_candidate_ids": ids, "artifacts": {"query_results_csv": str(ranking)}}, elapsed_ms)
+    return {key: value for key, value in output.items() if key not in ("candidates", "candidate_ids")}
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.time()
     state_path = Path(args.state)
@@ -111,6 +200,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if step.get("id") == "expand_search_request"), {})
     env_file = Path(args.env_file) if args.env_file else None
     set_id = args.set_id or (payload.get("role_search_filters") or {}).get("set_id") or powerset_api.personal_set_id(env_file)
+    if args.rerank:
+        return run_ranked(args, state_path, state, env_file, payload, set_id, started)
     request = api_request(env_file, payload, query=str(state.get("query") or ""), set_id=set_id, limit=args.limit)
     response = powerset_api.call(env_file, "/v2/search/execute", request, timeout=args.timeout)
     candidates = [{"person_id": row["person_id"], "score": row.get("final_score"),
@@ -134,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--write-state", action="store_true")
+    parser.add_argument("--rerank", action="store_true", help="The API filters, ranks and stores the results in a conversation")
     args = parser.parse_args(argv)
     print(json.dumps(run(args), indent=2, sort_keys=True))
     return 0

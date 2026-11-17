@@ -2,8 +2,9 @@
 """Resumable orchestrator for the search-network primitive pipeline, both backends.
 
 One orchestrator, one `--backend {powerset,local}` switch:
-- `powerset` (default): the Powerset API's search and hydration for a set (cloud_search.py);
-  no Postgres or TurboPuffer.
+- `powerset` (default): the Powerset API searches, filters and ranks a set and stores the
+  results (cloud_search.py); this run hydrates and lists them. Only a job-description run is
+  screened on this Mac. No Postgres or TurboPuffer.
 - `local`: the same mechanical primitives against the local DuckDB index. Scope is the
   DuckDB file itself — no set_id, operator resolution, Postgres, or TurboPuffer. Children
   that search it take the index as `--local-db` (local/local_search_backend);
@@ -965,9 +966,11 @@ def run_pipeline(args) -> dict[str, Any]:
     bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
     judge_changed = _capability_judge_changed(args, state)
+    # The API filters, ranks and stores a set search; only a job-description run is screened here.
+    api_ranks = not args.jd_file and not args.search_only
     steps=[
         ("execute_role_search",[sys.executable,str(ROOT/"packs/search/primitives/cloud_search/cloud_search.py"),"--state",str(state),"--env-file",args.env_file,"--write-state","--limit",str(args.limit),
-                                *(["--set-id",args.set_id] if getattr(args,"set_id",None) else [])]),
+                                *(["--set-id",args.set_id] if getattr(args,"set_id",None) else []), *(["--rerank"] if api_ranks else [])]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
     ]
     for step,cmd in steps:
@@ -976,7 +979,7 @@ def run_pipeline(args) -> dict[str, Any]:
         out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
-    if not args.search_only:
+    if not args.search_only and not api_ranks:
         payload = _llm_approval_payload(args, state)
         aid=approval_id("llm",payload)
         if not is_approved(l,aid) and not args.confirm_llm and not args.execute_approved:
