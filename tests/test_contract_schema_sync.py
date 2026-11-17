@@ -44,7 +44,7 @@ def _load_local_store():
 
 def _load_search_common():
     primitives = ROOT / "packs/search/primitives"
-    for rel in ["lib", "shared", "local", "turbopuffer"]:
+    for rel in ["lib", "shared", "local"]:
         path = str(primitives / rel)
         if path not in sys.path:
             sys.path.insert(0, path)

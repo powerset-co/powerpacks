@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve education names to canonical school IDs in TurboPuffer."""
+"""Resolve education names to canonical school IDs in the local DuckDB index."""
 
 from __future__ import annotations
 

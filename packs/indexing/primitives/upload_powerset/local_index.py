@@ -17,7 +17,7 @@ from typing import Any, Iterator
 
 from packs.indexing.lib.contracts import contract_attribute_names, load_search_contract, vector_metadata
 from packs.indexing.primitives.upload_powerset.models import Namespace, PersonProfile
-from packs.indexing.primitives.upload_powerset.turbopuffer_writer import NAMESPACE_BY_LOGICAL
+from packs.indexing.primitives.upload_powerset.namespaces import NAMESPACE_BY_LOGICAL
 
 
 # Local rows carry 1536-float vectors (~0.5 MB of Python per person): reading

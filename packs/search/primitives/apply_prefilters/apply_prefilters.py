@@ -20,12 +20,11 @@ LOCAL_DIR = PRIMITIVES_DIR / "local"
 for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
-import search_backend_mode  # noqa: E402
+import local_search_backend  # noqa: E402
 from search_common import (  # noqa: E402
     ADJACENCY_EXCLUDE_SENIORITY,
     ADJACENCY_LIMIT,
     adjacency_family_for_payload,
-    allowed_operator_ids_from_payload,
     comparison,
     company_filter_applies_to_role_search,
     effective_adjacent_role_ids,
@@ -84,7 +83,7 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
     ids = education_ids if education_ids is not None else payload.get("education_ids")
     clauses: list[tuple] = []
     if ids:
-        clauses.append(comparison(search_backend().SCHOOL_FILTER_FIELD, "In", ids))
+        clauses.append(comparison(local_search_backend.SCHOOL_FILTER_FIELD, "In", ids))
     if payload.get("degree_levels"):
         # Normalize to title-case to match TurboPuffer degree_normalized values
         degree_map = {"bachelors": "Bachelors", "masters": "Masters", "mba": "MBA", "phd": "PhD", "md": "MD", "jd": "JD"}
@@ -100,9 +99,6 @@ def education_filter(payload: dict[str, Any], education_ids: list[str] | None = 
         clauses.append(comparison("graduation_year", "Gte", payload["graduation_year_min"]))
     if payload.get("graduation_year_max") is not None:
         clauses.append(comparison("graduation_year", "Lte", payload["graduation_year_max"]))
-    operator_ids = allowed_operator_ids_from_payload(payload)
-    if operator_ids:
-        clauses.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     return and_filter(clauses)
 
 
@@ -114,7 +110,7 @@ async def education_base_ids(payload: dict[str, Any], *, page_size: int, max_ids
     families = dict(payload.get("education_families") or {})
     unknown = [school_id for school_id in education_ids if school_id not in families]
     if unknown:
-        families |= await search_backend().school_families(unknown)
+        families |= await local_search_backend.school_families(unknown)
     if education_op == "and" and len(education_ids) > 1:
         sets: list[list[str]] = []
         for school_id in education_ids:
@@ -145,9 +141,6 @@ async def tech_skill_base_ids(payload: dict[str, Any], *, page_size: int, max_id
     if not skills:
         return None
     clauses = [comparison("tech_skills", "ContainsAny", skills)]
-    operator_ids = allowed_operator_ids_from_payload(payload)
-    if operator_ids:
-        clauses.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     rows = await filter_only_rows_for_namespace("summaries", and_filter(clauses), [], page_size=page_size, max_results=max_ids)
     ids = extract_base_ids(rows)
     return ids, {"stage": "tech_skills", "input_count": len(skills), "matched": len(ids)}
@@ -225,15 +218,6 @@ PEOPLE_ATTRIBUTES = [
 ]
 
 
-def search_backend() -> Any:
-    """The local DuckDB index; a Powerset set is searched through the Powerset API (cloud_search)."""
-    if not search_backend_mode.is_local_backend_configured():
-        raise RuntimeError("a set search runs through the Powerset API (cloud_search.py), not this primitive")
-    import local_search_backend as local_backend  # type: ignore
-
-    return local_backend
-
-
 async def filter_only_rows_for_namespace(
     logical_name: str,
     filters: tuple,
@@ -242,7 +226,7 @@ async def filter_only_rows_for_namespace(
     page_size: int = 10000,
     max_results: int = 0,
 ) -> list[dict[str, Any]]:
-    return await search_backend().filter_only_rows_for_namespace(
+    return await local_search_backend.filter_only_rows_for_namespace(
         logical_name,
         filters,
         include_attributes,
@@ -258,7 +242,7 @@ async def bm25_adjacency_rows(
     top_k: int = ADJACENCY_LIMIT,
     include_attributes: list[str],
 ) -> list[dict[str, Any]]:
-    return await search_backend().bm25_adjacency_rows(
+    return await local_search_backend.bm25_adjacency_rows(
         queries,
         filters,
         top_k=top_k,
@@ -399,7 +383,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = Path(args.state) if args.state else None
     state = read_json(state_path) if state_path else {}
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
-    backend = search_backend()
 
     base_ids: list[str] | None = None
     company_union_ids: list[str] = []
@@ -438,9 +421,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     final_ids = base_ids if base_ids is not None else []
     return {
         "namespaces": {
-            "people": backend.namespace_name("people"),
-            "education": backend.namespace_name("education"),
-            "summaries": backend.namespace_name("summaries"),
+            "people": local_search_backend.namespace_name("people"),
+            "education": local_search_backend.namespace_name("education"),
+            "summaries": local_search_backend.namespace_name("summaries"),
         },
         "stages": stage_outputs,
         "search_mode": search_mode_for_payload(payload),
@@ -494,10 +477,10 @@ def main() -> None:
     parser.add_argument("--company-prefilter-threshold", type=int, default=3000)
     parser.add_argument("--company-id-batch-size", type=int, default=500)
     parser.add_argument("--company-id-batch-concurrency", type=int, default=8)
-    parser.add_argument("--local-db", help="Search the local DuckDB index at this path instead of TurboPuffer")
+    parser.add_argument("--local-db", help="The local DuckDB index to search")
     args = parser.parse_args()
     if args.local_db:
-        search_backend_mode.configure_local_backend(args.local_db)
+        local_search_backend.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

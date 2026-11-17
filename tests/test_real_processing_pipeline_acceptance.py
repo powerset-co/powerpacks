@@ -19,7 +19,6 @@ SEARCH_PRIMITIVES = ROOT / "packs/search/primitives"
 SEARCH_LIB = SEARCH_PRIMITIVES / "lib"
 SEARCH_SHARED = SEARCH_PRIMITIVES / "shared"
 SEARCH_LOCAL = SEARCH_PRIMITIVES / "local"
-SEARCH_TURBOPUFFER = SEARCH_PRIMITIVES / "turbopuffer"
 
 FULL_COMPATIBLE_GREEN_CRITERIA = {
     "role_artifacts": "roles_with_dense_text_remapped.jsonl + roles_with_embeddings.parquet keyed by 16-char title_hash with Aleph classifier fields and 1536-d dense_embedding",
@@ -472,7 +471,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(db_payload["status"], "ok")
 
-            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL]:
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
             from search_common import filters_from_role_payload  # type: ignore
@@ -715,7 +714,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_positions"], 1)
             self.assertEqual(payload["tables"]["local_companies"], 1)
 
-            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL]:
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
@@ -875,7 +874,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_people_education"], 3)
             self.assertEqual(payload["tables"]["local_education"], 3)
 
-            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL]:
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
@@ -944,7 +943,7 @@ class RealProcessingPipelineAcceptanceTests(unittest.TestCase):
             self.assertEqual(payload["tables"]["local_summaries"], 5)
             self.assertGreaterEqual(payload["tables"]["local_people_positions"], 4)
 
-            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+            for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL]:
                 sys.path.insert(0, str(_path))
             import local_search_backend as local_backend  # type: ignore
 
