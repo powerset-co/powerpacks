@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute a Powerpacks role search in TurboPuffer."""
+"""Execute a Powerpacks role search in the local DuckDB index."""
 
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ LOCAL_DIR = PRIMITIVES_DIR / "local"
 for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
     sys.path.insert(0, str(_path))
 
-import search_backend_mode  # noqa: E402
+import local_search_backend  # noqa: E402
+from local_search_backend import local_namespace_exists, local_namespace_row_count  # noqa: E402
+from local_search_verticals import company_signal_rows, summary_search_rows  # noqa: E402
 from search_result_merge import dedupe_people, merge_agentic_sql_candidates, merge_company_union_candidates  # noqa: E402
 from search_common import (  # noqa: E402
     filters_from_role_payload,
@@ -48,47 +50,6 @@ INCLUDE_ATTRIBUTES = [
     "company_id",
     "is_current",
 ]
-
-
-def search_backend() -> Any:
-    """The local DuckDB index; a Powerset set is searched through the Powerset API (cloud_search)."""
-    if not search_backend_mode.is_local_backend_configured():
-        raise RuntimeError("a set search runs through the Powerset API (cloud_search.py), not this primitive")
-    import local_search_backend as local_backend  # type: ignore
-
-    return local_backend
-
-
-async def local_summary_rows(payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
-    if not search_backend_mode.is_local_backend_configured():
-        return []
-    from local_search_verticals import summary_search_rows  # type: ignore
-
-    return await summary_search_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
-
-
-async def local_company_signal_rows(payload: dict[str, Any], filters: tuple | None, *, top_k: int, include_attributes: list[str]) -> list[dict[str, Any]]:
-    if not search_backend_mode.is_local_backend_configured():
-        return []
-    from local_search_verticals import company_signal_rows  # type: ignore
-
-    return await company_signal_rows(payload, filters, top_k=top_k, include_attributes=include_attributes)
-
-
-def local_namespace_exists(logical_name: str) -> bool:
-    if not search_backend_mode.is_local_backend_configured():
-        return False
-    import local_search_backend as local_backend  # type: ignore
-
-    return local_backend.local_namespace_exists(logical_name)
-
-
-def local_namespace_row_count(logical_name: str) -> int:
-    if not search_backend_mode.is_local_backend_configured():
-        return 0
-    import local_search_backend as local_backend  # type: ignore
-
-    return local_backend.local_namespace_row_count(logical_name)
 
 
 def now_iso() -> str:
@@ -152,7 +113,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = Path(args.state) if args.state else None
     state = read_json(state_path) if state_path else {}
     payload = json.loads(args.payload_json) if args.payload_json else role_payload_from_state(state)
-    backend = search_backend()
     filters = filters_from_role_payload(payload)
     prefilters = latest_step_output(state, "apply_prefilters") if state else {}
     search_mode = search_mode_for_payload(payload)
@@ -173,19 +133,19 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         verticals["summary"].update(status="skipped_empty_prefilter")
         verticals["company_signal"].update(status="skipped_empty_prefilter")
     else:
-        role_rows = await backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        role_rows = await local_search_backend.hybrid_role_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         verticals["role"].update(status="completed", row_count=len(role_rows))
         # Prod's summary vertical is person-level: its eligibility prefilter is
         # built with is_current=None so past positions can qualify a person.
-        summary_rows = await local_summary_rows(payload, strip_is_current_filter(filters), top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        summary_rows = await summary_search_rows(payload, strip_is_current_filter(filters), top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
         verticals["summary"].update(status="completed" if summary_rows or local_namespace_exists("summaries") else "skipped_missing_namespace", row_count=len(summary_rows))
-        signal_rows = await local_company_signal_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
-        signal_row_count = local_namespace_row_count("company_signals") if search_backend_mode.is_local_backend_configured() else 0
+        signal_rows = await company_signal_rows(payload, filters, top_k=args.top_k, include_attributes=INCLUDE_ATTRIBUTES)
+        signal_row_count = local_namespace_row_count("company_signals")
         if signal_rows:
             signal_status = "completed"
-        elif search_backend_mode.is_local_backend_configured() and not local_namespace_exists("company_signals"):
+        elif not local_namespace_exists("company_signals"):
             signal_status = "blocked_missing_local_company_signals"
-        elif search_backend_mode.is_local_backend_configured() and signal_row_count == 0:
+        elif signal_row_count == 0:
             signal_status = "unavailable_empty_local_company_signals"
         else:
             signal_status = "completed"
@@ -211,7 +171,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         path.parent.mkdir(parents=True, exist_ok=True)
         write_json(path, {
             "query": state.get("query"),
-            "namespace": backend.namespace_name("people"),
+            "namespace": local_search_backend.namespace_name("people"),
             "semantic_query": payload.get("semantic_query"),
             "bm25_queries": payload.get("bm25_queries") or [],
             "applied_filter": summarize_filter(filters),
@@ -233,7 +193,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         retrieval_artifact = str(path)
 
     return {
-        "namespace": backend.namespace_name("people"),
+        "namespace": local_search_backend.namespace_name("people"),
         "limit": args.limit,
         "top_k": args.top_k,
         "applied_filter": summarize_filter(filters),
@@ -257,7 +217,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Execute role search in TurboPuffer")
+    parser = argparse.ArgumentParser(description="Execute role search in the local DuckDB index")
     parser.add_argument("--state")
     parser.add_argument("--payload-json")
     parser.add_argument("--env-file", default=".env")
@@ -269,10 +229,10 @@ def main() -> None:
         "--extra-candidates-json",
         help="JSON file with agentic SQL vertical people ({'people': [{person_id, evidence, ...}]} or a bare list); unioned into candidates so they flow through the same hydration and LLM filter/rerank steps",
     )
-    parser.add_argument("--local-db", help="Search the local DuckDB index at this path instead of TurboPuffer")
+    parser.add_argument("--local-db", help="The local DuckDB index to search")
     args = parser.parse_args()
     if args.local_db:
-        search_backend_mode.configure_local_backend(args.local_db)
+        local_search_backend.configure_local_backend(args.local_db)
 
     started = time.time()
     output = asyncio.run(run(args))

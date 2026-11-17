@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import search_backend_mode
 import search_result_merge
 from powerpacks_contracts import TURBOPUFFER_FILTER_OPERATORS
 
@@ -324,18 +323,6 @@ def comparison(field: str, op: str, value: Any) -> tuple:
     return result
 
 
-def allowed_operator_ids_from_payload(payload: dict[str, Any]) -> list[str]:
-    if search_backend_mode.is_local_backend_configured():
-        return []
-
-    explicit = payload.get("operator_ids") or payload.get("allowed_operator_ids")
-    if explicit:
-        return list(dict.fromkeys(str(value) for value in explicit if value))
-
-    # A cloud set is searched through the Powerset API (cloud_search); nothing here resolves a set.
-    return []
-
-
 def detects_founder_shortcut(payload: dict[str, Any]) -> bool:
     # Role intent is owned by query extraction: network-search-api takes
     # role_ids only from LLM extraction and never re-detects roles from
@@ -438,9 +425,6 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
         filters.append(comparison("role_ids", "ContainsAny", shortcut_role_ids))
     if payload.get("base_candidate_ids"):
         filters.append(comparison("base_id", "In", payload["base_candidate_ids"]))
-    operator_ids = allowed_operator_ids_from_payload(payload)
-    if operator_ids:
-        filters.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
     if payload.get("position_before_date"):
         filters.append(comparison("start_date_epoch", "Lte", epoch_for_date(payload["position_before_date"], end_of_period=True)))
     if payload.get("position_after_date"):
@@ -467,11 +451,10 @@ def filters_from_role_payload(payload: dict[str, Any]) -> tuple | None:
     ]:
         if payload.get(payload_key) is not None:
             filters.append(comparison(field, op, payload[payload_key]))
-    if search_backend_mode.is_local_backend_configured():
-        # The local index counts the owner's own interactions with each person; a set has no local meaning.
-        for payload_key, op in (("operator_interaction_min", "Gte"), ("operator_interaction_max", "Lte")):
-            if payload.get(payload_key) is not None:
-                filters.append(comparison("total_interactions", op, payload[payload_key]))
+    # The local index counts the owner's own interactions with each person.
+    for payload_key, op in (("operator_interaction_min", "Gte"), ("operator_interaction_max", "Lte")):
+        if payload.get(payload_key) is not None:
+            filters.append(comparison("total_interactions", op, payload[payload_key]))
 
     if not filters:
         return None

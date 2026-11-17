@@ -11,7 +11,6 @@ primitives/hydrate_people/
 primitives/query_postgres_profiles/
 primitives/contracts/
 primitives/pull_runtime_keys/
-docs/postgres-contract.md
 docs/turbopuffer-contract.md
 tests/test_turbopuffer_primitives.py
 tests/test_enrich_primitives.py

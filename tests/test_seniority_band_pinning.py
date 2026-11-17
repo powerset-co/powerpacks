@@ -26,9 +26,8 @@ PRIMITIVES = ROOT / "packs/search/primitives"
 LIB = PRIMITIVES / "lib"
 SHARED = PRIMITIVES / "shared"
 LOCAL = PRIMITIVES / "local"
-TURBOPUFFER = PRIMITIVES / "turbopuffer"
 NETWORK_PIPELINE = PRIMITIVES / "search_network_pipeline/search_network_pipeline.py"
-for _path in [LIB, SHARED, LOCAL, TURBOPUFFER]:
+for _path in [LIB, SHARED, LOCAL]:
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 

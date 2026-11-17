@@ -8,7 +8,7 @@ import duckdb
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVES = ROOT / "packs/search/primitives"
-for _path in [PRIMITIVES / "lib", PRIMITIVES / "shared", PRIMITIVES / "local", PRIMITIVES / "turbopuffer"]:
+for _path in [PRIMITIVES / "lib", PRIMITIVES / "shared", PRIMITIVES / "local"]:
     sys.path.insert(0, str(_path))
 
 import local_search_backend as backend  # noqa: E402

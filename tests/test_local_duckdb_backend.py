@@ -970,7 +970,7 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
                 self.assertEqual(module.normalize_stage("series_d"), 6)
 
     def test_interactions_with_you_filter_the_local_index(self) -> None:
-        """The owner's interaction count per person is a local column; a set has no local meaning."""
+        """The owner's interaction count per person is a local column."""
         base = {"base_candidate_ids": ["person-founder", "person-engineer"], "is_current_role": True}
         frequent = asyncio.run(local_backend.filter_only_rows_for_namespace(
             "people",
@@ -985,12 +985,6 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         # The fixture profiles count 12 interactions with the founder and none with the engineer.
         self.assertEqual([row["base_id"] for row in frequent], ["person-founder"])
         self.assertEqual([row["base_id"] for row in rare], ["person-engineer"])
-        local_backend.configure_local_backend(None)
-        try:
-            self.assertNotIn("total_interactions", json.dumps(
-                search_common.filters_from_role_payload({**base, "operator_interaction_min": 5})))
-        finally:
-            local_backend.configure_local_backend(self.db_path)
 
     def test_education_prefilter_feeds_role_search(self) -> None:
         payload = {"education_ids": ["school-stanford"], "degree_levels": ["bachelors"], "fields_of_study": ["computer science"]}

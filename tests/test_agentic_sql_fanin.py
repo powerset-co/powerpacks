@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIMITIVES = ROOT / "packs/search/primitives"
-for _path in [PRIMITIVES / "lib", PRIMITIVES / "shared", PRIMITIVES / "local", PRIMITIVES / "turbopuffer"]:
+for _path in [PRIMITIVES / "lib", PRIMITIVES / "shared", PRIMITIVES / "local"]:
     sys.path.insert(0, str(_path))
 
 from search_result_merge import merge_agentic_sql_candidates  # noqa: E402
@@ -162,7 +162,7 @@ class CompactPreviewPoolEstimateTests(unittest.TestCase):
         call from inside local prepare)."""
         import os
 
-        import search_backend_mode
+        import local_search_backend
 
         original = os.environ.get("POWERPACKS_DEFAULT_SET_ID")
         os.environ["POWERPACKS_DEFAULT_SET_ID"] = "00000000-0000-0000-0000-00000000beef"
@@ -173,7 +173,7 @@ class CompactPreviewPoolEstimateTests(unittest.TestCase):
                 os.environ.pop("POWERPACKS_DEFAULT_SET_ID", None)
             else:
                 os.environ["POWERPACKS_DEFAULT_SET_ID"] = original
-            search_backend_mode.configure_local_backend(None)
+            local_search_backend.configure_local_backend(None)
         self.assertEqual(preview["pool_estimate"].get("status"), "completed", preview["pool_estimate"])
         self.assertEqual(preview["pool_estimate"]["matched_people"], 2)
 
@@ -198,23 +198,23 @@ class StubBackend:
 class ExecuteRoleSearchExtraCandidatesTests(unittest.TestCase):
     def setUp(self):
         self._orig = (
-            execute_role_search.search_backend,
-            execute_role_search.local_summary_rows,
-            execute_role_search.local_company_signal_rows,
+            execute_role_search.local_search_backend,
+            execute_role_search.summary_search_rows,
+            execute_role_search.company_signal_rows,
         )
 
         async def no_rows(payload, filters, *, top_k, include_attributes):
             return []
 
-        execute_role_search.search_backend = lambda: StubBackend()
-        execute_role_search.local_summary_rows = no_rows
-        execute_role_search.local_company_signal_rows = no_rows
+        execute_role_search.local_search_backend = StubBackend()
+        execute_role_search.summary_search_rows = no_rows
+        execute_role_search.company_signal_rows = no_rows
 
     def tearDown(self):
         (
-            execute_role_search.search_backend,
-            execute_role_search.local_summary_rows,
-            execute_role_search.local_company_signal_rows,
+            execute_role_search.local_search_backend,
+            execute_role_search.summary_search_rows,
+            execute_role_search.company_signal_rows,
         ) = self._orig
 
     def run_search(self, extra_candidates_json: str | None) -> dict:

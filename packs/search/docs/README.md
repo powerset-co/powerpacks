@@ -18,7 +18,6 @@ primitive CLIs are the executable contracts when implementation details matter.
 
 ## Data contracts
 
-- [Postgres hydration contract](postgres-contract.md)
 - [TurboPuffer query contract](turbopuffer-contract.md)
 - [TurboPuffer physical schema](turbopuffer-schema.md)
 - [Semantic query examples](semantic-query-examples.md)

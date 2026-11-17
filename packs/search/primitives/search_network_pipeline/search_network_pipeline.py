@@ -6,7 +6,7 @@ One orchestrator, one `--backend {powerset,local}` switch:
   no Postgres or TurboPuffer.
 - `local`: the same mechanical primitives against the local DuckDB index. Scope is the
   DuckDB file itself — no set_id, operator resolution, Postgres, or TurboPuffer. Children
-  that search it take the index as `--local-db` (shared/search_backend_mode);
+  that search it take the index as `--local-db` (local/local_search_backend);
   company/education resolution dispatches to the local/ resolve primitives.
 
 This runner can prepare the parallel `expand_search_request` payload, then run
@@ -752,19 +752,14 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
     return out
 
 def configure_local_backend_mode(db_path: Path) -> None:
-    """Mark this process as local-backend before any filter construction.
-
-    Shared filter helpers branch on backend mode. Local search scope is the DuckDB file, so
-    in-process payload transforms (pool estimate, title clustering) must run
-    with local mode configured or a foreign set id silently zeroes the pool
-    and prepare makes a network call.
-    """
+    """Point this process's local search at the index, for the in-process payload transforms
+    (pool estimate, title clustering)."""
     for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
         if str(_path) not in sys.path:
             sys.path.insert(0, str(_path))
-    import search_backend_mode  # type: ignore
+    import local_search_backend  # type: ignore
 
-    search_backend_mode.configure_local_backend(db_path)
+    local_search_backend.configure_local_backend(db_path)
 
 def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any]:
     """Count the people the run sends into filtering, before LLM spend.
@@ -784,7 +779,6 @@ def local_pool_estimate(payload: dict[str, Any], db_path: Path) -> dict[str, Any
 
         role_filters = payload_filters(payload)
         if role_filters.get("company_names") and not role_filters.get("company_ids"):
-            local_search_backend.configure_local_backend(db_path)
             rows = asyncio.run(company_rows_for_names(
                 role_filters["company_names"], None, top_k=20,
             ))

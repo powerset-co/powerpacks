@@ -12,8 +12,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import search_backend_mode
-
 
 _EXPLICIT_LOCAL_SEARCH_DB: str | None = None
 LOCAL_BACKEND_TABLES = {
@@ -31,13 +29,10 @@ LOCAL_BACKEND_NAMESPACES = set(LOCAL_BACKEND_TABLES)
 def configure_local_backend(db_path: str | Path | None) -> None:
     global _EXPLICIT_LOCAL_SEARCH_DB
     _EXPLICIT_LOCAL_SEARCH_DB = str(db_path) if db_path else None
-    search_backend_mode.configure_local_backend(db_path)
 
 
 def explicit_local_backend_path() -> str | None:
-    if _EXPLICIT_LOCAL_SEARCH_DB:
-        return _EXPLICIT_LOCAL_SEARCH_DB
-    return search_backend_mode.explicit_local_backend_path()
+    return _EXPLICIT_LOCAL_SEARCH_DB
 
 
 def is_local_backend() -> bool:

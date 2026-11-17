@@ -53,7 +53,7 @@ jobs:
       - name: Venv import health
         run: |
           UV_BIN="$(bin/ensure-uv)"
-          "$UV_BIN" run --project . python -c "import duckdb, openai, pyarrow, snowballstemmer, psycopg2, turbopuffer; print('imports ok')"
+          "$UV_BIN" run --project . python -c "import duckdb, openai, pyarrow, snowballstemmer; print('imports ok')"
       - name: Doctor smoke (no .env — env checks may warn/miss; core checks must hold)
         run: |
           bin/doctor run > doctor-report.json || true
