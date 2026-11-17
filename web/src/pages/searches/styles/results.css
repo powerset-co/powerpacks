@@ -723,11 +723,55 @@ section.review-sections {
     order: 1;
   }
 }
-/* Get Mutuals: each name links to the profile, quiet until hovered. */
-.evidence-operators a {
+/* Get Mutuals: the button (then the count) sits right of the heading; people as the rows show them. */
+.mutuals-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+}
+.mutuals-head button svg {
+  width: 12px;
+  height: 12px;
+  color: #60a5fa;
+}
+.mutuals-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.mutuals-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mutuals-list li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.mutuals-list a,
+.mutuals-list b,
+.mutuals-list small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mutuals-list a,
+.mutuals-list b {
   color: inherit;
+  font-size: 13px;
+  font-weight: 600;
   text-decoration: none;
 }
-.evidence-operators a:hover {
+.mutuals-list a:hover {
   text-decoration: underline;
+}
+.mutuals-list small {
+  color: var(--muted);
+  font-size: 12px;
 }

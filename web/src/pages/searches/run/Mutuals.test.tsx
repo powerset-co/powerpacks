@@ -38,7 +38,8 @@ describe("Mutuals", () => {
     expect(fetchMock).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole("button", { name: "Get Mutuals" }))
     expect(screen.getByRole("button", { name: "Getting mutuals…" })).toHaveProperty("disabled", true)
-    await waitFor(() => expect(screen.getByText("12 mutual connections")).toBeTruthy())
+    await waitFor(() => expect(screen.getByText("12")).toBeTruthy())
+    expect(screen.queryByRole("button")).toBeNull()
     expect(screen.getByRole("link", { name: "Ann Lee" }).getAttribute("href")).toBe(
       "https://www.linkedin.com/in/ann",
     )
