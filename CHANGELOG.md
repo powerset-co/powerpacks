@@ -1,5 +1,31 @@
 # Changelog
 
+## [3.62.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.61.1...powerpacks-v3.62.0) (2026-11-17)
+
+
+### Features
+
+* **indexing:** save Powerset Taste scores (people and companies) into the local index ([#1183](https://github.com/powerset-co/powerpacks/issues/1183)) ([2c09a1d](https://github.com/powerset-co/powerpacks/commit/2c09a1db834edbcbd882e36c4d3eb402a1c59790))
+* **qa:** run the desktop QA scenarios headless in WebKit (--browser) ([#1120](https://github.com/powerset-co/powerpacks/issues/1120)) ([96c7ca7](https://github.com/powerset-co/powerpacks/commit/96c7ca7dbb50c368e25881991120ad98b7bbc8be))
+* **search:** a cloud result shows the highest warmth any member has with the person; hover lists each member's ([#1213](https://github.com/powerset-co/powerpacks/issues/1213)) ([ef88048](https://github.com/powerset-co/powerpacks/commit/ef88048b135b03a17af2ac0d18cccb1a8ee5c0ca))
+* **sync:** sync this install's network to the Powerset cloud through network-search-api ([#1202](https://github.com/powerset-co/powerpacks/issues/1202)) ([a89c29c](https://github.com/powerset-co/powerpacks/commit/a89c29caf6da7151d566fba019fa135c7f841da1))
+
+
+### Bug Fixes
+
+* **gmail:** the sync count gets its total from Gmail, so "N of M messages" and the time left show again ([#1214](https://github.com/powerset-co/powerpacks/issues/1214)) ([884c042](https://github.com/powerset-co/powerpacks/commit/884c04228d31a55d0b758ebf992379647f76ec42))
+* **gmail:** the sync paces under Gmail's quota, so Gmail stops refusing it and ending the run ([#1215](https://github.com/powerset-co/powerpacks/issues/1215)) ([f48e459](https://github.com/powerset-co/powerpacks/commit/f48e4597e58598a0e2e36fd93914a50ea339dbee))
+* **linkedin:** the mutuals guardrails hold: errors are not cached, a slow down ends the day, one budget per Mac ([#1179](https://github.com/powerset-co/powerpacks/issues/1179)) ([895b145](https://github.com/powerset-co/powerpacks/commit/895b145793a564c1412dbf58efa3d1d832a0eab0))
+* **people:** the People row's photo link is the newest fetched profile's ([#1208](https://github.com/powerset-co/powerpacks/issues/1208)) ([8e37351](https://github.com/powerset-co/powerpacks/commit/8e373514adfb87b89c255a4a9f701b26d1174227))
+* **setup:** a checklist row keeps its name when it finishes; its result sits beside it ([#1212](https://github.com/powerset-co/powerpacks/issues/1212)) ([687087a](https://github.com/powerset-co/powerpacks/commit/687087a9da0b6370d6ded1a25c00d2f001c591e9))
+* **tasks:** See progress sits in the running run's row, not beside the schedule pickers ([#1211](https://github.com/powerset-co/powerpacks/issues/1211)) ([f2d78b5](https://github.com/powerset-co/powerpacks/commit/f2d78b511947605374952d409c213fdee337a8cd))
+
+
+### Performance Improvements
+
+* **companies:** the list takes each company's people count from the directory query ([#1207](https://github.com/powerset-co/powerpacks/issues/1207)) ([9eff94c](https://github.com/powerset-co/powerpacks/commit/9eff94cbf19a12b044e5e0367db56e5161de85b9))
+* **sync-cloud:** fingerprint inside DuckDB; fix the CLI ([#1206](https://github.com/powerset-co/powerpacks/issues/1206)) ([9b7b206](https://github.com/powerset-co/powerpacks/commit/9b7b206bcbc43fe60d015cfd910b5eb0edb7e58a))
+
 ## [3.61.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.61.0...powerpacks-v3.61.1) (2026-11-14)
 
 
