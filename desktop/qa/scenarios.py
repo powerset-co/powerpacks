@@ -372,6 +372,34 @@ def search_mutuals(app: App) -> None:
                  MUTUALS, "the mutuals show")
 
 
+RESULT_SEARCH = "input[data-results-search]"
+RESULT_NAMES = "[...document.querySelectorAll('.result-row .result-name > b')].map((name) => name.innerText.trim())"
+
+
+def search_results_search(app: App) -> None:
+    """The results toolbar has a search box: a name typed into it leaves that person's row and the
+    count reads "N of M"; text nobody has says no one matches; clearing it brings every row back.
+    Needs the root's refined search."""
+    app.go("/agent", {"text": REFINED}, PAGE)
+    app.click({"text": REFINED})
+    app.wait_for({"css": ".result-row .result-line"}, PAGE, "the search shows its rows")
+    names = app.js(RESULT_NAMES)
+    if len(set(names)) < 2:
+        raise Failed("the search needs two people to check a filter")
+    wanted = names[-1]
+    app.click({"css": RESULT_SEARCH})
+    app.type(wanted.upper())  # whatever the case
+    app.wait_for(f"{RESULT_NAMES}.length > 0 && {RESULT_NAMES}.length < {len(names)}"
+                 f" && {RESULT_NAMES}.includes({json.dumps(wanted)})", CLICK, "the name typed keeps that person's row")
+    app.wait_for("/ of /.test(document.querySelector('[data-result-count] [role=status]').innerText)", CLICK,
+                 "the count reads N of M")
+    app.type(" zzqx")
+    app.wait_for({"text": "No one here matches these filters."}, CLICK, "text nobody has says no one matches")
+    app.js(f"document.querySelector({json.dumps(RESULT_SEARCH)}).select()")
+    app.key("Backspace")
+    app.wait_for(f"{RESULT_NAMES}.length === {len(names)}", CLICK, "clearing the box brings every row back")
+
+
 def refresh_toggle(app: App) -> None:
     """Scheduled tasks' automatic refresh switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
@@ -467,6 +495,7 @@ SCENARIOS = {
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "search-mutuals": search_mutuals,
+    "search-results-search": search_results_search,
     "refresh-toggle": refresh_toggle,
     "accounts-refresh-prompt": accounts_refresh_prompt,
     "chat-access-pill": chat_access_pill,

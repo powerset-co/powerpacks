@@ -1,4 +1,4 @@
-import { Appear, Chip, CountRoll, type ToastMessage } from "@/components/shared"
+import { Appear, Chip, CountRoll, SearchField, type ToastMessage } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import { plural } from "@/lib/copy"
 import { copyRows, csvFilename, downloadCsv } from "@/lib/searches/exports"
@@ -45,7 +45,7 @@ export interface ResultsToolbarProps {
   className?: string
 }
 
-// rendering.py _results_toolbar: Tagged (n), Overall score, Operators, tag filter, Labels (when a
+// rendering.py _results_toolbar, plus the cloud results page's search box: Tagged (n), Overall score, Operators, tag filter, Labels (when a
 // row has one),
 // then the count and Untag all on page / Copy / CSV / Clear all. Export and copy take every
 // filtered row, never only the mounted ones.
@@ -120,6 +120,14 @@ export function ResultsToolbar({
         </Chip>
       </Appear>
       <span className="ml-auto inline-flex flex-wrap items-center gap-1.5">
+        <SearchField
+          className="w-56"
+          data-results-search
+          placeholder="Search by name or company..."
+          aria-label="Search results by name or company"
+          value={live.text}
+          onChange={(event) => change({ text: event.target.value })}
+        />
         <ResultCount shown={shown.length} total={total} />
         <Appear show={live.taggedOnly && shown.length > 0}>
           <Button variant="ghost" size="sm" onClick={() => onUntag(shown.map((row) => row.row.person_id))}>
