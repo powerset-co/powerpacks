@@ -365,10 +365,10 @@ def search_mutuals(app: App) -> None:
     app.click({"text": REFINED})
     app.wait_for({"css": ".result-row .result-line"}, PAGE, "the search shows its rows")
     app.click({"css": ".result-row .result-line"})
-    button = {"css": "[data-mutuals] button", "text": "Get Mutuals"}
+    button = {"css": "button[data-mutuals]"}
     app.wait_for(button, CLICK, "the drawer shows Get Mutuals")
     app.click(button)
-    app.wait_for("document.querySelector('[data-mutuals]') && !document.querySelector('[data-mutuals] button')",
+    app.wait_for("document.querySelector('div[data-mutuals]')",
                  MUTUALS, "the mutuals show")
 
 

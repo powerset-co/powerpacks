@@ -723,22 +723,50 @@ section.review-sections {
     order: 1;
   }
 }
-/* Get Mutuals: the button (then the count) sits right of the heading; people as the rows show them. */
-.mutuals-head {
-  display: flex;
+/* Get mutuals: a quiet link under the location, then the count beside the first faces; the
+   people list under the header as the rows show them. */
+.mutuals-line {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  min-height: 28px;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
 }
-.mutuals-head button svg {
+button.mutuals-line {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.mutuals-line:hover:not(:disabled) {
+  color: var(--foreground);
+}
+button.mutuals-line:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+.mutuals-line svg {
   width: 12px;
   height: 12px;
   color: #60a5fa;
 }
-.mutuals-count {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+.mutuals-stack {
+  display: inline-flex;
+}
+.mutuals-stack:empty {
+  display: none;
+}
+.mutuals-stack > span {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  font-size: 8px;
+}
+.mutuals-stack > span + span {
+  margin-left: -5px;
 }
 .mutuals-list {
   display: grid;
