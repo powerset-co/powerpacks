@@ -795,7 +795,14 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
     env_file = Path(args.env_file) if args.env_file else None
     rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
     if rows is None:
-        rows = fetch_api_person_rows(requested, env_file)
+        # A search the API ranked was downloaded with every profile in it; that file is the people.
+        results_path = step_output(state, "execute_role_search").get("results_path")
+        if results_path:
+            from packs.search.primitives.cloud_search.cloud_search import person_rows
+            wanted = set(requested)
+            rows = [row for row in person_rows(Path(results_path)) if row["id"] in wanted]
+        else:
+            rows = fetch_api_person_rows(requested, env_file)
         source_attribution = api_source_attribution(requested, env_file, step_output(state, "execute_role_search").get("set_id"))
         interaction_counts = {person_id: row["total_interactions"] for person_id, row in source_attribution.items() if row["total_interactions"]}
         source = {"type": "powerset_api", "backend": "powerset_api", "env_file": str(env_file) if env_file else None}

@@ -1187,8 +1187,7 @@ def record_quick_run(result: dict[str, Any]) -> None:
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
                         person_attribution=attribution, person_attribution_error=attribution_error,
-                        bad_results=({"path": searched["bad_results_path"], "count": searched.get("bad_count") or 0}
-                                     if searched.get("bad_results_path") else None),
+                        bad_results=searched.get("bad_results"),
                         partial=bool(searched.get("partial")) and result["status"]=="running")
 
 def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> tuple[dict[str, Any], str | None]:

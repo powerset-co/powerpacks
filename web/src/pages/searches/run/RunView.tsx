@@ -118,7 +118,13 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       sections={shownSections}
       filtered={shown.length < people}
       labels={filters.labels}
-      loading={showBad && !badRows ? "Loading bad results…" : undefined}
+      loading={
+        !showBad || badRows
+          ? undefined
+          : bad?.status === "failed"
+            ? "Couldn't load bad results. Run the search again."
+            : "Loading bad results…"
+      }
       toolbar={
         <ResultsToolbar
           title={search.title}

@@ -250,9 +250,10 @@ export interface SearchResult {
   partial: boolean
 }
 
-/** The people a Powerset-ranked search turned down; "loading" while their file downloads. */
+/** The people a Powerset-ranked search turned down; "loading" while they download, "failed" when
+ *  the download broke. */
 export interface BadResultsPayload {
-  status: "loading" | "ready"
+  status: "loading" | "ready" | "failed"
   candidates: PondCandidate[]
 }
 

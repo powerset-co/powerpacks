@@ -342,27 +342,29 @@ class ResultsWebTest(unittest.TestCase):
             root.mkdir(parents=True)
             artifacts = self._pond_artifacts(base, "quick", score=0.78, title="Technical Recruiter", company="Example Labs",
                                              query="recruiters")["arm"]["artifacts"]
-            bad = base / "bad_results.jsonl.gz"
+            turned_down = self._pond_artifacts(base, "bad", score=0.1, title="Account Executive", company="Example Labs",
+                                               query="recruiters")["arm"]["artifacts"]
+            rows, error = base / turned_down["jsonl"], base / "error.txt"
+            waiting = rows.with_name("waiting.jsonl")
+            rows.rename(waiting)
             run = dict(query="recruiters", filters={}, traits=[], created_at="2026-11-17T00:00:00Z",
                        jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"])
             record_quick_search(root, "recruiters", **run, status="running", partial=True)
             first = load_search(root, "recruiters")
-            record_quick_search(root, "recruiters", **run, status="completed", bad_results={"path": str(bad), "count": 1})
+            record_quick_search(root, "recruiters", **run, status="completed",
+                                bad_results={**turned_down, "error": str(error), "count": 1})
             done = load_search(root, "recruiters")
             still_downloading = load_bad(root, "recruiters")
-            with gzip.open(bad, "wt") as handle:
-                handle.write(json.dumps({"person_id": "b1", "name": "Sam Rivers", "final_score": 0.1,
-                                         "overall_reasoning": "Sells storage", "location": "Austin",
-                                         "trait_scores": {"Recruiter": {"score": 0.0, "reason": "Sells storage"}},
-                                         "positions": [{"position_title": "Account Executive", "company_name": "Example Labs",
-                                                        "is_current": True}]}) + "\n")
-            rows = load_bad(root, "recruiters")
-        assert first is not None and done is not None and rows is not None
+            waiting.rename(rows)
+            people = load_bad(root, "recruiters")
+            error.write_text("RuntimeError: downloaded 10 of the 501 bad results")
+            failed = load_bad(root, "recruiters")
+        assert first is not None and done is not None and isinstance(people, tuple)
         self.assertEqual((first.partial, first.bad_count), (True, 0))
         self.assertEqual((done.partial, done.bad_count), (False, 1))
         self.assertIsNone(still_downloading)
-        self.assertEqual([(row.person_id, row.name, row.title, row.company, row.final_score, row.reasoning) for row in rows],
-                         [("b1", "Sam Rivers", "Account Executive", "Example Labs", 0.1, "Sells storage")])
+        self.assertEqual([(row.title, row.company, row.final_score) for row in people][:1], [("Account Executive", "Example Labs", 0.1)])
+        self.assertEqual(failed, "RuntimeError: downloaded 10 of the 501 bad results")
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:

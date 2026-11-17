@@ -770,28 +770,18 @@ def load_search(root: Path, run_id: str) -> SearchResult | None:
     return next(search for search in _searches(root, payloads) if search.run_id == run_id)
 
 
-def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None:
-    """The people a Powerset-ranked search turned down, as the API returned them (each row carries
-    its score, reason and profile); None while their file is still downloading."""
-    payload = _payload(root / run_id / "results.json") or {}
-    path = _artifact_path(root, (payload.get("bad_results") or {}).get("path"))
-    if path is None or not path.exists():
+def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None | str:
+    """The people a Powerset-ranked search turned down, read from the same artifacts and by the same
+    loader as the run's own people; None while they are still downloading, the error text when the
+    download failed."""
+    bad = (_payload(root / run_id / "results.json") or {}).get("bad_results") or {}
+    error = _artifact_path(root, bad.get("error"))
+    if error is not None and error.exists():
+        return error.read_text()
+    rows = _artifact_path(root, bad.get("jsonl"))
+    if rows is None or not rows.exists():
         return None
-    rows = []
-    for row in _jsonl_rows(path):
-        positions = _positions(row.get("positions"))
-        current = next((position for position in positions if position.is_current), positions[0] if positions else None)
-        rows.append(PondCandidate(
-            person_id=_text(row.get("person_id")), title=current.title if current else "",
-            company=current.company if current else "", location=_text(row.get("location")),
-            avatar_url=_text(row.get("profile_picture_url")), final_score=_number(row.get("final_score")),
-            traits=_traits(row.get("trait_scores")), name=_text(row.get("name")),
-            linkedin_url=_text(row.get("linkedin_url")), reasoning=_text(row.get("overall_reasoning")),
-            vertical_sources=tuple(_text(item) for item in _list(row.get("vertical_sources")) if _text(item)),
-            matched_positions=tuple(int(index) for index in _list(row.get("matched_position_indexes"))),
-            summary=_text(row.get("summary")), headline=_text(row.get("headline")),
-            profile_location=_text(row.get("location")), positions=positions, education=_education(row.get("education"))))
-    return tuple(rows)
+    return _pond_candidates(root, {"arm": {"artifacts": bad}})
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:
@@ -923,7 +913,7 @@ def record_quick_search(root: Path, run_id: str, *, query: str, title: str | Non
         payload["person_attribution"] = person_attribution
     if person_attribution_error:
         payload["person_attribution_error"] = person_attribution_error
-    if bad_results:  # a Powerset-ranked search: {"path": the bad results' gzip, "count": how many}
+    if bad_results:  # a Powerset-ranked search: the bad results' rows and profiles files, and how many
         payload["bad_results"] = bad_results
     if partial:  # the rest of the good people are still downloading; the page reads the run again
         payload["partial"] = True

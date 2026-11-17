@@ -30,6 +30,6 @@ export function useBadResults(runId: string, asked: boolean) {
     queryFn: ({ signal }) => fetchBadResults(runId, signal),
     enabled: asked,
     staleTime: Infinity,
-    refetchInterval: (query) => (query.state.data?.status === "ready" ? false : POLL_MS),
+    refetchInterval: (query) => (query.state.data?.status === "loading" ? POLL_MS : false),
   })
 }
