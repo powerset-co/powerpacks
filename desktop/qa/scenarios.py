@@ -368,7 +368,7 @@ def search_mutuals(app: App) -> None:
     button = {"css": "button[data-mutuals]"}
     app.wait_for(button, CLICK, "the drawer shows Get Mutuals")
     app.click(button)
-    app.wait_for("document.querySelector('div[data-mutuals]')",
+    app.wait_for("document.querySelector('div[data-mutuals], [data-mutuals-list]')",
                  MUTUALS, "the mutuals show")
 
 

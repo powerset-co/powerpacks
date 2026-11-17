@@ -4,8 +4,6 @@ import type { MutualsAnswer } from "@/lib/api/linkedin"
 
 import type { Mutuals } from "../hooks/useMutuals"
 
-const STACKED = 3
-
 /** What the lookup said, in words: the count, or why there is none. */
 function words(answer: MutualsAnswer | Error): string {
   if (answer instanceof Error) return answer.message
@@ -20,7 +18,8 @@ function words(answer: MutualsAnswer | Error): string {
 const peopleOf = (state: Mutuals["state"]) =>
   typeof state === "string" || state instanceof Error ? [] : (state.people ?? [])
 
-// The line under the person's location: the Get mutuals link, then the count with the first faces.
+// The line under the person's location: the Get mutuals link, then why there is no list (a
+// connection, a spent day, a failure, none).
 export function MutualsLine({ mutuals }: { mutuals: Mutuals }) {
   const { state, get } = mutuals
   if (state === "idle" || state === "loading")
@@ -36,27 +35,24 @@ export function MutualsLine({ mutuals }: { mutuals: Mutuals }) {
         {state === "loading" ? "Getting mutuals…" : "Get mutuals"}
       </button>
     )
+  // People answer in the list under the header; the line is only for words with no list.
+  if (peopleOf(state).length) return null
   return (
     <div className="mutuals-line" data-mutuals>
-      <span className="mutuals-stack">
-        {peopleOf(state)
-          .slice(0, STACKED)
-          .map((person) => (
-            <ProxiedLinkedinAvatar key={person.url || person.name} name={person.name} size={26} />
-          ))}
-      </span>
       {words(state)}
     </div>
   )
 }
 
-// Under the drawer's header once the lookup answered with people: the first ten, each to their profile.
+// Under the drawer's header once the lookup answered with people: the count as the heading, then
+// the first ten, each to their profile.
 export function MutualsSection({ mutuals }: { mutuals: Mutuals }) {
-  const people = peopleOf(mutuals.state)
-  if (!people.length) return null
+  const { state } = mutuals
+  const people = peopleOf(state)
+  if (typeof state === "string" || state instanceof Error || !people.length) return null
   return (
     <section className="review-sections" data-mutuals-list>
-      <h4>Mutual connections</h4>
+      <h4>{words(state)}</h4>
       <ul className="mutuals-list">
         {people.map((person) => (
           <li key={person.url || person.name}>
