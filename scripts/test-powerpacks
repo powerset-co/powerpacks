@@ -82,6 +82,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_luna_screen \
   tests.test_job_location \
   tests.test_llm_rerank_candidates \
+  tests.test_local_company_match \
   tests.test_local_duckdb_backend \
   tests.test_local_search_pipeline \
   tests.test_location_normalization \

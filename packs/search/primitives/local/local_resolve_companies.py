@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import openai
+
 
 PRIMITIVES_DIR = Path(__file__).resolve().parents[1]
 LIB_DIR = PRIMITIVES_DIR / "lib"
@@ -33,6 +35,8 @@ from search_common import (  # noqa: E402
     row_attrs,
 )
 from search_embeddings import embedding  # noqa: E402
+from ce_rerank import ce_rerank_companies  # noqa: E402
+from packs.ingestion.primitives.deep_context_v2 import decisions  # noqa: E402
 
 
 STRONG_CONSISTENCY = {"level": "strong"}
@@ -82,6 +86,52 @@ COMPANY_ALIASES = {
 }
 
 SECTOR_STRATEGIES = {"hard_filter", "soft_union", "semantic_only", "staged"}
+
+
+# Luna's question about one semantic company: would a search for people in this industry want
+# its people. Measured 2026-11-17 on ten industries with no sector tag, judged blind: at 0.5 it
+# kept 470 of 478 real matches and dropped 81% of the companies it was asked about, most of them
+# a bare name with no description. It counts suppliers and sellers to the industry as matches: a
+# stricter wording dropped a mining drilling contractor and a wine retailer.
+KEEP_PROBABILITY = 0.5
+COMPANY_QUESTION_VERSION = "company-match-1"
+
+
+def company_question(description: str) -> dict[str, Any]:
+    return {"type": "predicate", "name": "matches", "instructions": (
+        f'Would someone searching for people who work in this industry want people from the company in `company`: '
+        f'"{description}"? Answer yes when the company operates in, supplies, serves or sells in that industry as a '
+        "real part of its business. Answer no when the connection is only investing in, advising or writing about "
+        "it. When `company` is only a name with no description, answer no unless the name itself clearly says so. "
+        "Judge only the supplied text.")}
+
+
+def _refused(answers: list[decisions.Answer]) -> bool:
+    return answers[0]["type"] != "predicate"
+
+
+async def matching_companies(description: str, rows: list[dict[str, Any]], cache_dir: Path) -> list[dict[str, Any]]:
+    """The rows Luna says match the description (Decisions API, answers saved under `cache_dir`).
+    A company Luna refuses to answer for is kept; so is every row when a request still fails after
+    its retries (decisions.MAX_RETRIES), and the answers that did arrive stay saved."""
+    question = company_question(description)
+    digests: list[str] = []
+    requests: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        text = row.get("semantic_text") or row.get("description") or row.get("company_name") or ""
+        request = {"model": decisions.MODEL, "questions": [question],
+                   "input": json.dumps({"company": text}, ensure_ascii=False)}
+        digest = decisions.request_digest(COMPANY_QUESTION_VERSION, request)
+        digests.append(digest)
+        requests[digest] = request
+    try:
+        answers = await decisions.decide_all(requests, cache_dir, cache_only=False, stage="resolve_companies",
+                                             on_progress=lambda done, total: None, refused=_refused)
+    except openai.OpenAIError as e:
+        print(f"[resolve_companies] Luna's company match failed, keeping every company: {e}", file=sys.stderr)
+        return rows
+    return [row for row, digest in zip(rows, digests)
+            if _refused(answers[digest]) or answers[digest][0]["probability"] >= KEEP_PROBABILITY]
 
 
 def now_iso() -> str:
@@ -559,6 +609,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     hard_semantic_count = 0
     sector_strategy_broadened = False
     ce_result = None
+    matched = None
     if names:
         rows.extend(await company_rows_for_names(names, filters, top_k=args.name_top_k))
     if semantic_queries or query_vector is not None:
@@ -584,22 +635,27 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             hard_semantic_count = len(dedupe_rows(semantic_rows))
             semantic_rows_all.extend(semantic_rows)
 
-        # CE rerank semantic rows before union with sector filter rows
-        semantic_rows_deduped = dedupe_rows(semantic_rows_all)
-        if len(semantic_rows_deduped) > args.ce_threshold and not args.no_ce:
-            query_text = " ".join(semantic_queries)
-            from ce_rerank import ce_rerank_companies
+        # The semantic rows are cut by the models before the union with sector filter rows: the
+        # cross-encoder when there are many, then Luna on whether each one matches the description.
+        semantic_rows_kept = dedupe_rows(semantic_rows_all)
+        query_text = " ".join(semantic_queries)
+        if len(semantic_rows_kept) > args.ce_threshold and not args.no_ce:
             ce_result = await ce_rerank_companies(
                 query_text,
-                semantic_rows_deduped,
-                top_n=args.ce_top_n or len(semantic_rows_deduped),
+                semantic_rows_kept,
+                top_n=args.ce_top_n or len(semantic_rows_kept),
                 model=args.ce_model,
                 batch_size=args.ce_batch_size,
                 concurrency=args.ce_concurrency,
             )
-            rows.extend(ce_result["scored_companies"])
-        else:
-            rows.extend(semantic_rows_all)
+            semantic_rows_kept = ce_result["scored_companies"]
+        if query_text and not args.no_ce:
+            unmatched_count = len(semantic_rows_kept)
+            semantic_rows_kept = await matching_companies(
+                query_text, semantic_rows_kept,
+                Path(local_backend.explicit_local_backend_path()).parent / "company-decisions")
+            matched = {"asked": unmatched_count, "matched": len(semantic_rows_kept)}
+        rows.extend(semantic_rows_kept)
 
         # Soft filter rows always pass through (sector/entity type matches)
         if semantic_queries and soft_filters is not None and (strategy == "soft_union" or sector_strategy_broadened):
@@ -619,7 +675,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     # Optional: CE on all rows (semantic + sector) for testing
     if semantic_queries and args.ce_all and len(rows) > args.ce_threshold and not args.no_ce:
         query_text = " ".join(semantic_queries)
-        from ce_rerank import ce_rerank_companies
         ce_all_result = await ce_rerank_companies(
             query_text,
             rows,
@@ -668,6 +723,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "std_score": ce_result.get("std_score"),
             "score_distribution": ce_result["score_distribution"],
         }
+    if matched:
+        result["company_match"] = matched
     return result
 
 
@@ -708,7 +765,7 @@ def main() -> None:
     parser.add_argument("--page-size", type=int, default=10000)
     parser.add_argument("--max-companies", type=int, default=0, help="Max companies in output (0 = no cap)")
     # CE rerank args
-    parser.add_argument("--no-ce", action="store_true", help="Disable cross-encoder reranking")
+    parser.add_argument("--no-ce", action="store_true", help="Skip the model steps on semantic rows: the cross-encoder and Luna's match")
     parser.add_argument("--ce-all", action="store_true", help="Run CE on ALL rows (semantic + sector filter), not just semantic")
     parser.add_argument("--ce-threshold", type=int, default=500, help="Min companies to trigger CE rerank")
     parser.add_argument("--ce-top-n", type=int, default=0, help="Hard cap after CE (0 = use adaptive threshold only)")
