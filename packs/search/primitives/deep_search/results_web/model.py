@@ -350,6 +350,10 @@ class SearchResult:
     team_status: str = ""
     steps: tuple[SearchStep, ...] = ()
     current_step: str | None = None
+    # A Powerset-ranked search: the people the API turned down, kept in their own file (load_bad).
+    bad_count: int = 0
+    # The first good people of a Powerset-ranked search are in and the rest are still downloading.
+    partial: bool = False
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -718,6 +722,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         steps=tuple(SearchStep(**{key: value for key, value in step.items() if key != "jsonl"})
                     for step in payload.get("steps", [])),
         current_step=payload.get("current_step"),
+        bad_count=int((payload.get("bad_results") or {}).get("count") or 0),
+        partial=bool(payload.get("partial")),
         team=tuple(TeamMember(**row) for row in team.get("members", [])),
         team_fetched_at=team.get("fetched_at", ""),
         team_status=str(status.get("reason") or
@@ -762,6 +768,30 @@ def load_search(root: Path, run_id: str) -> SearchResult | None:
         if referenced is not None:
             payloads[other] = referenced
     return next(search for search in _searches(root, payloads) if search.run_id == run_id)
+
+
+def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None:
+    """The people a Powerset-ranked search turned down, as the API returned them (each row carries
+    its score, reason and profile); None while their file is still downloading."""
+    payload = _payload(root / run_id / "results.json") or {}
+    path = _artifact_path(root, (payload.get("bad_results") or {}).get("path"))
+    if path is None or not path.exists():
+        return None
+    rows = []
+    for row in _jsonl_rows(path):
+        positions = _positions(row.get("positions"))
+        current = next((position for position in positions if position.is_current), positions[0] if positions else None)
+        rows.append(PondCandidate(
+            person_id=_text(row.get("person_id")), title=current.title if current else "",
+            company=current.company if current else "", location=_text(row.get("location")),
+            avatar_url=_text(row.get("profile_picture_url")), final_score=_number(row.get("final_score")),
+            traits=_traits(row.get("trait_scores")), name=_text(row.get("name")),
+            linkedin_url=_text(row.get("linkedin_url")), reasoning=_text(row.get("overall_reasoning")),
+            vertical_sources=tuple(_text(item) for item in _list(row.get("vertical_sources")) if _text(item)),
+            matched_positions=tuple(int(index) for index in _list(row.get("matched_position_indexes"))),
+            summary=_text(row.get("summary")), headline=_text(row.get("headline")),
+            profile_location=_text(row.get("location")), positions=positions, education=_education(row.get("education"))))
+    return tuple(rows)
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:
@@ -874,7 +904,8 @@ def select_quick_step(payload: dict[str, Any], step: dict[str, Any]) -> None:
 def record_quick_search(root: Path, run_id: str, *, query: str, title: str | None = None, filters: dict[str, Any],
                         traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
                         status: str, person_attribution: dict[str, Any] | None = None,
-                        person_attribution_error: str | None = None) -> None:
+                        person_attribution_error: str | None = None,
+                        bad_results: dict[str, Any] | None = None, partial: bool = False) -> None:
     """Save a quick search as a one-pond run beside the deep ones, with the filters and traits it
     ran with and, on a Powerset set, who in the set knows each person (the deep runs' shape), and
     list it. When that lookup failed, the run carries the error instead of silently showing no sources."""
@@ -892,6 +923,10 @@ def record_quick_search(root: Path, run_id: str, *, query: str, title: str | Non
         payload["person_attribution"] = person_attribution
     if person_attribution_error:
         payload["person_attribution_error"] = person_attribution_error
+    if bad_results:  # a Powerset-ranked search: {"path": the bad results' gzip, "count": how many}
+        payload["bad_results"] = bad_results
+    if partial:  # the rest of the good people are still downloading; the page reads the run again
+        payload["partial"] = True
     payload["steps"] = [original_quick_step(payload)]
     payload["current_step"] = "s1"
     write_json(root / run_id / "results.json", payload)

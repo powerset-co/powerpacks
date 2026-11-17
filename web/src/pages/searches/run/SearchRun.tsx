@@ -30,6 +30,8 @@ export interface SearchRunProps {
   filtered: boolean
   // Taste, Suggested pin and Team similarity labels on each row.
   labels: boolean
+  // Said over the skeleton while the rows asked for are still downloading (the bad results).
+  loading?: string
   // The run's controls (web/README.md "Searches").
   toolbar: ReactNode
   headerActions: ReactNode
@@ -62,11 +64,12 @@ export function SearchRun(props: SearchRunProps) {
   const { search, mode, pondAt, sections, filtered, status } = props
   // One identity per filtered list: the table's row keys and measurements follow it.
   const items = useMemo(() => tableItems(sections), [sections])
-  // A plain run's rows arrive screened and the ranking reorders them, so the table waits for it.
+  // A plain run's rows arrive screened and the ranking reorders them, so the table waits for it;
+  // a Powerset-ranked one arrives ranked, best first, and shows its first people at once.
   // A deep run shows its finished ponds while the next one runs; until one has people, it waits too.
   const running = status !== undefined && status !== "failed" && !isComplete(status)
-  const ranking = running && !search.jd_text
-  const waiting = ranking || (running && items.length === 0 && !filtered)
+  const ranking = running && !search.jd_text && !search.partial
+  const waiting = props.loading !== undefined || ranking || (running && items.length === 0 && !filtered)
   // Shut by default: the title already says what was searched, so the people start near the top.
   const [filtersOpen, setFiltersOpen] = useState(false)
   const only = search.ponds.length === 1 ? search.ponds[0] : undefined
@@ -102,7 +105,8 @@ export function SearchRun(props: SearchRunProps) {
       {waiting ? (
         <div className="grid content-start" aria-busy="true" data-results-waiting>
           <p className="m-0 border-b border-line px-3 py-2 text-xs text-muted-foreground">
-            {ranking ? `${props.people.toLocaleString()} screened, ranking…` : "Searching…"}
+            {props.loading ??
+              (ranking ? `${props.people.toLocaleString()} screened, ranking…` : "Searching…")}
           </p>
           <RowsSkeleton />
         </div>

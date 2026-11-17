@@ -311,6 +311,8 @@ export const RUN: SearchRunPayload = {
     team_status: "",
     steps: [],
     current_step: null,
+    bad_count: 0,
+    partial: false,
   },
   ratings: RATINGS,
 }
@@ -346,6 +348,8 @@ export const QUICK_RUN: SearchRunPayload = {
     team_status: "",
     steps: [],
     current_step: null,
+    bad_count: 0,
+    partial: false,
   },
   ratings: RATINGS,
 }

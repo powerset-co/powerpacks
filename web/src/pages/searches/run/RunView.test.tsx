@@ -265,6 +265,41 @@ describe("RunView", () => {
     expect(document.querySelectorAll("[data-results-waiting] .bg-card").length).toBeGreaterThan(0)
   })
 
+  it("lists a Powerset-ranked run's first people while the rest download", () => {
+    const first = { ...QUICK_RUN, search: { ...QUICK_RUN.search, partial: true } }
+    renderRun(null, NOT_STOPPED, first, "running")
+    expect(screen.queryByText(/ranking…/)).toBeNull()
+    expect(document.querySelectorAll(".result-row").length).toBeGreaterThan(0)
+  })
+
+  it("swaps in the bad results when asked, loading until their download is in", async () => {
+    renderRun(null, NOT_STOPPED, { ...QUICK_RUN, search: { ...QUICK_RUN.search, bad_count: 4 } })
+    const turnedDown = { ...QUICK_RUN.search.ponds[0]?.candidates[0], person_id: "p-sam", name: "Sam Rivers" }
+    const tags = fetch
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) =>
+        url.includes("/api/bad.json")
+          ? Promise.resolve(
+              new Response(
+                JSON.stringify({ status: "ready", candidates: [{ ...turnedDown, final_score: 0.1 }] }),
+              ),
+            )
+          : tags(url, init),
+      ),
+    )
+    const chip = screen.getByRole("button", { name: /Bad results/ })
+    expect(chip.textContent).toContain("4")
+    fireEvent.click(chip)
+    expect(screen.getByText("Loading bad results…")).toBeTruthy()
+    expect(await screen.findByText("Sam Rivers")).toBeTruthy()
+    expect(screen.queryByText("Jordan Bravo")).toBeNull()
+    // Back to the people the search kept.
+    fireEvent.click(chip)
+    expect(screen.getAllByText("Jordan Bravo").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Sam Rivers")).toBeNull()
+  })
+
   it("shows the header, the pond chain and both score tables in the documented order", () => {
     renderEveryPond()
     const header = within(screen.getByRole("banner"))

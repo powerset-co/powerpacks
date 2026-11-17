@@ -973,12 +973,20 @@ def run_pipeline(args) -> dict[str, Any]:
                                 *(["--set-id",args.set_id] if getattr(args,"set_id",None) else []), *(["--rerank"] if api_ranks else [])]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
     ]
-    for step,cmd in steps:
-        if done(l,step) and not args.force: continue
+    def run_step(step: str, cmd: list[str], *, again: bool = False) -> None:
+        if done(l,step) and not args.force and not again: return
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
         out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
+    for step,cmd in steps:
+        run_step(step,cmd)
+    if api_ranks and latest_step(state,"execute_role_search").get("partial"):
+        # The search answered with its best people: the page lists them now, and the rest of the
+        # good ones replace them when they are in.
+        _export_first(args, lp, l, state)
+        run_step("execute_role_search",[*steps[0][1],"--rerank-rest"],again=True)
+        run_step("hydrate_people",steps[1][1],again=True)
     if not args.search_only and not api_ranks:
         payload = _llm_approval_payload(args, state)
         aid=approval_id("llm",payload)
@@ -1174,10 +1182,14 @@ def record_quick_run(result: dict[str, Any]) -> None:
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
     attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file"))
+    searched = latest_step(state, "execute_role_search")
     record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], title=l.get("title"), filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
                         jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status=result["status"],
-                        person_attribution=attribution, person_attribution_error=attribution_error)
+                        person_attribution=attribution, person_attribution_error=attribution_error,
+                        bad_results=({"path": searched["bad_results_path"], "count": searched.get("bad_count") or 0}
+                                     if searched.get("bad_results_path") else None),
+                        partial=bool(searched.get("partial")) and result["status"]=="running")
 
 def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> tuple[dict[str, Any], str | None]:
     """Save the same source contract for local and Powerset search results. A failed lookup comes back
@@ -1207,6 +1219,16 @@ def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_
     record_quick_run({"ledger": str(lp), "state": str(state), "status": "running", "env_file": args.env_file})
     print(f"search: {out['row_count']} screened, not ranked yet; results page already lists them",
           file=sys.stderr, flush=True)
+
+def _export_first(args, lp: Path, ledger: dict[str, Any], state: Path) -> None:
+    """List a Powerset-ranked search's first people on the results page while the rest download."""
+    cmd = [sys.executable, str(ROOT / "packs/search/primitives/persist_search_results/results_io.py"),
+           "export", "--state", str(state)]
+    out = require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout), "persist_search_results")
+    ledger.setdefault("artifacts", {}).update(collect_artifacts(out))
+    save(lp, ledger)
+    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running", "env_file": args.env_file})
+    print(f"search: the first {out['row_count']} are on the results page; downloading the rest", file=sys.stderr, flush=True)
 
 def cmd_run(args):
     try:

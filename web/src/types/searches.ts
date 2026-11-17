@@ -244,6 +244,16 @@ export interface SearchResult {
   team_status: string
   steps: SearchStep[]
   current_step: string | null
+  /** A Powerset-ranked search: how many people the API turned down (read apart, BadResultsPayload). */
+  bad_count: number
+  /** Its first good people are in and the rest are still downloading. */
+  partial: boolean
+}
+
+/** The people a Powerset-ranked search turned down; "loading" while their file downloads. */
+export interface BadResultsPayload {
+  status: "loading" | "ready"
+  candidates: PondCandidate[]
 }
 
 export interface CatalogPayload {

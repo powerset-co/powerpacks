@@ -333,6 +333,37 @@ class ResultsWebTest(unittest.TestCase):
         self.assertEqual(pond.traits, (Trait(value="Technical recruiter", temporal="current", meaning="role"),))
         self.assertEqual(json.loads(json.dumps(asdict(pond)))["traits"], traits)
 
+    def test_powerset_ranked_search_lists_its_first_people_and_loads_the_bad_ones_apart(self):
+        from packs.search.primitives.deep_search.results_web.model import load_bad
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / ".powerpacks" / "deep-search"
+            root.mkdir(parents=True)
+            artifacts = self._pond_artifacts(base, "quick", score=0.78, title="Technical Recruiter", company="Example Labs",
+                                             query="recruiters")["arm"]["artifacts"]
+            bad = base / "bad_results.jsonl.gz"
+            run = dict(query="recruiters", filters={}, traits=[], created_at="2026-11-17T00:00:00Z",
+                       jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"])
+            record_quick_search(root, "recruiters", **run, status="running", partial=True)
+            first = load_search(root, "recruiters")
+            record_quick_search(root, "recruiters", **run, status="completed", bad_results={"path": str(bad), "count": 1})
+            done = load_search(root, "recruiters")
+            still_downloading = load_bad(root, "recruiters")
+            with gzip.open(bad, "wt") as handle:
+                handle.write(json.dumps({"person_id": "b1", "name": "Sam Rivers", "final_score": 0.1,
+                                         "overall_reasoning": "Sells storage", "location": "Austin",
+                                         "trait_scores": {"Recruiter": {"score": 0.0, "reason": "Sells storage"}},
+                                         "positions": [{"position_title": "Account Executive", "company_name": "Example Labs",
+                                                        "is_current": True}]}) + "\n")
+            rows = load_bad(root, "recruiters")
+        assert first is not None and done is not None and rows is not None
+        self.assertEqual((first.partial, first.bad_count), (True, 0))
+        self.assertEqual((done.partial, done.bad_count), (False, 1))
+        self.assertIsNone(still_downloading)
+        self.assertEqual([(row.person_id, row.name, row.title, row.company, row.final_score, row.reasoning) for row in rows],
+                         [("b1", "Sam Rivers", "Account Executive", "Example Labs", 0.1, "Sells storage")])
+
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:
             search = load_searches(self._fixture(directory, cross_encoder=True))[0]

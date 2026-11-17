@@ -65,14 +65,14 @@ class CloudSearchTests(unittest.TestCase):
             state.write_text(json.dumps({"query": "q", "steps": [{"id": "expand_search_request", "output": {}}]}))
             with mock.patch.object(cloud_search.powerset_api, "call", return_value={"results": results}):
                 out = cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=2,
-                                                       timeout=60, write_state=False, rerank=False))
+                                                       timeout=60, write_state=False, rerank=False, rerank_rest=False))
         self.assertEqual(out["candidate_count"], 2)
 
     def test_rerank_downloads_the_api_ranking_in_pages_good_and_bad_apart(self) -> None:
         """With --rerank the API filters, ranks and saves to a conversation; the run pages the good
         results back as its own ranking (the exporter reads it like a local rerank's) and streams the
         bad ones, as the API returns them, into their own gzip."""
-        good = [{"person_id": f"g{i}", "final_score": round(0.9 - i / 1000, 3), "overall_reasoning": "Runs storage",
+        good = [{"person_id": f"g{i}", "final_score": round(0.9 - i / 1000, 3), "overall_reasoning": "Runs storage", "status": "good",
                  "trait_scores": {"storage": {"score": 0.9, "reason": "Runs storage"}}, "name": f"Good {i}"} for i in range(501)]
         bad = [{"person_id": "b1", "final_score": 0.1, "overall_reasoning": "Sells storage", "name": "Bad One",
                 "positions": [{"title": "Account Executive"}]}]
@@ -96,13 +96,24 @@ class CloudSearchTests(unittest.TestCase):
             state = Path(directory) / "state.json"
             state.write_text(json.dumps({"task_id": "t", "query": "storage engineers", "steps": [
                 {"id": "expand_search_request", "output": {"traits": ["storage"]}}]}))
-            with mock.patch("packs.shared.powerset_api.call", side_effect=api), mock.patch.object(cloud_search.time, "sleep"):
-                out = cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0,
-                                                       timeout=60, write_state=True, rerank=True))
+            args = dict(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60, write_state=True, rerank=True)
+            with mock.patch("packs.shared.powerset_api.call", side_effect=api), mock.patch.object(cloud_search.time, "sleep"), \
+                    mock.patch.object(cloud_search.subprocess, "Popen") as background:
+                # The search's own answer is the first ranking: the page has people before any download.
+                first = cloud_search.run(SimpleNamespace(**args, rerank_rest=False))
+                first_rows = results_io.result_rows(json.loads(state.read_text()))
+                self.assertEqual(background.call_count, 0)
+                out = cloud_search.run(SimpleNamespace(**args, rerank_rest=True))
+                # The bad ones are another process's job; here it runs in line.
+                command = background.call_args.args[0]
+                self.assertEqual(command[2:6], ["--bad-for", "c1", "--out", out["bad_results_path"]])
+                cloud_search.main(command[2:])
             steps = json.loads(state.read_text())["steps"]
             rows = results_io.result_rows(json.loads(state.read_text()))
             with gzip.open(out["bad_results_path"], "rt") as handle:
                 saved_bad = [json.loads(line) for line in handle]
+        self.assertEqual((first["candidate_count"], first["partial"], len(first_rows)), (50, True, 50))
+        self.assertEqual(out["partial"], False)
         results = "/v2/conversations/c1/results?"
         self.assertEqual([path for path, _ in sent], [
             "/v2/conversations", "/v2/search/execute", results + "limit=1", results + "limit=1", results + "limit=1",
@@ -110,7 +121,7 @@ class CloudSearchTests(unittest.TestCase):
             results + "filter=bad&limit=500&offset=0"])
         request = sent[1][1]
         self.assertEqual((request["rerank"], request["skip_llm_filter"], request["conversation_id"]), (True, False, "c1"))
-        self.assertEqual([step["id"] for step in steps][1:], ["execute_role_search", "llm_rerank_candidates"])
+        self.assertEqual([step["id"] for step in steps][1:], ["execute_role_search", "llm_rerank_candidates"] * 2)
         self.assertEqual((out["candidate_count"], out["bad_count"], out["conversation_id"]), (501, 1, "c1"))
         self.assertEqual([row["person_id"] for row in rows], [row["person_id"] for row in good])
         self.assertEqual((rows[0]["final_score"], json.loads(rows[0]["trait_scores"])["storage"]["score"]), ("0.9", 0.9))
@@ -129,10 +140,11 @@ class CloudSearchTests(unittest.TestCase):
             state.write_text(json.dumps({"query": "q", "steps": [{"id": "expand_search_request", "output": {}}]}))
             with mock.patch("packs.shared.powerset_api.call", side_effect=api), \
                     mock.patch.object(cloud_search.time, "sleep"), \
-                    mock.patch.object(cloud_search.time, "time", side_effect=[0, 0, 200, 200]), \
+                    mock.patch.object(cloud_search.time, "time", side_effect=[0, 0, 0, 0, 200, 200]), \
                     self.assertRaisesRegex(RuntimeError, "saved 0 of 3 results"):
-                cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0,
-                                                 timeout=60, write_state=True, rerank=True))
+                args = dict(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60, write_state=True, rerank=True)
+                cloud_search.run(SimpleNamespace(**args, rerank_rest=False))
+                cloud_search.run(SimpleNamespace(**args, rerank_rest=True))
 
     def test_a_set_search_is_not_screened_or_ranked_on_this_mac(self) -> None:
         """The pipeline asks the API to rank a set search and runs no LLM step; a job-description
@@ -144,7 +156,11 @@ class CloudSearchTests(unittest.TestCase):
 
             def child(command, **kwargs):
                 stages.append((Path(command[1]).stem, "--rerank" in command))
-                return {"returncode": 0, "json": {}}
+                if "--rerank" in command:  # what cloud_search records: the first people, then all of them
+                    saved = json.loads(Path(command[command.index("--state") + 1]).read_text())
+                    saved["steps"].append({"id": "execute_role_search", "output": {"partial": "--rerank-rest" not in command}})
+                    Path(command[command.index("--state") + 1]).write_text(json.dumps(saved))
+                return {"returncode": 0, "json": {"row_count": 1}}
 
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
                 state = Path(directory) / "state.json"
@@ -154,7 +170,8 @@ class CloudSearchTests(unittest.TestCase):
                     ["run", "--state", str(state), "--ledger", str(Path(directory) / "pipeline.json"), *extra])
                 with mock.patch.object(pipeline, "run", side_effect=child):
                     pipeline.run_pipeline(args)
-            self.assertEqual(stages, [("cloud_search", ranked), ("hydrate_people", False), ("results_io", False)])
+            once = [("cloud_search", ranked), ("hydrate_people", False), ("results_io", False)]
+            self.assertEqual(stages, once * 2 if ranked else once)
 
     def test_api_calls_ask_for_gzip_and_read_it(self) -> None:
         from packs.shared import powerset_api
@@ -202,7 +219,7 @@ class CloudSearchTests(unittest.TestCase):
                                                             "api_filters": EXPANDED, "traits": []}}]}))
             with mock.patch("packs.shared.powerset_api.call", side_effect=api):
                 cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0,
-                                                 timeout=60, write_state=True, rerank=False))
+                                                 timeout=60, write_state=True, rerank=False, rerank_rest=False))
                 hydrate_people.cmd_hydrate(SimpleNamespace(
                     state=str(state), env_file=None, limit=0, dry_run=False, local_db=None, local_workers=None,
                     local_batch_size=None, no_compress_profiles=False, dump_profiles=False, write_state=True))

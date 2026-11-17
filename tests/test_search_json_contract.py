@@ -116,6 +116,7 @@ class SearchJsonContractTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["search"].pop("steps"), [])
         self.assertIsNone(payload["search"].pop("current_step"))
+        self.assertEqual((payload["search"].pop("bad_count"), payload["search"].pop("partial")), (0, False))
         # Same fixture serialized by BASE 18f5f39, before step fields were added.
         self.assertEqual(hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
                          "62c21bb4dab3d32640ef0d0605c5937a9754f716e21979aa406fa72a53be7a31")

@@ -2,6 +2,7 @@
 
 import { body, failure } from "@/lib/api/http"
 import type {
+  BadResultsPayload,
   CatalogPayload,
   SearchRunPayload,
   SearchScope,
@@ -24,6 +25,13 @@ export async function fetchSearchRun(runId: string, signal?: AbortSignal): Promi
   const response = await fetch(`${API}/api/search.json?run_id=${encodeURIComponent(runId)}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't load search.")
   return body<SearchRunPayload>(response)
+}
+
+/** The people the run's Powerset search turned down, once their download is in. */
+export async function fetchBadResults(runId: string, signal?: AbortSignal): Promise<BadResultsPayload> {
+  const response = await fetch(`${API}/api/bad.json?run_id=${encodeURIComponent(runId)}`, { signal })
+  if (!response.ok) throw await failure(response, "Couldn't load bad results.")
+  return body<BadResultsPayload>(response)
 }
 
 export async function fetchTags(runId: string): Promise<TagsPayload> {

@@ -5,13 +5,13 @@ import type { ToastMessage } from "@/components/shared"
 import { isDesktop } from "@/lib/desktop"
 import { exportScoreOf, queuedScores, withScore } from "@/lib/searches/feedback"
 import { filterRows, keptRows, labelsShown, NO_FILTERS, type ResultFilters } from "@/lib/searches/filters"
-import { panelSections, rankResults } from "@/lib/searches/ranking"
+import { panelSections, pondRows, rankResults } from "@/lib/searches/ranking"
 import type { FeedbackRecord, SearchRunPayload } from "@/types/searches"
 
 import { FeedbackStatus } from "../dialogs/FeedbackStatus"
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
 import type { Feedback } from "../hooks/useFeedback"
-import { searchRunKey } from "../hooks/useSearchRun"
+import { searchRunKey, useBadResults } from "../hooks/useSearchRun"
 import { useSearchTags } from "../hooks/useSearchTags"
 import { ResultsToolbar } from "../toolbar/ResultsToolbar"
 import type { RowContext } from "./RowActions"
@@ -41,8 +41,20 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
   const [pondAt, setPond] = useState(latest)
   const [pondOnly, setPondOnly] = useState<number | null>(search.ponds.length ? latest : null)
 
+  // The people the Powerset search turned down take the table's place when asked for; the same
+  // filters, tags and export then work on them.
+  const [showBad, setShowBad] = useState(false)
+  const bad = useBadResults(runId, showBad).data
+  const badRows = showBad && bad?.status === "ready" ? bad.candidates : undefined
+
   const results = useMemo(() => rankResults(search), [search])
   const sections = useMemo(() => {
+    const first = search.ponds[0]
+    if (showBad) {
+      return badRows && first
+        ? [{ heading: null, rows: pondRows(search, { ...first, candidates: badRows }) }]
+        : []
+    }
     const all = panelSections(search, results, pondAt)
     const pond = pondOnly === null ? undefined : search.ponds[pondOnly]
     if (results.mode !== "ranked" || !pond) return all
@@ -51,7 +63,7 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       ...section,
       rows: section.rows.filter((row) => found.has(row.row.person_id)),
     }))
-  }, [search, results, pondAt, pondOnly])
+  }, [search, results, pondAt, pondOnly, showBad, badRows])
   const rows = useMemo(() => sections.flatMap((section) => section.rows), [sections])
   const kept = useMemo(() => new Set(keptRows(rows, filters, tags.tagged)), [rows, filters, tags.tagged])
   const shownSections = useMemo(
@@ -106,6 +118,7 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
       sections={shownSections}
       filtered={shown.length < people}
       labels={filters.labels}
+      loading={showBad && !badRows ? "Loading bad results…" : undefined}
       toolbar={
         <ResultsToolbar
           title={search.title}
@@ -115,6 +128,11 @@ export function RunView({ payload, status, feedback, onToast }: RunViewProps) {
           tagged={tags.tagged}
           filters={filters}
           exportScore={exportScoreOf(queued)}
+          bad={
+            search.bad_count > 0
+              ? { count: search.bad_count, shown: showBad, onToggle: setShowBad }
+              : undefined
+          }
           onFiltersChange={setFilters}
           onUntag={tags.untag}
           onClearTags={tags.clear}
