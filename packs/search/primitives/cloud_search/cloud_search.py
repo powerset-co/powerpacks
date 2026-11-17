@@ -157,20 +157,20 @@ def get(env_file: Path | None, path: str, *, tries: int = 3) -> dict[str, Any]:
 
 
 def wait_saved(env_file: Path | None, conversation_id: str, expected: int, *, good_only: bool = False,
-               timeout: int = 120, pause: float = 2.0) -> None:
+               stalled: int = 120, pause: float = 2.0) -> None:
     """Return once the conversation holds `expected` results (good ones, with good_only): the API
-    saves them, 50 at a time, after it answers. It drops duplicates, so a count that has not grown
-    over three checks is also all of them."""
-    seen, still, deadline = -1, 0, time.time() + timeout
+    saves them, 50 at a time, after it answers. A count that stops growing for `stalled` seconds
+    short of that is a failed save, never taken for the whole result."""
+    seen, grew = -1, time.time()
     while expected:
         page = get(env_file, f"/v2/conversations/{conversation_id}/results?limit=1")
         count = int(page.get("good_count") or 0) + (0 if good_only else int(page.get("bad_count") or 0))
-        still = still + 1 if count and count == seen else 0
-        if count >= expected or still == 3:
+        if count >= expected:
             return
-        if time.time() > deadline:
-            raise RuntimeError(f"the Powerset API saved {count} of {expected} results in {timeout}s; run the search again")
-        seen = count
+        if count > seen:
+            seen, grew = count, time.time()
+        elif time.time() - grew > stalled:
+            raise RuntimeError(f"the Powerset API saved {count} of {expected} results and then stopped; run the search again")
         time.sleep(pause)
 
 
@@ -295,6 +295,7 @@ def export_bad(env_file: Path | None, conversation_id: str, out_dir: Path, state
     from packs.search.primitives.persist_search_results import results_io
 
     results_path = out_dir / "bad_results.jsonl.gz"
+    (out_dir / BAD_ERROR).unlink(missing_ok=True)  # an earlier try's failure
     download(env_file, conversation_id, "bad", results_path)
     bad = read_results(results_path)
     ranking, profiles = out_dir / "query_results.csv", out_dir / "profiles.jsonl.gz"

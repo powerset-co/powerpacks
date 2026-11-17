@@ -203,6 +203,14 @@ class CloudSearchTests(unittest.TestCase):
                 self.assertEqual(cloud_search.main(["--bad-for", "c1", "--out", str(Path(directory) / "bad"), "--env-file", ""]), 1)
             self.assertIn("RuntimeError", (Path(directory) / "bad" / "error.txt").read_text())
 
+    def test_a_pause_in_the_api_saving_is_not_taken_for_all_of_it(self) -> None:
+        counts = iter([50, 50, 50, 50, 50, 1000])
+        with mock.patch("packs.shared.powerset_api.call",
+                        side_effect=lambda *a, **k: {"good_count": next(counts), "bad_count": 0}), \
+                mock.patch.object(cloud_search.time, "sleep") as slept:
+            cloud_search.wait_saved(None, "c1", 1000)
+        self.assertEqual(slept.call_count, 5)
+
     def test_rerank_fails_when_the_api_never_saves_the_results(self) -> None:
         def api(env_file, path, body=None, **kwargs):
             if path == "/v2/conversations":
@@ -216,37 +224,47 @@ class CloudSearchTests(unittest.TestCase):
             state.write_text(json.dumps({"query": "q", "steps": [{"id": "expand_search_request", "output": {}}]}))
             with mock.patch("packs.shared.powerset_api.call", side_effect=api), \
                     mock.patch.object(cloud_search.time, "sleep"), \
-                    mock.patch.object(cloud_search.time, "time", side_effect=[0, 0, 200, 200]), \
-                    self.assertRaisesRegex(RuntimeError, "saved 0 of 3 results"):
+                    mock.patch.object(cloud_search.time, "time", side_effect=[0, 0, 0, 200, 200]), \
+                    self.assertRaisesRegex(RuntimeError, "saved 0 of 3 results and then stopped"):
                 cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60,
                                                  write_state=True, rerank=True, rerank_rest=False))
 
     def test_a_set_search_is_not_screened_or_ranked_on_this_mac(self) -> None:
-        """The pipeline asks the API to rank a set search and runs no LLM step; a job-description
-        run and --search-only keep the unranked search."""
+        """The pipeline asks the API to rank a set search and runs no LLM step: the best 500 are
+        listed, then all of them. A run stopped part way picks up at the step it was on and never
+        searches again. A job-description run and --search-only keep the unranked search."""
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 
-        for extra, ranked in (([], True), (["--search-only"], False)):
-            stages = []
+        first = [("cloud_search", "--rerank"), ("hydrate_people", ""), ("results_io", "")]
+        rest = [("cloud_search", "--rerank-rest"), ("hydrate_people", ""), ("results_io", "")]
+        for extra, fail_at, expected in (
+                ([], None, [first + rest]),
+                (["--search-only"], None, [[("cloud_search", ""), ("hydrate_people", ""), ("results_io", "")]]),
+                ([], 3, [first + rest[:1], [("results_io", "")] + rest]),      # the full download failed
+                ([], 4, [first + rest[:2], rest[1:]])):  # stopped before the full hydrate
+            runs = []
 
             def child(command, **kwargs):
-                stages.append((Path(command[1]).stem, "--rerank" in command))
-                if "--rerank" in command:  # what cloud_search records: the first people, then all of them
-                    saved = json.loads(Path(command[command.index("--state") + 1]).read_text())
-                    saved["steps"].append({"id": "execute_role_search", "output": {"partial": "--rerank-rest" not in command}})
-                    Path(command[command.index("--state") + 1]).write_text(json.dumps(saved))
+                stage = (Path(command[1]).stem, next((flag for flag in ("--rerank-rest", "--rerank") if flag in command), ""))
+                runs[-1].append(stage)
+                if len(runs) == 1 and len(runs[0]) - 1 == fail_at:
+                    return {"returncode": 1, "json": {}, "stderr": "boom", "stdout": ""}
                 return {"returncode": 0, "json": {"row_count": 1}}
 
-            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+            with self.subTest(extra=extra, fail_at=fail_at), tempfile.TemporaryDirectory() as directory:
                 state = Path(directory) / "state.json"
                 state.write_text(json.dumps({"task_id": "t", "query": "q", "steps": [
                     {"id": "expand_search_request", "output": {"traits": []}}]}))
                 args = pipeline.build_parser().parse_args(
                     ["run", "--state", str(state), "--ledger", str(Path(directory) / "pipeline.json"), *extra])
                 with mock.patch.object(pipeline, "run", side_effect=child):
-                    pipeline.run_pipeline(args)
-            once = [("cloud_search", ranked), ("hydrate_people", False), ("results_io", False)]
-            self.assertEqual(stages, once * 2 if ranked else once)
+                    for _ in expected:
+                        runs.append([])
+                        try:
+                            pipeline.run_pipeline(args)
+                        except Exception:
+                            self.assertIsNotNone(fail_at)
+                self.assertEqual(runs, expected)
 
     def test_api_calls_ask_for_gzip_and_read_it(self) -> None:
         from packs.shared import powerset_api

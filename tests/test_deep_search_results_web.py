@@ -357,14 +357,21 @@ class ResultsWebTest(unittest.TestCase):
             still_downloading = load_bad(root, "recruiters")
             waiting.rename(rows)
             people = load_bad(root, "recruiters")
+            # A failure is reported until a later try's rows are in; a download that died says so.
+            rows.rename(waiting)
+            with patch("packs.search.primitives.deep_search.results_web.model.time.time", return_value=waiting.stat().st_mtime + 301):
+                died = load_bad(root, "recruiters")
             error.write_text("RuntimeError: downloaded 10 of the 501 bad results")
             failed = load_bad(root, "recruiters")
+            waiting.rename(rows)
+            retried = load_bad(root, "recruiters")
         assert first is not None and done is not None and isinstance(people, tuple)
         self.assertEqual((first.partial, first.bad_count), (True, 0))
         self.assertEqual((done.partial, done.bad_count), (False, 1))
         self.assertIsNone(still_downloading)
         self.assertEqual([(row.title, row.company, row.final_score) for row in people][:1], [("Account Executive", "Example Labs", 0.1)])
         self.assertEqual(failed, "RuntimeError: downloaded 10 of the 501 bad results")
+        self.assertEqual((died, isinstance(retried, tuple)), ("the download stopped", True))
 
     def test_page_has_one_candidate_and_trait_reasoning_table(self):
         with tempfile.TemporaryDirectory() as directory:

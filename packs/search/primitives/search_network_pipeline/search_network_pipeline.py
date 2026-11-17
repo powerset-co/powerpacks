@@ -431,7 +431,8 @@ def pipeline_summary(l: dict[str, Any]) -> dict[str, Any]:
     resolved=s("resolve_companies")
     pre=s("apply_prefilters")
     retrieval=s("execute_role_search")
-    hydrate=s("hydrate_people")
+    retrieval=s("download_results") or retrieval
+    hydrate=s("hydrate_results") or s("hydrate_people")
     llm_filter=s("llm_filter_candidates")
     rerank=s("llm_rerank_candidates")
     persist=s("persist_search_results")
@@ -973,20 +974,22 @@ def run_pipeline(args) -> dict[str, Any]:
                                 *(["--set-id",args.set_id] if getattr(args,"set_id",None) else []), *(["--rerank"] if api_ranks else [])]),
         ("hydrate_people",[sys.executable,str(ROOT/"packs/search/primitives/hydrate_people/hydrate_people.py"),"--state",str(state),"--env-file",args.env_file,"--write-state"]),
     ]
-    def run_step(step: str, cmd: list[str], *, again: bool = False) -> None:
-        if done(l,step) and not args.force and not again: return
+    def run_step(step: str, cmd: list[str]) -> None:
+        if done(l,step) and not args.force: return
         mark(lp,l,step,"running",command=" ".join(shlex.quote(x) for x in cmd))
         out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout, extra_env={"POWERPACKS_USAGE_STAGE":step}),step)
         l.setdefault("artifacts",{}).update(collect_artifacts(out))
         mark(lp,l,step,"completed",summary=compact_summary(out),command=" ".join(shlex.quote(x) for x in cmd))
     for step,cmd in steps:
         run_step(step,cmd)
-    if api_ranks and latest_step(state,"execute_role_search").get("partial"):
-        # The search answered with its best people: the page lists them now, and the rest of the
-        # good ones replace them when they are in.
-        _export_first(args, lp, l, state)
-        run_step("execute_role_search",[*steps[0][1],"--rerank-rest"],again=True)
-        run_step("hydrate_people",steps[1][1],again=True)
+    if api_ranks:
+        # The best 500 are in: the page lists them now, and all the good ones replace them when
+        # they are in. Each half is its own step, so a run stopped anywhere picks up where it was
+        # and never searches twice.
+        if not done(l,"download_results") or args.force:
+            _export_first(args, lp, l, state)
+        run_step("download_results",[*steps[0][1],"--rerank-rest"])
+        run_step("hydrate_results",steps[1][1])
     if not args.search_only and not api_ranks:
         payload = _llm_approval_payload(args, state)
         aid=approval_id("llm",payload)
