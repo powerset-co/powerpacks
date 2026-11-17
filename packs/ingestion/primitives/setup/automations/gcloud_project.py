@@ -109,6 +109,14 @@ def is_project_taken_error(text: str) -> bool:
     )
 
 
+def is_terms_error(text: str) -> bool:
+    """Return True when gcloud says the account has not accepted the Google Cloud Terms of Service.
+
+    A Google account that never used Cloud gets this from `gcloud projects create` until it
+    agrees in the Console (no API accepts them)."""
+    return "terms of service" in text.lower()
+
+
 def gcloud_context(project: str | None = None) -> dict[str, Any]:
     """Return gcloud install state plus the active account and project."""
     gcloud_path = shutil.which("gcloud") or ""

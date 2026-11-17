@@ -6,11 +6,14 @@ const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
 ];
 const CALLBACK = "http://localhost:8089/callback";
+// Google's consent page names each box by its permission followed by a "See access details" link.
+const DETAILS = "(?:\\s*See access details)?";
 const PERMISSIONS = [
-  /^See your email messages and settings\.?$/i,
-  /^View your email messages and settings\.?$/i,
-  /^Read, compose, and send emails from your Gmail account\.?$/i,
-];
+  "See your email messages and settings",
+  "View your email messages and settings",
+  "Read, compose, and send emails from your Gmail account",
+].map(text => new RegExp(`^${text}\\.?${DETAILS}$`, "i"));
+const CHECKBOXES = "input[type=checkbox], [role=checkbox]";
 
 function validateRequest(request) {
   const url = new URL(request.url);
@@ -56,7 +59,7 @@ function consentAction(snapshot, request) {
   if (snapshot.checkboxes.some(box => !PERMISSIONS.some(pattern => pattern.test(box.name)) &&
       !/^Select all$/i.test(box.name))) return { kind: "human" };
   const unchecked = snapshot.checkboxes.find(box => !box.checked && PERMISSIONS.some(pattern => pattern.test(box.name)));
-  if (unchecked) return { kind: "checkbox", name: unchecked.name };
+  if (unchecked) return { kind: "checkbox", name: unchecked.name, ...(unchecked.index === undefined ? {} : { index: unchecked.index }) };
   const existingAccess = url.pathname === "/signin/oauth/v3/consent" && snapshot.checkboxes.length === 0 &&
     snapshot.text.includes(`${request.clientName} already has some access`) &&
     snapshot.text.includes(`See the 2 services that ${request.clientName} has some access to.`);
@@ -74,20 +77,25 @@ function consentAction(snapshot, request) {
 }
 
 async function snapshot(page) {
-  return page.evaluate(() => {
+  return page.evaluate(selector => {
     const visible = element => element.getClientRects().length > 0;
-    const name = element => element.getAttribute("aria-label") || element.innerText || "";
+    const clean = text => (text || "").replace(/\s+/g, " ").trim();
+    // A box on the consent page is named through aria-labelledby, not aria-label or a <label>.
+    const labelledBy = element => clean((element.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean)
+      .map(id => document.getElementById(id)?.innerText || "").join(" "));
+    const name = element => element.getAttribute("aria-label") || labelledBy(element) || element.innerText || "";
     return {
       url: location.href,
       text: document.body.innerText,
       accounts: [...document.querySelectorAll("[data-identifier], [data-email]")].filter(visible)
         .map(element => element.getAttribute("data-identifier") || element.getAttribute("data-email")),
       buttons: [...document.querySelectorAll("button, a, [role=button]")].filter(visible).map(name),
-      checkboxes: [...document.querySelectorAll("input[type=checkbox], [role=checkbox]")].filter(visible)
-        .map(element => ({ name: name(element) || element.labels?.[0]?.innerText || "",
+      checkboxes: [...document.querySelectorAll(selector)].map((element, index) => ({ element, index }))
+        .filter(({ element }) => visible(element))
+        .map(({ element, index }) => ({ name: clean(name(element) || element.labels?.[0]?.innerText), index,
           checked: element.checked || element.getAttribute("aria-checked") === "true" })),
     };
-  });
+  }, CHECKBOXES);
 }
 
 async function authorize(request, { launchChrome, progress, returnFocus }) {
@@ -138,7 +146,9 @@ async function authorize(request, { launchChrome, progress, returnFocus }) {
           await page.locator(`[data-identifier=${JSON.stringify(action.email)}], [data-email=${JSON.stringify(action.email)}]`)
             .first().click({ timeout: 2500 });
         } else if (action.kind === "checkbox") {
-          await page.getByRole("checkbox", { name: action.name, exact: true }).check({ timeout: 2500 });
+          // The box the snapshot read, by its place on the page: its name is not always an accessible name.
+          await (action.index === undefined ? page.getByRole("checkbox", { name: action.name, exact: true })
+            : page.locator(CHECKBOXES).nth(action.index)).check({ timeout: 2500 });
         } else {
           await page.getByRole("button", { name: action.name, exact: true }).or(
             page.getByRole("link", { name: action.name, exact: true })).first().click({ timeout: 2500 });

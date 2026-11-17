@@ -483,8 +483,21 @@ it("shows WhatsApp's code while it waits on a scan", async () => {
   expect(code.getAttribute("src")).toBe("/api/install/qr?connect=1&t=1")
 })
 
+it("connects Gmail only once Google Cloud's terms are accepted on the person's behalf", async () => {
+  mount()
+  const connect = await within(row("Gmail")).findByRole("button", { name: "Gmail: Connect" })
+  expect(connect.hasAttribute("disabled")).toBe(true)
+  fireEvent.click(
+    within(row("Gmail")).getByRole("checkbox", { name: /I accept Powerpacks accepting GCP ToS/ }),
+  )
+  expect(connect.hasAttribute("disabled")).toBe(false)
+})
+
 it("connects Gmail with the Powerset address, then adds another mailbox to the signed-in ones", async () => {
   mount()
+  fireEvent.click(
+    await within(row("Gmail")).findByRole("checkbox", { name: /I accept Powerpacks accepting GCP ToS/ }),
+  )
   fireEvent.click(await within(row("Gmail")).findByRole("button", { name: "Gmail: Connect" }))
   await waitFor(() =>
     expect(state.posts).toContainEqual({

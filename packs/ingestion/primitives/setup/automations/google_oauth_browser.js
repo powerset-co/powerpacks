@@ -20,6 +20,12 @@
  *   2026-10-28: waits are measured (page_wait.js): a page settles when two reads agree, the
  *     network is dead when Chrome says so and nothing answers for a minute, the person is gone
  *     after five idle minutes. No networkidle: Google's long-polls never let it fire.
+ *   2026-11-14: --mode accept-terms agrees to the Google Cloud Terms of Service a Google account
+ *     must accept before it can create a project. The scopes check waits for the Data Access
+ *     page's tables: it read the page while only the nav and a spinner were up, and reported
+ *     saved scopes as missing.
+ *   2026-11-16: settle counts a spinner on screen as still loading (every Console page), and
+ *     gives a slow document 90 s while the network is alive.
  */
 
 const fs = require("fs");
@@ -87,11 +93,52 @@ function log(message) {
 // Wait for the page to settle (page_wait.js: loaded, and two reads agree), and log how long it
 // actually took so timings are visible in the job log. Never throws; the element waits that
 // follow are the backstop for a page that would not settle by `until`.
-async function settle(page, label = "settle", until = Date.now() + 30000) {
+// Measured on the live Console (2026-11-16): content follows the full-pane spinner by 1-10 s on a
+// throttled network with a warm cache, and with a cold cache at 400 kbit/s the document itself
+// takes about a minute. So: 90 s for the document while the network is alive (page_wait.js ends
+// the wait early when it is dead), and 45 s for a spinner.
+async function settle(page, label = "settle", until = Date.now() + 90000, spinnerMs = 45000) {
   const start = Date.now();
-  const stable = await settled(page, until);
-  log(`${label}: waited ${Date.now() - start}ms${stable === null ? " (not settled)" : ""}`);
+  let stable = await settled(page, until);
+  // A Console page draws its frame, then a spinner while it fetches its content: two reads of
+  // that agree, so it "settled" with nothing on it and a check read saved work as missing. A
+  // spinner on screen is still loading; once it goes, settle again on what replaced it.
+  // The spinner is Google's markup and there are stretches without one, so the positive sign
+  // counts too: a Console page whose text is only its frame (top bar and nav, 96 characters
+  // measured) has not drawn yet.
+  // Its own clock, not `until`: a document that used up `until` may still be drawing.
+  const spinnerUntil = Date.now() + spinnerMs;
+  let spun = false;
+  while (Date.now() < spinnerUntil && (await spinning(page) || await bare(page))) {
+    spun = true;
+    await page.waitForTimeout(250);
+  }
+  if (spun) stable = await settled(page, Math.max(until, Date.now() + 10000));
+  log(`${label}: waited ${Date.now() - start}ms${spun ? " (loading)" : ""}${stable === null ? " (not settled)" : ""}`);
   await snapshot(page);
+}
+
+// Whether a Console page shows only its frame. Other sites (Google's sign-in) are never bare.
+// Measured live: the frame is 96 characters, 230 with Google's free-trial banner; the smallest
+// drawn page (Clients, one client) is 320 without the banner.
+const FRAME_CHARS = 280;
+async function bare(page) {
+  if (!page.url().startsWith("https://console.cloud.google.com/") && !process.env.POWERPACKS_TEST_CONSOLE) return false;
+  const text = await page.locator("body").innerText({ timeout: 2000 }).catch(() => null);
+  return text !== null && text.trim().length < FRAME_CHARS;
+}
+
+// Whether the Console shows a loading spinner: an indeterminate progress indicator with a size.
+function spinning(page) {
+  return page.evaluate(() => [...document.querySelectorAll(
+    '.pcc-loading-overlay, [role="progressbar"], mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, cfc-progress-spinner, cfc-loader',
+  )].some((node) => {
+    // Not aria-hidden: the Console's first, full-pane spinner (.pcc-loading-overlay) carries it.
+    if (node.hasAttribute("aria-valuenow")) return false;
+    const box = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity) > 0;
+  })).catch(() => false);
 }
 
 // A picture of the page as it stands, for the person watching from Powerpacks (the Sources
@@ -456,6 +503,33 @@ async function setupConsent(page, project, email, clientName, audience, timeoutM
   await requireGoogleAuthConfigured(page);
 }
 
+// A Google account that has never used Cloud must agree to the Google Cloud Terms of Service
+// (a dialog on its first Console visit) before `gcloud projects create` works; there is no API
+// for it. The person agreed in Powerpacks, so the dialog's required box is checked and agreed
+// to; the optional email-updates choices are left alone.
+async function acceptCloudTerms(page) {
+  await gotoPage(page, `https://console.cloud.google.com/?authuser=${encodeURIComponent(consoleAccount)}`, "Console home");
+  await settle(page);
+  const agree = page.getByRole("button", { name: /Agree and continue/i });
+  if (!(await visible(agree, 4000))) {
+    log("no Terms of Service dialog");
+    return { ok: true, accepted: false };
+  }
+  const box = page.getByRole("checkbox", { name: /Terms of Service/i });
+  if (await visible(box, 2000)) {
+    log("checking the Terms of Service box");
+    await box.first().check({ force: true, timeout: 2500 }).catch(() => box.first().click({ force: true, timeout: 2500 }));
+  }
+  await clickLocator(agree, "Agree and continue", 2500);
+  await page.waitForTimeout(2500);
+  await settle(page);
+  if (await visible(agree, 1500)) {
+    throw new StepError("terms.agree", "The Google Cloud Terms of Service dialog is still open.");
+  }
+  log("Terms of Service accepted");
+  return { ok: true, accepted: true };
+}
+
 async function modalRoot(page) {
   const dialogs = page.getByRole("dialog");
   if (await visible(dialogs, 1200)) return dialogs.last();
@@ -495,6 +569,7 @@ async function addScopes(page, project) {
   const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes");
   await settle(page);
+  await scopesPageDrawn(page);
 
   const existing = await verifyScopesOnCurrentPage(page);
   if (existing.ok) {
@@ -630,10 +705,20 @@ async function verifyScopesOnCurrentPage(page) {
   };
 }
 
+// The Data Access page settles on its nav and a spinner before its scope tables draw: a read then
+// finds no scopes although they are saved. The page's own button says the tables are there.
+async function scopesPageDrawn(page) {
+  await visible(page.getByRole("button", { name: /Add or remove scopes/i }), 20000);
+}
+
 async function verifyScopes(page, project) {
   const scopesUrl = consoleUrl("auth/scopes", project);
   await gotoPage(page, scopesUrl, "OAuth scopes verification");
   await settle(page);
+  await scopesPageDrawn(page);
+  for (const scope of GMAIL_SCOPES) {
+    await visible(page.getByText(scope.replace("https://www.googleapis.com", ""), { exact: false }), 5000);
+  }
   return verifyScopesOnCurrentPage(page);
 }
 
@@ -868,7 +953,9 @@ async function main() {
 
   let payload;
   try {
-    if (mode === "add-test-users") {
+    if (mode === "accept-terms") {
+      payload = { status: "ok", project, ...(await acceptCloudTerms(page)) };
+    } else if (mode === "add-test-users") {
       const added = await addTestUsers(page, project, email, testUsers, timeoutMs);
       payload = {
         status: "ok",
@@ -920,7 +1007,7 @@ async function main() {
   result(payload);
 }
 
-module.exports = { launchChrome };
+module.exports = { launchChrome, settle, spinning };
 
 if (require.main === module) main().catch((error) => {
   result({ status: "error", message: String(error && error.message ? error.message : error) });

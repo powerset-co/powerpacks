@@ -10,6 +10,8 @@ it and maps its status to an exit code. Cross-module calls are
 module-qualified so tests patch the defining submodule.
 
 Changelog:
+  2026-11-14: a project create refused for the Google Cloud Terms of Service accepts them in
+    the saved profile (oauth_browser.run_browser_mode("accept-terms")) and creates once more.
   2026-09-23 (typed rows): the flow reads the `ensure_gcloud_auth` /
     `create_gcloud_project` / `choose_project_id` payload keys directly and the
     browser script's fields through `oauth_browser.browser_status` /
@@ -207,6 +209,14 @@ class BrowserSetup:
         project_result: dict[str, Any] = {"status": "skipped", "project": project_id}
         if self.create_project:
             project_result = gcloud_project.create_gcloud_project(project_id, self.project_name)
+            if project_result["status"] == "error" and gcloud_project.is_terms_error(str(project_result["message"])):
+                progress("Accepting the Google Cloud Terms of Service...")
+                terms = oauth_browser.run_browser_mode(
+                    "accept-terms", project=project_id, email=account_email, profile_dir=self.profile_dir)
+                if oauth_browser.browser_status(terms) != "ok":
+                    return {"status": "error", "message": "Google Cloud Terms of Service were not accepted.",
+                            "project": project_result, "terms": terms}
+                project_result = gcloud_project.create_gcloud_project(project_id, self.project_name)
             if project_result["status"] != "ok":
                 return {
                     "status": "error",
