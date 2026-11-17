@@ -28,7 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-4o-mini")
 DEFAULT_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT")
 DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 
@@ -148,7 +147,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Expand a search query into role_search_filters via parallel extractors")
     parser.add_argument("--query", help="Natural-language search query")
     parser.add_argument("--model", default=None,
-                        help=f"Override model for all extractors (default keeps extractor-specific models; reported default: {DEFAULT_MODEL})")
+                        help="One model for every extractor (default: each extractor's own, parallel_extractors.EXTRACTOR_MODELS)")
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
                         help="Reasoning effort for supported query-expansion models")
     parser.add_argument("--prompts-dir",
@@ -205,7 +204,7 @@ def main() -> None:
 
     started = time.time()
     try:
-        from parallel_extractors import expand_query_parallel
+        from parallel_extractors import EXTRACTOR_MODELS, expand_query_parallel
         result = asyncio.run(expand_query_parallel(
             args.query,
             api_key=api_key,
@@ -222,7 +221,8 @@ def main() -> None:
         output = {
             "primitive": "expand_search_request",
             "status": "completed",
-            "model": args.model or DEFAULT_MODEL,
+            # The model each extractor ran on: --model for all of them, else each one's own.
+            "models": {name: args.model or model for name, model in EXTRACTOR_MODELS.items()},
             "reasoning_effort": args.reasoning_effort,
             "prompt_bundle": prompt_manifest,
             "prompt_bundle_snapshot": str(Path(args.snapshot_prompts_dir).resolve()) if args.snapshot_prompts_dir else None,
