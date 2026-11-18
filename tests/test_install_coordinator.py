@@ -51,7 +51,7 @@ class InstallCoordinatorTests(unittest.TestCase):
     def build_account(self, root, *, pid, retry_command, plan=None):
         def run():
             self.events.append("account")
-            event = {0: "network.ready", 1: "account.error", 10: "network.empty"}[self.account_code]
+            event = {0: "network.ready", 1: "account.error", 10: "network.unconfirmed"}[self.account_code]
             self.status.write(event, step=InstallStep.NETWORK, pid=os.getpid(), retry_command=retry_command,
                               account_email=self.account_email, network="Personal Network",
                               email=self.account_email, count=1)

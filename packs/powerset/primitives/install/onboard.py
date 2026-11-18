@@ -33,9 +33,7 @@ from packs.shared.web.server import start_server
 NEEDS_YOU = 10
 # Set by the desktop app (desktop/src-tauri): sign-ins show inside the app, never in a browser.
 DESKTOP = os.environ.get("POWERPACKS_DESKTOP") == "1"
-REQUIRED_KEYS = ("OPENAI_API_KEY", "TURBOPUFFER_API_KEY", "DATABASE_URL")
-# Local processing needs only this one; the others serve hosted search.
-_PROCESSING_KEY = "OPENAI_API_KEY"
+REQUIRED_KEYS = ("OPENAI_API_KEY", "POWERSET_API_KEY")
 
 
 @dataclass(frozen=True)
@@ -192,21 +190,13 @@ class Onboarding:
         self.progress("network.checking")
         networks = [Network.parse(row) for row in self.request("/v2/sets")]
         selected = self.choose_network(networks, account)
-        largest = max(networks, key=lambda network: network.person_count, default=None)
-        # The agent can offer the largest network the account has instead.
-        alternative = ({"alternative": {"name": largest.name, "person_count": largest.person_count}}
-                       if largest and largest.person_count else None)
-        if networks and all(network.person_count == 0 for network in networks):
-            return self.waiting("network.all_empty", email=self.email)
         if selected is None:
-            return self.waiting("network.unconfirmed", email=self.email, details=alternative)
+            return self.waiting("network.unconfirmed", email=self.email)
         name = "Personal Network" if selected.is_personal and selected.name == "Personal Connections" else selected.name
         found = {"network": name, "email": self.email, "count": selected.person_count}
         self.progress("network.checking_one", network_name=name, person_count=selected.person_count, **found)
         keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
-        if selected.person_count == 0:
-            return self.waiting("network.empty", details=alternative, **found)
-        record = self.progress("network.ready_small" if selected.person_count < 10 else "network.ready", **found)
+        record = self.progress("network.ready", **found)
         print(f"DONE: {record['message']} Ask me to find someone.", flush=True)
         return 0
 
@@ -218,12 +208,8 @@ class Onboarding:
             missing = self.prepare_credentials()
             if missing:
                 print("Missing search credentials: " + ", ".join(missing), file=sys.stderr)
-            if _PROCESSING_KEY in missing:
-                return self.waiting("credentials.not_provisioned", email=self.email)
             if missing:
-                # Local setup does not use hosted search; say so and keep going.
-                self.progress("credentials.hosted_off", email=self.email)
-                return NEEDS_YOU
+                return self.waiting("credentials.not_provisioned", email=self.email)
             return self.check_network(account)
         except urllib.error.HTTPError as exc:
             print(f"{self.step.value}: HTTP {exc.code} at {urllib.parse.urlsplit(exc.filename).path}", file=sys.stderr)

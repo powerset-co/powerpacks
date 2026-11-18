@@ -210,11 +210,6 @@
       "line": "Search access isn't set up for {email} yet.",
       "note": "Ask Powerset to finish enabling search for this account, then tell me to retry."
     },
-    "credentials.hosted_off": {
-      "step": "credentials",
-      "state": "skipped",
-      "line": "Hosted search isn't enabled for {email} yet, so local setup continues. Tell me if you want to sign in with a different account."
-    },
     "network.checking": {
       "step": "network",
       "state": "running",
@@ -225,33 +220,16 @@
       "state": "running",
       "line": "Checking {network} for {email}"
     },
-    "network.all_empty": {
-      "step": "network",
-      "state": "waiting",
-      "line": "Every network for {email} has 0 people.",
-      "note": "Tell me in chat whether to switch accounts or connect your contacts."
-    },
     "network.unconfirmed": {
       "step": "network",
       "state": "waiting",
       "line": "Your network for {email} could not be confirmed.",
       "note": "Tell me in chat whether to switch accounts or choose a network."
     },
-    "network.empty": {
-      "step": "network",
-      "state": "waiting",
-      "line": "{network} for {email} has 0 people.",
-      "note": "Tell me in chat whether to switch accounts or connect your contacts."
-    },
     "network.ready": {
       "step": "network",
       "state": "completed",
-      "line": "{network} for {email} is ready: {count:,} people in this network."
-    },
-    "network.ready_small": {
-      "step": "network",
-      "state": "completed",
-      "line": "{network} for {email} is ready: {count:,} people in this network. This is a small network; you may want another network or account."
+      "line": "{network} for {email} is ready."
     },
     "account.denied": {
       "step": null,
@@ -1055,7 +1033,6 @@
     "install.unreadable": "Installation status could not be read. Check the installation log.",
     "account.reused": "Already signed in as {email}.",
     "account.login_failed": "Powerset sign-in did not finish. Try again to reopen the sign-in page.",
-    "credentials.hosted_off": "Hosted search isn't enabled for {email} yet, so local setup continues.",
     "account.error": "Setup could not finish. Check the installation log, then try again.",
     "tools.needs_password": "Your Mac password is needed to prepare import tools.",
     "gmail.app.stopped": "Gmail setup stopped in Google Cloud. Try again to pick up from here.",
