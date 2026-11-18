@@ -159,6 +159,7 @@ class SyncCloudTest(unittest.TestCase):
                  "starts_at": {"year": 2026, "month": 5, "day": 0}, "ends_at": None, "is_current_position": True},
                 {"title": "Intern", "company_name": "Beta", "starts_at": {"year": 2019, "month": 6, "day": 0},
                  "ends_at": {"year": 2019, "month": 9, "day": 0}, "is_current_position": False}]),
+            "rapidapi_response": json.dumps({"skills": [{"name": "SaaS", "endorsementsCount": 40}, {"name": "Python"}]}),
             "education": json.dumps([{"schoolName": "State U", "degree": "Master's degree", "fieldOfStudy": "Computer Science",
                                       "starts_at": {"year": 2010, "month": 0, "day": 0}, "ends_at": {"year": 2012, "month": 0, "day": 0}}]),
         }
@@ -190,6 +191,7 @@ class SyncCloudTest(unittest.TestCase):
                           for school in sent["education"]],
                          [{"school_name": "State U", "degree": "Master's degree", "field_of_study": "Computer Science",
                            "start_year": 2010, "end_year": 2012}])
+        self.assertEqual(sent["tech_skills"], ["SaaS", "Python"])  # names, the list of strings the API joins
 
     def test_cli_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

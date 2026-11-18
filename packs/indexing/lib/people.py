@@ -630,7 +630,8 @@ def _hydrated_context(person: dict[str, Any]) -> dict[str, Any]:
         "summary": person.get("summary") or None,
         "positions": positions,
         "education": education,
-        "tech_skills": rapid.get("skills") or [],
+        # Skill names: the Powerset API reads a list of strings; LinkedIn returns {"name": ...} rows.
+        "tech_skills": [str(name) for name in (skill.get("name") if isinstance(skill, dict) else skill for skill in rapid.get("skills") or []) if name],
         "linkedin_url": person.get("linkedin_url") or None,
         "profile_picture_url": person.get("profile_picture_url") or None,
         "x_twitter_handle": person.get("x_twitter_handle") or None,

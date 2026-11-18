@@ -20,9 +20,10 @@ Then test local search with:
     prepare --backend local --db .powerpacks/search-index/local-search.duckdb ...
 
 Changelog:
-- 2026-11-18: a profile's hydrated_context carries positions and education under the Powerset
-  API's field names (position_title, start_date, is_current; start_year, end_year) instead of
-  the raw experience rows, whose title, dates and current flag the API read back blank.
+- 2026-11-18: a profile's hydrated_context is the one indexing builds everywhere else
+  (people._hydrated_context), in the Powerset API's field names (position_title, start_date,
+  is_current; start_year, end_year). The copy built here pasted in the raw experience rows,
+  whose title, dates and current flag the API read back blank.
 - 2026-07-26: an external --records-dir that ships person_profiles.records.parquet
   keeps its own profiles; the implicit .powerpacks merged-people.csv fallback no
   longer overrides caller-provided profile records (it still refreshes profiles
@@ -50,7 +51,7 @@ DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
 from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
-from packs.indexing.lib.people import _education_to_profile, _position_to_profile, build_people_records, flatten_people  # noqa: E402
+from packs.indexing.lib.people import _hydrated_context, build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -865,20 +866,9 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
             linkedin_url = person.get("linkedin_url") or rapid.get("url") or rapid.get("linkedinUrl") or ""
             location = person.get("location_raw") or ", ".join(str(person.get(k) or "") for k in ["city", "state", "country"] if person.get(k))
             full_name = person.get("full_name") or " ".join(part for part in [person.get("first_name"), person.get("last_name")] if part)
-            context = {
-                "person_id": pid,
-                "name": full_name,
-                "headline": person.get("headline") or rapid.get("headline") or "",
-                "summary": person.get("summary") or rapid.get("summary") or "",
-                "location": location or None,
-                "linkedin_url": linkedin_url,
-                "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
-                # The profile as the Powerset API reads it (position_title, start_date, is_current;
-                # start_year, end_year): cloud sync sends this as is.
-                "positions": [_position_to_profile(exp, idx) for idx, exp in enumerate(work) if isinstance(exp, dict)],
-                "education": [_education_to_profile(item) for item in edu if isinstance(item, dict)],
-                "tech_skills": _string_list(rapid.get("skills")),
-            }
+            # The one profile the rest of indexing builds, in the Powerset API's field names
+            # (position_title, start_date, is_current; start_year, end_year): cloud sync sends it as is.
+            context = _hydrated_context(person)
             yield {
                 "id": pid,
                 "person_id": pid,
