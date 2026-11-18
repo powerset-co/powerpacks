@@ -36,6 +36,22 @@ def load_pipeline_module():
     return module
 
 
+def store_profiles(conn) -> None:
+    """As the index build leaves it: a profile row for everyone with positions, each storing the
+    person's full profile (what local hydration reads)."""
+    spec = importlib.util.spec_from_file_location("build_local_duckdb_shim_pipeline_test", ROOT / "scripts/build-local-duckdb-shim.py")
+    shim = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(shim)
+    position_columns = {row[0] for row in conn.execute("DESCRIBE local_people_positions").fetchall()}
+    person_columns = "".join(f'any_value("{column}") AS "{column}", ' for column in shim.POSITION_PERSON_DUPLICATE_COLUMNS
+                             if column in position_columns)
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS local_person_profiles AS
+                     SELECT person_id AS id, person_id, person_id AS base_id, {person_columns}CAST(NULL AS JSON) AS hydrated_context
+                     FROM local_people_positions GROUP BY person_id""")
+    shim.store_hydrated_profiles(conn)
+
+
 def write_local_search_db(path: Path) -> None:
     try:
         import duckdb  # type: ignore
@@ -409,6 +425,7 @@ def write_local_search_db(path: Path) -> None:
             )
         ],
     )
+    store_profiles(conn)
     conn.close()
 
 
@@ -1143,6 +1160,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
                 ]
             ],
         )
+        store_profiles(conn)
         conn.close()
 
     def cluster(self, role_filters):

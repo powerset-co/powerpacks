@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Hydrate a Powerpacks frontier: the local DuckDB index, or a set's people through the Powerset API (POST /v2/hydrate)."""
+"""Hydrate a Powerpacks frontier: the local DuckDB index, or a set's people through the Powerset API (POST /v2/hydrate).
+
+A local person's profile is stored: the index build assembles it once from the finished position,
+summary and education rows (assemble_local_person_rows) and writes it to
+local_person_profiles.hydrated_context, and a search reads that one row (fetch_local_person_batch).
+The same stored profile is what cloud sync sends. Interaction counts are read beside it, since a
+refresh changes them without a rebuild.
+
+Changelog:
+  2026-11-18: local hydration reads the stored profile instead of assembling it on every search.
+"""
 
 from __future__ import annotations
 
@@ -510,7 +520,8 @@ def build_local_person_rows(
         if pid:
             positions_by_person.setdefault(pid, []).append(row)
     for rows in positions_by_person.values():
-        rows.sort(key=lambda row: (not bool(row.get("is_current")), -(int(row.get("start_date_epoch") or 0))))
+        # The id settles ties, so the same index always stores the same profile.
+        rows.sort(key=lambda row: (not bool(row.get("is_current")), -(int(row.get("start_date_epoch") or 0)), str(row.get("id") or "")))
 
     summaries_by_person = {
         str(row.get("person_id") or row.get("base_id")): row
@@ -522,6 +533,8 @@ def build_local_person_rows(
         pid = str(row.get("person_id") or row.get("base_id") or "")
         if pid:
             education_by_person.setdefault(pid, []).append(row)
+    for rows in education_by_person.values():  # latest first
+        rows.sort(key=lambda row: (-(int(row.get("end_year") or row.get("graduation_year") or 0)), str(row.get("id") or "")))
 
     rows: list[dict[str, Any]] = []
     for pid in person_ids:
@@ -535,10 +548,10 @@ def build_local_person_rows(
 
         positions = [local_position(row) for row in position_source]
         if not positions:
-            positions = _list_value(profile.get("work_experiences")) or _list_value(profile_context.get("positions"))
+            positions = _list_value(profile_context.get("positions")) or _list_value(profile.get("work_experiences"))
         education = [local_education(row) for row in education_source]
         if not education:
-            education = _list_value(profile.get("education")) or _list_value(profile_context.get("education"))
+            education = _list_value(profile_context.get("education")) or _list_value(profile.get("education"))
         current = next((row for row in position_source if row.get("is_current")), position_source[0] if position_source else {})
         title = profile.get("current_title") or current.get("position_title") or current.get("raw_title")
         company = profile.get("current_company") or current.get("company_name")
@@ -647,19 +660,74 @@ def api_source_attribution(person_ids: list[str], env_file: Path | None, set_id:
     return out
 
 
+def _profile_table(conn: Any) -> str:
+    return "local_person_profiles" if table_exists(conn, "local_person_profiles") else "local_people_profiles" if table_exists(conn, "local_people_profiles") else ""
+
+
+def assemble_local_person_rows(conn: Any, person_ids: list[str]) -> list[dict[str, Any]]:
+    """Each person's full profile from the index's finished rows: positions with their company and
+    classification, summary, education, company logos. The index build runs this once per person
+    and stores the result; nothing assembles a profile at search time."""
+    prepare_requested_ids(conn, person_ids)
+    profile_table = _profile_table(conn)
+    profile_rows = local_rows(conn, profile_table, select_columns=LOCAL_PROFILE_HYDRATE_COLUMNS) if profile_table else []
+    position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
+    attach_company_logos(conn, position_rows)
+    summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
+    education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
+    return build_local_person_rows(person_ids, profile_rows, position_rows, summary_rows, education_rows)
+
+
+def stored_profile(row: dict[str, Any]) -> dict[str, Any]:
+    """What the index stores for an assembled person: the profile itself, in the Powerset API's
+    field names. The interaction total is left out, since it lives on the profile row and a
+    refresh changes it there."""
+    context = {key: value for key, value in row["hydrated_context"].items() if key != "total_interactions"}
+    if row.get("inferred_birth_year"):
+        context["inferred_birth_year"] = row["inferred_birth_year"]
+    return context
+
+
 def fetch_local_person_batch(db_path: str, person_ids: list[str]) -> list[dict[str, Any]]:
+    """Each person's stored profile, one row read per person."""
     import duckdb  # type: ignore
 
     with duckdb.connect(str(db_path), read_only=True) as conn:
         prepare_requested_ids(conn, person_ids)
-        profile_table = "local_person_profiles" if table_exists(conn, "local_person_profiles") else "local_people_profiles" if table_exists(conn, "local_people_profiles") else ""
-        profile_rows = local_rows(conn, profile_table, select_columns=LOCAL_PROFILE_HYDRATE_COLUMNS) if profile_table else []
-        position_rows = local_rows(conn, "local_people_positions", select_columns=LOCAL_POSITION_HYDRATE_COLUMNS)
-        attach_company_logos(conn, position_rows)
-        summary_rows = local_rows(conn, "local_summaries", select_columns=LOCAL_SUMMARY_HYDRATE_COLUMNS)
-        education_rows = local_rows(conn, "local_people_education", select_columns=LOCAL_EDUCATION_HYDRATE_COLUMNS)
+        profile_table = _profile_table(conn)
+        profiles = local_rows(conn, profile_table, select_columns=LOCAL_PROFILE_HYDRATE_COLUMNS) if profile_table else []
         interaction_counts = local_interaction_counts(conn, person_ids)
-    return build_local_person_rows(person_ids, profile_rows, position_rows, summary_rows, education_rows, interaction_counts)
+    by_person = {str(profile.get("person_id") or profile.get("base_id") or profile.get("id")): profile for profile in profiles}
+    rows = []
+    for pid in person_ids:
+        profile = by_person.get(pid)
+        if profile is None:
+            continue
+        context = _dict_value(profile.get("hydrated_context"))
+        total_interactions = interaction_counts.get(pid)
+        if total_interactions is None:
+            total_interactions = profile.get("total_interactions")
+        rows.append({
+            "id": pid,
+            "full_name": profile.get("full_name") or context.get("name") or "",
+            "headline": context.get("headline"),
+            "summary": context.get("summary"),
+            "location_raw": context.get("location"),
+            "city": profile.get("city"),
+            "state": profile.get("state"),
+            "country": profile.get("country"),
+            "public_profile_url": profile.get("public_profile_url") or profile.get("linkedin_url") or context.get("linkedin_url"),
+            "profile_picture_url": profile.get("profile_picture_url") or context.get("profile_picture_url"),
+            "hydrated_context": {**context, "total_interactions": total_interactions},
+            "x_twitter_handle": profile.get("x_twitter_handle") or profile.get("twitter_handle"),
+            "x_twitter_followers": profile.get("x_twitter_followers"),
+            "linkedin_followers": profile.get("linkedin_followers"),
+            "linkedin_connections": profile.get("linkedin_connections"),
+            "ig_followers": profile.get("ig_followers"),
+            "inferred_birth_year": profile.get("inferred_birth_year") or context.get("inferred_birth_year"),
+            "total_interactions": total_interactions,
+        })
+    return rows
 
 
 def chunked(values: list[str], size: int) -> list[list[str]]:

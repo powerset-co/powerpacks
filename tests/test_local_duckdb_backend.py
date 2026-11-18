@@ -496,6 +496,14 @@ class LocalDuckDBFixtureMixin:
                     )
                 ],
             )
+            # As the index build leaves it: everyone with positions has a profile row, and each row
+            # stores the person's full profile.
+            con.execute(
+                "insert into local_person_profiles (id, person_id, base_id) "
+                "select distinct person_id, person_id, person_id from local_people_positions "
+                "where person_id not in (select person_id from local_person_profiles)"
+            )
+            build_local_duckdb_shim.store_hydrated_profiles(con)
         finally:
             con.close()
 
@@ -1353,6 +1361,23 @@ class LocalDuckDBBackendTests(LocalDuckDBFixtureMixin, unittest.TestCase):
         self.assertEqual(position["role_ids"], ["software_engineer", "backend_engineer"])
         self.assertNotIn("vector", position)
         self.assertNotIn("word_tokens", position)
+
+    def test_the_stored_profile_is_the_one_local_search_returns_and_sync_sends(self) -> None:
+        """The index stores each person's full profile once (local_person_profiles.hydrated_context),
+        under the Powerset API's field names; hydration returns that row and cloud sync sends it."""
+        import duckdb
+
+        with duckdb.connect(self.db_path, read_only=True) as con:
+            stored = json.loads(con.execute(
+                "select hydrated_context from local_person_profiles where person_id = 'person-engineer'").fetchone()[0])
+        position = stored["positions"][0]
+        self.assertEqual((position["position_title"], position["is_current"]), ("Backend Engineer", True))
+        self.assertTrue(position["start_date"])
+        self.assertEqual(position["company_domain"], "infradb.example")  # from the finished rows, not the raw job list
+        self.assertTrue(position["company_description"])
+        self.assertNotIn("total_interactions", stored)  # read beside the profile: a refresh changes it
+        returned = hydrate_people.fetch_local_person_rows(["person-engineer"], db_path=self.db_path, workers=1)[0]["hydrated_context"]
+        self.assertEqual({key: value for key, value in returned.items() if key != "total_interactions"}, stored)
 
     def test_local_hydration_exposes_inferred_birth_year_and_age(self) -> None:
         rows = hydrate_people.fetch_local_person_rows(["person-founder"], db_path=self.db_path, workers=1, batch_size=1)
