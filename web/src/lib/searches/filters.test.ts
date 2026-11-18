@@ -8,6 +8,7 @@ import {
   filterRows,
   keptRows,
   liveFilters,
+  matchesText,
   NO_FILTERS,
   operatorOptions,
   taggedCount,
@@ -123,5 +124,59 @@ describe("toolbar values", () => {
       { id: "op-1", name: "Drew Kilo" },
       { id: "op-2", name: "emery Lima" },
     ])
+  })
+})
+
+// The cloud results page's search (network-search-api result_text_search.py), on local rows.
+describe("matchesText", () => {
+  const position = (title: string, company: string) => ({
+    title,
+    company,
+    company_url: "",
+    start_date: "",
+    end_date: "",
+    is_current: false,
+    description: "",
+    headcount: 0,
+    stage: "",
+    funding: 0,
+    logo_url: "",
+  })
+  const row = resultRow("p-1", "Robin Echo", {
+    pond: {
+      positions: [position("Staff Engineer", "Northwind"), position("Intern", "Contoso")],
+      matched_positions: [0],
+      vertical_sources: ["role"],
+    },
+  })
+
+  it("matches any part of the name, whatever the case, and an empty box matches everyone", () => {
+    expect(matchesText(row, "  ")).toBe(true)
+    expect(matchesText(row, "bin EC")).toBe(true)
+    expect(matchesText(row, "robyn")).toBe(false)
+  })
+
+  it("matches the title and company of matched positions only", () => {
+    expect(matchesText(row, "northwind")).toBe(true)
+    expect(matchesText(row, "staff eng")).toBe(true)
+    expect(matchesText(row, "contoso")).toBe(false)
+  })
+
+  it("skips positions when the person matched on something else, but still matches the name", () => {
+    const other = { ...row, row: { ...row.row, vertical_sources: ["education"] } }
+    expect(matchesText(other, "northwind")).toBe(false)
+    expect(matchesText(other, "robin")).toBe(true)
+    const unsourced = { ...row, row: { ...row.row, vertical_sources: [] } }
+    expect(matchesText(unsourced, "northwind")).toBe(true)
+  })
+
+  it("filters the table and the count with the other filters", () => {
+    expect(ids(filterRows(SCORED, only({ text: "person 12" }), NO_TAGS))).toEqual([
+      "score-person-12",
+      ...Array.from({ length: 5 }, (_, index) => `score-person-${120 + index}`),
+    ])
+    expect(
+      filterRows(SCORED, only({ text: "person 12", scores: new Set<Score>([1]) }), NO_TAGS),
+    ).toHaveLength(1)
   })
 })

@@ -103,6 +103,13 @@ describe("ResultsToolbar", () => {
     expect(lastFilters(onFiltersChange)?.scores).toEqual(new Set())
   })
 
+  it("has a search box that sets the text filter", () => {
+    const { onFiltersChange } = toolbar()
+    const box = screen.getByRole("searchbox", { name: "Search results by name or company" })
+    fireEvent.change(box, { target: { value: "casey" } })
+    expect(lastFilters(onFiltersChange)?.text).toBe("casey")
+  })
+
   it("has no score filter on a pond table", () => {
     toolbar({ scored: false })
     expect(screen.queryByRole("group", { name: "Overall score filter" })).toBeNull()

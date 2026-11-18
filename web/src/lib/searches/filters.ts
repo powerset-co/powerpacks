@@ -1,5 +1,5 @@
-// The results toolbar's filter over a table's rows (results.js filteredRows): tagged only
-// (and which tags), overall score, operators, plus the labels toggle and the count.
+// The results toolbar's filter over a table's rows (results.js filteredRows): the search box,
+// tagged only (and which tags), overall score, operators, plus the labels toggle and the count.
 
 import { readStored, writeStored } from "@/lib/storage"
 import type { Tagged } from "@/types/searches"
@@ -17,6 +17,8 @@ export type ScoreOf = (row: ResultRow) => number | null
 const modelScore: ScoreOf = (row) => row.overall
 
 export interface ResultFilters {
+  // The search box: a name, or a title or company the person matched on.
+  text: string
   taggedOnly: boolean
   // Within tagged only: people holding any of these tags; empty means any tag.
   tags: ReadonlySet<string>
@@ -26,6 +28,7 @@ export interface ResultFilters {
 }
 
 export const NO_FILTERS: ResultFilters = {
+  text: "",
   taggedOnly: false,
   tags: new Set(),
   scores: new Set(),
@@ -62,6 +65,27 @@ export function liveFilters(
   return { ...filters, taggedOnly: filters.taggedOnly && taggedCount(rows, tagged) > 0, tags }
 }
 
+// The sources whose matched positions are the person's evidence (the cloud results search,
+// network-search-api result_text_search.py); a row with no sources counts too.
+const POSITION_SOURCES = new Set(["role", "company_signal", "company_filter"])
+
+/**
+ * The search box, as the cloud results page searches: the text, as typed and whatever its
+ * case, anywhere in the person's name, or in the title and company of a position they matched on.
+ */
+export function matchesText(row: ResultRow, text: string): boolean {
+  const needle = text.trim().toLowerCase()
+  if (!needle) return true
+  const person = row.row
+  if (person.name.toLowerCase().includes(needle)) return true
+  const sources = person.vertical_sources
+  if (sources.length && !sources.some((source) => POSITION_SOURCES.has(source))) return false
+  return person.matched_positions.some((index) => {
+    const position = person.positions[index]
+    return position ? `${position.title}\n${position.company}`.toLowerCase().includes(needle) : false
+  })
+}
+
 function matches(row: ResultRow, filters: ResultFilters, tagged: Tagged, scoreOf: ScoreOf): boolean {
   const tags = tagsOf(tagged, row)
   const score = scoreOf(row)
@@ -72,7 +96,7 @@ function matches(row: ResultRow, filters: ResultFilters, tagged: Tagged, scoreOf
   const operatorOk =
     !filters.operators.size ||
     operatorsOf(row).some((operator) => filters.operators.has(operator.operator_id))
-  return tagOk && scoreOk && operatorOk
+  return tagOk && scoreOk && operatorOk && matchesText(row, filters.text)
 }
 
 /** Every row the filters keep, in order; a person ranked in two sections can stay in both. */
