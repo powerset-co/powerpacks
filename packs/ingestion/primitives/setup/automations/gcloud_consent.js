@@ -40,10 +40,17 @@ function consentAction(page, request) {
 async function loginGcloud(request, { launchChrome, progress, returnFocus }) {
   const callback = validateRequest(request);
   const deadline = Date.now() + request.timeoutSeconds * 1000;
-  // gcloud's localhost callback took the code; it then redirects to its success page.
-  const done = url => url.startsWith(callback) || url.startsWith("https://cloud.google.com/sdk/auth_success");
+  // The sign-in is done once the browser asks gcloud's localhost callback for a page: gcloud has
+  // the code. Where gcloud sends the browser next is Google's page to move, and it has (the
+  // success page went from cloud.google.com to docs.cloud.google.com), so it is not read.
+  let delivered = false;
+  const done = () => delivered;
+  const watch = opened => {
+    opened.on("request", sent => { if (sent.url().startsWith(callback)) delivered = true; });
+    return opened;
+  };
   let context = await launchChrome(request.profileDir, true);
-  let page = context.pages()[0] || await context.newPage();
+  let page = watch(context.pages()[0] || await context.newPage());
   let human = false;
   const open = () => page.goto(request.url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
   try {
@@ -66,7 +73,7 @@ async function loginGcloud(request, { launchChrome, progress, returnFocus }) {
         progress("sign_in");
         await context.close();
         context = await launchChrome(request.profileDir, false);
-        page = context.pages()[0] || await context.newPage();
+        page = watch(context.pages()[0] || await context.newPage());
         human = true;
         await open();
         continue;
