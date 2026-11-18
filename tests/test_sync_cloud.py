@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import gzip
+import importlib.util
 import json
 import sqlite3
 import sys
@@ -17,8 +19,10 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from packs.indexing.lib.artifact_io import iter_artifact_rows
 from packs.indexing.lib.identity import position_uuid, stable_person_id
 from packs.indexing.primitives.sync_cloud import sync_cloud
+from packs.ingestion.schemas.people_schema import PEOPLE_SCHEMA_COLUMNS
 from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH
 
 P1 = stable_person_id(public_identifier="ada-l")
@@ -138,6 +142,54 @@ class SyncCloudTest(unittest.TestCase):
             con.close()
             result = sync_cloud.sync(root, cloud, log=lambda _: None)
             self.assertEqual((result["upsert"], [p["person_id"] for p in cloud.applied[0]["people"]]), (1, [P1]))
+
+    def test_a_synced_profile_reads_back_with_title_dates_and_current(self):
+        """people.csv -> the index's profile -> the sync payload -> the fields the Powerset API's
+        hydrate reads (PersonContext.from_dict in network-search-api
+        api_v2/models/rerank/person_context.py). The index used to store the raw experience rows
+        (title, starts_at, is_current_position), which the API read back with no title, no dates
+        and nobody current."""
+        spec = importlib.util.spec_from_file_location("build_local_duckdb_shim_sync", REPO / "scripts/build-local-duckdb-shim.py")
+        shim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shim)
+        row = {column: "" for column in PEOPLE_SCHEMA_COLUMNS} | {
+            "id": P1, "full_name": "Ada L", "public_identifier": "ada-l", "linkedin_url": "https://www.linkedin.com/in/ada-l",
+            "work_experiences": json.dumps([
+                {"title": "Software Engineer", "company_name": "Acme", "company_linkedin_url": "https://www.linkedin.com/company/acme",
+                 "starts_at": {"year": 2026, "month": 5, "day": 0}, "ends_at": None, "is_current_position": True},
+                {"title": "Intern", "company_name": "Beta", "starts_at": {"year": 2019, "month": 6, "day": 0},
+                 "ends_at": {"year": 2019, "month": 9, "day": 0}, "is_current_position": False}]),
+            "education": json.dumps([{"schoolName": "State U", "degree": "Master's degree", "fieldOfStudy": "Computer Science",
+                                      "starts_at": {"year": 2010, "month": 0, "day": 0}, "ends_at": {"year": 2012, "month": 0, "day": 0}}]),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            people_csv = Path(tmp) / "people.csv"
+            with people_csv.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=PEOPLE_SCHEMA_COLUMNS)
+                writer.writeheader()
+                writer.writerow(row)
+            stored = next(iter_artifact_rows(shim.materialize_person_profiles_from_csv(people_csv, Path(tmp) / "records", "local:user")))["hydrated_context"]
+            root = build_root(Path(tmp) / "install")
+            con = duckdb.connect(str(root / sync_cloud.INDEX_RELATIVE))
+            con.execute("UPDATE local_person_profiles SET hydrated_context = ? WHERE person_id = ?",
+                        [stored if isinstance(stored, str) else json.dumps(stored), P1])
+            con.close()
+            cloud = FakeCloud()
+            sync_cloud.sync(root, cloud, log=lambda _: None)
+        sent = json.loads(next(p for p in cloud.applied[0]["people"] if p["person_id"] == P1)["profile"]["hydrated_context"])
+        # Exactly the keys the API takes from a stored position and a stored education row.
+        positions = [{key: position.get(key) for key in ("position_title", "company_name", "company_linkedin_url",
+                                                         "start_date", "end_date", "is_current")}
+                     for position in sent["positions"]]
+        self.assertEqual(positions, [
+            {"position_title": "Software Engineer", "company_name": "Acme", "company_linkedin_url": "https://www.linkedin.com/company/acme",
+             "start_date": "2026-05", "end_date": None, "is_current": True},
+            {"position_title": "Intern", "company_name": "Beta", "company_linkedin_url": None,
+             "start_date": "2019-06", "end_date": "2019-09", "is_current": False}])
+        self.assertEqual([{key: school.get(key) for key in ("school_name", "degree", "field_of_study", "start_year", "end_year")}
+                          for school in sent["education"]],
+                         [{"school_name": "State U", "degree": "Master's degree", "field_of_study": "Computer Science",
+                           "start_year": 2010, "end_year": 2012}])
 
     def test_cli_runs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -20,6 +20,9 @@ Then test local search with:
     prepare --backend local --db .powerpacks/search-index/local-search.duckdb ...
 
 Changelog:
+- 2026-11-18: a profile's hydrated_context carries positions and education under the Powerset
+  API's field names (position_title, start_date, is_current; start_year, end_year) instead of
+  the raw experience rows, whose title, dates and current flag the API read back blank.
 - 2026-07-26: an external --records-dir that ships person_profiles.records.parquet
   keeps its own profiles; the implicit .powerpacks merged-people.csv fallback no
   longer overrides caller-provided profile records (it still refreshes profiles
@@ -47,7 +50,7 @@ DUCKDB_LOCK_NAME = ".local-search-duckdb.lock"
 
 from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
-from packs.indexing.lib.people import build_people_records, flatten_people  # noqa: E402
+from packs.indexing.lib.people import _education_to_profile, _position_to_profile, build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
@@ -870,8 +873,10 @@ def materialize_person_profiles_from_csv(source: Path, run_dir: Path, operator_i
                 "location": location or None,
                 "linkedin_url": linkedin_url,
                 "profile_picture_url": person.get("profile_picture_url") or rapid.get("profilePicture") or "",
-                "positions": work,
-                "education": edu,
+                # The profile as the Powerset API reads it (position_title, start_date, is_current;
+                # start_year, end_year): cloud sync sends this as is.
+                "positions": [_position_to_profile(exp, idx) for idx, exp in enumerate(work) if isinstance(exp, dict)],
+                "education": [_education_to_profile(item) for item in edu if isinstance(item, dict)],
                 "tech_skills": _string_list(rapid.get("skills")),
             }
             yield {
