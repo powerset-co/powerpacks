@@ -54,8 +54,15 @@ const server = http.createServer((incoming, response) => {
     }, server.delay);
     return;
   }
+  // gcloud's callback answers with a redirect to Google's success page, which Google has moved
+  // before: `server.success` is where it sends the browser, off the callback's origin.
+  if (url.pathname === "/callback" && server.success) {
+    response.writeHead(302, { Location: `http://127.0.0.1:${server.address().port}${server.success}` });
+    response.end();
+    return;
+  }
   response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-  const body = url.pathname === "/callback" ? "<h1>Authorization successful!</h1>" :
+  const body = url.pathname === "/callback" || url.pathname === server.success ? "<h1>Authorization successful!</h1>" :
     `<h1>Synthetic sign-in: ${url.pathname.slice(1)}</h1><form method="post" action="${url.pathname}">
       <input name="value"><button>Next</button></form>`;
   response.end(`<!doctype html><html><body style="font:20px sans-serif;padding:40px">${body}
@@ -63,6 +70,7 @@ const server = http.createServer((incoming, response) => {
 });
 server.delay = 0;
 server.chain = 0;
+server.success = "";
 
 // Bound on every loopback address: gcloud's callback must be http://localhost.
 before(async () => { await new Promise(resolve => server.listen(0, resolve)); });
@@ -258,4 +266,16 @@ test("(f) the old gcloud loop (before #991) throws out mid-hop on slow 3G; the n
   t.diagnostic(`new loop: ${JSON.stringify(after.result)} after hops ${after.hops.join(",")}`);
   assert.deepEqual(after.result, { status: "ok" });
   assert.deepEqual(after.hops, HOPS.map(([hop]) => hop));
+});
+
+test("(g) gcloud's callback sends the browser on to a success page at an address the script never heard of: still done", { skip }, async t => {
+  server.delay = 0;
+  server.chain = 0;
+  server.success = "/moved/auth_success";
+  t.after(() => { server.success = ""; });
+  // Before: done meant the page sat on the callback or on cloud.google.com/sdk/auth_success. Google
+  // moved that page to docs.cloud.google.com, the window settled there, and the wait ran its
+  // five idle minutes although gcloud had the code in seconds.
+  const signIn = await gcloudSignIn(loginGcloud, FAST);
+  assert.deepEqual(signIn.result, { status: "ok" });
 });
