@@ -129,6 +129,7 @@ class RunTests(unittest.TestCase):
         (self.root / ".powerpacks/search-index").mkdir(parents=True)
         (self.root / daily.PEOPLE_CSV).write_text("name\nA\nB\n")
         (self.root / daily.INDEX_FINGERPRINT).write_text("old")
+        self.logbooks = MagicMock()
 
     def run_with(self, manifest, signins, signed):
         def onboard(*_args, **_kwargs):
@@ -141,6 +142,7 @@ class RunTests(unittest.TestCase):
         with patch.object(daily, "connected_sources", return_value=["gmail", "whatsapp"]), \
                 patch.object(daily, "powerset_signed_in", return_value=True), \
                 patch.object(daily, "renew_gmail") as renew, \
+                patch.object(daily, "refresh_logbooks", self.logbooks), \
                 patch.object(daily.subprocess, "run", side_effect=onboard) as ran, \
                 patch("packs.ingestion.primitives.accounts.accounts.gmail_signins", return_value=signins), \
                 patch("packs.ingestion.primitives.accounts.accounts.signed_in", return_value=signed), \
@@ -165,6 +167,46 @@ class RunTests(unittest.TestCase):
                          [("gmail", "synced", ["a@x.com"]), ("whatsapp", "synced", [])])
         self.assertEqual(run.problems, [])
 
+    def cloud_sync_after(self, email, manifest):
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
+        commands = []
+
+        def record(command, **_kwargs):
+            commands.append(command)
+            return SimpleNamespace(stdout="DONE", stderr="", returncode=0)
+        status = MagicMock()
+        status.return_value.read.return_value = manifest
+        run_id = daily._insert(self.root, "daily", 0)
+        with patch.object(daily, "connected_sources", return_value=["whatsapp"]), \
+                patch.object(daily, "powerset_signed_in", return_value=True), \
+                patch.object(daily.subprocess, "run", side_effect=record), \
+                patch("packs.shared.web.account.read", return_value={"email": email}), \
+                patch("packs.ingestion.primitives.accounts.accounts.gmail_signins", return_value={}), \
+                patch("packs.ingestion.primitives.accounts.accounts.signed_in", return_value=signed), \
+                patch("packs.powerset.primitives.install.status.InstallStatus", status):
+            run = daily.run_once(self.root, run_id)
+        return run, [command for command in commands if daily.CLOUD_SYNC in command]
+
+    def test_a_powerset_team_refresh_ends_by_uploading_the_network(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        run, uploads = self.cloud_sync_after("someone@powerset.co", done)
+        self.assertEqual(run.status, "ok")
+        self.assertEqual([command[1:] for command in uploads], [[daily.CLOUD_SYNC, "--root", str(self.root)]])
+
+    def test_other_installs_and_failed_refreshes_upload_nothing(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        self.assertEqual(self.cloud_sync_after("someone@example.com", done)[1], [])
+        self.assertEqual(self.cloud_sync_after(None, done)[1], [])
+        failed = {"status": "failed", "message": "Stopped.", "steps": {}}
+        self.assertEqual(self.cloud_sync_after("someone@powerset.co", failed)[1], [])
+
+    def test_a_failed_upload_does_not_fail_the_refresh(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        with patch.object(daily, "project_python", side_effect=[daily.sys.executable, OSError("no python")]):
+            run, _ = self.cloud_sync_after("someone@powerset.co", done)
+        self.assertEqual(run.status, "ok")
+
     def test_expired_gmail_and_unlinked_whatsapp_need_the_person(self):
         manifest = {"status": "completed", "message": "Search is ready.",
                     "steps": {"gmail_import": {"status": "skipped"}, "whatsapp_import": {"status": "skipped"}}}
@@ -187,6 +229,24 @@ class RunTests(unittest.TestCase):
         self.assertEqual([p.source for p in run.problems], ["gmail"])
         self.assertIn("old@x.com", run.problems[0].title)
         self.assertNotIn("work@x.com", run.problems[0].title)
+
+    def test_the_saved_logbooks_are_updated_after_the_import(self):
+        manifest = {"status": "completed", "message": "Search is ready.", "steps": {}}
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
+        self.run_with(manifest, {"a@x.com": "healthy"}, signed)
+        self.logbooks.assert_called_once_with(self.root)
+
+    def test_a_logbook_step_that_crashes_hangs_or_exits_badly_never_fails_the_refresh(self):
+        outcomes = (OSError("no python"), daily.subprocess.TimeoutExpired("logbook", 1),
+                    SimpleNamespace(stdout="", stderr="Traceback: chat.db is locked", returncode=1))
+        for outcome in outcomes:
+            with patch.object(daily.subprocess, "run", side_effect=[outcome]) as ran, \
+                    patch("sys.stdout", new_callable=io.StringIO) as printed:
+                daily.refresh_logbooks(self.root)
+            command = ran.call_args.args[0]
+            self.assertEqual(command[1:], ["-m", daily.LOGBOOK_REFRESH, "--root", str(self.root)])
+            self.assertIn("logbook", printed.getvalue())
 
     def test_a_stopped_run_fails_with_its_message(self):
         manifest = {"status": "failed", "message": "Deep Context stopped: no operator id.", "steps": {}}

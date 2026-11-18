@@ -9,6 +9,7 @@ One run is what Accounts' "Enrich imported data" does, unattended:
        signed in is skipped, never waited on), which syncs and imports them, runs Deep Context
        (v2 keys every stage, so only what is new is processed) and rebuilds search only when
        people.csv changed
+    -> the saved Logbooks get their new messages (logbook_refresh.py; local, free, nothing uploaded)
     -> what needs the person (an expired sign-in, Full Disk Access off, WhatsApp unlinked,
        LinkedIn signed out, a stopped run), each with the one thing to do about it.
 
@@ -29,6 +30,10 @@ The Codex and Claude scheduled tasks (tasks.py) stay for anyone who wants them; 
 longer offers or installs them.
 
 Changelog:
+  2026-11-18: a refresh that did not fail ends by uploading the network to the cloud, on installs
+    signed in with a @powerset.co account only.
+  2026-11-18: after the import, each saved Logbook gets the new messages appended (local files
+    only; a failure there is printed to the run's log and never fails the refresh).
   2026-11-13: LinkedIn counts as connected once its sign-in is saved, not only once Connections.csv
     exists, so Refresh now (and an agent posting to /tasks/api/refresh/run) can redo a first read
     that died before saving anything.
@@ -90,6 +95,10 @@ CONNECTIONS_CSV = Path(".powerpacks/network-import/discover/linkedin/Connections
 IMESSAGE_CONTACTS = Path(".powerpacks/messages/imessage.contacts.csv")
 MAX_RUNS = 60
 TICK_SECONDS = 60
+CLOUD_SYNC = "packs/indexing/primitives/sync_cloud/sync_cloud.py"
+CLOUD_SYNC_TIMEOUT_SECONDS = 30 * 60
+LOGBOOK_REFRESH = "packs.ingestion.primitives.logbook.logbook_refresh"
+LOGBOOK_TIMEOUT_SECONDS = 30 * 60
 # A missed run waits for the next one instead when that is this close.
 CATCH_UP_WINDOW = timedelta(hours=6)
 SOURCES: tuple[SourceName, ...] = ("linkedin", "gmail", "imessage", "whatsapp")
@@ -536,6 +545,19 @@ def sources_after(connected: list[SourceName], manifest: dict, mailboxes: tuple[
     return result
 
 
+def refresh_logbooks(root: Path) -> None:
+    """Append new messages to the Logbooks already saved (logbook_refresh.py reads each entry's saved
+    watermark, so only what is new is written). Its own process: whatever happens in it is printed
+    to the run's log and never fails the refresh; the next refresh picks up what this one did not."""
+    try:
+        completed = subprocess.run([project_python(root), "-m", LOGBOOK_REFRESH, "--root", str(root)], cwd=root,
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                   timeout=LOGBOOK_TIMEOUT_SECONDS)
+        print("logbook:", completed.stdout, completed.stderr, sep="\n", flush=True)
+    except Exception as caught:  # noqa: BLE001 - the refresh itself is not affected
+        print(f"logbook did not run: {type(caught).__name__}: {caught}", flush=True)
+
+
 def powerset_signed_in(root: Path) -> bool:
     """Whether the Powerset sign-in is still good (refreshed when it expired). Setup's account step
     would otherwise wait for a browser sign-in nobody is there to finish."""
@@ -551,8 +573,26 @@ def powerset_signed_in(root: Path) -> bool:
     return True
 
 
+def sync_to_cloud(root: Path) -> None:
+    """A Powerset team install uploads the refreshed network to the cloud (sync_cloud.py sends only
+    what changed). Other installs upload nothing. A failed upload is printed to the run's log and
+    never fails the refresh: the next refresh sends what this one did not."""
+    from packs.shared.web import account
+
+    if not account.is_team(account.read(root).get("email")):
+        return
+    try:
+        completed = subprocess.run([project_python(root), CLOUD_SYNC, "--root", str(root)], cwd=root,
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                   timeout=CLOUD_SYNC_TIMEOUT_SECONDS)
+        print("cloud sync:", completed.stdout, completed.stderr, sep="\n", flush=True)
+    except Exception as caught:  # noqa: BLE001 - the refresh itself succeeded
+        print(f"cloud sync did not run: {type(caught).__name__}: {caught}", flush=True)
+
+
 def run_once(root: Path, run_id: int) -> Run:
-    """The child: check the Powerset sign-in, renew Gmail's, run onboard --refresh, then record what happened."""
+    """The child: check the Powerset sign-in, renew Gmail's, run onboard --refresh, upload the
+    network to the cloud (Powerset team installs), then record what happened."""
     from packs.ingestion.primitives.accounts.accounts import gmail_signins, signed_in
     from packs.powerset.primitives.install.status import InstallStatus
 
@@ -591,6 +631,8 @@ def run_once(root: Path, run_id: int) -> Run:
         traceback.print_exc()
         error = f"{type(caught).__name__}: {caught}"
         ready = None
+    if not error:
+        refresh_logbooks(root)
     manifest = InstallStatus(root).read() if not error else {"status": "failed", "message": error, "steps": {}}
     signins = gmail_signins()
     after = signed_in(signins, sources=tuple(connected))
@@ -600,6 +642,8 @@ def run_once(root: Path, run_id: int) -> Run:
     sources = sources_after(connected, manifest, ready.healthy_mailboxes if ready else ())
     failed = manifest.get("status") == "failed" or bool(error)
     status: Status = "failed" if failed else "needs_you" if problems else "ok"
+    if not failed:
+        sync_to_cloud(root)
     _update(root, run_id, status=status, finished_at=_iso(now()), sources=sources, problems=problems,
             people_after=_count_people(root / PEOPLE_CSV),
             index_rebuilt=int(_read(root / INDEX_FINGERPRINT) != fingerprint and bool(_read(root / INDEX_FINGERPRINT))),

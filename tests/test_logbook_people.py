@@ -9,6 +9,7 @@ import json
 import tempfile
 import unittest
 import re
+import shutil
 import socket
 import subprocess
 import urllib.parse
@@ -16,8 +17,8 @@ from pathlib import Path
 from unittest import mock
 
 from packs.ingestion.primitives.deep_context_v2.db import queries
-from packs.ingestion.primitives.deep_context_v2.db.store import open_store
-from packs.ingestion.primitives.logbook import logbook_common, logbook_export
+from packs.ingestion.primitives.deep_context_v2.db.store import STORE_RELATIVE_PATH, open_store
+from packs.ingestion.primitives.logbook import logbook_common, logbook_export, logbook_refresh
 from packs.ingestion.primitives.logbook.logbook_people import people_for_parents
 from packs.ingestion.primitives.share.web import logbook as web_logbook
 from packs.ingestion.primitives.share.web.server import share_routes
@@ -194,3 +195,54 @@ class LogbookRoutesTests(LogbookPeopleFixture):
         self.assertEqual(ts_interface("LogbookStatus"), tuple(status))
         self.assertEqual(ts_interface("LogbookResult"), tuple(status["result"]))
         self.assertEqual(ts_interface("ChannelCoverage"), tuple(status["result"]["channels"][0]))
+
+
+class RefreshLogbooksTests(LogbookPeopleFixture):
+    """The scheduled refresh's step: saved person logbooks get what is new, nobody else gets one."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.app = self.root / "app"
+        self.archive = self.app / logbook_common.LOGBOOK_ROOT
+        store = self.app / ".powerpacks" / STORE_RELATIVE_PATH
+        store.parent.mkdir(parents=True)
+        self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        shutil.copy(self.root / "deep-context-v2.sqlite", store)
+
+    def _refresh(self):
+        with mock.patch.object(socket.socket, "connect", side_effect=AssertionError("no network")), \
+                mock.patch.object(subprocess, "Popen", side_effect=AssertionError("no subprocess")):
+            return logbook_refresh.refresh_logbooks(self.app, stores=self.stores)
+
+    def test_nothing_saved_builds_nothing(self):
+        add_whatsapp(self.wacli, "14155550101@s.whatsapp.net", "c1", RECENT_TS, "hi casey")
+        self.assertIsNone(self._refresh())
+        self.assertFalse(self.archive.exists())
+
+    def test_a_saved_logbook_gets_only_the_new_messages_and_others_get_none(self):
+        add_whatsapp(self.wacli, "14155550101@s.whatsapp.net", "c1", RECENT_TS, "hi casey")
+        add_whatsapp(self.wacli, "15550100@s.whatsapp.net", "q1", RECENT_TS, "hi quinn")
+        logbook_export.build_logbook(people_for_parents(self.db, ["parent-bbbb"]), paths=self.stores, root=self.archive)
+        (dm,) = self.archive.rglob("dm.md")
+        self.assertEqual(self._refresh().messages, 0)
+        before = dm.read_text()
+
+        add_whatsapp(self.wacli, "14155550101@s.whatsapp.net", "c2", RECENT_TS + 60, "see you friday")
+        build = self._refresh()
+
+        self.assertEqual((build.entries, build.messages), (("casey-delta-bbbb",), 1))
+        after = dm.read_text()
+        self.assertTrue(after.startswith(before))
+        self.assertEqual((after.count("hi casey"), after.count("see you friday")), (1, 1))
+        self.assertEqual([path.name for path in self.archive.iterdir() if path.is_dir()], ["casey-delta-bbbb"])
+        self.assertEqual(list(self.archive.parent.rglob("*.bkup-*")), [])
+
+    def test_an_entry_whose_person_left_the_store_is_left_alone(self):
+        add_whatsapp(self.wacli, "14155550101@s.whatsapp.net", "c1", RECENT_TS, "hi casey")
+        logbook_export.build_logbook(people_for_parents(self.db, ["parent-bbbb"]), paths=self.stores, root=self.archive)
+        manifest = self.archive / "manifest.json"
+        saved = json.loads(manifest.read_text())
+        saved["entries"]["gone-person"] = {**saved["entries"].pop("casey-delta-bbbb"), "slug": "gone-person"}
+        manifest.write_text(json.dumps(saved))
+        self.assertIsNone(self._refresh())
+        self.assertEqual(json.loads(manifest.read_text()), saved)
