@@ -165,6 +165,46 @@ class RunTests(unittest.TestCase):
                          [("gmail", "synced", ["a@x.com"]), ("whatsapp", "synced", [])])
         self.assertEqual(run.problems, [])
 
+    def cloud_sync_after(self, email, manifest):
+        signed = SimpleNamespace(linkedin=False, imessage=False, whatsapp=True, gmail=True, mailboxes=("a@x.com",),
+                                 healthy_mailboxes=("a@x.com",))
+        commands = []
+
+        def record(command, **_kwargs):
+            commands.append(command)
+            return SimpleNamespace(stdout="DONE", stderr="", returncode=0)
+        status = MagicMock()
+        status.return_value.read.return_value = manifest
+        run_id = daily._insert(self.root, "daily", 0)
+        with patch.object(daily, "connected_sources", return_value=["whatsapp"]), \
+                patch.object(daily, "powerset_signed_in", return_value=True), \
+                patch.object(daily.subprocess, "run", side_effect=record), \
+                patch("packs.shared.web.account.read", return_value={"email": email}), \
+                patch("packs.ingestion.primitives.accounts.accounts.gmail_signins", return_value={}), \
+                patch("packs.ingestion.primitives.accounts.accounts.signed_in", return_value=signed), \
+                patch("packs.powerset.primitives.install.status.InstallStatus", status):
+            run = daily.run_once(self.root, run_id)
+        return run, [command for command in commands if daily.CLOUD_SYNC in command]
+
+    def test_a_powerset_team_refresh_ends_by_uploading_the_network(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        run, uploads = self.cloud_sync_after("someone@powerset.co", done)
+        self.assertEqual(run.status, "ok")
+        self.assertEqual([command[1:] for command in uploads], [[daily.CLOUD_SYNC, "--root", str(self.root)]])
+
+    def test_other_installs_and_failed_refreshes_upload_nothing(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        self.assertEqual(self.cloud_sync_after("someone@example.com", done)[1], [])
+        self.assertEqual(self.cloud_sync_after(None, done)[1], [])
+        failed = {"status": "failed", "message": "Stopped.", "steps": {}}
+        self.assertEqual(self.cloud_sync_after("someone@powerset.co", failed)[1], [])
+
+    def test_a_failed_upload_does_not_fail_the_refresh(self):
+        done = {"status": "completed", "message": "Search is ready.", "steps": {"whatsapp_import": {"status": "completed"}}}
+        with patch.object(daily, "project_python", side_effect=[daily.sys.executable, OSError("no python")]):
+            run, _ = self.cloud_sync_after("someone@powerset.co", done)
+        self.assertEqual(run.status, "ok")
+
     def test_expired_gmail_and_unlinked_whatsapp_need_the_person(self):
         manifest = {"status": "completed", "message": "Search is ready.",
                     "steps": {"gmail_import": {"status": "skipped"}, "whatsapp_import": {"status": "skipped"}}}
