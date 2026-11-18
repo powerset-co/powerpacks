@@ -350,6 +350,10 @@ class SearchResult:
     team_status: str = ""
     steps: tuple[SearchStep, ...] = ()
     current_step: str | None = None
+    # A Powerset-ranked search: the people the API turned down, kept in their own file (load_bad).
+    bad_count: int = 0
+    # The first good people of a Powerset-ranked search are in and the rest are still downloading.
+    partial: bool = False
 
     @property
     def queries(self) -> tuple[str, ...]:
@@ -718,6 +722,8 @@ def _search(root: Path, run_id: str, payload: dict[str, Any],
         steps=tuple(SearchStep(**{key: value for key, value in step.items() if key != "jsonl"})
                     for step in payload.get("steps", [])),
         current_step=payload.get("current_step"),
+        bad_count=int((payload.get("bad_results") or {}).get("count") or 0),
+        partial=bool(payload.get("partial")),
         team=tuple(TeamMember(**row) for row in team.get("members", [])),
         team_fetched_at=team.get("fetched_at", ""),
         team_status=str(status.get("reason") or
@@ -762,6 +768,29 @@ def load_search(root: Path, run_id: str) -> SearchResult | None:
         if referenced is not None:
             payloads[other] = referenced
     return next(search for search in _searches(root, payloads) if search.run_id == run_id)
+
+
+def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None | str:
+    """The people a Powerset-ranked search turned down, read from the same artifacts and by the same
+    loader as the run's own people; None while they are still downloading, the error text when the
+    download failed."""
+    bad = (_payload(root / run_id / "results.json") or {}).get("bad_results") or {}
+    rows, error = _artifact_path(root, bad.get("jsonl")), _artifact_path(root, bad.get("error"))
+    if rows is not None and rows.exists():
+        return _pond_candidates(root, {"arm": {"artifacts": bad}})
+    if error is not None and error.exists():
+        return error.read_text()
+    # Still downloading while its process lives; one that died without rows or an error stopped.
+    pid = _artifact_path(root, bad.get("pid"))
+    if pid is None or not pid.exists():
+        return None
+    try:
+        os.kill(int(pid.read_text()), 0)
+    except (ProcessLookupError, ValueError):
+        return "the download stopped"
+    except PermissionError:  # alive, another user's
+        pass
+    return None
 
 
 def load_searches(root: Path, run_id: str | None = None) -> tuple[SearchResult, ...]:
@@ -874,7 +903,8 @@ def select_quick_step(payload: dict[str, Any], step: dict[str, Any]) -> None:
 def record_quick_search(root: Path, run_id: str, *, query: str, title: str | None = None, filters: dict[str, Any],
                         traits: list[dict[str, Any]], created_at: str, jsonl: str, profiles_path: str,
                         status: str, person_attribution: dict[str, Any] | None = None,
-                        person_attribution_error: str | None = None) -> None:
+                        person_attribution_error: str | None = None,
+                        bad_results: dict[str, Any] | None = None, partial: bool = False) -> None:
     """Save a quick search as a one-pond run beside the deep ones, with the filters and traits it
     ran with and, on a Powerset set, who in the set knows each person (the deep runs' shape), and
     list it. When that lookup failed, the run carries the error instead of silently showing no sources."""
@@ -892,6 +922,10 @@ def record_quick_search(root: Path, run_id: str, *, query: str, title: str | Non
         payload["person_attribution"] = person_attribution
     if person_attribution_error:
         payload["person_attribution_error"] = person_attribution_error
+    if bad_results:  # a Powerset-ranked search: the bad results' rows and profiles files, and how many
+        payload["bad_results"] = bad_results
+    if partial:  # the rest of the good people are still downloading; the page reads the run again
+        payload["partial"] = True
     payload["steps"] = [original_quick_step(payload)]
     payload["current_step"] = "s1"
     write_json(root / run_id / "results.json", payload)
