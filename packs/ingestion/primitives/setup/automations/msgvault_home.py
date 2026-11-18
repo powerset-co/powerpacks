@@ -394,12 +394,12 @@ def set_toml_value(text: str, table: str, key: str, value: str | int) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-# msgvault paces Gmail by its own price list, where downloading a message costs 5 units. Gmail
-# charges 60, against 6,000 a minute for one person: 100 messages a minute. The setting is a whole
-# number and 1 is 600 messages a minute, so 0, which msgvault raises to its floor of 0.1: 60 a
-# minute, measured 2026-11-16 on msgvault 0.22.0 with no refusal. At 5 Gmail refused the sync
-# every minute and ended it after five refusals of one request. Read msgvault's
-# internal/gmail/ratelimit.go again when desktop/scripts/bundle-runtime.sh moves its version.
+# Gmail charges 60 units to download a message, against 6,000 a minute for one person: 100
+# messages a minute. Upstream msgvault still prices a download at 5, and its setting is a whole
+# number where 1 is already 600 messages a minute, so 0, which it raises to its floor of 0.1: 60 a
+# minute, measured 2026-11-16 on msgvault 0.22.0 with no refusal. The app ships the powerset-co
+# fork (desktop/scripts/bundle-runtime.sh), which prices a download at 60 and reads 0 as "not
+# set": about 95 a minute, measured 2026-11-17. One value keeps both under the quota.
 GMAIL_RATE_LIMIT_QPS = 0
 
 

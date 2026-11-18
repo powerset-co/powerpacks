@@ -14,7 +14,9 @@ UV_VERSION="0.13.5"
 CODEX_VERSION="0.161.0"
 NODE_VERSION="22.16.0"
 PLAYWRIGHT_VERSION="1.64.1"
-MSGVAULT_VERSION="0.22.0"
+# The powerset-co fork of msgvault 0.22.0: Gmail paced to Google's 2026 quota (a full message is
+# 60 units against 6,000 a person a minute) and a count that moves every 100 messages.
+MSGVAULT_VERSION="0.22.0-powerset.1"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
@@ -72,7 +74,7 @@ verify() { # file expected-sha256
 }
 
 echo "bundle-runtime: msgvault $MSGVAULT_VERSION for $msgvault_platform"
-msgvault_base="https://github.com/kenn-io/msgvault/releases/download/v$MSGVAULT_VERSION"
+msgvault_base="https://github.com/powerset-co/msgvault/releases/download/v$MSGVAULT_VERSION"
 msgvault_archive="msgvault_${MSGVAULT_VERSION}_$msgvault_platform.tar.gz"
 curl -fsSL -o "$work/$msgvault_archive" "$msgvault_base/$msgvault_archive"
 verify "$work/$msgvault_archive" "$(curl -fsSL "$msgvault_base/SHA256SUMS" | grep " $msgvault_archive\$" | cut -d' ' -f1)"
