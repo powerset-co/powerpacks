@@ -20,6 +20,9 @@ Then test local search with:
     prepare --backend local --db .powerpacks/search-index/local-search.duckdb ...
 
 Changelog:
+- 2026-11-18: once the tables are loaded, every person's hydrated_context is replaced by the full
+  profile assembled from the finished rows (store_hydrated_profiles): the profile local search
+  reads and cloud sync sends.
 - 2026-11-18: a profile's hydrated_context is the one indexing builds everywhere else
   (people._hydrated_context), in the Powerset API's field names (position_title, start_date,
   is_current; start_year, end_year). The copy built here pasted in the raw experience rows,
@@ -53,6 +56,7 @@ from packs.indexing.lib.artifact_io import iter_artifact_rows, write_parquet_row
 from packs.indexing.lib.contracts import contract_duckdb_columns, load_search_contract  # noqa: E402
 from packs.indexing.lib.people import _hydrated_context, build_people_records, flatten_people  # noqa: E402
 from packs.ingestion.schemas.people_schema import parse_interaction_counts  # noqa: E402
+from packs.search.primitives.hydrate_people.hydrate_people import assemble_local_person_rows, stored_profile  # noqa: E402
 from packs.shared.csv_io import CsvIO  # noqa: E402
 
 DEFAULT_OPERATOR_ID = "00000000-0000-0000-0000-000000000000"
@@ -1192,6 +1196,7 @@ def load_duckdb(run_dir: Path, operator_id: str, *, force: bool = False, increme
         postprocess_cross_tables(con)
         counts["local_person_profile_position_overlap"] = profile_position_id_overlap(con)
         counts["local_people_positions_person_columns_dropped"] = int(drop_position_person_duplicates(con))
+        counts["local_person_profiles_hydrated"] = store_hydrated_profiles(con)
         con.execute("CREATE OR REPLACE VIEW local_people AS SELECT * FROM local_people_positions")
         con.execute("CHECKPOINT")
     finally:
@@ -1227,6 +1232,25 @@ def drop_position_person_duplicates(con: Any) -> bool:
             except Exception:
                 pass
     return dropped
+
+
+def store_hydrated_profiles(con: Any) -> int:
+    """Write every person's full profile to local_person_profiles.hydrated_context, assembled from
+    the finished rows of this build. Local search reads it and cloud sync sends it, so the profile
+    a person shows locally is the one the cloud gets."""
+    tables = {row[0] for row in con.execute("select table_name from information_schema.tables where table_schema = 'main'").fetchall()}
+    if "local_person_profiles" not in tables:
+        return 0
+    ids = [str(row[0]) for row in con.execute("SELECT CAST(person_id AS VARCHAR) FROM local_person_profiles ORDER BY 1").fetchall()]
+    con.execute("CREATE OR REPLACE TEMP TABLE _hydrated_profiles (person_id VARCHAR, hydrated_context VARCHAR)")
+    for start in range(0, len(ids), 1000):
+        rows = assemble_local_person_rows(con, ids[start:start + 1000])
+        con.executemany("INSERT INTO _hydrated_profiles VALUES (?, ?)",
+                        [(str(row["id"]), json.dumps(stored_profile(row), default=str)) for row in rows])
+    con.execute("""UPDATE local_person_profiles AS p SET hydrated_context = CAST(h.hydrated_context AS JSON)
+                   FROM _hydrated_profiles AS h WHERE CAST(p.person_id AS VARCHAR) = h.person_id""")
+    con.execute("DROP TABLE _hydrated_profiles")
+    return len(ids)
 
 
 def postprocess_cross_tables(con: Any) -> None:
