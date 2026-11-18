@@ -6,6 +6,8 @@ description: Download EVERYTHING for a set of people across Gmail, iMessage, and
 <!--
 Created: 2026-06-25
 Changelog:
+- 2026-11-18: The scheduled refresh (and Refresh now) appends new messages to every saved
+  person's logbook.
 - 2026-10-12: People's logbook action is a book icon beside the drawer's Close; the Has
   logbook filter is gone (the reader lists every saved logbook).
 - 2026-09-30: People page reads saved logbooks in-app (Logbook reader, Has logbook
@@ -143,6 +145,10 @@ Gmail (msgvault) and WhatsApp (wacli) read fine from anywhere.
    bin/logbook sync --csv "<path>"
    ```
    Re-running with nothing new is a no-op.
+
+   The app's scheduled refresh (and **Refresh now** on Scheduled tasks) runs this same sync
+   after its import, for every saved person entry still in the network
+   (`logbook_refresh.py`). It never starts a logbook for someone who has none.
 
 ## From the People page
 
