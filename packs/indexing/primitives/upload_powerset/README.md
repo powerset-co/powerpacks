@@ -3,6 +3,8 @@
 Created: 2026-09-24
 
 Change log:
+- 2026-11-17: `turbopuffer_writer.py` became `namespaces.py`; its TurboPuffer reads and writes
+  are gone.
 - 2026-11-12: the share upload (CLI, plan, Postgres writes, manifest) was removed with
   the People page Share button. What is left is kept for network-search-api's index
   refresh (`scripts/powerset_v2/prepare_refreshed_indexes.py` imports `local_index`).
@@ -13,6 +15,6 @@ Change log:
 | --- | --- |
 | `local_index.py` | local DuckDB readers for profiles and namespace documents |
 | `models.py` | frozen value types + the channel/identifier table (`CLOUD_SOURCE_CHANNEL`, also read by deep search attribution) |
-| `turbopuffer_writer.py` | namespace definitions (`NAMESPACES`, `NAMESPACE_BY_LOGICAL`) that `local_index` reads, and the write schema |
+| `namespaces.py` | namespace definitions (`NAMESPACES`, `NAMESPACE_BY_LOGICAL`) that `local_index` reads, and the cloud's field types |
 
 Nothing in the app writes Powerset Postgres or TurboPuffer from here any more.

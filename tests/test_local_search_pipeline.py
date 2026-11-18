@@ -1125,10 +1125,10 @@ class LocalTitleExpansionTests(unittest.TestCase):
 
         self.mod = load_pipeline_module()
         self.mod.configure_local_backend_mode(self.db)
-        import search_backend_mode
+        import local_search_backend
         from search_common import phrase_query_tokenize, word_tokenize
 
-        self.addCleanup(search_backend_mode.configure_local_backend, None)
+        self.addCleanup(local_search_backend.configure_local_backend, None)
         conn = duckdb.connect(str(self.db))
         conn.executemany(
             "UPDATE local_people_positions SET position_title = ?, phrase_tokens = ?, word_tokens = ? WHERE person_id = ?",

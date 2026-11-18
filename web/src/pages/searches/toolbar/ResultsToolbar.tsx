@@ -41,6 +41,8 @@ export interface ResultsToolbarProps {
   onUntag: (personIds: readonly string[]) => void
   onClearTags: () => void
   onAnnounce: (toast: ToastMessage) => void
+  // A Powerset-ranked search: the people it turned down, shown in the table's place when picked.
+  bad?: { count: number; shown: boolean; onToggle: (shown: boolean) => void }
   // Placement from the page.
   className?: string
 }
@@ -61,6 +63,7 @@ export function ResultsToolbar({
   onUntag,
   onClearTags,
   onAnnounce,
+  bad,
   className,
 }: ResultsToolbarProps) {
   const live = liveFilters(filters, rows, tagged)
@@ -97,6 +100,11 @@ export function ResultsToolbar({
           </span>
         </Chip>
       </Appear>
+      {bad ? (
+        <Chip pressed={bad.shown} count={bad.count} onClick={() => bad.onToggle(!bad.shown)}>
+          Bad results
+        </Chip>
+      ) : null}
       {scored ? <ScoreFilter scores={live.scores} onChange={(scores) => change({ scores })} /> : null}
       <OperatorPicker
         operators={operatorOptions(rows)}

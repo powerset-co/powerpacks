@@ -20,7 +20,6 @@ SEARCH_PRIMITIVES = ROOT / "packs/search/primitives"
 SEARCH_LIB = SEARCH_PRIMITIVES / "lib"
 SEARCH_SHARED = SEARCH_PRIMITIVES / "shared"
 SEARCH_LOCAL = SEARCH_PRIMITIVES / "local"
-SEARCH_TURBOPUFFER = SEARCH_PRIMITIVES / "turbopuffer"
 
 from packs.indexing.primitives.build_processing_pipeline import build_processing_pipeline as pipeline
 from packs.indexing.primitives.embed_records_checkpointed import embed_records_checkpointed
@@ -582,7 +581,7 @@ class OpenAIProcessingPipelineTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 db_payload = parse_last_json(proc.stdout)
-                for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL, SEARCH_TURBOPUFFER]:
+                for _path in [SEARCH_LIB, SEARCH_SHARED, SEARCH_LOCAL]:
                     sys.path.insert(0, str(_path))
                 import local_search_backend as local_backend  # type: ignore
 

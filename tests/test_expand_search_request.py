@@ -453,7 +453,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         mod = load_module()
         prompts = mod.load_prompt_bundle()
 
-        self.assertIn("GRAMMATICAL EMPLOYER BOUNDARY", prompts["company"])
+        self.assertIn("INDUSTRY VS PERSON SKILL", prompts["company"])
         self.assertIn("EDUCATION RELATIONSHIP REQUIRED", prompts["education"])
         self.assertIn("return an empty list", prompts["seniority"])
         self.assertIn("explicitly states a numeric duration", prompts["temporal"])

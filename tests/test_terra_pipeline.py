@@ -43,6 +43,9 @@ class TerraPipelineTests(unittest.TestCase):
                     self.assertEqual(output["status"], "completed")
                     commands = [call.args[0] for call in run.call_args_list
                                 if Path(call.args[0][1]).stem == "llm_filter_candidates"]
+                    if backend == "powerset" and not jd_mode:
+                        self.assertEqual(commands, [])  # the Powerset API filters and ranks a set search
+                        continue
                     self.assertEqual(len(commands), 1)
                     command = commands[0]
                     self.assertEqual(command[command.index("--profile-scope") + 1], "auto")

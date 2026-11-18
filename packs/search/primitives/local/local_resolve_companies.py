@@ -27,7 +27,6 @@ for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
 import local_search_backend as local_backend  # noqa: E402
 from local_duckdb_store import LocalDuckDBSearchStore  # noqa: E402
 from search_common import (  # noqa: E402
-    allowed_operator_ids_from_payload,
     comparison,
     load_env_file,
     reciprocal_rank_fusion,
@@ -230,9 +229,6 @@ def company_attribute_filters(payload: dict[str, Any], *, include_soft: bool = T
         if values:
             filters.append(comparison(field, op, values))
 
-    operator_ids = allowed_operator_ids_from_payload(payload)
-    if operator_ids:
-        filters.append(comparison("allowed_operator_ids", "ContainsAny", operator_ids))
 
     if only_soft:
         return None if not filters else filters[0] if len(filters) == 1 else ("And", filters)
@@ -721,7 +717,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "threshold": ce_result.get("threshold"),
             "mean_score": ce_result.get("mean_score"),
             "std_score": ce_result.get("std_score"),
-            "score_distribution": ce_result["score_distribution"],
+            # Absent when the cross-encoder was skipped for want of a key and passed every company through.
+            "score_distribution": ce_result.get("score_distribution"),
         }
     if matched:
         result["company_match"] = matched

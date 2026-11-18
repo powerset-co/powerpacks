@@ -400,6 +400,25 @@ def search_results_search(app: App) -> None:
     app.wait_for(f"{RESULT_NAMES}.length === {len(names)}", CLICK, "clearing the box brings every row back")
 
 
+RUN_ITEM = {"css": "[data-run-list] [data-run-id]"}
+
+
+def search_switch_fast(app: App) -> None:
+    """Picking a second saved search before the first has loaded shows the second, with no error.
+    The page cancels the first load; the server used to log that hang-up as a failed request, and
+    the app filed each one as feedback. Needs two saved searches."""
+    app.go("/searches", RUN_ITEM, PAGE)
+    ids = app.js("[...document.querySelectorAll('[data-run-list] [data-run-id]')].map((run) => run.dataset.runId)")
+    if len(ids) < 2:
+        raise Failed("needs two saved searches")
+    app.click(RUN_ITEM)
+    app.click(RUN_ITEM, nth=1)
+    app.wait_for(f"document.querySelector('.run-pane[data-run=' + {json.dumps(json.dumps(ids[1]))} + '] h1')",
+                 2 * PAGE, "the second search shows")
+    if app.shows({"text": "Couldn't load search."}):
+        raise Failed("the page shows an error after switching searches")
+
+
 def refresh_toggle(app: App) -> None:
     """Scheduled tasks' automatic refresh switch flips on the click and the flip is saved (it survives a
     reload); it is put back as it was."""
@@ -496,6 +515,7 @@ SCENARIOS = {
     "search-card-narrow": search_card_narrow,
     "search-mutuals": search_mutuals,
     "search-results-search": search_results_search,
+    "search-switch-fast": search_switch_fast,
     "refresh-toggle": refresh_toggle,
     "accounts-refresh-prompt": accounts_refresh_prompt,
     "chat-access-pill": chat_access_pill,

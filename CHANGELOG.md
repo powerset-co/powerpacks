@@ -1,5 +1,27 @@
 # Changelog
 
+## [3.64.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.64.0...powerpacks-v3.64.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **search:** a local search that names an industry as a skill asks for that industry's companies ([#1226](https://github.com/powerset-co/powerpacks/issues/1226)) ([c7be482](https://github.com/powerset-co/powerpacks/commit/c7be482df3f4216e47b529d8e9e22acbce2c66cc))
+* **server:** a page that hangs up before its answer is not a failed request ([#1224](https://github.com/powerset-co/powerpacks/issues/1224)) ([cdd1c62](https://github.com/powerset-co/powerpacks/commit/cdd1c624e351cb63000496ffd6ae9535617507f9))
+
+## [3.64.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.63.0...powerpacks-v3.64.0) (2026-11-17)
+
+
+### Features
+
+* **search:** a local industry search asks Luna which companies match the description ([#1220](https://github.com/powerset-co/powerpacks/issues/1220)) ([f443a4a](https://github.com/powerset-co/powerpacks/commit/f443a4ac137e86b3f1523a919ab395cb87efa908))
+
+
+### Bug Fixes
+
+* **agent:** AGENTS.md and every skill use the app's folder, ~/.powerpacks/app ([#1164](https://github.com/powerset-co/powerpacks/issues/1164)) ([33f4770](https://github.com/powerset-co/powerpacks/commit/33f4770169512bfa1ad3def216da542b3101e182))
+* **search:** a local search over 500 matching companies no longer crashes when the cross-encoder is skipped ([#1223](https://github.com/powerset-co/powerpacks/issues/1223)) ([78d9ed9](https://github.com/powerset-co/powerpacks/commit/78d9ed94b230881bb6433868776bedd196c82390))
+* **search:** the expander reports the model each extractor ran on ([#1217](https://github.com/powerset-co/powerpacks/issues/1217)) ([8e1286a](https://github.com/powerset-co/powerpacks/commit/8e1286a959fe9bc31dcdf9c8592c8dd85eee88de))
+
 ## [3.63.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.62.0...powerpacks-v3.63.0) (2026-11-17)
 
 

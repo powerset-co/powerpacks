@@ -151,6 +151,16 @@ class AccountRoutesTests(unittest.TestCase):
             handler.log_message('%s', '"GET /api/account HTTP/1.1" 200 -')
         self.assertRegex(output.getvalue(), r'127\.0\.0\.1 - - \[\d{2}/[A-Za-z]{3}/\d{4} \d{2}:\d{2}:\d{2}\] "GET /api/account HTTP/1\.1"')
 
+    def test_a_page_that_hangs_up_is_not_a_failed_request(self) -> None:
+        # The page cancels a load it no longer needs (another search picked): the write hits a closed socket.
+        handler = object.__new__(persistent_handler(self.root))
+        with patch.object(BaseHTTPRequestHandler, "handle", side_effect=BrokenPipeError(32, "Broken pipe")), \
+                self.assertNoLogs("packs.shared.web.server", "ERROR"):
+            handler.handle()
+        with patch.object(BaseHTTPRequestHandler, "handle", side_effect=ValueError("bug")), \
+                self.assertLogs("packs.shared.web.server", "ERROR"):
+            handler.handle()
+
     def _json(self, path: str, method: str = "GET") -> tuple[int, dict]:
         request = urllib.request.Request(self.base + path, method=method, data=b"" if method == "POST" else None)
         try:

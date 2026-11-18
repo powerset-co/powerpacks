@@ -4,6 +4,7 @@
 `SearchResult.queries` and `Candidate.suggested_pin` are not emitted.
 
 Changelog:
+  2026-11-17: /api/bad.json: the people a Powerset-ranked search turned down, "loading" while they download, "failed" when that broke.
   2026-11-16: the ask routes are gone with local sets (Ask your set, Broadcast).
   2026-11-16: /api/search.json no longer takes step=; the page only ever read the current step.
   2026-11-09: /card-edits saves a chat search card's edits beside its prepare, so the chat shows none of the JSON.
@@ -23,6 +24,7 @@ from pathlib import Path
 
 from packs.search.primitives.shared.human_ratings import LEGACY_SCORES, RUBRIC
 
+from .model import load_bad
 from .server import LOCAL_HOSTS, SearchRoutes, _send_json
 
 
@@ -35,12 +37,18 @@ class SearchApi:
         if path == "/api/catalog":
             _send_json(handler, {"searches": [asdict(card) for card in self.routes.catalog()]})
             return True
-        if path != "/api/search.json":
+        if path not in ("/api/search.json", "/api/bad.json"):
             return False
 
         run_id = (urllib.parse.parse_qs(parsed.query).get("run_id") or [""])[0]
-        if not run_id:
+        if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
             _send_json(handler, {"error": "run_id is required"}, status=HTTPStatus.BAD_REQUEST)
+            return True
+        if path == "/api/bad.json":
+            rows = load_bad(self.routes.results_root, run_id)
+            _send_json(handler, {"status": "loading", "candidates": []} if rows is None
+                       else {"status": "failed", "candidates": [], "error": rows} if isinstance(rows, str)
+                       else {"status": "ready", "candidates": [asdict(row) for row in rows]})
             return True
         search = self.routes.one(run_id)
         if search is None:
