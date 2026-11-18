@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.65.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.64.1...powerpacks-v3.65.0) (2026-11-18)
+
+
+### Features
+
+* **search:** the Powerset API ranks a set search and the app downloads the results to files ([#1227](https://github.com/powerset-co/powerpacks/issues/1227)) ([37a1889](https://github.com/powerset-co/powerpacks/commit/37a188936554da90ed40ab1c5cbe90b9f3ada206))
+* **search:** the results toolbar has a search box for a name, or a title or company the person matched on ([#1222](https://github.com/powerset-co/powerpacks/issues/1222)) ([92e67ca](https://github.com/powerset-co/powerpacks/commit/92e67ca32e9d5b47e41def2a9d8051eb497cbcf2))
+
 ## [3.64.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.64.0...powerpacks-v3.64.1) (2026-11-17)
 
 
