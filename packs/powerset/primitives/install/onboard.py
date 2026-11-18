@@ -206,12 +206,6 @@ class Onboarding:
         keys.write_env(self.env_path, {"POWERPACKS_DEFAULT_SET_ID": selected.id})
         if selected.person_count == 0:
             return self.waiting("network.empty", details=alternative, **found)
-        escaped_id = urllib.parse.quote(selected.id, safe="")
-        contacts = self.request(f"/v2/set-contacts/{escaped_id}?page_size=1")
-        count = self.request("/v2/search/count", {"set_id": selected.id, "is_current": True,
-                                                  "search_summary": False, "search_company_signal": False})
-        if not contacts["leads"] or int(count["count"]) < 1:
-            return self.waiting("network.not_searchable", **found)
         record = self.progress("network.ready_small" if selected.person_count < 10 else "network.ready", **found)
         print(f"DONE: {record['message']} Ask me to find someone.", flush=True)
         return 0

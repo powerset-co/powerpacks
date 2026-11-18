@@ -33,9 +33,7 @@ class OnboardingTests(unittest.TestCase):
                               is_personal=False, role="member")]
         self.fail_path = None
         self.fail_code = 503
-        self.count = 120
         self.missing_keys = set()
-        self.empty_contacts = False
         self.blank_keys = set()
         self.operator_id = ""
         self.reject_old_token = False
@@ -59,8 +57,6 @@ class OnboardingTests(unittest.TestCase):
                     return self.reply(case.networks)
                 if self.path.startswith("/v2/sets/"):
                     return self.reply({"members": [{"user_id": case.owner_id, "role": "owner"}]})
-                if self.path.startswith("/v2/set-contacts/"):
-                    return self.reply({"leads": [] if case.empty_contacts else [{"id": "person-one"}]})
                 return self.reply({}, 404)
 
             def do_POST(self):
@@ -70,8 +66,6 @@ class OnboardingTests(unittest.TestCase):
                     return self.reply({"detail": "mock failure"}, case.fail_code)
                 if self.path == "/oauth/token":
                     return self.reply({"access_token": "refreshed-token", "expires_in": 3600})
-                if self.path == "/v2/search/count":
-                    return self.reply({"count": case.count})
                 return self.reply({}, 404)
 
             def reply(self, payload, status=200):
@@ -129,10 +123,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(state["steps"]["account"]["status"], "skipped")
         self.assertEqual(state["person_count"], 120)
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
-        self.assertIn(("GET", "/v2/set-contacts/own?page_size=1", None), self.calls)
-        count_call = next(call for call in self.calls if call[1] == "/v2/search/count")
-        self.assertEqual(count_call[2], {"set_id": "own", "is_current": True,
-                                      "search_summary": False, "search_company_signal": False})
 
     def test_account_lines_carry_the_runs_plan(self):
         """The run's own rows from its first line, never the last run's (LinkedIn setup's)."""
@@ -264,12 +254,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(sources.call_args.kwargs["gmail_emails"], ("personal@gmail.com",))
         self.assertEqual(sources.call_args.kwargs["sync_after"], "2025-10-03")
 
-    def test_unindexed_hosted_network_does_not_block_local_imports(self):
-        self.count = 0
-        code, sources = self.run_install_command()
-        self.assertEqual(code, 10)
-        sources.return_value.run.assert_called_once()
-
     def test_empty_hosted_network_does_not_block_local_imports(self):
         self.networks[0]["person_count"] = 0
         code, sources = self.run_install_command()
@@ -298,13 +282,6 @@ class OnboardingTests(unittest.TestCase):
             stream.write("POWERPACKS_DEFAULT_SET_ID=not-accessible\n")
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
-
-    def test_catalog_count_does_not_claim_index_readiness(self):
-        self.count = 0
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 10)
-        self.assertIn("profiles are not ready", state["message"])
-        self.assertEqual(state["person_count"], 120)
 
     def test_missing_required_access_waits_but_optional_providers_do_not(self):
         self.missing_keys = {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "PARALLEL_API_KEY"}
@@ -348,7 +325,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertIn("Hosted search isn't enabled", state["steps"]["credentials"]["message"])
 
     def test_service_failure_is_failed_and_not_mistaken_for_login(self):
-        self.fail_path = "/v2/search/count"
+        self.fail_path = "/v2/sets"
         with patch.object(auth, "cmd_login") as login:
             code, state, output = self.run_onboarding()
         self.assertEqual(code, 1)

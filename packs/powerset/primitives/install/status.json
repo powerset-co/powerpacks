@@ -243,12 +243,6 @@
       "line": "{network} for {email} has 0 people.",
       "note": "Tell me in chat whether to switch accounts or connect your contacts."
     },
-    "network.not_searchable": {
-      "step": "network",
-      "state": "waiting",
-      "line": "{network} has {count:,} people, but its searchable profiles are not ready.",
-      "note": "Ask me in chat to check the network before searching."
-    },
     "network.ready": {
       "step": "network",
       "state": "completed",
@@ -1077,7 +1071,6 @@
   "desktop_notes": {
     "credentials.not_provisioned": "Ask Powerset to finish enabling search for this account, then continue setup.",
     "network.unconfirmed": "Setup continues with your contacts.",
-    "network.not_searchable": "Powerset is still preparing them; setup continues with your contacts.",
     "gmail.connect.waiting": "Finish connecting Gmail in your browser; Powerpacks continues here.",
     "imessage.permission": "Powerpacks reads your iMessage history to find the people you talk to. Drag {app} into Full Disk Access and turn it on; Powerpacks continues on its own.",
     "whatsapp.qr": "Scan the code with WhatsApp; Powerpacks continues on its own.",
