@@ -300,10 +300,11 @@ def read_run_status(label: str) -> dict | None:
 
 
 def watch_run(read: Callable[[], dict | None], timeout_s: int = 7200) -> dict | None:
-    """Poll the run's status and print each changed code and count."""
-    deadline = time.time() + timeout_s
+    """Poll the run's status and print each changed code and count. The limit counts time awake:
+    the monotonic clock stops while the Mac sleeps, so a night asleep does not end the watch."""
+    deadline = time.monotonic() + timeout_s
     last: dict | None = None
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         try:
             payload = read()
         except OSError as error:
