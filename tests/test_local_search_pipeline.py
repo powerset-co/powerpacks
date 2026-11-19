@@ -11,8 +11,6 @@ from datetime import datetime
 from unittest import mock
 from pathlib import Path
 
-import pytest
-
 from packs.shared.csv_io import CsvIO
 
 
@@ -30,9 +28,15 @@ OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
 
 
-@pytest.fixture(autouse=True)
-def no_title_pick_credentials(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "")
+_no_title_pick_credentials = mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""})
+
+
+def setUpModule():
+    _no_title_pick_credentials.start()
+
+
+def tearDownModule():
+    _no_title_pick_credentials.stop()
 
 
 def load_pipeline_module():
