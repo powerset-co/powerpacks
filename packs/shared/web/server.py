@@ -10,6 +10,8 @@ The review routes are deep_context_v2's (review/api.py); the People page's are t
 (share/web/server.py). Both read the one store connection, one request at a time.
 
 Changelog:
+- 2026-11-18: serve raises its open-file limit to 10240; a refresh started from the Mac app ran out at 256
+  with 256 OpenAI calls in flight and stopped in Deep Context.
 - 2026-11-17: a page that hangs up before its answer is no longer logged (and reported) as a failed request.
 - 2026-11-12: a set action whose Powerset API call fails answers 502 with the reason (a non-JSON error
   body or an unreachable API used to drop the request, so the page said "Failed to fetch").
@@ -42,6 +44,7 @@ import json
 import logging
 import os
 import re
+import resource
 import signal
 import site
 import socket
@@ -576,6 +579,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.open:
             webbrowser.open(url)
         return 0
+    # A Mac app's processes start with room for 256 open files, and a refresh this server starts
+    # holds 256 OpenAI connections at once. 10240 is the most macOS grants a process.
+    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    resource.setrlimit(resource.RLIMIT_NOFILE, (10240 if hard == resource.RLIM_INFINITY else min(hard, 10240), hard))
     report.install(root)
     handler = persistent_handler(root)
     with ThreadingHTTPServer((args.host, args.port), handler) as server:
