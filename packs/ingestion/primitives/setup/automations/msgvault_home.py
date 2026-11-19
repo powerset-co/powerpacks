@@ -409,9 +409,12 @@ def write_msgvault_config(path: Path, client_secret_path: Path, app_name: str = 
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     table = "oauth" if not app_name else f"oauth.apps.{app_name}"
+    before = text
     text = set_toml_value(text, table, "client_secrets", str(client_secret_path))
     text = set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS)
-    path.write_text(text, encoding="utf-8")
+    # An unchanged config is left alone: a sync may be starting on it while an extra project is set up.
+    if text != before:
+        path.write_text(text, encoding="utf-8")
     os.chmod(path, 0o600)
 
 
@@ -419,16 +422,17 @@ def pace_gmail_sync(home: Path) -> None:
     """Set msgvault's Gmail pace in the home's config.toml, whatever it held before."""
     path = config_path(home)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS), encoding="utf-8")
+    paced = set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS)
+    if paced != text:
+        path.write_text(paced, encoding="utf-8")
 
 
-# Gmail counts a person's quota per Google project, so the first sync of a large mailbox reads
-# through extra projects, each at its own 95 messages a minute (measured 2026-11-19: 94, 187 and
-# 266 a minute through 1, 2 and 3 projects, no refusal). Daily syncs use the one main project.
+# Gmail counts a person's quota per Google project, so the first sync of a mailbox reads through
+# extra projects, each at its own 95 messages a minute (measured 2026-11-19: 94, 187, 266 and 717 a
+# minute through 1, 2, 3 and 10 projects, no refusal). Daily syncs use the one main project.
 GMAIL_QUOTA_APPS = tuple(f"quota{n}" for n in range(2, 11))
-# The first sync aims to finish in about an hour: one project reads about this many messages an
-# hour (94 a minute), so a mailbox gets one project per this many messages, ten at most.
-GMAIL_MESSAGES_PER_PROJECT_HOUR = 5600
+# An extra project takes about three minutes to set up; a sync shorter than a few of those gains nothing.
+GMAIL_QUOTA_MIN_MESSAGES = 1000
 
 
 def msgvault_has_quota_apps() -> bool:
@@ -439,11 +443,21 @@ def msgvault_has_quota_apps() -> bool:
         return False
 
 
-def set_gmail_quota_apps(home: Path, apps: list[str]) -> None:
-    """Name the extra OAuth apps msgvault's next Gmail sync also reads through ([] for none)."""
+def name_gmail_quota_apps(home: Path, apps: list[str]) -> None:
+    """Name the extra OAuth apps msgvault's Gmail sync also reads through ([] for none).
+
+    Each is named with where its client secret will be, before it exists: msgvault skips an app
+    whose secret or sign-in is not there yet and looks again every 30 seconds, so the config is
+    written once, before the sync, and an app set up during the sync joins it."""
     path = config_path(home)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    path.write_text(set_toml_value(text, "sync", "quota_apps", apps), encoding="utf-8")
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    text = before
+    for app in apps:
+        text = set_toml_value(text, f"oauth.apps.{app}", "client_secrets", str(destination_secret_path(home, app)))
+    if apps or "quota_apps" in text:
+        text = set_toml_value(text, "sync", "quota_apps", apps)
+    if text != before:
+        path.write_text(text, encoding="utf-8")
 
 
 def init_db(home: Path) -> dict[str, Any]:
