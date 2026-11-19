@@ -51,6 +51,7 @@ from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
+from packs.search.primitives.expand_search_request.parallel_extractors import _role_core_patterns_from_bm25  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -319,7 +320,13 @@ def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
 
 def payload_from_expand_output(out: dict[str, Any], *, backend: str = "powerset") -> dict[str, Any]:
     keys = LOCAL_PAYLOAD_KEYS if backend == "local" else PAYLOAD_KEYS
-    return {k:v for k,v in out.items() if k in keys}
+    payload = {k:v for k,v in out.items() if k in keys}
+    filters = payload.get("role_search_filters") or {}
+    examples = _pattern_examples(filters.get("role_core_patterns"))
+    if examples:
+        keywords = filters.get("bm25_queries", filters.get("role_bm25_queries")) or []
+        payload["role_search_filters"] = {**filters, "bm25_queries": _dedupe_present([*keywords, *examples])}
+    return payload
 
 def comparable_text(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", s.lower())).strip()
@@ -508,12 +515,7 @@ def apply_card_edits(payload: dict[str, Any], edits: dict[str, Any], run_dir: Pa
         # The run would restore a cleared value from the older alias.
         filters.pop(EDIT_ALIASES.get(key, ""), None)
         if key == "bm25_queries":
-            # A pattern's examples merge back into the keywords at run time, so a removed keyword must not return.
-            kept = set(value or [])
-            filters["role_core_patterns"] = [
-                pattern for pattern in filters.get("role_core_patterns") or []
-                if set(pattern.get("examples") or []) <= kept
-            ]
+            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [])
         log_edit(run_dir, kind="filter_edit", note=key, before=json.dumps(before), after=json.dumps(value))
     if "traits" in edits:
         log_edit(run_dir, kind="query_edit", note="traits",
@@ -596,10 +598,11 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
 
     if "role_semantic_query" in normalized and "semantic_query" not in normalized:
         normalized["semantic_query"] = normalized.get("role_semantic_query")
-    # The keywords live in `bm25_queries`; the older alias only stands in when it is absent, so a
-    # keyword the user removed stays removed.
-    if "role_bm25_queries" in normalized and "bm25_queries" not in normalized:
-        normalized["bm25_queries"] = _dedupe_present(normalized.get("role_bm25_queries") or [])
+    # The card's keywords are authoritative; aliases and pattern examples only fill an absent list.
+    if "bm25_queries" not in normalized:
+        normalized["bm25_queries"] = _dedupe_present([
+            *(normalized.get("role_bm25_queries") or []), *_pattern_examples(normalized.get("role_core_patterns")),
+        ])
 
     id_entity_keys = {
         "company_ids", "cities", "states", "countries", "metro_areas", "macro_regions",
@@ -613,10 +616,6 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
     if isinstance(normalized.get("education_ids"), list) and normalized["education_ids"] and isinstance(normalized["education_ids"][0], dict):
         normalized.setdefault("education_names", _entity_values(normalized["education_ids"], prefer_display=True))
         normalized["education_ids"] = _entity_values(normalized["education_ids"])
-
-    examples = _pattern_examples(normalized.get("role_core_patterns"))
-    if examples:
-        normalized["bm25_queries"] = _dedupe_present([*(normalized.get("bm25_queries") or []), *examples])
 
     normalized = {key: value for key, value in normalized.items() if is_present(value)}
     # Trait temporals are the extractor's currentness contract; honor them at

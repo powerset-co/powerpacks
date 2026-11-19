@@ -430,6 +430,65 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_prepare_adds_shortened_pattern_examples_to_keywords_on_both_backends(self) -> None:
+        mod = load_pipeline_module()
+        keywords = ["Head of Sales", "Senior Product Manager", "sales director"]
+        patterns = mod._role_core_patterns_from_bm25(keywords)
+        expansion = {"status": "completed", "role_search_filters": {
+            "bm25_queries": keywords, "role_core_patterns": patterns,
+        }}
+        for backend in ("local", "powerset"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                command = ["prepare", "--query", "sales and product leaders", "--backend", backend,
+                           "--output-dir", directory]
+                if backend == "local":
+                    db = root / "local.duckdb"
+                    write_local_search_db(db)
+                    command += ["--db", str(db)]
+                else:
+                    command += ["--set-id", "s1"]
+                args = mod.build_parser().parse_args(command)
+                with mock.patch.object(mod, "run", return_value={"returncode": 0, "json": expansion}), \
+                        mock.patch.object(mod.cloud_search.powerset_api, "call", return_value={}) as api, \
+                        mock.patch.object(mod, "emit"), mock.patch.dict(os.environ):
+                    self.assertEqual(mod.cmd_prepare(args), 0)
+                    payload = json.loads((root / "expand_search_request.json").read_text())
+                    expected = [*keywords, "Sales", "Product Manager"]
+                    self.assertEqual(payload["role_search_filters"]["bm25_queries"], expected)
+                    self.assertEqual(payload["role_search_filters"]["role_core_patterns"], patterns)
+                    if backend == "local":
+                        api.assert_not_called()
+                    else:
+                        request = mod.cloud_search.api_request(None, payload, query=args.query, set_id="s1", limit=0)
+                        self.assertEqual(request["role_bm25_queries"], expected)
+
+    def test_local_run_does_not_restore_a_removed_keyword_from_pattern_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "local.duckdb"
+            write_local_search_db(db)
+            payload = root / "payload.json"
+            payload.write_text(json.dumps({"role_search_filters": {
+                "bm25_queries": ["Senior Backend Engineer", "backend engineer"],
+                "role_core_patterns": [{"regex": "backend engineer", "examples": ["Backend Engineer"]}],
+                "local_title_clustering_status": {"status": "completed"},
+            }}))
+            edits = root / "edits.json"
+            keywords = ["Senior Backend Engineer"]
+            edits.write_text(json.dumps({"filters": {"bm25_queries": keywords}}))
+            proc = subprocess.run([
+                sys.executable, str(PIPELINE), "run", "--backend", "local", "--search-only",
+                "--db", str(db), "--ledger", str(root / "ledger.json"),
+                "--query", "backend engineers", "--payload-json", str(payload),
+                "--edits-json", str(edits), "--limit", "1",
+            ], cwd=ROOT, capture_output=True, text=True, timeout=60,
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"})
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            state = json.loads(Path(json.loads(proc.stdout)["state"]).read_text())
+            filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
+            self.assertEqual(filters["bm25_queries"], keywords)
+
     def test_removed_keyword_stays_removed_beside_the_older_alias(self) -> None:
         # The card's edit writes bm25_queries; the alias from the expand step must not merge it back.
         mod = load_pipeline_module()
@@ -1311,7 +1370,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
 
     def test_card_edits_apply_to_the_payload_and_log_each_one(self):
         """The card's JSON edits the prepared payload in code: null removes a key, the older alias
-        goes with it, a kept keyword list prunes the patterns, traits are replaced; every edit
+        goes with it, the keywords rebuild the patterns, traits are replaced; every edit
         lands in user-edits.jsonl."""
         module = load_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -1334,7 +1393,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             out = module.apply_card_edits(payload, edits, run_dir)
             self.assertEqual(out["role_search_filters"], {
                 "cities": ["Boston", "Austin"], "bm25_queries": ["backend engineer"],
-                "role_core_patterns": [{"regex": "backend", "examples": ["backend engineer"]}],
+                "role_core_patterns": [{"regex": r"\b(backend\ engineer)\b", "examples": ["backend engineer"]}],
             })
             self.assertEqual(out["traits"][0]["temporal"], "past")
             self.assertEqual(payload["role_search_filters"]["seniority_bands"], ["senior", "staff"])

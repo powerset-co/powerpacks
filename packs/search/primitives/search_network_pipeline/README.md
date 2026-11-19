@@ -47,9 +47,8 @@ The runner then executes without another gate:
 5. `llm_rerank_candidates`
 6. `persist_search_results`
 
-A set search never reads Postgres or TurboPuffer: `prepare` asks POST
-/v2/search/expand for the filters (the Powerset web app's own), and the run
-maps the card's names back to the expansion's ids.
+A set search never reads Postgres or TurboPuffer: `prepare` calls POST
+/v2/search/resolve, then the run sends the edited card to POST /v2/search/execute.
 
 Use `--search-only` only when the user explicitly wants retrieval/hydration
 without LLM filtering/reranking, or when the deep loop owns downstream triage

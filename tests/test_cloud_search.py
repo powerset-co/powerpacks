@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,40 +26,163 @@ EXPANDED = {
     "is_current": True,
     "headcount_min": 50,
 }
+CARD = {
+    "semantic_query": EXPANDED["role_semantic_query"],
+    "bm25_queries": ["Storage Engineer"],
+    "role_core_patterns": EXPANDED["role_core_patterns"],
+    "company_names": ["Acme"], "cities": ["San Francisco"],
+    "is_current_role": True, "headcount_min": 50,
+}
 
 
 class CloudSearchTests(unittest.TestCase):
-    def test_card_shows_names_and_keywords_under_its_own_keys(self) -> None:
-        card = cloud_search.card_filters(EXPANDED)
-        self.assertEqual(card["company_names"], ["Acme"])
-        self.assertEqual(card["semantic_query"], EXPANDED["role_semantic_query"])
-        self.assertEqual(card["bm25_queries"], ["Storage Engineer"])
-        self.assertTrue(card["is_current_role"])
-        self.assertNotIn("education_names", card)
+    def test_execute_sends_each_card_filter_under_the_api_name_only(self) -> None:
+        lists = {
+            "role_ids": ["chief_financial_officer"], "cities": ["Austin"], "states": ["Texas"],
+            "countries": ["USA"], "metro_areas": ["Austin Metro"], "macro_regions": ["North America"],
+            "company_cities": ["Boston"], "company_states": ["Massachusetts"], "company_countries": ["USA"],
+            "company_metro_areas": ["Boston Metro"], "company_macro_regions": ["North America"],
+            "yc_batches": ["W24"], "entity_types": ["venture_backed_startup"], "sector_types": ["saas"],
+            "seniority_bands": ["senior"], "role_tracks": ["finance"], "degree_levels": ["MBA"],
+            "fields_of_study": ["Finance"], "company_semantic_queries": ["banks"],
+            "company_adjacency_queries": ["bank CFO"],
+        }
+        scalars = {
+            "funding_stage_min": "seed", "funding_stage_max": "series_b", "headcount_min": 0,
+            "headcount_max": 500, "last_funding_after": "2020-01-01", "last_funding_before": "2025-01-01",
+            "funding_amount_min": 1000000, "funding_amount_max": 50000000, "valuation_min": 100000000,
+            "valuation_max": 1000000000, "founded_year_min": 2000, "founded_year_max": 2025,
+            "graduation_year_min": 2000, "graduation_year_max": 2010, "years_experience_min": 5,
+            "years_experience_max": 20, "age_min": 25, "age_max": 45, "role_function": "leader",
+            "x_followers_min": 0, "x_followers_max": 5000, "li_followers_min": 10, "li_followers_max": 1000,
+            "ig_followers_min": 20, "ig_followers_max": 2000, "li_connections_min": 30, "li_connections_max": 3000,
+            "operator_interaction_min": 0, "operator_interaction_max": 100, "set_interaction_min": 5,
+            "set_interaction_max": 500, "position_after_date": "2020", "position_before_date": "2025",
+            "education_op": "and",
+        }
+        unsupported = {key: ["ignored"] for key in (
+            "role_agent_ids", "role_departments", "csuite_shortcut_role_id", "local_title_clusters",
+            "local_title_patterns", "is_current_company", "tech_skills", "technology_types", "customer_types",
+            "company_size", "notes", "person_sort_strategy", "seniority_intent", "unknown_filter")}
+        core = [{"regex": "CFO", "examples": ["CFO"], "source": "local_title_cluster", "count": 7}]
+        adjacent = [{"regex": "finance", "examples": ["Finance Leader"], "metadata": {"score": 1}}]
+        card = {**lists, **scalars, **unsupported, "semantic_query": "finance leaders", "bm25_queries": ["CFO"],
+                "role_core_patterns": core, "role_adjacent_patterns": adjacent, "is_current_role": None}
+        traits = ["builds banks", {"value": "CFO", "temporal": "past", "meaning": "role", "score": 1},
+                  {"value": "owns finance"}]
+        for domain in (False, True):
+            with self.subTest(domain=domain), mock.patch.object(cloud_search.powerset_api, "call") as api:
+                request = cloud_search.api_request(None, {"role_search_filters": card, "traits": traits,
+                                                           "has_domain_intent": domain},
+                                                   query="full original query", set_id="s1", limit=1500,
+                                                   conversation_id="c1")
+                api.assert_not_called()
+            self.assertEqual(request, {
+                **lists, **scalars, "company_ids": [], "education_ids": [], "investors": [],
+                "role_semantic_query": "finance leaders", "role_bm25_queries": ["CFO"],
+                "role_core_patterns": [{"regex": "CFO", "examples": ["CFO"]}],
+                "role_adjacent_patterns": [{"regex": "finance", "examples": ["Finance Leader"]}],
+                "is_current": None, "traits": [{"value": "builds banks", "temporal": "all", "meaning": "general"},
+                                                {"value": "CFO", "temporal": "past", "meaning": "role"},
+                                                {"value": "owns finance", "temporal": "all", "meaning": "general"}],
+                "has_domain_intent": domain, "search_summary": domain, "search_company_signal": domain,
+                "query": "full original query", "set_id": "s1", "limit": 1500, "rerank": True,
+                "skip_llm_filter": False, "conversation_id": "c1", "save_before_response": True,
+            })
 
-    def test_card_edits_map_back_to_ids_and_new_names_are_looked_up(self) -> None:
-        card = cloud_search.card_filters(EXPANDED) | {"company_names": ["Acme", "Globex"],
-                                                       "education_names": ["Stanford"], "set_id": "s1"}
+    def test_execute_preserves_empty_false_and_null_card_values(self) -> None:
+        for current in (True, False, None):
+            with self.subTest(current=current):
+                request = cloud_search.api_request(None, {"role_search_filters": {
+                    "is_current_role": current, "semantic_query": "", "headcount_min": None,
+                    "role_function": None, "bm25_queries": []}}, query="q", set_id="s1", limit=3000)
+                self.assertIs(request["is_current"], current)
+                self.assertEqual(request["role_semantic_query"], "")
+                self.assertEqual(request["role_bm25_queries"], [])
+                self.assertEqual(request["limit"], 2000)
+                self.assertEqual(request["education_op"], "or")
+                self.assertNotIn("headcount_min", request)
+                self.assertNotIn("role_function", request)
+        request = cloud_search.api_request(None, {"role_search_filters": {"semantic_query": "engineer"}},
+                                           query="q", set_id="s1", limit=0)
+        self.assertNotIn("is_current", request)
+        self.assertNotIn("role_semantic_query", request)
+
+    def test_execute_leaves_currentness_to_traits_without_a_card_override(self) -> None:
+        for temporal in ("current", "past", "all"):
+            with self.subTest(temporal=temporal):
+                traits = [{"value": "Engineer", "temporal": temporal, "meaning": "role"}]
+                request = cloud_search.api_request(None, {"role_search_filters": {}, "traits": traits},
+                                                   query="q", set_id="s1", limit=0)
+                self.assertNotIn("is_current", request)
+                self.assertEqual(request["traits"], traits)
+
+    def test_pipeline_imports_without_direct_database_dependencies(self) -> None:
+        proc = subprocess.run([sys.executable, "-c", """
+import sys
+for name in ('psycopg', 'psycopg2', 'turbopuffer'):
+    sys.modules[name] = None
+from packs.search.primitives.search_network_pipeline import search_network_pipeline
+"""], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_keyword_edits_rebuild_patterns_and_reach_execute(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        payload = {"role_search_filters": {
+            "semantic_query": "people building systems", "bm25_queries": ["backend engineer", "platform engineer"],
+            "role_core_patterns": [{"regex": "backend engineer|platform engineer",
+                                    "examples": ["backend engineer", "platform engineer"]}]}}
+        for keywords in (["backend engineer"], ["backend engineer", "storage engineer"], [], None):
+            with self.subTest(keywords=keywords), tempfile.TemporaryDirectory() as directory:
+                edited = pipeline.apply_card_edits(payload, {"filters": {"bm25_queries": keywords}}, Path(directory))
+                request = cloud_search.api_request(None, edited, query="q", set_id="s1", limit=0)
+                self.assertEqual(request["role_bm25_queries"], keywords or [])
+                patterns = request["role_core_patterns"]
+                for title in ("backend engineer", "platform engineer", "storage engineer"):
+                    self.assertEqual(any(re.search(p["regex"], title) for p in patterns), title in (keywords or []))
+                if keywords:
+                    self.assertEqual(request["role_semantic_query"], "people building systems")
+                else:
+                    self.assertNotIn("role_semantic_query", request)
+
+    def test_resolve_notes_only_names_without_an_equal_or_prefixed_label(self) -> None:
+        payload = {"role_search_filters": {"education_names": ["Example University", "Missing College"]}}
+        with mock.patch.object(cloud_search.powerset_api, "call", return_value={
+                "education_ids": [{"id": "e1", "display_value": "EXAMPLE University (Main)"}]}):
+            out, _ = cloud_search.resolve(None, payload, "s1")
+        self.assertEqual(out["notes"], ["resolve did not return education_names: Missing College"])
+
+    def test_card_edits_resolve_all_added_names_in_one_request(self) -> None:
+        card = CARD | {"company_names": ["Acme", "Globex"], "education_names": ["Example University"],
+                       "investor_names": ["Example Ventures"], "set_id": "s1"}
         calls = []
 
         def api(env_file, path, body=None, **kwargs):
-            calls.append(path)
-            return {"suggestions": [{"id": "urn:co:2" if "companies" in path else "urn:edu:1", "display_value": "x"}]}
+            calls.append((path, body))
+            return {"company_ids": [{"id": "urn:co:2", "display_value": "Globex"},
+                                    {"id": "urn:co:3", "display_value": "Globex Labs"}],
+                    "education_ids": [{"id": "urn:edu:1", "display_value": "Example University (Main)"}],
+                    "investors": [{"id": "urn:vc:1", "display_value": "Example Ventures"}]}
 
         with mock.patch.object(cloud_search.powerset_api, "call", side_effect=api):
             request = cloud_search.api_request(None, {"role_search_filters": card, "api_filters": EXPANDED,
                                                       "traits": ["builds storage"]},
                                                query="storage engineers", set_id="s1", limit=0)
-        self.assertEqual(request["company_ids"], ["urn:co:1", "urn:co:2"])
+        self.assertEqual(request["company_ids"], ["urn:co:1", "urn:co:2", "urn:co:3"])
         self.assertEqual(request["education_ids"], ["urn:edu:1"])
+        self.assertEqual(request["investors"], ["urn:vc:1"])
         self.assertEqual(request["cities"], ["San Francisco"])
         self.assertTrue(request["is_current"])
         self.assertEqual(request["role_core_patterns"], EXPANDED["role_core_patterns"])
         self.assertEqual((request["set_id"], request["limit"], request["rerank"], request["skip_llm_filter"]),
                          ("s1", 2000, False, True))
         self.assertNotIn("bm25_queries", request)
+        self.assertEqual(request["role_bm25_queries"], card["bm25_queries"])
         self.assertNotIn("company_names", request)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [("/v2/search/resolve", {"company_names": ["Globex"],
+                               "education_names": ["Example University"], "investor_names": ["Example Ventures"],
+                               "set_id": "s1"})])
 
     def test_run_keeps_at_most_the_limit(self) -> None:
         results = [{"person_id": f"p{i}", "status": "good"} for i in range(5)]
@@ -68,9 +194,9 @@ class CloudSearchTests(unittest.TestCase):
                                                        timeout=60, write_state=False, rerank=False, rerank_rest=False))
         self.assertEqual(out["candidate_count"], 2)
 
-    def test_company_and_school_names_keep_all_matching_ids_in_expansion_order(self) -> None:
-        for key, card_key, kind in (("company_ids", "company_names", "companies"),
-                                    ("education_ids", "education_names", "schools")):
+    def test_entity_names_keep_all_matching_ids_in_resolve_order(self) -> None:
+        for key, card_key in (("company_ids", "company_names"), ("education_ids", "education_names"),
+                              ("investors", "investor_names")):
             expanded = {key: [{"id": id_, "display_value": name} for id_, name in
                               [("A", "Google"), ("D", "Other"), ("B", "Google"),
                                ("C", "Google"), ("A", "Google")]]}
@@ -79,18 +205,29 @@ class CloudSearchTests(unittest.TestCase):
                     (["google"], ["A", "B", "C"], False),
                     (["Other", "Google"], ["A", "D", "B", "C"], False),
                     (["Other"], ["D"], False),
-                    ([], None, False),
+                    ([], [], False),
                     (["Google", "Added"], ["A", "B", "C", "E"], True)):
                 with self.subTest(key=key, names=names), mock.patch.object(
-                        cloud_search.powerset_api, "call", return_value={"suggestions": [{"id": "E"}]}) as api:
+                        cloud_search.powerset_api, "call", return_value={key: [{"id": "E", "display_value": "Added"}]}) as api:
                     request = cloud_search.api_request(
                         None, {"api_filters": expanded, "role_search_filters": {card_key: names}},
                         query="q", set_id="s1", limit=0)
                     self.assertEqual(request.get(key), expected)
                     if lookup:
-                        api.assert_called_once_with(None, f"/v2/autocomplete/{kind}?limit=1&q=Added")
+                        api.assert_called_once_with(None, "/v2/search/resolve", {card_key: ["Added"], "set_id": "s1"})
                     else:
                         api.assert_not_called()
+
+    def test_person_places_send_resolved_ids_and_keep_added_card_values(self) -> None:
+        places = ("cities", "states", "countries", "metro_areas", "macro_regions")
+        resolved = {key: [{"id": f"{key}-id", "display_value": f"{key} label"}] for key in places}
+        card = {key: [f"{key} label", f"{key} added"] for key in places}
+        with mock.patch.object(cloud_search.powerset_api, "call") as api:
+            request = cloud_search.api_request(None, {"role_search_filters": card, "api_filters": resolved},
+                                               query="q", set_id="s1", limit=0)
+        api.assert_not_called()
+        for key in places:
+            self.assertEqual(request[key], [f"{key}-id", f"{key} added"])
 
     def test_set_prepare_expands_in_the_app_then_resolves_names_and_titles_once(self) -> None:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
@@ -449,7 +586,7 @@ class CloudSearchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
             state.write_text(json.dumps({"task_id": "t", "query": "storage engineers", "steps": [
-                {"id": "expand_search_request", "output": {"role_search_filters": cloud_search.card_filters(EXPANDED),
+                {"id": "expand_search_request", "output": {"role_search_filters": CARD,
                                                             "api_filters": EXPANDED, "traits": []}}]}))
             with mock.patch("packs.shared.powerset_api.call", side_effect=api):
                 cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0,

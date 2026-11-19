@@ -165,7 +165,7 @@ viewer; auto deep mode runs all approved ponds without that pause.
 ### Retrieval surface boundary
 
 `$search` people retrieval means the Powerpacks network surface: the `powerset` backend is
-the Powerset API for a set (POST /v2/search/expand + /execute; no Postgres or TurboPuffer) and the `local` backend is DuckDB. It is not Sales Navigator.
+the Powerset API for a set (POST /v2/search/resolve then /v2/search/execute; no Postgres or TurboPuffer) and the `local` backend is DuckDB. It is not Sales Navigator.
 
 - An explicit Powerset/network request stays on `$search` with `surface: people` and
   `backend: powerset`, including retries, wider probes, adjacency, and sparse-result diagnosis.
