@@ -55,6 +55,7 @@ LOOKUPS = {"company_ids": "companies", "education_ids": "schools"}
 # Card-only keys with no API field.
 CARD_ONLY = {"bm25_queries", "set_id", "is_current_company"}
 LIMIT = 2000  # /v2/search/execute caps a page at 2000
+EXPAND_QUERY_LIMIT = 2048  # /v2/search/expand's query limit
 PAGE = 500  # GET /v2/conversations/{id}/results caps a page at 500
 GOOD_SCORE = 0.3  # the API's line between good and bad (with no zero trait)
 
@@ -78,7 +79,7 @@ def card_filters(api_filters: dict[str, Any]) -> dict[str, Any]:
 
 def expand(env_file: Path | None, query: str, set_id: str | None) -> dict[str, Any]:
     """The prepared payload for a query: the card's filters, the API's as expanded, and the traits."""
-    out = powerset_api.call(env_file, "/v2/search/expand", {"query": query, "set_id": set_id})
+    out = powerset_api.call(env_file, "/v2/search/expand", {"query": query[:EXPAND_QUERY_LIMIT], "set_id": set_id})
     api_filters = out.get("filters") or {}
     return {"normalized_query": query, "role_search_filters": card_filters(api_filters), "api_filters": api_filters,
             "traits": out.get("traits") or [], "has_domain_intent": bool(out.get("has_domain_intent"))}
@@ -86,16 +87,19 @@ def expand(env_file: Path | None, query: str, set_id: str | None) -> dict[str, A
 
 def _resolve(env_file: Path | None, key: str, names: list[Any], expanded: list[Any]) -> list[str]:
     known = {str(_label(item)).lower(): str(item.get("id") or _label(item)) for item in expanded if isinstance(item, dict)}
+    if key not in LOOKUPS:
+        return [known.get(str(name).lower(), str(name)) for name in names]
+
+    selected = {str(name).lower() for name in names}
     ids = []
+    for item in expanded:
+        if isinstance(item, dict) and str(_label(item)).lower() in selected:
+            ids.append(str(item.get("id") or _label(item)))
     for name in names:
-        if str(name).lower() in known:
-            ids.append(known[str(name).lower()])
-        elif key in LOOKUPS:
+        if str(name).lower() not in known:
             hits = powerset_api.call(env_file, f"/v2/autocomplete/{LOOKUPS[key]}?limit=1&q={powerset_api.quote(str(name))}").get("suggestions") or []
             ids += [str(hit["id"]) for hit in hits[:1] if hit.get("id")]
-        else:
-            ids.append(str(name))
-    return ids
+    return list(dict.fromkeys(ids))
 
 
 def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, set_id: str | None, limit: int,
@@ -111,7 +115,7 @@ def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, s
         request[key] = _resolve(env_file, key, value, expanded.get(key) or []) if is_entities and isinstance(value, list) and key not in ("role_core_patterns", "role_adjacent_patterns") else value
     if request.get("role_semantic_query") and not request.get("role_core_patterns"):
         request.pop("role_semantic_query")  # the API takes a role query only with its patterns
-    return {**request, "query": query[:500], "traits": payload.get("traits") or [],
+    return {**request, "query": query, "traits": payload.get("traits") or [],
             "has_domain_intent": bool(payload.get("has_domain_intent")), "set_id": set_id,
             "limit": min(limit or LIMIT, LIMIT), "rerank": bool(conversation_id), "skip_llm_filter": not conversation_id,
             # A ranked search is answered only once every result is saved, so there is no saving to wait for.
