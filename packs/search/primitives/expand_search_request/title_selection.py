@@ -31,8 +31,8 @@ async def pick_title_clusters(
 ) -> TitleSelection:
     lines = []
     for group in groups[:MAX_TITLE_GROUPS]:
-        stem = group.get("stemmed") or group["stem"]
-        examples = ", ".join((group.get("raw_titles") or group["titles"])[:3])
+        stem = group["stem"]
+        examples = ", ".join(group["titles"][:3])
         lines.append(f'  "{stem}" (count={group["count"]}, e.g.: {examples})')
     user_content = (f'Query: "{query}"\n\n'
                     'Title clusters (stemmed form, count, raw examples):\n'

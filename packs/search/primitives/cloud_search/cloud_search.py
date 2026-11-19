@@ -20,6 +20,7 @@ reads them only when asked, and shows them loading until their rows file exists.
 TurboPuffer.
 
 Changelog:
+  2026-11-18: Prepare resolves the app's expansion through /v2/search/resolve.
   2026-11-17: --rerank: the API filters, ranks and stores a set search and the app downloads the
       result back in pages, good and bad apart; the app no longer filters or ranks a set search.
   2026-11-16: created; replaces the direct TurboPuffer/Postgres set search (resolve_set_operators,

@@ -1231,7 +1231,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["hydrated"], "True")
 
 
-class LocalTitleExpansionTests(unittest.TestCase):
+class LocalRunKeywordsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -1262,7 +1262,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
         store_profiles(conn)
         conn.close()
 
-    def test_investor_cli_persists_role_titles_and_honors_limit_one(self):
+    def test_investor_cli_keeps_prepared_keywords_and_honors_limit_one(self):
         tmp = Path(self.tmp.name)
         query = "general partners at any seniority who can lead our software company's Series B with a $20M check"
         payload_path = tmp / "payload.json"

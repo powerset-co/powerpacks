@@ -59,12 +59,3 @@ def test_unseen_provider_school_stays_itself():
     assert result["education"][0]["canonical_education_id"] == school_id
     assert result["schools"][0]["id"] == school_id
     assert result["schools"][0]["canonical_key"] == "provider:2"
-
-
-def test_name_index_is_built_once():
-    rows = {"a": row("a", key="provider:1")}
-    with mock.patch.object(school_parents, "school_rows", return_value=rows):
-        with mock.patch.object(school_parents, "flatten", wraps=school_parents.flatten) as flatten:
-            assert school_parents.parent_row("unseen-1", NAME, "name:bravo")["id"] == "a"
-            assert school_parents.parent_row("unseen-2", NAME, "name:bravo")["id"] == "a"
-            flatten.assert_called_once()

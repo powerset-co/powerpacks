@@ -934,10 +934,9 @@ class LocalDuckDBSearchStore:
         for stemmed, raw_counts in sorted(clusters.items(), key=lambda item: (-sum(item[1].values()), item[0])):
             raw_titles = [title for title, _count in raw_counts.most_common()]
             out.append({
-                "stemmed": stemmed,
+                "stem": stemmed,
                 "count": sum(raw_counts.values()),
-                "raw_titles": raw_titles[:5],
-                "display_title": raw_titles[0],
+                "titles": raw_titles[:5],
             })
         return out
 

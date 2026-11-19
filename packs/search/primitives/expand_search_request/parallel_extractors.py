@@ -417,10 +417,7 @@ async def _extract(
             **kwargs,
         )
         content = resp.choices[0].message.content or "{}"
-        result = json.loads(content)
-        if name == "interaction":
-            return {key: int(result[key]) for key in INTERACTION_FIELDS if result.get(key) is not None}
-        return result
+        return json.loads(content)
     except Exception as e:
         logger.error(f"[{name}] extraction failed: {e}")
         return {}
@@ -688,7 +685,11 @@ def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
+def injected_role_titles(role_ids: list[str]) -> list[str]:
+    return sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
+
+
+def role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     examples: list[str] = []
     seen: set[str] = set()
     for query in queries:
@@ -833,9 +834,9 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
             filters["role_function"] = role_function
 
     agent_and_shortcut_ids = _dedupe_strings([*role_ids, *(filters.get("role_ids") or [])])
-    injected_titles = [title for role_id in agent_and_shortcut_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]
+    injected_titles = injected_role_titles(agent_and_shortcut_ids)
     if injected_titles:
-        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *sorted(set(injected_titles))])
+        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *injected_titles])
 
     if filters.get("bm25_queries") and not filters.get("role_core_patterns"):
         seniority_prefixes = re.compile(
@@ -845,7 +846,7 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
         )
         phrases = [re.split(r"[|,]", seniority_prefixes.sub("", title).strip())[0].strip()
                    for title in filters["bm25_queries"]]
-        filters["role_core_patterns"] = _role_core_patterns_from_bm25(phrases)
+        filters["role_core_patterns"] = role_core_patterns_from_bm25(phrases)
 
 
 def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:
@@ -941,6 +942,12 @@ async def expand_query_parallel(
                 model=model_override or EXTRACTOR_MODELS.get(name),
                 reasoning_effort=reasoning_effort,
             )
+        if name == "interaction":
+            try:
+                result = {key: int(result[key]) for key in INTERACTION_FIELDS if result.get(key) is not None}
+            except Exception as e:
+                logger.error(f"[{name}] extraction failed: {e}")
+                result = {}
         timings[name] = round(time.monotonic() - t0, 3)
         return result
 

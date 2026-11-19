@@ -204,7 +204,7 @@ export function filledFields(values: Values, prepared: Values): Field[] {
   const known = FIELDS.filter((field) => fieldHasValue(field, values) || fieldHasValue(field, prepared))
   const named = new Set(FIELDS.flatMap(fieldKeys))
   const other = [...values.keys()]
-    .filter((key) => !named.has(key) && key !== "technology_types" && key !== "customer_types")
+    .filter((key) => !named.has(key))
     .map((key) => fieldFor(key, values.get(key) ?? prepared.get(key)))
   return [...known, ...other]
 }
@@ -253,6 +253,7 @@ export const HIDDEN_KEYS = new Set([
   "company_semantic_query",
   "company_adjacency_queries",
   "customer_types",
+  "technology_types",
   "role_query_type",
   "role_function",
   "seniority_intent",

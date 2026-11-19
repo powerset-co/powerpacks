@@ -169,7 +169,6 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         payload = search.payload_from_expand_output(expand)
         self.assertNotIn("primitive", payload)
         self.assertNotIn("status", payload)
-        self.assertEqual(search.payload_quality_issues(payload), [])
 
         preview = search.compact_preview(payload, Path("payload.json"), [])
         self.assertEqual(preview["payload_json"], "payload.json")
@@ -204,29 +203,6 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 expected = {"countries": ["US"]} if traits else filters
                 self.assertEqual(preview["filters"], expected)
                 self.assertEqual(local_preview["filters"], expected)
-
-    def test_prepare_quality_gate_rejects_short_title_semantic_query(self):
-        payload = {
-            "role_search_filters": {
-                "semantic_query": "software engineer",
-                "bm25_queries": ["software engineer"],
-            }
-        }
-
-        issues = search.payload_quality_issues(payload)
-
-        self.assertTrue(issues)
-        self.assertIn("semantic_query", issues[0])
-
-    def test_prepare_quality_gate_allows_filter_only_search(self):
-        payload = {
-            "role_search_filters": {
-                "company_names": ["Meta"],
-                "position_after_date": "2020-01-01",
-            }
-        }
-
-        self.assertEqual(search.payload_quality_issues(payload), [])
 
     def test_cmd_prepare_invokes_expand_and_emits_execute_command_without_openai(self):
         expand = {

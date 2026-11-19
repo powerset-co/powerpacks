@@ -16,7 +16,7 @@ beforeAll(() => {
 })
 
 import type { PreparedSearch } from "@/lib/agent/preparedSearch"
-import { FIELDS, fieldKeys, filledFields } from "@/lib/agent/searchFields"
+import { FIELDS, fieldKeys, previewFields } from "@/lib/agent/searchFields"
 import { isRecord } from "@/lib/utils"
 
 import { SearchCard } from "./SearchCard"
@@ -377,7 +377,7 @@ it("omits technology and customers from the field list, including saved filters"
   ])
   expect(FIELDS.flatMap(fieldKeys)).not.toContain("technology_types")
   expect(FIELDS.flatMap(fieldKeys)).not.toContain("customer_types")
-  expect(filledFields(values, values)).toEqual([])
+  expect(previewFields(values)).toEqual([])
 })
 
 it("hides what the cloud app's preview hides, and keeps sending it", () => {

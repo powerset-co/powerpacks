@@ -33,7 +33,7 @@ class PersonLookupTests(unittest.TestCase):
                     "prepare", "--query", "who is Jordan Bravo", "--backend", backend,
                     "--db", str(db), "--set-id", "s1", "--output-dir", raw,
                 ])
-                with mock.patch.object(pipeline, "_expand_query", return_value=lookup_payload()), \
+                with mock.patch.object(pipeline, "_expand_query", return_value=(lookup_payload(), directory / "expand-prompts")), \
                      mock.patch.object(pipeline, "emit") as emit, \
                      mock.patch.object(powerset_api, "call", side_effect=AssertionError("no API during prepare")), \
                      mock.patch.object(pipeline, "_local_title_clusters", side_effect=AssertionError("no titles")), \

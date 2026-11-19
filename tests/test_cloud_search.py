@@ -18,18 +18,14 @@ from packs.search.primitives.hydrate_people import hydrate_people
 from packs.search.primitives.persist_search_results import results_io
 
 EXPANDED = {
-    "role_semantic_query": "Engineers who build storage engines",
-    "role_core_patterns": [{"regex": "storage engineer", "examples": ["Storage Engineer"]}],
     "company_ids": [{"id": "urn:co:1", "type": "company", "display_value": "Acme"}],
     "education_ids": [],
     "cities": [{"id": "San Francisco", "type": "city", "display_value": "San Francisco"}],
-    "is_current": True,
-    "headcount_min": 50,
 }
 CARD = {
-    "semantic_query": EXPANDED["role_semantic_query"],
+    "semantic_query": "Engineers who build storage engines",
     "bm25_queries": ["Storage Engineer"],
-    "role_core_patterns": EXPANDED["role_core_patterns"],
+    "role_core_patterns": [{"regex": "storage engineer", "examples": ["Storage Engineer"]}],
     "company_names": ["Acme"], "cities": ["San Francisco"],
     "is_current_role": True, "headcount_min": 50,
 }
@@ -62,7 +58,7 @@ class CloudSearchTests(unittest.TestCase):
         }
         unsupported = {key: ["ignored"] for key in (
             "role_agent_ids", "role_departments", "csuite_shortcut_role_id", "local_title_clusters",
-            "local_title_patterns", "is_current_company", "tech_skills", "technology_types", "customer_types",
+            "is_current_company", "tech_skills", "technology_types", "customer_types",
             "company_size", "notes", "person_sort_strategy", "seniority_intent", "unknown_filter")}
         core = [{"regex": "CFO", "examples": ["CFO"], "source": "local_title_cluster", "count": 7}]
         adjacent = [{"regex": "finance", "examples": ["Finance Leader"], "metadata": {"score": 1}}]
@@ -174,7 +170,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         self.assertEqual(request["investors"], ["urn:vc:1"])
         self.assertEqual(request["cities"], ["San Francisco"])
         self.assertNotIn("is_current", request)
-        self.assertEqual(request["role_core_patterns"], EXPANDED["role_core_patterns"])
+        self.assertEqual(request["role_core_patterns"], CARD["role_core_patterns"])
         self.assertEqual((request["set_id"], request["limit"], request["rerank"], request["skip_llm_filter"]),
                          ("s1", 2000, False, True))
         self.assertNotIn("bm25_queries", request)
@@ -279,7 +275,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             self.assertFalse(payload["has_domain_intent"])
             self.assertTrue(any("Missing" in note for note in payload["notes"]))
             pick.assert_awaited_once_with(
-                args.query, [{**group, "display_title": group["titles"][0]} for group in resolved["title_clusters"]],
+                args.query, resolved["title_clusters"],
                 model="synthetic-model", reasoning_effort="high")
             self.assertEqual(card["bm25_queries"], ["software engineers", "Software Engineer"])
             self.assertEqual(card["role_core_patterns"], [{"regex": r"\b(software\ engineer)\b",

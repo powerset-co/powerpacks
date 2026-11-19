@@ -16,6 +16,7 @@ For manual runs it needs either an existing task `--state` or a `--query` plus
 `--payload-json` containing the `expand_search_request` shape.
 
 Changelog:
+    2026-11-18: Remove dead preparation checks and share title groups and role-title injections.
     2026-11-13: a refine killed mid-judge no longer holds its run "running": the card carries the
         refine's pid, and a gone pid reads as failed so the next refine (or a retry) runs.
     2026-11-10: `rerank --sql` is the second tool: a hard criterion is DuckDB SQL over the rows showing
@@ -26,6 +27,8 @@ Changelog:
         like Jev, reads every hydrated row without `llm_filter_candidates`.
     2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
         hydrated row. The Luna filter still precedes `--capability-judge terra`.
+    2026-09-13: Local title expansion matches complete extracted role phrases,
+        not individual words from the whole search query.
 """
 from __future__ import annotations
 
@@ -51,7 +54,7 @@ from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
-from packs.search.primitives.expand_search_request.parallel_extractors import ROLE_ID_TITLE_INJECTIONS, _role_core_patterns_from_bm25  # noqa: E402
+from packs.search.primitives.expand_search_request.parallel_extractors import injected_role_titles, role_core_patterns_from_bm25  # noqa: E402
 from packs.search.primitives.expand_search_request import title_selection  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
@@ -326,22 +329,6 @@ def payload_from_expand_output(out: dict[str, Any], *, backend: str = "powerset"
         raise Failed("expand_search_request returned a role search without traits; prepare requires traits")
     return payload
 
-def comparable_text(s: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", s.lower())).strip()
-
-def payload_quality_issues(payload: dict[str, Any]) -> list[str]:
-    f=payload.get("role_search_filters") if isinstance(payload.get("role_search_filters"),dict) else {}
-    sq=f.get("semantic_query")
-    bm25=[x for x in (f.get("bm25_queries") or []) if isinstance(x,str) and x.strip()]
-    has_role_or_profile_intent=bool(sq or bm25 or f.get("role_ids") or f.get("role_names") or f.get("titles"))
-    issues=[]
-    if has_role_or_profile_intent:
-        if not isinstance(sq,str) or len(sq.strip()) < 80:
-            issues.append("role/profile intent needs role_search_filters.semantic_query prose with at least 80 characters")
-        elif any(comparable_text(sq)==comparable_text(x) for x in bm25):
-            issues.append("semantic_query must not duplicate a bm25/title phrase")
-    return issues
-
 def payload_quality_issues_local(payload: dict[str, Any]) -> list[str]:
     filters = payload_filters(payload)
     semantic_query = filters.get("semantic_query")
@@ -514,7 +501,7 @@ def apply_card_edits(payload: dict[str, Any], edits: dict[str, Any], run_dir: Pa
         # The run would restore a cleared value from the older alias.
         filters.pop(EDIT_ALIASES.get(key, ""), None)
         if key == "bm25_queries":
-            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [])
+            filters["role_core_patterns"] = role_core_patterns_from_bm25(value or [])
         log_edit(run_dir, kind="filter_edit", note=key, before=json.dumps(before), after=json.dumps(value))
     if "traits" in edits:
         log_edit(run_dir, kind="query_edit", note="traits",
@@ -552,15 +539,7 @@ def _entity_values(values: Any, *, prefer_display: bool = False) -> list[str]:
     return list(dict.fromkeys(out))
 
 def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | None = None) -> dict[str, Any]:
-    """Normalize the prepared payload for set and local searches.
-
-    Prod/network expansion uses `filters.role_semantic_query`,
-    `filters.role_bm25_queries`, and entity objects. Local DuckDB primitives use
-    `role_search_filters.semantic_query`, `role_search_filters.bm25_queries`, and
-    scalar local filters. Normalizing at this boundary lets the local backend
-    consume the same query-expansion artifact where fields are statically
-    translatable.
-    """
+    """Normalize expansion aliases and entity objects into card filters for either backend."""
     if not isinstance(payload, dict) or payload.get("intent_type") == "person_lookup":
         return payload
     source_filters = payload.get("role_search_filters")
@@ -647,7 +626,7 @@ def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[st
     return out
 
 def _title_pick_skip_reason(filters: dict[str, Any]) -> str | None:
-    founder = any(role_id in {"founder", "cofounder", "co-founder"} for role_id in filters.get("role_ids") or [])
+    founder = "founder" in (filters.get("role_ids") or [])
     if founder or filters.get("csuite_shortcut_role_id"):
         return "skipped_shortcut"
     if not any(filters.get(key) for key in ("role_ids", "role_agent_ids", "bm25_queries", "role_core_patterns")):
@@ -721,12 +700,12 @@ def _apply_title_clusters(
     adjacent_patterns = []
     if adjacent is not None:
         for group in adjacent_shown:
-            if (group.get("stemmed") or group.get("stem")) not in adjacent.selected:
+            if group["stem"] not in adjacent.selected:
                 continue
-            display = group["display_title"]
+            display = group["titles"][0]
             adjacent_patterns.append({
                 "regex": rf"\b{re.escape(display.lower())}\b",
-                "examples": (group.get("raw_titles") or group["titles"])[:3],
+                "examples": group["titles"][:3],
                 "display_value": display,
             })
             if len(adjacent_patterns) == title_selection.MAX_ADJACENT_PATTERNS:
@@ -737,13 +716,12 @@ def _apply_title_clusters(
     out_filters["role_adjacent_patterns"] = adjacent_patterns
     if direct is not None:
         role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
-        injected = sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
         unique_keywords = {}
-        for title in [*(filters.get("bm25_queries") or []), *direct.keywords, *injected]:
+        for title in [*(filters.get("bm25_queries") or []), *direct.keywords, *injected_role_titles(role_ids)]:
             unique_keywords.setdefault(title.casefold(), title)
         keywords = list(unique_keywords.values())
         out_filters["bm25_queries"] = keywords
-        out_filters["role_core_patterns"] = _role_core_patterns_from_bm25(keywords)
+        out_filters["role_core_patterns"] = role_core_patterns_from_bm25(keywords)
     out["role_search_filters"] = out_filters
     return out
 
@@ -1286,16 +1264,17 @@ def cmd_run(args):
             record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed", "env_file": args.env_file})
         emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
-def _expand_query(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
+def _expand_query(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any], Path]:
+    prompt_snapshot=out_dir/"expand-prompts"
     cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
          "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
          "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
-         "--snapshot-prompts-dir",str(out_dir/"expand-prompts")]
+         "--snapshot-prompts-dir",str(prompt_snapshot)]
     prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
     if prompts_dir:
         cmd += ["--prompts-dir",prompts_dir]
     return require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30,
-                          extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
+                          extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request"), prompt_snapshot
 
 def cmd_prepare(args):
     """Run extraction and emit a compact preview without requiring repo inspection."""
@@ -1309,7 +1288,7 @@ def cmd_prepare(args):
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         set_id=getattr(args,"set_id",None)
-        expand=_expand_query(args,out_dir)
+        expand,_=_expand_query(args,out_dir)
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand), query=args.query)
         clusters = []
         adjacent_clusters = []
@@ -1325,14 +1304,11 @@ def cmd_prepare(args):
             payload=pin_payload_set_id(payload,set_id)
         if payload.get("intent_type") != "person_lookup":
             load_env_file(ROOT / args.env_file)
-            payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
-                                                  for group in clusters if group["titles"]],
-                                          adjacent_clusters=[{**group,"display_title":group["titles"][0]}
-                                                             for group in adjacent_clusters if group["titles"]],
+            payload=_apply_title_clusters(payload,[group for group in clusters if group["titles"]],
+                                          adjacent_clusters=[group for group in adjacent_clusters if group["titles"]],
                                           model=args.expand_model, reasoning_effort=args.expand_reasoning_effort)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        issues=[]
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         if set_id: extra += f" --set-id {shlex.quote(set_id)}"
         extra+=execution_contract_suffix(args)
@@ -1340,14 +1316,14 @@ def cmd_prepare(args):
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
         emit({
             "primitive":"search_network_pipeline",
-            "status":"preview_ready" if not issues else "blocked_user_action",
-            "message":"Say: Search prepared. Execute or modify?" if not issues else "Regenerate or modify extraction before retrieval.",
+            "status":"preview_ready",
+            "message":"Say: Search prepared. Execute or modify?",
             "query":args.query,
             "payload_json":str(payload_json),
             "expand_json":str(expand_json),
             "ledger":str(ledger),
-            "quality_issues":issues,
-            "preview":compact_preview(payload,payload_json,issues),
+            "quality_issues":[],
+            "preview":compact_preview(payload,payload_json,[]),
             "execute_command":uv_python_command(args,"run",ledger,extra),
         })
         return 0
@@ -1365,8 +1341,7 @@ def cmd_prepare_local(args):
         payload_json=out_dir/"expand_search_request.json"
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
-        prompt_snapshot=out_dir/"expand-prompts"
-        expand=_expand_query(args,out_dir)
+        expand,prompt_snapshot=_expand_query(args,out_dir)
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand, backend="local"), query=args.query)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)

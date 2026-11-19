@@ -16,8 +16,8 @@ from packs.search.primitives.shared import openai_client
 
 
 GROUPS = [
-    {"stemmed": "appli scientist", "count": 12, "raw_titles": ["Applied Scientist"], "display_title": "Applied Scientist"},
-    {"stemmed": "chief staff", "count": 8, "raw_titles": ["Chief of Staff"], "display_title": "Chief of Staff"},
+    {"stem": "appli scientist", "count": 12, "titles": ["Applied Scientist"]},
+    {"stem": "chief staff", "count": 8, "titles": ["Chief of Staff"]},
 ]
 
 
@@ -169,7 +169,7 @@ def test_local_title_read_uses_neighbouring_role_ids_with_other_filters(tmp_path
                 "--output-dir", str(tmp_path), "--expand-model", "synthetic-model",
                 "--expand-reasoning-effort", "high",
             ])
-            with mock.patch.object(pipeline, "_expand_query", return_value={"status": "completed", **source}), \
+            with mock.patch.object(pipeline, "_expand_query", return_value=({"status": "completed", **source}, tmp_path / "expand-prompts")), \
                     mock.patch.dict("os.environ"):
                 assert pipeline.cmd_prepare(args) == 0
             result = json.loads((tmp_path / "expand_search_request.json").read_text())
@@ -178,10 +178,10 @@ def test_local_title_read_uses_neighbouring_role_ids_with_other_filters(tmp_path
             result = pipeline._apply_title_clusters(source, clusters, adjacent_clusters=adjacent_clusters,
                                                     model="synthetic-model", reasoning_effort="high")
     groups = pick.call_args_list[0].args[1]
-    assert {group["display_title"] for group in groups} == {"AI Engineer", "Applied Scientist"}
+    assert {group["titles"][0] for group in groups} == {"AI Engineer", "Applied Scientist"}
     assert pick.call_args_list[0].kwargs == {"model": "synthetic-model", "reasoning_effort": "high"}
     adjacent = pick.call_args_list[1]
-    assert {group["display_title"] for group in adjacent.args[1]} == {"Applied Scientist"}
+    assert {group["titles"][0] for group in adjacent.args[1]} == {"Applied Scientist"}
     assert adjacent.kwargs == {"model": "synthetic-model", "reasoning_effort": "high",
                                "system_prompt": title_selection.ADJACENT_TITLE_SELECTION_PROMPT}
     assert result["role_search_filters"]["bm25_queries"] == ["Senior AI Engineer", "Applied Scientist"]
@@ -200,7 +200,7 @@ def test_set_prepare_passes_resolved_groups_and_applies_edits_after_pick(tmp_pat
         "--preserve-query-semantic", "--seniority-bands", "senior,staff",
         "--edits-json", str(edits),
     ])
-    with mock.patch.object(pipeline, "_expand_query", return_value=expansion), \
+    with mock.patch.object(pipeline, "_expand_query", return_value=(expansion, tmp_path / "expand-prompts")), \
             mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={"title_clusters": groups,
                                                                                       "adjacent_title_clusters": adjacent_groups}), \
             mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
@@ -209,9 +209,9 @@ def test_set_prepare_passes_resolved_groups_and_applies_edits_after_pick(tmp_pat
             mock.patch.object(pipeline, "emit"), mock.patch.dict("os.environ"):
         assert pipeline.cmd_prepare(args) == 0
     assert pick.await_args_list == [
-        mock.call("ai engineers", [{**groups[0], "display_title": "Applied Scientist"}],
+        mock.call("ai engineers", groups,
                   model="synthetic-model", reasoning_effort="high"),
-        mock.call("ai engineers", [{**adjacent_groups[0], "display_title": "Software Engineer"}],
+        mock.call("ai engineers", adjacent_groups,
                   model="synthetic-model", reasoning_effort="high",
                   system_prompt=title_selection.ADJACENT_TITLE_SELECTION_PROMPT),
     ]
@@ -244,7 +244,7 @@ def test_failed_title_choice_fails_prepare(tmp_path, backend):
         "prepare", "--query", "ai engineers", "--backend", backend, "--db", str(db),
         "--set-id", "s1", "--output-dir", str(tmp_path),
     ])
-    with mock.patch.object(pipeline, "_expand_query", return_value=payload()), \
+    with mock.patch.object(pipeline, "_expand_query", return_value=(payload(), tmp_path / "expand-prompts")), \
             mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={
                 "title_clusters": [{"stem": "ai engin", "count": 1, "titles": ["AI Engineer"]}],
             }), mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
@@ -264,8 +264,7 @@ def test_local_title_read_error_propagates(tmp_path):
 
 
 ADJACENT_GROUPS = [{"stem": f"related {i}", "count": 20 - i,
-                    "titles": [f"Related Title {i}", "Second Title", "Third Title", "Fourth Title"],
-                    "display_title": f"Related Title {i}"} for i in range(17)]
+                    "titles": [f"Related Title {i}", "Second Title", "Third Title", "Fourth Title"]} for i in range(17)]
 
 
 def test_adjacent_patterns_use_selected_titles_cap_15_and_ignore_keywords():
@@ -278,8 +277,8 @@ def test_adjacent_patterns_use_selected_titles_cap_15_and_ignore_keywords():
         result = pipeline._apply_title_clusters(payload(), GROUPS, adjacent_clusters=ADJACENT_GROUPS)
     filters = result["role_search_filters"]
     assert filters["role_adjacent_patterns"] == [{
-        "regex": rf"\b{re.escape(group['display_title'].lower())}\b",
-        "examples": group["titles"][:3], "display_value": group["display_title"],
+        "regex": rf"\b{re.escape(group['titles'][0].lower())}\b",
+        "examples": group["titles"][:3], "display_value": group["titles"][0],
     } for group in ADJACENT_GROUPS[:15]]
     assert filters["bm25_queries"] == ["Senior AI Engineer", "Applied Scientist"]
     assert re.search(filters["role_adjacent_patterns"][0]["regex"], "Related Title 0", re.I)
@@ -346,7 +345,7 @@ def test_role_prepare_without_traits_fails_before_resolve_or_title_read(tmp_path
     ])
     source = payload()
     source.pop("traits")
-    with mock.patch.object(pipeline, "_expand_query", return_value=source), \
+    with mock.patch.object(pipeline, "_expand_query", return_value=(source, tmp_path / "expand-prompts")), \
             mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={}) as api, \
             mock.patch.object(title_selection, "pick_title_clusters") as pick, \
             mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
@@ -366,7 +365,7 @@ def test_set_prepare_without_set_id_resolves_personal_set(tmp_path):
     args = pipeline.build_parser().parse_args([
         "prepare", "--query", "ai engineers", "--output-dir", str(tmp_path),
     ])
-    with mock.patch.object(pipeline, "_expand_query", return_value=payload()), \
+    with mock.patch.object(pipeline, "_expand_query", return_value=(payload(), tmp_path / "expand-prompts")), \
             mock.patch.object(pipeline.cloud_search.powerset_api, "personal_set_id", return_value="personal") as personal, \
             mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={
                 "title_clusters": [{"stem": "ai engin", "count": 1, "titles": ["AI Engineer"]}],
