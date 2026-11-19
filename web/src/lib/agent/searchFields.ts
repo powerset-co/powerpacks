@@ -81,8 +81,6 @@ export const FIELDS: Field[] = [
   { label: "Company location", control: { kind: "kinds", keys: COMPANY_LOCATION_KINDS } },
   { label: "Sector", control: { kind: "chips", key: "sector_types" } },
   { label: "Entity type", control: { kind: "chips", key: "entity_types" } },
-  { label: "Technology", control: { kind: "chips", key: "technology_types" } },
-  { label: "Customers", control: { kind: "chips", key: "customer_types" } },
   {
     label: "Stage",
     control: {
@@ -206,7 +204,7 @@ export function filledFields(values: Values, prepared: Values): Field[] {
   const known = FIELDS.filter((field) => fieldHasValue(field, values) || fieldHasValue(field, prepared))
   const named = new Set(FIELDS.flatMap(fieldKeys))
   const other = [...values.keys()]
-    .filter((key) => !named.has(key))
+    .filter((key) => !named.has(key) && key !== "technology_types" && key !== "customer_types")
     .map((key) => fieldFor(key, values.get(key) ?? prepared.get(key)))
   return [...known, ...other]
 }

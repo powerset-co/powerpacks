@@ -75,6 +75,30 @@ class ExpandSearchRequestTests(unittest.TestCase):
             self.assertEqual(call.kwargs["model"], "gpt-5.4")
             self.assertEqual(call.kwargs["reasoning_effort"], "medium")
 
+    def test_company_technology_and_customers_do_not_become_filters(self):
+        company = {
+            "company_names": ["Example Robotics"],
+            "sector_types": ["software"],
+            "entity_types": ["startup"],
+            "company_semantic_queries": ["B2B robotics companies"],
+            "headcount_min": 10,
+        }
+        answers = {"company": company, "trait_generation": {
+            "traits": [{"value": "B2B robotics experience"}], "has_domain_intent": True,
+        }}
+        query = "engineers at B2B robotics companies"
+        baseline, _ = self._expand_with_model_answers(answers, query=query)
+        result, _ = self._expand_with_model_answers({
+            **answers,
+            "company": {**company, "technology_types": ["robotics"],
+                        "customer_types": ["Business (B2B)"]},
+        }, query=query)
+        self.assertNotIn("technology_types", result["role_search_filters"])
+        self.assertNotIn("customer_types", result["role_search_filters"])
+        self.assertEqual(result["role_search_filters"], baseline["role_search_filters"])
+        self.assertEqual(result["traits"], baseline["traits"])
+        self.assertEqual(result["normalized_query"], query)
+
     def test_person_name_selects_lookup_without_another_model_call(self):
         result, create = self._expand_with_model_answers({
             "role": {"bm25_queries": ["engineer"]},

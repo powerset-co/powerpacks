@@ -430,10 +430,6 @@ def _merge(
         filters["last_funding_after"] = company["last_funding_after"]
     if company.get("yc_batches"):
         filters["yc_batches"] = company["yc_batches"]
-    if company.get("technology_types"):
-        filters["technology_types"] = company["technology_types"]
-    if company.get("customer_types"):
-        filters["customer_types"] = company["customer_types"]
 
     # Auto-add company_sector_strategy when both semantic + sector present
     if filters.get("company_semantic_queries") and filters.get("sector_types"):
