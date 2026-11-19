@@ -293,7 +293,7 @@ async def _extract(
     model = model or EXTRACTOR_MODELS.get(name, "gpt-4o-mini")
     # Trait generation uses a specific user prompt format
     if name == "trait_generation":
-        user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false}}'
+        user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false, "person_name": "..."/null}}'
     elif name == "role":
         user_content = role_agent_user_content(query)
     elif name == "company_adjacency":
@@ -875,6 +875,21 @@ async def expand_query_parallel(
     )
 
     total_ms = int((time.monotonic() - started) * 1000)
+
+    if traits.get("person_name"):
+        return {
+            "intent_type": "person_lookup",
+            "person_name": traits["person_name"],
+            "source_type": "query",
+            "normalized_query": query,
+            "vertical": "people",
+            "role_search_filters": {},
+            "traits": [],
+            "has_domain_intent": False,
+            "notes": [],
+            "extractor_timings": timings,
+            "total_ms": total_ms,
+        }
 
     # Merge
     filters = _merge(role, company, location, education, temporal, seniority, social, query)

@@ -71,6 +71,26 @@ PAGE = 500  # GET /v2/conversations/{id}/results caps a page at 500
 GOOD_SCORE = 0.3  # the API's line between good and bad (with no zero trait)
 
 
+def lookup_person(env_file: Path | None, set_id: str, name: str) -> list[dict[str, Any]]:
+    """Read the set's contacts once and keep only names containing every requested word."""
+    response = powerset_api.call(
+        env_file, f"/v2/set-contacts/{powerset_api.quote(set_id)}?search={powerset_api.quote(name)}&page_size=200",
+    )
+    words = name.casefold().split()
+    profiles = []
+    for lead in response["leads"]:
+        if not all(word in lead["name"].casefold() for word in words):
+            continue
+        operators = lead.get("operators") or []
+        profiles.append({
+            **lead,
+            "headline": lead.get("title"),
+            "source_operators": [operator["operator_name"] for operator in operators],
+            "source_channels": sorted({channel for operator in operators for channel in operator["source_channels"]}),
+        })
+    return profiles
+
+
 def _label(item: Any) -> Any:
     return (item.get("display_value") or item.get("id")) if isinstance(item, dict) else item
 

@@ -49,8 +49,10 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
 from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
+from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
+from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
 from packs.search.primitives.expand_search_request.parallel_extractors import _role_core_patterns_from_bm25  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
@@ -69,7 +71,7 @@ DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE
 DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 PAYLOAD_KEYS = {
-    "intent_type", "source_type", "normalized_query", "vertical",
+    "intent_type", "person_name", "source_type", "normalized_query", "vertical",
     "role_search_filters", "traits", "has_domain_intent", "notes",
     "api_filters",  # a set search keeps resolved records to map the card's names back to ids
 }
@@ -371,6 +373,7 @@ def compact_preview(payload: dict[str, Any], payload_json: Path, quality_issues:
         if v not in (None, [], ""):
             role[k]=v
     return {
+        **({"person_name": payload["person_name"]} if payload.get("intent_type") == "person_lookup" else {}),
         "normalized_query": payload.get("normalized_query"),
         "payload_json": str(payload_json),
         "set_scope": f.get("set_id") or "personal set",
@@ -437,7 +440,7 @@ def pipeline_summary(l: dict[str, Any]) -> dict[str, Any]:
         return (steps.get(step,{}) or {}).get("summary",{}) or {}
     resolved=s("resolve_companies")
     pre=s("apply_prefilters")
-    retrieval=s("execute_role_search")
+    retrieval=s("person_lookup") or s("execute_role_search")
     retrieval=s("download_results") or retrieval
     hydrate=s("hydrate_results") or s("hydrate_people")
     llm_filter=s("llm_filter_candidates")
@@ -586,7 +589,7 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
     consume the same query-expansion artifact where fields are statically
     translatable.
     """
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("intent_type") == "person_lookup":
         return payload
     source_filters = payload.get("role_search_filters")
     if isinstance(source_filters, dict):
@@ -815,6 +818,8 @@ def age_filter_notes(filters: dict[str, Any]) -> list[str]:
     return notes
 
 def compact_preview_local(payload: dict[str, Any], payload_json: Path, db_path: Path, removed_scope_keys: list[str]) -> dict[str, Any]:
+    if payload.get("intent_type") == "person_lookup":
+        return {**compact_preview(payload, payload_json, []), "duckdb": str(db_path), "scope": "local_duckdb"}
     filters = payload_filters(payload)
     visible_filters = preview_filters(payload)
     role = {key: filters.get(key) for key in ["semantic_query", "bm25_queries", "role_ids", "role_tracks"] if is_present(filters.get(key))}
@@ -959,6 +964,49 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
         payload["jd_cleaner_output_dir"] = getattr(args, "jd_cleaner_output_dir", None)
     return payload
 
+def _run_person_lookup(args, lp: Path, ledger: dict[str, Any], state: Path,
+                       payload: dict[str, Any], db_path: Path | None = None) -> dict[str, Any]:
+    name = payload["person_name"]
+    if not done(ledger, "person_lookup") or args.force:
+        started = time.monotonic()
+        if db_path is not None:
+            import duckdb  # Lazy so remote-only installs can import without DuckDB.
+
+            words = name.lower().split()
+            where = " AND ".join("contains(lower(full_name), ?)" for _ in words)
+            with duckdb.connect(str(db_path), read_only=True) as conn:
+                ids = [row[0] for row in conn.execute(
+                    f"SELECT person_id FROM local_person_profiles WHERE {where}", words,
+                ).fetchall()]
+            profiles = [normalize_hydrated_context(row) for row in fetch_local_person_batch(str(db_path), ids)] if ids else []
+        else:
+            set_id = args.set_id or payload_filters(payload).get("set_id") or powerset_api.personal_set_id(Path(args.env_file))
+            profiles = cloud_search.lookup_person(Path(args.env_file), set_id, name)
+        profiles.sort(key=lambda profile: profile["name"].casefold())
+        profiles_path = (state.parent / "artifacts" / read_json(state)["task_id"] / "profiles.jsonl.gz").resolve()
+        write_jsonl(profiles_path, profiles)
+        output = {"person_name": name, "returned_people": len(profiles)}
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        cloud_search.record(state, "person_lookup", output, elapsed_ms)
+        hydration = {"hydrated": len(profiles), "profile_ids": [profile["person_id"] for profile in profiles],
+                     "profiles_path": str(profiles_path)}
+        cloud_search.record(state, "hydrate_people", hydration, elapsed_ms)
+        ledger.setdefault("artifacts", {}).update(collect_artifacts(hydration))
+        mark(lp, ledger, "hydrate_people", "completed", summary=compact_summary(hydration))
+        mark(lp, ledger, "person_lookup", "completed", summary=output)
+
+    if not done(ledger, "persist_search_results") or args.force:
+        cmd = [sys.executable, str(ROOT / "packs/search/primitives/persist_search_results/results_io.py"),
+               "export", "--state", str(state)]
+        out = require_ok(run(cmd, timeout=args.timeout, env_file="/dev/null", skip_env_files=True), "persist_search_results")
+        ledger["artifacts"].update(collect_artifacts(out))
+        mark(lp, ledger, "persist_search_results", "completed", summary=compact_summary(out))
+    summary = pipeline_summary(ledger)
+    return {"primitive": "search_network_pipeline", "status": "completed", "ledger": str(lp), "state": str(state),
+            "summary": summary, "artifacts": ledger["artifacts"],
+            "message": f"Found {summary['returned_people']} people named {name}." if summary["returned_people"] else f"No people found named {name}."}
+
+
 def run_pipeline(args) -> dict[str, Any]:
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
@@ -970,6 +1018,9 @@ def run_pipeline(args) -> dict[str, Any]:
     args.rerank_system_file=reviewed_file(getattr(args,"rerank_system_file",None),"rerank system prompt")
     bind_execution_payload(args,lp,l)
     state=init_state(args,lp,l)
+    payload = latest_step(state, "expand_search_request")
+    if payload.get("intent_type") == "person_lookup":
+        return _run_person_lookup(args, lp, l, state, payload)
     judge_changed = _capability_judge_changed(args, state)
     # The API filters, ranks and stores a set search; only a job-description run is screened here.
     api_ranks = not args.jd_file and not args.search_only
@@ -1074,7 +1125,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
         payload=pin_payload_current_role(payload, True)
     payload, ignored_scope_keys=prepare_local_payload(payload)
     # Clustered once, at prepare; clustering again at run would add back a keyword the user removed.
-    if not payload_filters(payload).get("local_title_clustering_status"):
+    if payload.get("intent_type") != "person_lookup" and not payload_filters(payload).get("local_title_clustering_status"):
         payload=apply_local_title_clustering(payload, db_path)
     if args.payload_json:
         sanitized_path=lp.parent/f"{lp.stem}.local-payload.json"
@@ -1084,6 +1135,8 @@ def run_pipeline_local(args) -> dict[str, Any]:
         save(lp,l)
 
     state=init_state_local(args,lp,l,payload,run_kwargs)
+    if payload.get("intent_type") == "person_lookup":
+        return {**_run_person_lookup(args, lp, l, state, payload, db_path), "mode": "local_duckdb", "duckdb": str(db_path)}
     judge_changed = _capability_judge_changed(args, state)
     filters=payload_filters(payload)
     top_k=args.top_k if args.top_k is not None else DEFAULT_TOP_K["local"]
@@ -1252,7 +1305,7 @@ def cmd_run(args):
         record_quick_run({**result, "env_file": args.env_file})
         emit(result); return 0
     except Blocked as e: emit(e.payload); return e.code
-    except Exception as e:
+    except (Exception, SystemExit) as e:  # a signed-out bearer_token() raises SystemExit
         lp = ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
         ledger = load_ledger(lp)
         if ledger["artifacts"].get("jsonl"):
@@ -1284,7 +1337,9 @@ def cmd_prepare(args):
         set_id=getattr(args,"set_id",None)
         expand=_expand_query(args,out_dir)
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand), query=args.query)
-        payload, clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
+        clusters = []
+        if payload.get("intent_type") != "person_lookup":
+            payload, clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
         pinned_bands=pinned_bands_from_args(args)
@@ -1294,8 +1349,9 @@ def cmd_prepare(args):
             payload=pin_payload_current_role(payload,True)
         if set_id:
             payload=pin_payload_set_id(payload,set_id)
-        payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
-                                              for group in clusters if group["titles"]])
+        if payload.get("intent_type") != "person_lookup":
+            payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
+                                                  for group in clusters if group["titles"]])
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         issues=[]
@@ -1343,7 +1399,8 @@ def cmd_prepare_local(args):
         if getattr(args,"current_role",False):
             payload=pin_payload_current_role(payload,True)
         payload, removed_scope_keys=prepare_local_payload(payload)
-        payload=apply_local_title_clustering(payload, db_path)
+        if payload.get("intent_type") != "person_lookup":
+            payload=apply_local_title_clustering(payload, db_path)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         extra=(

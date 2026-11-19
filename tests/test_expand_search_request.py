@@ -19,7 +19,7 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
-    def _expand_with_model_answers(self, answers, **kwargs):
+    def _expand_with_model_answers(self, answers, *, query="fintech engineers", **kwargs):
         mod = load_module()
         prompts = mod.load_prompt_bundle()
         names_by_prompt = {body: name for name, body in prompts.items()}
@@ -41,7 +41,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         create = mock.AsyncMock(side_effect=complete)
         client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         with mock.patch.object(mod, "make_async_openai_client", return_value=client):
-            result = asyncio.run(mod.expand_query_parallel("fintech engineers", api_key="test", **kwargs))
+            result = asyncio.run(mod.expand_query_parallel(query, api_key="test", **kwargs))
         return result, create
 
     def test_adjacency_and_interaction_model_answers_merge_without_changing_other_filters(self):
@@ -74,6 +74,31 @@ class ExpandSearchRequestTests(unittest.TestCase):
         for call in create.call_args_list:
             self.assertEqual(call.kwargs["model"], "gpt-5.4")
             self.assertEqual(call.kwargs["reasoning_effort"], "medium")
+
+    def test_person_name_selects_lookup_without_another_model_call(self):
+        result, create = self._expand_with_model_answers({
+            "role": {"bm25_queries": ["engineer"]},
+            "company": {"company_names": ["Stripe"]},
+            "trait_generation": {"person_name": "Jordan Bravo"},
+        }, query="who is Jordan Bravo")
+        self.assertEqual(result["intent_type"], "person_lookup")
+        self.assertEqual(result["person_name"], "Jordan Bravo")
+        self.assertEqual(result["role_search_filters"], {})
+        self.assertEqual(result["traits"], [])
+        self.assertEqual(create.await_count, 10)
+
+    def test_null_person_name_does_not_change_search_output(self):
+        answers = {"role": {"bm25_queries": ["engineer"]},
+                   "trait_generation": {"traits": [], "has_domain_intent": False}}
+        baseline, _ = self._expand_with_model_answers(answers)
+        result, _ = self._expand_with_model_answers({
+            **answers, "trait_generation": {**answers["trait_generation"], "person_name": None},
+        })
+        for output in (baseline, result):
+            output.pop("extractor_timings")
+            output.pop("total_ms")
+        self.assertEqual(result, baseline)
+        self.assertNotIn("person_name", result)
 
     def test_failed_new_extractor_preserves_other_model_answers(self):
         answers = {
