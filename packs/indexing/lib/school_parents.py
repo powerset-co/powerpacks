@@ -50,10 +50,34 @@ def school_rows() -> dict[str, dict[str, Any]]:
     return read_rows()
 
 
-def parent_row(school_id: str) -> dict[str, Any] | None:
+def parent_row(school_id: str, school_name: str, school_key: str) -> dict[str, Any] | None:
     """The row a school rolls up to, or None when it is its own parent."""
-    row = school_rows().get(school_id)
-    return school_rows().get(row["parent_id"]) if row and row["parent_id"] else None
+    rows = school_rows()
+    if school_id in rows:
+        return rows.get(rows[school_id]["parent_id"])
+    if not school_key.startswith("name:"):
+        return None
+    return _parents_by_name().get(normalize_name(school_name))
+
+
+@lru_cache(maxsize=1)
+def _parents_by_name() -> dict[str, dict[str, Any]]:
+    rows = {school_id: dict(row) for school_id, row in school_rows().items()}
+    flatten(rows)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows.values():
+        groups.setdefault(normalize_name(row["school_name"]), []).append(row)
+    parents = {}
+    for name, group in groups.items():
+        if not name:
+            continue
+        providers = [row for row in group if (row["key"] or "").startswith("provider:")]
+        if len(providers) > 1:
+            continue
+        tops = {row["parent_id"] or row["id"] for row in providers or group}
+        if len(tops) == 1:
+            parents[name] = rows[tops.pop()]
+    return parents
 
 
 def normalize_name(name: str) -> str:
