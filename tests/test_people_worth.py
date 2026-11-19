@@ -211,6 +211,28 @@ class PeopleWorthTests(StoreTests):
             if uploaded:
                 self.assertEqual(json.loads(uploaded[0].labels_json)["relationship_kind"], kind)
 
+    def test_family_is_the_top_warmth_whoever_said_family_and_other_kinds_keep_the_models_score(self) -> None:
+        from packs.ingestion.primitives.share.web.model import SharePeople
+
+        def label(kind: str) -> None:
+            self.conn.execute("UPDATE person_labels SET labels_json = ?",
+                              (json.dumps({"relationship_kind": kind, "relationship_kind_p": 0.9, "warmth": 2.3}),))
+            self.conn.commit()
+
+        label("friend")
+        self.assertEqual(self.people.load()[0].warmth, 2.3)
+        label("family")  # the model's word
+        self.assertEqual(self.people.load()[0].warmth, 4.0)
+        self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "colleague"})
+        self.assertEqual(self.people.load()[0].warmth, 2.3)  # the human says not family
+        label("friend")
+        self.post("/api/people/relationship", {"parent_id": "p:a", "relationship_kind": "family"})
+        self.assertEqual(self.people.load()[0].warmth, 4.0)  # the human's word
+        # A row derived before the rule catches up when the page next opens the store.
+        self.conn.execute("UPDATE families SET warmth = 2.3")
+        self.conn.commit()
+        self.assertEqual(SharePeople(self.conn, self.root).load()[0].warmth, 4.0)
+
     def test_rename_shows_everywhere_and_survives_refreshes(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
         from packs.ingestion.primitives.share.person_labels import PersonLabels
