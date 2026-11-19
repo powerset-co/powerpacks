@@ -11,6 +11,8 @@ from datetime import datetime
 from unittest import mock
 from pathlib import Path
 
+import pytest
+
 from packs.shared.csv_io import CsvIO
 
 
@@ -26,6 +28,11 @@ PERSON_GROWTH_ADJACENT = "00000000-0000-0000-0000-000000000007"
 PERSON_FOUNDER = "00000000-0000-0000-0000-000000000008"
 OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
+
+
+@pytest.fixture(autouse=True)
+def no_title_pick_credentials(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "")
 
 
 def load_pipeline_module():
@@ -430,6 +437,43 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_unprepared_run_title_pick_uses_prepare_defaults_and_run_env_file(self) -> None:
+        mod = load_pipeline_module()
+        defaults = mod.build_parser().parse_args(["prepare", "--query", "software engineers"])
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ):
+            root = Path(directory)
+            db = root / "local.duckdb"
+            write_local_search_db(db)
+            env_file = root / "run.env"
+            env_file.write_text("TITLE_PICK_TEST_ENV=from-run-env\n")
+            payload_path = root / "payload.json"
+            command = [
+                "run", "--backend", "local", "--db", str(db), "--search-only",
+                "--query", "software engineers", "--payload-json", str(payload_path),
+                "--env-file", str(env_file),
+            ]
+
+            for prepared in (False, True):
+                with self.subTest(prepared=prepared):
+                    args = mod.build_parser().parse_args([*command, "--ledger", str(root / f"ledger-{prepared}.json")])
+                    filters = {"role_ids": ["software_engineer"], "bm25_queries": ["Software Engineer"]}
+                    if prepared:
+                        filters["local_title_clustering_status"] = {"status": "completed"}
+                    payload_path.write_text(json.dumps({"role_search_filters": filters}))
+                    with mock.patch.object(mod.title_selection, "pick_title_clusters",
+                                           return_value=mod.title_selection.TitleSelection([], ["Software Engineer"])) as pick, \
+                            mock.patch.object(mod, "init_state_local", side_effect=RuntimeError("stop before retrieval")):
+                        with self.assertRaisesRegex(RuntimeError, "stop before retrieval"):
+                            mod.run_pipeline_local(args)
+                    if prepared:
+                        pick.assert_not_awaited()
+                    else:
+                        pick.assert_awaited_once()
+                        self.assertEqual(os.environ.get("TITLE_PICK_TEST_ENV"), "from-run-env")
+                        self.assertEqual(pick.call_args.kwargs, {
+                            "model": defaults.expand_model, "reasoning_effort": defaults.expand_reasoning_effort,
+                        })
+
     def test_prepare_adds_shortened_pattern_examples_to_keywords_on_both_backends(self) -> None:
         mod = load_pipeline_module()
         keywords = ["Head of Sales", "Senior Product Manager", "sales director"]
@@ -624,6 +668,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -638,11 +683,9 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(filters["role_ids"], ["software_engineer"])
             self.assertIn("software engineer", filters["bm25_queries"])
             self.assertIn("Software Engineer", filters["bm25_queries"])
-            self.assertIn("Senior Software Engineer", filters["bm25_queries"])
-            self.assertEqual(filters["local_title_clusters"][0]["stemmed"], "softwar engin")
-            self.assertEqual(filters["local_title_clustering_status"]["status"], "completed")
-            self.assertGreater(filters["local_title_clustering_status"]["selected_count"], 0)
-            self.assertTrue(any(pattern.get("source") == "local_title_cluster" for pattern in filters["role_core_patterns"]))
+            self.assertEqual(filters["local_title_clustering_status"]["fallback"], "role_agent")
+            self.assertFalse(filters["local_title_clustering_status"]["model_used"])
+            self.assertEqual(len(filters["role_core_patterns"]), 1)
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
             candidate = retrieval["output"]["candidates"][0]
             self.assertIn("hybrid", candidate["vertical_sources"])
@@ -1222,40 +1265,6 @@ class LocalTitleExpansionTests(unittest.TestCase):
         store_profiles(conn)
         conn.close()
 
-    def cluster(self, role_filters):
-        filters = {
-            "company_ids": ["linkedin:company:one", "linkedin:company:two", "linkedin:company:signals"],
-            **role_filters,
-        }
-        payload = {
-            "normalized_query": "general partners who can lead our software company's Series B with a $20M check",
-            "role_search_filters": filters,
-        }
-        before = json.dumps(payload, sort_keys=True)
-        result = self.mod.apply_local_title_clustering(payload, self.db)
-        self.assertEqual(json.dumps(payload, sort_keys=True), before)
-        result_filters = result["role_search_filters"]
-        self.assertEqual(result_filters["local_title_clustering_status"]["status"], "completed")
-        return result_filters
-
-    def test_investor_role_phrases_do_not_admit_other_occupations(self):
-        result = self.cluster({"bm25_queries": ["general partner", "venture partner"]})
-        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
-
-    def test_role_words_from_separate_phrases_do_not_form_a_new_occupation(self):
-        result = self.cluster({"bm25_queries": ["general partners", "investment managers"]})
-        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Investment Manager"})
-
-    def test_role_pattern_examples_match_plurals_and_seniority_prefixes(self):
-        result = self.cluster({"role_core_patterns": [{"regex": r"software\s+engineer", "examples": ["software engineers"]}]})
-        self.assertEqual(result["local_title_cluster_keywords"], ["Senior Software Engineer"])
-
-    def test_without_extracted_role_phrases_adds_no_titles(self):
-        result = self.cluster({})
-        self.assertEqual(result["local_title_clustering_status"]["selected_count"], 0)
-        self.assertNotIn("bm25_queries", result)
-        self.assertNotIn("role_core_patterns", result)
-
     def test_investor_cli_persists_role_titles_and_honors_limit_one(self):
         tmp = Path(self.tmp.name)
         query = "general partners at any seniority who can lead our software company's Series B with a $20M check"
@@ -1272,7 +1281,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
              "--db", str(self.db), "--ledger", str(tmp / "ledger.json"),
              "--query", query, "--payload-json", str(payload_path), "--limit", "1"],
             cwd=ROOT, text=True, capture_output=True, timeout=60,
-            env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+            env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         output = json.loads(result.stdout)
@@ -1281,7 +1290,8 @@ class LocalTitleExpansionTests(unittest.TestCase):
         self.assertEqual(output["summary"]["hydrated"], 1)
         state = json.loads(Path(output["state"]).read_text())
         filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
-        self.assertEqual(set(filters["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
+        self.assertEqual(filters["bm25_queries"], ["general partner", "venture partner"])
+        self.assertFalse(filters["local_title_clustering_status"]["model_used"])
         self.assertNotIn("seniority_bands", filters)
         self.assertNotIn("funding_amount_min", filters)
         with Path(output["artifacts"]["csv"]).open(newline="") as handle:

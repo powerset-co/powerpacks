@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -220,7 +221,10 @@ class LocalPipelineSeniorityPinningTests(unittest.TestCase):
         ]
         if bands:
             cmd.extend(["--seniority-bands", bands])
-        return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, timeout=120)
+        return subprocess.run(
+            cmd, cwd=ROOT, text=True, capture_output=True, timeout=120,
+            env={**os.environ, "OPENAI_API_KEY": ""},
+        )
 
     def csv_person_ids(self, out: dict) -> list[str]:
         with Path(out["artifacts"]["csv"]).open(newline="") as handle:

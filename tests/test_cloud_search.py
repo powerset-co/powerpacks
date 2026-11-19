@@ -253,7 +253,10 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                 "--expand-model", "synthetic-model", "--expand-reasoning-effort", "high"])
             with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": expansion}) as run, \
                     mock.patch.object(cloud_search.powerset_api, "call", return_value=resolved) as api, \
-                    mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
+                    mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"), \
+                    mock.patch.object(pipeline.title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
+                                      return_value=pipeline.title_selection.TitleSelection(
+                                          ["senior software engin"], ["Software Engineer"])) as pick:
                 self.assertEqual(pipeline.cmd_prepare(args), 0)
             run.assert_called_once()
             command = run.call_args.args[0]
@@ -275,12 +278,12 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             self.assertEqual(payload["traits"], expansion["traits"])
             self.assertFalse(payload["has_domain_intent"])
             self.assertTrue(any("Missing" in note for note in payload["notes"]))
-            expected = pipeline._apply_title_clusters(
-                pipeline.normalize_query_expansion_payload(pipeline.payload_from_expand_output(expansion)),
-                [{**group, "display_title": group["titles"][0]} for group in resolved["title_clusters"]])
-            for key in ("bm25_queries", "role_core_patterns"):
-                self.assertEqual(card[key], expected["role_search_filters"][key])
-            self.assertEqual(card["bm25_queries"], ["software engineers", "Senior Software Engineer"])
+            pick.assert_awaited_once_with(
+                args.query, [{**group, "display_title": group["titles"][0]} for group in resolved["title_clusters"]],
+                model="synthetic-model", reasoning_effort="high")
+            self.assertEqual(card["bm25_queries"], ["Software Engineer"])
+            self.assertEqual(card["role_core_patterns"], [{"regex": r"\b(software\ engineer)\b",
+                                                         "examples": ["Software Engineer"]}])
             self.assertEqual(emit.call_args.args[0]["status"], "preview_ready")
             with mock.patch.object(cloud_search.powerset_api, "call", side_effect=AssertionError("no lookup")):
                 request = cloud_search.api_request(None, payload, query=args.query, set_id="s1", limit=0)

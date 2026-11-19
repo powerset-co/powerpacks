@@ -192,7 +192,7 @@ class PlainSearchPipelineTests(unittest.TestCase):
                 mock.patch.object(pipeline, "QUICK_SEARCH_ROOT", root / "search"), \
                 mock.patch.object(pipeline, "DEEP_SEARCH_ROOT", catalog_root), \
                 mock.patch.object(pipeline, "configure_local_backend_mode"), \
-                mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db: p), \
+                mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db, **_: p), \
                 mock.patch.object(pipeline, "run", side_effect=child), \
                 mock.patch.object(screening, "score_batches", new_callable=mock.AsyncMock, return_value=([], scores)) as filtered, \
                 mock.patch.object(reranker, "rerank_all", side_effect=rank) as ranked, \

@@ -602,7 +602,7 @@ def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
+def _role_core_patterns_from_bm25(queries: list[str], *, strip_seniority: bool = True) -> list[dict[str, Any]]:
     seniority_prefixes = re.compile(
         r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
         r"vp of|chief|associate|intern|executive|managing|group)\s+",
@@ -611,8 +611,10 @@ def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     examples: list[str] = []
     seen: set[str] = set()
     for query in queries:
-        phrase = seniority_prefixes.sub("", str(query)).strip()
-        phrase = re.split(r"[|,]", phrase)[0].strip()
+        phrase = str(query)
+        if strip_seniority:
+            phrase = seniority_prefixes.sub("", phrase).strip()
+            phrase = re.split(r"[|,]", phrase)[0].strip()
         if len(phrase) < 3:
             continue
         key = phrase.lower()

@@ -26,8 +26,6 @@ Changelog:
         like Jev, reads every hydrated row without `llm_filter_candidates`.
     2026-09-25: JD runs judged by Jev skip `llm_filter_candidates`; Jev reads every
         hydrated row. The Luna filter still precedes `--capability-judge terra`.
-    2026-09-13: Local title expansion matches complete extracted role phrases,
-        not individual words from the whole search query.
 """
 from __future__ import annotations
 
@@ -48,12 +46,13 @@ if str(SHARED_DIR) not in sys.path:
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
-from search_common import apply_trait_currentness, phrase_query_tokenize  # noqa: E402
+from search_common import adjacent_role_ids_for, apply_trait_currentness, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
-from packs.search.primitives.expand_search_request.parallel_extractors import _role_core_patterns_from_bm25  # noqa: E402
+from packs.search.primitives.expand_search_request.parallel_extractors import ROLE_ID_TITLE_INJECTIONS, _role_core_patterns_from_bm25  # noqa: E402
+from packs.search.primitives.expand_search_request import title_selection  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -518,7 +517,7 @@ def apply_card_edits(payload: dict[str, Any], edits: dict[str, Any], run_dir: Pa
         # The run would restore a cleared value from the older alias.
         filters.pop(EDIT_ALIASES.get(key, ""), None)
         if key == "bm25_queries":
-            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [])
+            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [], strip_seniority=False)
         log_edit(run_dir, kind="filter_edit", note=key, before=json.dumps(before), after=json.dumps(value))
     if "traits" in edits:
         log_edit(run_dir, kind="query_edit", note="traits",
@@ -683,20 +682,23 @@ def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[st
     out["notes"] = notes
     return out
 
-def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_clusters: int = 20) -> dict[str, Any]:
-    """Augment local expansion with DuckDB-scoped title clusters.
+def _title_pick_skip_reason(filters: dict[str, Any]) -> str | None:
+    founder = any(role_id in {"founder", "cofounder", "co-founder"} for role_id in filters.get("role_ids") or [])
+    if founder or filters.get("csuite_shortcut_role_id"):
+        return "skipped_shortcut"
+    if not any(filters.get(key) for key in ("role_ids", "role_agent_ids", "bm25_queries", "role_core_patterns")):
+        return "skipped_no_role"
+    return None
 
-    Prod runs TitleClusterer during query expansion before search execution.
-    Local mirrors that layer boundary by reading title inventory from the DuckDB
-    people table while preparing the payload. Titles must contain a complete
-    extracted role phrase (BM25 or a core-pattern example), using the search
-    stemmer for plurals. Non-role query text never becomes a title hint.
-    """
+
+def apply_local_title_clustering(
+    payload: dict[str, Any], db_path: Path, *, model: str | None = None,
+    reasoning_effort: str | None = None, env_file: str = ".env",
+) -> dict[str, Any]:
+    """Read role-scoped local title groups, then use the shared title pick."""
     filters = payload_filters(payload)
-    if not filters or not db_path.exists():
-        return _with_local_title_clustering_status(payload, {"status": "skipped_no_filters_or_db"})
-    if not any(filters.get(key) for key in ["role_ids", "role_agent_ids", "role_tracks", "seniority_bands", "company_ids"]):
-        return _with_local_title_clustering_status(payload, {"status": "skipped_no_title_scope"})
+    if _title_pick_skip_reason(filters) or not db_path.exists():
+        return _apply_title_clusters(payload, [])
     try:
         for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
             if str(_path) not in sys.path:
@@ -706,57 +708,70 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
         from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
         from search_common import filters_from_role_payload  # type: ignore
 
+        role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
+        widened_ids = list(dict.fromkeys([*role_ids, *adjacent_role_ids_for(role_ids)]))
         store = LocalDuckDBSearchStore(str(db_path))
-        title_filters = filters_from_role_payload(filters)
-        clusters = store.title_clusters_for_filters(title_filters, max_titles=10000)
-    except Exception as exc:
-        return _with_local_title_clustering_status(payload, {"status": "error", "error": str(exc)[:300]})
-    finally:
         try:
-            store.conn.close()  # type: ignore[name-defined]
-        except Exception:
-            pass
+            title_filters = filters_from_role_payload(filters)
+            clusters = store.title_clusters_for_filters(title_filters, role_ids=widened_ids, max_titles=10000)
+        finally:
+            store.conn.close()
+    except Exception as exc:
+        fallback = _apply_title_clusters(payload, [])
+        status = payload_filters(fallback)["local_title_clustering_status"]
+        return _with_local_title_clustering_status(fallback, {**status, "status": "error", "error": str(exc)[:300]})
 
-    return _apply_title_clusters(payload, clusters, max_clusters=max_clusters)
+    return _apply_title_clusters(payload, clusters, model=model, reasoning_effort=reasoning_effort, env_file=env_file)
 
-def _apply_title_clusters(payload: dict[str, Any], clusters: list[dict[str, Any]], *, max_clusters: int = 20) -> dict[str, Any]:
-    """Add titles containing a complete extracted role phrase, using the search stemmer."""
+
+def _apply_title_clusters(
+    payload: dict[str, Any], clusters: list[dict[str, Any]], *, model: str | None = None,
+    reasoning_effort: str | None = None, env_file: str = ".env",
+) -> dict[str, Any]:
+    """Replace role keywords and the core pattern with the shared model's title pick."""
     filters = payload_filters(payload)
-    if not clusters:
-        return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": 0, "selected_count": 0})
-    role_phrases = [
-        phrase
-        for value in [*(filters.get("bm25_queries") or []), *_pattern_examples(filters.get("role_core_patterns"))]
-        for phrase in phrase_query_tokenize(value)
-    ]
-    selected: list[dict[str, Any]] = []
-    keywords: list[str] = []
-    for cluster in clusters:
-        title = str(cluster.get("display_title") or "").strip()
-        stemmed_title = " " + " ".join(phrase_query_tokenize(title)) + " "
-        if not any(f" {phrase} " in stemmed_title for phrase in role_phrases):
-            continue
-        selected.append(cluster)
-        keywords.append(title)
-        if len(selected) >= max_clusters:
-            break
-    if not selected:
-        return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": len(clusters), "selected_count": 0})
+    status = {"status": "completed", "cluster_count": len(clusters), "shown_count": 0,
+              "selected_count": 0, "model_used": False}
+    skip_reason = _title_pick_skip_reason(filters)
+    if skip_reason:
+        return _with_local_title_clustering_status(payload, {**status, "status": skip_reason})
 
-    out = json.loads(json.dumps(payload))
+    selected = []
+    keywords = filters.get("bm25_queries") or []
+    strip_seniority = True
+    if clusters:
+        shown = clusters[:title_selection.MAX_TITLE_GROUPS]
+        status["shown_count"] = len(shown)
+        try:
+            load_env_file(Path(env_file))
+            pick = asyncio.run(title_selection.pick_title_clusters(
+                str(payload.get("normalized_query") or ""), shown, model=model, reasoning_effort=reasoning_effort,
+            ))
+            status["model_used"] = True
+            selected = [group for group in shown if (group.get("stemmed") or group.get("stem")) in pick.selected]
+            picked_keywords = pick.keywords or [group["display_title"] for group in selected]
+            if picked_keywords:
+                keywords = picked_keywords
+                strip_seniority = not bool(pick.keywords)
+            else:
+                status["fallback"] = "role_agent"
+        except Exception as exc:
+            status.update(status="error", error=str(exc)[:300], fallback="role_agent")
+    else:
+        status["fallback"] = "role_agent"
+
+    role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
+    injected = sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
+    keywords = [*keywords]
+    for title in injected:
+        if title.lower() not in {keyword.lower() for keyword in keywords}:
+            keywords.append(title)
+    status["selected_count"] = len(selected)
+    out = _with_local_title_clustering_status(payload, status)
     out_filters = payload_filters(out)
     out_filters["local_title_clusters"] = selected
-    out_filters["local_title_cluster_keywords"] = list(dict.fromkeys(keywords))
-    out_filters["local_title_clustering_status"] = {"status": "completed", "cluster_count": len(clusters), "selected_count": len(selected)}
-    out_filters["bm25_queries"] = _dedupe_present([*(out_filters.get("bm25_queries") or []), *keywords])
-    existing_patterns = list(out_filters.get("role_core_patterns") or [])
-    seen_regex = {str(item.get("regex")) for item in existing_patterns if isinstance(item, dict)}
-    for keyword in keywords:
-        regex = r"\b" + r"\s+".join(re.escape(token) for token in re.findall(r"[A-Za-z0-9]+", keyword)) + r"\b"
-        if regex not in seen_regex:
-            existing_patterns.append({"regex": regex, "examples": [keyword], "source": "local_title_cluster"})
-            seen_regex.add(regex)
-    out_filters["role_core_patterns"] = existing_patterns
+    out_filters["bm25_queries"] = keywords
+    out_filters["role_core_patterns"] = _role_core_patterns_from_bm25(keywords, strip_seniority=strip_seniority)
     out["role_search_filters"] = out_filters
     return out
 
@@ -1126,7 +1141,8 @@ def run_pipeline_local(args) -> dict[str, Any]:
     payload, ignored_scope_keys=prepare_local_payload(payload)
     # Clustered once, at prepare; clustering again at run would add back a keyword the user removed.
     if payload.get("intent_type") != "person_lookup" and not payload_filters(payload).get("local_title_clustering_status"):
-        payload=apply_local_title_clustering(payload, db_path)
+        payload=apply_local_title_clustering(payload, db_path, model=DEFAULT_EXPAND_MODEL,
+                                             reasoning_effort=DEFAULT_EXPAND_REASONING_EFFORT, env_file=args.env_file)
     if args.payload_json:
         sanitized_path=lp.parent/f"{lp.stem}.local-payload.json"
         write_json(sanitized_path,payload)
@@ -1351,7 +1367,9 @@ def cmd_prepare(args):
             payload=pin_payload_set_id(payload,set_id)
         if payload.get("intent_type") != "person_lookup":
             payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
-                                                  for group in clusters if group["titles"]])
+                                                  for group in clusters if group["titles"]],
+                                          model=args.expand_model, reasoning_effort=args.expand_reasoning_effort,
+                                          env_file=args.env_file)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         issues=[]
@@ -1400,7 +1418,8 @@ def cmd_prepare_local(args):
             payload=pin_payload_current_role(payload,True)
         payload, removed_scope_keys=prepare_local_payload(payload)
         if payload.get("intent_type") != "person_lookup":
-            payload=apply_local_title_clustering(payload, db_path)
+            payload=apply_local_title_clustering(payload, db_path, model=args.expand_model,
+                                             reasoning_effort=args.expand_reasoning_effort, env_file=args.env_file)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         extra=(

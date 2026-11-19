@@ -910,7 +910,9 @@ class LocalDuckDBSearchStore:
             meaningful.pop(0)
         return " ".join(self._stem_words(meaningful)) if meaningful else ""
 
-    def title_clusters_for_filters(self, filters: Any, *, max_titles: int = 10000) -> list[dict[str, Any]]:
+    def title_clusters_for_filters(self, filters: Any, *, role_ids: list[str], max_titles: int = 10000) -> list[dict[str, Any]]:
+        role_filter = ("role_ids", "ContainsAny", role_ids)
+        filters = ("And", [filters, role_filter]) if filters else role_filter
         rows = self._filtered_rows_sql("people", filters, limit=max_titles)
         clusters: dict[str, Counter[str]] = {}
         for row in rows:
