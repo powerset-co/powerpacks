@@ -92,7 +92,8 @@ class PlainSearchPipelineTests(unittest.TestCase):
             payload = {"normalized_query": "Storage engineers", "traits": [],
                        "role_search_filters": {"semantic_query": "Engineers who build and operate distributed storage systems, recovery protocols and database infrastructure"}}
             stdout = io.StringIO()
-            with mock.patch.object(pipeline.cloud_search, "expand", return_value=payload), \
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": payload}), \
+                    mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={}), \
                     contextlib.redirect_stdout(stdout):
                 args = pipeline.build_parser().parse_args([
                     "prepare", "--query", "Storage engineers", "--output-dir", directory])

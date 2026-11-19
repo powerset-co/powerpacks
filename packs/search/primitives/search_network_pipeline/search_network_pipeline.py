@@ -70,7 +70,7 @@ DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.env
 PAYLOAD_KEYS = {
     "intent_type", "source_type", "normalized_query", "vertical",
     "role_search_filters", "traits", "has_domain_intent", "notes",
-    "api_filters",  # a set search keeps the API's expansion to map the card's names back to ids
+    "api_filters",  # a set search keeps resolved records to map the card's names back to ids
 }
 LOCAL_PAYLOAD_KEYS = PAYLOAD_KEYS - {"api_filters"}
 DEFAULT_LOCAL_DB = ".powerpacks/search-index/local-search.duckdb"
@@ -715,6 +715,11 @@ def apply_local_title_clustering(payload: dict[str, Any], db_path: Path, *, max_
         except Exception:
             pass
 
+    return _apply_title_clusters(payload, clusters, max_clusters=max_clusters)
+
+def _apply_title_clusters(payload: dict[str, Any], clusters: list[dict[str, Any]], *, max_clusters: int = 20) -> dict[str, Any]:
+    """Add titles containing a complete extracted role phrase, using the search stemmer."""
+    filters = payload_filters(payload)
     if not clusters:
         return _with_local_title_clustering_status(payload, {"status": "completed", "cluster_count": 0, "selected_count": 0})
     role_phrases = [
@@ -1255,6 +1260,17 @@ def cmd_run(args):
             record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed", "env_file": args.env_file})
         emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
+def _expand_query(args: argparse.Namespace, out_dir: Path) -> dict[str, Any]:
+    cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
+         "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
+         "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
+         "--snapshot-prompts-dir",str(out_dir/"expand-prompts")]
+    prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
+    if prompts_dir:
+        cmd += ["--prompts-dir",prompts_dir]
+    return require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30,
+                          extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
+
 def cmd_prepare(args):
     """Run extraction and emit a compact preview without requiring repo inspection."""
     try:
@@ -1267,8 +1283,9 @@ def cmd_prepare(args):
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         set_id=getattr(args,"set_id",None)
-        expand=cloud_search.expand(Path(args.env_file), args.query, set_id)
-        payload=payload_from_expand_output(expand)
+        expand=_expand_query(args,out_dir)
+        payload=normalize_query_expansion_payload(payload_from_expand_output(expand), query=args.query)
+        payload, clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
         pinned_bands=pinned_bands_from_args(args)
@@ -1278,9 +1295,11 @@ def cmd_prepare(args):
             payload=pin_payload_current_role(payload,True)
         if set_id:
             payload=pin_payload_set_id(payload,set_id)
+        payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
+                                              for group in clusters if group["titles"]])
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
-        issues=[]  # the API's own expansion: no local quality rules
+        issues=[]
         extra=f"--query {shlex.quote(args.query)} --payload-json {shlex.quote(str(payload_json))} --execute-approved"
         if set_id: extra += f" --set-id {shlex.quote(set_id)}"
         extra+=execution_contract_suffix(args)
@@ -1315,13 +1334,7 @@ def cmd_prepare_local(args):
         expand_json=out_dir/"expand_search_request.full.json"
         ledger=out_dir/"pipeline.ledger.json"
         prompt_snapshot=out_dir/"expand-prompts"
-        cmd=[sys.executable,str(ROOT/"packs/search/primitives/expand_search_request/expand_search_request.py"),
-             "--query",args.query,"--env-file",args.env_file,"--timeout",str(args.timeout),
-             "--model",args.expand_model,"--reasoning-effort",args.expand_reasoning_effort,
-             "--snapshot-prompts-dir",str(prompt_snapshot)]
-        prompts_dir=reviewed_dir(getattr(args,"expand_prompts_dir",None),"expand prompt bundle")
-        if prompts_dir: cmd += ["--prompts-dir",prompts_dir]
-        expand=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout+30, extra_env={"POWERPACKS_USAGE_STAGE":"expand"}),"expand_search_request")
+        expand=_expand_query(args,out_dir)
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand, backend="local"), query=args.query)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
@@ -1383,7 +1396,7 @@ def cmd_approve(args):
 def add_backend(p):
     # The scope is an argument. The chat's instructions name its set or its local index and the
     # agent passes it here; nothing is read from the environment or .env for it.
-    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = the Powerset API (POST /v2/search/expand + /execute) for a set; local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
+    p.add_argument("--backend",choices=("powerset","local"),default="powerset",help="powerset = the Powerset API (POST /v2/search/resolve + /execute) for a set; local = the local DuckDB index (scope is the DB file; no set/operator resolution)")
     p.add_argument("--db",default=DEFAULT_LOCAL_DB,help="Local DuckDB path (used only with --backend local); unstated: "+DEFAULT_LOCAL_DB)
     p.add_argument("--set-id",default=None,help="Powerset set to search (used only with --backend powerset); unstated: the signed-in user's personal set")
 

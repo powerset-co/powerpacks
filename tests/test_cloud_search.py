@@ -1,4 +1,4 @@
-"""A set search goes only through the Powerset API: expand, execute, hydrate (synthetic data)."""
+"""A set search expands in the app, then resolves and executes through the API (synthetic data)."""
 
 from __future__ import annotations
 
@@ -92,7 +92,65 @@ class CloudSearchTests(unittest.TestCase):
                     else:
                         api.assert_not_called()
 
-    def test_long_query_is_shortened_only_for_expand(self) -> None:
+    def test_set_prepare_expands_in_the_app_then_resolves_names_and_titles_once(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        filters = {"company_names": ["Acme", "Missing"], "education_names": ["Example University"],
+                   "investor_names": ["Example Ventures"], "role_agent_ids": ["software_engineer"],
+                   "cities": ["Austin"], "states": ["Texas"], "countries": ["USA"],
+                   "metro_areas": ["Austin Metro"], "macro_regions": ["North America"],
+                   "bm25_queries": ["software engineers"], "set_interaction_min": 2}
+        expansion = {"status": "completed", "role_search_filters": filters, "traits": ["builds storage"],
+                     "has_domain_intent": False, "notes": ["from app"]}
+        resolved = {key: [{"id": name, "display_value": name}] for key, name in
+                    [("investors", "Example Ventures"), ("education_ids", "Example University"),
+                     *[(key, filters[key][0]) for key in ("cities", "states", "countries", "metro_areas", "macro_regions")]]}
+        resolved["company_ids"] = [{"id": id_, "display_value": name} for id_, name in
+                                   [("co1", "Acme"), ("co2", "Acme"), ("co3", "Acme Labs")]]
+        resolved["title_clusters"] = [
+            {"stem": "senior software engin", "titles": ["Senior Software Engineer", "Software Engineer II"], "count": 10},
+            {"stem": "sales engin", "titles": ["Sales Engineer"], "count": 5}]
+        with tempfile.TemporaryDirectory() as directory:
+            args = pipeline.build_parser().parse_args([
+                "prepare", "--query", "software engineers", "--set-id", "s1", "--output-dir", directory,
+                "--expand-model", "synthetic-model", "--expand-reasoning-effort", "high"])
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": expansion}) as run, \
+                    mock.patch.object(cloud_search.powerset_api, "call", return_value=resolved) as api, \
+                    mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
+                self.assertEqual(pipeline.cmd_prepare(args), 0)
+            run.assert_called_once()
+            command = run.call_args.args[0]
+            self.assertEqual(Path(command[1]).stem, "expand_search_request")
+            for flag, value in (("--query", args.query), ("--model", "synthetic-model"),
+                                ("--reasoning-effort", "high"),
+                                ("--snapshot-prompts-dir", str(Path(directory) / "expand-prompts"))):
+                self.assertEqual(command[command.index(flag) + 1], value)
+            api.assert_called_once_with(Path(".env"), "/v2/search/resolve", {
+                **{key: filters[key] for key in ("company_names", "education_names", "investor_names", "cities",
+                                                 "states", "countries", "metro_areas", "macro_regions")},
+                "role_ids": ["software_engineer"], "set_id": "s1"})
+            payload = json.loads((Path(directory) / "expand_search_request.json").read_text())
+            card = payload["role_search_filters"]
+            self.assertEqual(payload["api_filters"], {k: v for k, v in resolved.items() if k != "title_clusters"})
+            self.assertEqual(card["company_names"], ["Acme", "Acme Labs"])
+            self.assertEqual(card["investor_names"], ["Example Ventures"])
+            self.assertEqual((card["set_id"], card["set_interaction_min"]), ("s1", 2))
+            self.assertEqual(payload["traits"], expansion["traits"])
+            self.assertFalse(payload["has_domain_intent"])
+            self.assertTrue(any("Missing" in note for note in payload["notes"]))
+            expected = pipeline._apply_title_clusters(
+                pipeline.normalize_query_expansion_payload(pipeline.payload_from_expand_output(expansion)),
+                [{**group, "display_title": group["titles"][0]} for group in resolved["title_clusters"]])
+            for key in ("bm25_queries", "role_core_patterns"):
+                self.assertEqual(card[key], expected["role_search_filters"][key])
+            self.assertEqual(card["bm25_queries"], ["software engineers", "Senior Software Engineer"])
+            self.assertEqual(emit.call_args.args[0]["status"], "preview_ready")
+            with mock.patch.object(cloud_search.powerset_api, "call", side_effect=AssertionError("no lookup")):
+                request = cloud_search.api_request(None, payload, query=args.query, set_id="s1", limit=0)
+            self.assertEqual(request["company_ids"], ["co1", "co2", "co3"])
+            self.assertEqual(request["cities"], ["Austin"])
+
+    def test_long_query_reaches_the_app_expander_and_execute_unchanged(self) -> None:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 
         query = "job description " * 250
@@ -101,9 +159,12 @@ class CloudSearchTests(unittest.TestCase):
             args = pipeline.build_parser().parse_args(
                 ["prepare", "--query", query, "--set-id", "s1", "--output-dir", directory])
             with mock.patch.object(cloud_search.powerset_api, "call", return_value={}) as api, \
+                    mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {}}) as expand, \
                     mock.patch.object(pipeline, "emit"), mock.patch.dict("os.environ"):
                 self.assertEqual(pipeline.cmd_prepare(args), 0)
-                self.assertEqual(api.call_args.args[2]["query"], query[:2048])
+                command = expand.call_args.args[0]
+                self.assertEqual(command[command.index("--query") + 1], query)
+                self.assertEqual(api.call_args.args[1], "/v2/search/resolve")
                 payload = json.loads((Path(directory) / "expand_search_request.json").read_text())
                 state = Path(directory) / "state.json"
                 state.write_text(json.dumps({"query": query, "steps": [
@@ -112,6 +173,56 @@ class CloudSearchTests(unittest.TestCase):
                                                 timeout=60, write_state=False, rerank=False, rerank_rest=False))
                 self.assertEqual(api.call_args.args[1], "/v2/search/execute")
                 self.assertEqual(api.call_args.args[2]["query"], query)
+
+    def test_signed_out_set_prepare_emits_failed_status(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        with tempfile.TemporaryDirectory() as directory:
+            args = pipeline.build_parser().parse_args(["prepare", "--query", "q", "--output-dir", directory])
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {}}), \
+                    mock.patch.object(cloud_search.powerset_api, "call", side_effect=SystemExit("signed out")), \
+                    mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
+                self.assertEqual(pipeline.cmd_prepare(args), 1)
+            self.assertEqual(emit.call_args.args[0]["status"], "failed")
+            self.assertEqual(emit.call_args.args[0]["error"], "signed out")
+
+    def test_resolve_drops_empty_results_and_uses_shortcut_role_ids(self) -> None:
+        payload = {"role_search_filters": {key: ["Missing"] for key in cloud_search.RESOLVE_KEYS}}
+        payload["role_search_filters"]["role_ids"] = ["founder"]
+        with mock.patch.object(cloud_search.powerset_api, "call", return_value={}) as api:
+            out, clusters = cloud_search.resolve(None, payload, "s1")
+        self.assertEqual(api.call_args.args[2]["role_ids"], ["founder"])
+        self.assertEqual(out["role_search_filters"], {"role_ids": ["founder"]})
+        self.assertEqual(len(out["notes"]), len(cloud_search.RESOLVE_KEYS))
+        self.assertTrue(all("Missing" in note for note in out["notes"]))
+        self.assertEqual(clusters, [])
+
+    def test_set_prepare_preserves_pins_and_applies_edits_last(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        expansion = {"role_search_filters": {"semantic_query": "expanded", "seniority_bands": ["junior"],
+                                             "is_current_role": False, "set_id": "wrong"}}
+        with tempfile.TemporaryDirectory() as directory:
+            edits = Path(directory) / "edits.json"
+            edits.write_text(json.dumps({"filters": {"cities": ["Edited"], "is_current_role": False}}))
+            args = pipeline.build_parser().parse_args([
+                "prepare", "--query", "raw query", "--output-dir", directory, "--set-id", "s1",
+                "--preserve-query-semantic", "--seniority-bands", "staff", "--current-role",
+                "--edits-json", str(edits)])
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": expansion}), \
+                    mock.patch.object(cloud_search.powerset_api, "call", return_value={}), \
+                    mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
+                self.assertEqual(pipeline.cmd_prepare(args), 0)
+            filters = json.loads((Path(directory) / "expand_search_request.json").read_text())["role_search_filters"]
+            self.assertEqual(filters["semantic_query"], "raw query")
+            self.assertEqual(filters["seniority_bands"], ["staff"])
+            self.assertTrue(filters["seniority_bands_pinned"])
+            self.assertTrue(filters["is_current_role_pinned"])
+            self.assertFalse(filters["is_current_role"])
+            self.assertEqual((filters["set_id"], filters["cities"]), ("s1", ["Edited"]))
+            command = emit.call_args.args[0]["execute_command"]
+            for flag in ("--set-id s1", "--current-role", "--seniority-bands staff", "--execute-approved"):
+                self.assertIn(flag, command)
 
     def _api(self, good, bad, sent, *, answer=None):
         """The API of one ranked search, which answers only once its results are saved."""

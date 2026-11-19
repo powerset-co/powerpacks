@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Search a Powerset set through the Powerset API, the same search the Powerset web app runs.
 
-prepare: POST /v2/search/expand turns the query into the API's filters; the card shows them under
-its own keys (card_filters). run: the card's filters go back to the API's (api_request) and POST
+prepare: the app expands the query, then POST /v2/search/resolve turns its names into ids and
+returns the set's title groups. run: the card's filters go back to the API's (api_request) and POST
 /v2/search/execute searches the set. With --rerank the API also filters and ranks the people and
 saves them to a conversation, and this downloads them back from GET /v2/conversations/{id}/results,
 500 a request, gzipped on the wire, into gzip files of the API's rows: good_results.jsonl.gz (score
@@ -55,7 +55,8 @@ LOOKUPS = {"company_ids": "companies", "education_ids": "schools"}
 # Card-only keys with no API field.
 CARD_ONLY = {"bm25_queries", "set_id", "is_current_company"}
 LIMIT = 2000  # /v2/search/execute caps a page at 2000
-EXPAND_QUERY_LIMIT = 2048  # /v2/search/expand's query limit
+RESOLVE_KEYS = {"company_names": "company_ids", "education_names": "education_ids", "investor_names": "investors",
+                **{key: key for key in ("cities", "states", "countries", "metro_areas", "macro_regions")}}
 PAGE = 500  # GET /v2/conversations/{id}/results caps a page at 500
 GOOD_SCORE = 0.3  # the API's line between good and bad (with no zero trait)
 
@@ -77,12 +78,26 @@ def card_filters(api_filters: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def expand(env_file: Path | None, query: str, set_id: str | None) -> dict[str, Any]:
-    """The prepared payload for a query: the card's filters, the API's as expanded, and the traits."""
-    out = powerset_api.call(env_file, "/v2/search/expand", {"query": query[:EXPAND_QUERY_LIMIT], "set_id": set_id})
-    api_filters = out.get("filters") or {}
-    return {"normalized_query": query, "role_search_filters": card_filters(api_filters), "api_filters": api_filters,
-            "traits": out.get("traits") or [], "has_domain_intent": bool(out.get("has_domain_intent"))}
+def resolve(env_file: Path | None, payload: dict[str, Any], set_id: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Resolve the app's names, keeping the returned ids and displaying their labels on the card."""
+    filters = dict(payload.get("role_search_filters") or {})
+    request = {key: filters.get(key) or [] for key in RESOLVE_KEYS}
+    request.update(role_ids=filters.get("role_agent_ids") or filters.get("role_ids") or [], set_id=set_id)
+    resolved = powerset_api.call(env_file, "/v2/search/resolve", request)
+    api_filters = {key: resolved.get(key) or [] for key in RESOLVE_KEYS.values()}
+    resolved_card = card_filters(api_filters)
+    notes = list(payload.get("notes") or [])
+    for card_key in RESOLVE_KEYS:
+        names = list(dict.fromkeys(resolved_card.get(card_key) or []))
+        returned = {name.casefold() for name in names}
+        missing = [name for name in request[card_key] if name.casefold() not in returned]
+        if missing:
+            notes.append(f"resolve did not return {card_key}: {', '.join(missing)}")
+        filters.pop(card_key, None)
+        if names:
+            filters[card_key] = names
+    return ({**payload, "role_search_filters": filters, "api_filters": api_filters, "notes": notes},
+            resolved.get("title_clusters") or [])
 
 
 def _resolve(env_file: Path | None, key: str, names: list[Any], expanded: list[Any]) -> list[str]:

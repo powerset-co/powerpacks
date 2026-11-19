@@ -245,6 +245,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         emitted = []
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}) as run_mock, \
+             mock.patch.object(search.cloud_search.powerset_api, "call", return_value={}), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="software engineers in sf",
@@ -289,6 +290,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         emitted = []
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}), \
+             mock.patch.object(search.cloud_search.powerset_api, "call", return_value={
+                 "company_ids": [{"id": "example-company", "display_value": "OpenAI"}]}), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="people who work at OpenAI",
