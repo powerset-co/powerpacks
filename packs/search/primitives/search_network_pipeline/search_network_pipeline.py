@@ -709,11 +709,14 @@ def apply_local_title_clustering(
         from search_common import filters_from_role_payload  # type: ignore
 
         role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
-        widened_ids = list(dict.fromkeys([*role_ids, *adjacent_role_ids_for(role_ids)]))
+        adjacent_ids = adjacent_role_ids_for(role_ids)
+        widened_ids = list(dict.fromkeys([*role_ids, *adjacent_ids]))
         store = LocalDuckDBSearchStore(str(db_path))
         try:
             title_filters = filters_from_role_payload(filters)
             clusters = store.title_clusters_for_filters(title_filters, role_ids=widened_ids, max_titles=10000)
+            adjacent_clusters = (store.title_clusters_for_filters(title_filters, role_ids=adjacent_ids, max_titles=10000)
+                                 if adjacent_ids else [])
         finally:
             store.conn.close()
     except Exception as exc:
@@ -721,14 +724,16 @@ def apply_local_title_clustering(
         status = payload_filters(fallback)["local_title_clustering_status"]
         return _with_local_title_clustering_status(fallback, {**status, "status": "error", "error": str(exc)[:300]})
 
-    return _apply_title_clusters(payload, clusters, model=model, reasoning_effort=reasoning_effort, env_file=env_file)
+    return _apply_title_clusters(payload, clusters, adjacent_clusters=adjacent_clusters,
+                                 model=model, reasoning_effort=reasoning_effort, env_file=env_file)
 
 
 def _apply_title_clusters(
-    payload: dict[str, Any], clusters: list[dict[str, Any]], *, model: str | None = None,
+    payload: dict[str, Any], clusters: list[dict[str, Any]], *,
+    adjacent_clusters: list[dict[str, Any]] | None = None, model: str | None = None,
     reasoning_effort: str | None = None, env_file: str = ".env",
 ) -> dict[str, Any]:
-    """Replace role keywords and the core pattern with the shared model's title pick."""
+    """Pick direct and adjacent titles, keeping the role agent's keywords first."""
     filters = payload_filters(payload)
     status = {"status": "completed", "cluster_count": len(clusters), "shown_count": 0,
               "selected_count": 0, "model_used": False}
@@ -736,40 +741,76 @@ def _apply_title_clusters(
     if skip_reason:
         return _with_local_title_clustering_status(payload, {**status, "status": skip_reason})
 
+    shown = clusters[:title_selection.MAX_TITLE_GROUPS]
+    adjacent_shown = (adjacent_clusters or [])[:title_selection.MAX_TITLE_GROUPS]
+    status["shown_count"] = len(shown)
+
+    async def pick(groups, **kwargs):
+        if groups:
+            return await title_selection.pick_title_clusters(
+                str(payload.get("normalized_query") or ""), groups,
+                model=model, reasoning_effort=reasoning_effort, **kwargs,
+            )
+
+    async def pick_both():
+        return await asyncio.gather(
+            pick(shown), pick(adjacent_shown, system_prompt=title_selection.ADJACENT_TITLE_SELECTION_PROMPT),
+            return_exceptions=True,
+        )
+
+    # Both calls share the stage until both finish; neither can restore it early.
+    load_env_file(Path(env_file))
+    previous_stage = os.environ.get("POWERPACKS_USAGE_STAGE")
+    os.environ["POWERPACKS_USAGE_STAGE"] = "expand"
+    try:
+        direct, adjacent = asyncio.run(pick_both())
+    finally:
+        if previous_stage is None:
+            os.environ.pop("POWERPACKS_USAGE_STAGE", None)
+        else:
+            os.environ["POWERPACKS_USAGE_STAGE"] = previous_stage
+
     selected = []
-    keywords = filters.get("bm25_queries") or []
+    keywords = list(filters.get("bm25_queries") or [])
     strip_seniority = True
-    if clusters:
-        shown = clusters[:title_selection.MAX_TITLE_GROUPS]
-        status["shown_count"] = len(shown)
-        try:
-            load_env_file(Path(env_file))
-            pick = asyncio.run(title_selection.pick_title_clusters(
-                str(payload.get("normalized_query") or ""), shown, model=model, reasoning_effort=reasoning_effort,
-            ))
-            status["model_used"] = True
-            selected = [group for group in shown if (group.get("stemmed") or group.get("stem")) in pick.selected]
-            picked_keywords = pick.keywords or [group["display_title"] for group in selected]
-            if picked_keywords:
-                keywords = picked_keywords
-                strip_seniority = not bool(pick.keywords)
-            else:
-                status["fallback"] = "role_agent"
-        except Exception as exc:
-            status.update(status="error", error=str(exc)[:300], fallback="role_agent")
+    if isinstance(direct, Exception):
+        status.update(status="error", error=str(direct)[:300], fallback="role_agent")
+    elif direct is not None:
+        status["model_used"] = True
+        selected = [group for group in shown if (group.get("stemmed") or group.get("stem")) in direct.selected]
+        picked_keywords = direct.keywords or [group["display_title"] for group in selected]
+        keywords.extend(picked_keywords)
+        strip_seniority = not bool(direct.keywords)
+        if not picked_keywords:
+            status["fallback"] = "role_agent"
     else:
         status["fallback"] = "role_agent"
 
+    adjacent_patterns = []
+    if adjacent is not None and not isinstance(adjacent, Exception) and not isinstance(direct, Exception):
+        for group in adjacent_shown:
+            if (group.get("stemmed") or group.get("stem")) not in adjacent.selected:
+                continue
+            display = group["display_title"]
+            adjacent_patterns.append({
+                "regex": rf"\b{re.escape(display.lower())}\b",
+                "examples": (group.get("raw_titles") or group["titles"])[:3],
+                "display_value": display,
+            })
+            if len(adjacent_patterns) == title_selection.MAX_ADJACENT_PATTERNS:
+                break
+
     role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
     injected = sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
-    keywords = [*keywords]
-    for title in injected:
-        if title.lower() not in {keyword.lower() for keyword in keywords}:
-            keywords.append(title)
+    unique_keywords = {}
+    for title in [*keywords, *injected]:
+        unique_keywords.setdefault(title.casefold(), title)
+    keywords = list(unique_keywords.values())
     status["selected_count"] = len(selected)
     out = _with_local_title_clustering_status(payload, status)
     out_filters = payload_filters(out)
     out_filters["local_title_clusters"] = selected
+    out_filters["role_adjacent_patterns"] = adjacent_patterns
     out_filters["bm25_queries"] = keywords
     out_filters["role_core_patterns"] = _role_core_patterns_from_bm25(keywords, strip_seniority=strip_seniority)
     out["role_search_filters"] = out_filters
@@ -1354,8 +1395,9 @@ def cmd_prepare(args):
         expand=_expand_query(args,out_dir)
         payload=normalize_query_expansion_payload(payload_from_expand_output(expand), query=args.query)
         clusters = []
+        adjacent_clusters = []
         if payload.get("intent_type") != "person_lookup":
-            payload, clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
+            payload, clusters, adjacent_clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
         pinned_bands=pinned_bands_from_args(args)
@@ -1368,6 +1410,8 @@ def cmd_prepare(args):
         if payload.get("intent_type") != "person_lookup":
             payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
                                                   for group in clusters if group["titles"]],
+                                          adjacent_clusters=[{**group,"display_title":group["titles"][0]}
+                                                             for group in adjacent_clusters if group["titles"]],
                                           model=args.expand_model, reasoning_effort=args.expand_reasoning_effort,
                                           env_file=args.env_file)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)

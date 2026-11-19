@@ -10,7 +10,9 @@ from packs.search.primitives.expand_search_request.parallel_extractors import EX
 from packs.search.primitives.shared.openai_client import make_async_openai_client
 
 MAX_TITLE_GROUPS = 100
+MAX_ADJACENT_PATTERNS = 15
 TITLE_SELECTION_PROMPT = (Path(__file__).parent / "prompts/title_selection.txt").read_text()
+ADJACENT_TITLE_SELECTION_PROMPT = (Path(__file__).parent / "prompts/adjacent_title_selection.txt").read_text()
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,7 @@ async def pick_title_clusters(
     query: str,
     groups: list[dict[str, Any]],
     *,
+    system_prompt: str = TITLE_SELECTION_PROMPT,
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> TitleSelection:
@@ -41,7 +44,7 @@ async def pick_title_clusters(
     previous_stage = os.environ.get("POWERPACKS_USAGE_STAGE")
     os.environ["POWERPACKS_USAGE_STAGE"] = "expand"
     try:
-        result = await _extract(client, "title_selection", TITLE_SELECTION_PROMPT, user_content,
+        result = await _extract(client, "title_selection", system_prompt, user_content,
                                 model=model or EXTRACTOR_MODELS["role"], reasoning_effort=reasoning_effort)
     finally:
         if previous_stage is None:

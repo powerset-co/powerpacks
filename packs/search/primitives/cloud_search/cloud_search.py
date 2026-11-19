@@ -95,7 +95,7 @@ def _label(item: Any) -> Any:
     return (item.get("display_value") or item.get("id")) if isinstance(item, dict) else item
 
 
-def resolve(env_file: Path | None, payload: dict[str, Any], set_id: str | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def resolve(env_file: Path | None, payload: dict[str, Any], set_id: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Resolve the app's names, keeping the returned ids and displaying their labels on the card."""
     filters = dict(payload.get("role_search_filters") or {})
     request = {key: filters.get(key) or [] for key in RESOLVE_KEYS}
@@ -113,7 +113,7 @@ def resolve(env_file: Path | None, payload: dict[str, Any], set_id: str | None) 
         if names:
             filters[card_key] = names
     return ({**payload, "role_search_filters": filters, "api_filters": api_filters, "notes": notes},
-            resolved.get("title_clusters") or [])
+            resolved.get("title_clusters") or [], resolved.get("adjacent_title_clusters") or [])
 
 
 def _resolved_ids(env_file: Path | None, filters: dict[str, Any], resolved: dict[str, Any],

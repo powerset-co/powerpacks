@@ -150,7 +150,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         payload = {"role_search_filters": {"education_names": ["Example University", "Missing College"]}}
         with mock.patch.object(cloud_search.powerset_api, "call", return_value={
                 "education_ids": [{"id": "e1", "display_value": "EXAMPLE University (Main)"}]}):
-            out, _ = cloud_search.resolve(None, payload, "s1")
+            out, _, _ = cloud_search.resolve(None, payload, "s1")
         self.assertEqual(out["notes"], ["resolve did not return education_names: Missing College"])
 
     def test_card_edits_resolve_all_added_names_in_one_request(self) -> None:
@@ -271,7 +271,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                 "role_ids": ["software_engineer"], "set_id": "s1"})
             payload = json.loads((Path(directory) / "expand_search_request.json").read_text())
             card = payload["role_search_filters"]
-            self.assertEqual(payload["api_filters"], {k: v for k, v in resolved.items() if k != "title_clusters"})
+            self.assertEqual(payload["api_filters"], {k: v for k, v in resolved.items() if k not in ("title_clusters", "adjacent_title_clusters")})
             self.assertEqual(card["company_names"], ["Acme", "Acme Labs"])
             self.assertEqual(card["investor_names"], ["Example Ventures"])
             self.assertEqual((card["set_id"], card["set_interaction_min"]), ("s1", 2))
@@ -281,7 +281,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             pick.assert_awaited_once_with(
                 args.query, [{**group, "display_title": group["titles"][0]} for group in resolved["title_clusters"]],
                 model="synthetic-model", reasoning_effort="high")
-            self.assertEqual(card["bm25_queries"], ["Software Engineer"])
+            self.assertEqual(card["bm25_queries"], ["software engineers", "Software Engineer"])
             self.assertEqual(card["role_core_patterns"], [{"regex": r"\b(software\ engineer)\b",
                                                          "examples": ["Software Engineer"]}])
             self.assertEqual(emit.call_args.args[0]["status"], "preview_ready")
@@ -330,12 +330,13 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         payload = {"role_search_filters": {key: ["Missing"] for key in cloud_search.RESOLVE_KEYS}}
         payload["role_search_filters"]["role_ids"] = ["founder"]
         with mock.patch.object(cloud_search.powerset_api, "call", return_value={}) as api:
-            out, clusters = cloud_search.resolve(None, payload, "s1")
+            out, clusters, adjacent = cloud_search.resolve(None, payload, "s1")
         self.assertEqual(api.call_args.args[2]["role_ids"], ["founder"])
         self.assertEqual(out["role_search_filters"], {"role_ids": ["founder"]})
         self.assertEqual(len(out["notes"]), len(cloud_search.RESOLVE_KEYS))
         self.assertTrue(all("Missing" in note for note in out["notes"]))
         self.assertEqual(clusters, [])
+        self.assertEqual(adjacent, [])
 
     def test_set_prepare_preserves_pins_and_applies_edits_last(self) -> None:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline

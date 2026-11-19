@@ -26,17 +26,19 @@ def payload(**filters):
     }}
 
 
-def test_model_keywords_replace_agent_keywords_in_order():
-    keywords = ["Applied Scientist", "Chief of Staff", "Machine Learning", "Machine Learning Engineer"]
+def test_agent_keywords_come_first_when_model_omits_chief_of_staff():
+    keywords = ["Applied Scientist", "Machine Learning", "Machine Learning Engineer"]
     with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
                            return_value=title_selection.TitleSelection(["appli scientist"], keywords)) as pick:
-        result = pipeline._apply_title_clusters(payload(), GROUPS, model="gpt-5.6-luna", reasoning_effort="high")
+        result = pipeline._apply_title_clusters(payload(bm25_queries=["Chief of Staff", "Special Projects"]),
+                                                GROUPS, model="gpt-5.6-luna", reasoning_effort="high")
     filters = result["role_search_filters"]
-    assert filters["bm25_queries"] == keywords
+    assert filters["bm25_queries"] == ["Chief of Staff", "Special Projects", "Applied Scientist",
+                                        "Machine Learning", "Machine Learning Engineer"]
     assert filters["local_title_clusters"] == GROUPS[:1]
     assert filters["role_core_patterns"] == [{
-        "regex": r"\b(applied\ scientist|chief\ of\ staff|machine\ learning)\b",
-        "examples": keywords[:3],
+        "regex": r"\b(chief\ of\ staff|special\ projects|applied\ scientist|machine\ learning)\b",
+        "examples": ["Chief of Staff", "Special Projects", "Applied Scientist", "Machine Learning"],
     }]
     assert re.search(filters["role_core_patterns"][0]["regex"], "Chief of Staff", re.I)
     assert filters["local_title_clustering_status"]["model_used"] is True
@@ -60,7 +62,7 @@ def test_no_model_keywords_uses_selected_display_titles_and_injections():
                            return_value=title_selection.TitleSelection(["appli scientist", "chief staff"], [])):
         result = pipeline._apply_title_clusters(payload(role_agent_ids=["ai_researcher"]), GROUPS)
     filters = result["role_search_filters"]
-    assert filters["bm25_queries"] == ["Applied Scientist", "Chief of Staff", "Research Fellow", "Research Scientist"]
+    assert filters["bm25_queries"] == ["Senior AI Engineer", "Applied Scientist", "Chief of Staff", "Research Fellow", "Research Scientist"]
     assert len(filters["role_core_patterns"]) == 1
     assert "of Staff" in filters["role_core_patterns"][0]["examples"]
 
@@ -72,9 +74,9 @@ def test_display_title_keywords_strip_level_words_from_pattern():
                            return_value=title_selection.TitleSelection(["senior softwar engin"], [])):
         result = pipeline._apply_title_clusters(payload(), groups)
     filters = result["role_search_filters"]
-    assert filters["bm25_queries"] == ["Senior Software Engineer"]
+    assert filters["bm25_queries"] == ["Senior AI Engineer", "Senior Software Engineer"]
     assert filters["role_core_patterns"] == [{
-        "regex": r"\b(software\ engineer)\b", "examples": ["Software Engineer"],
+        "regex": r"\b(ai\ engineer|software\ engineer)\b", "examples": ["AI Engineer", "Software Engineer"],
     }]
     assert re.search(filters["role_core_patterns"][0]["regex"], "Software Engineer", re.I)
 
@@ -86,7 +88,7 @@ def test_display_title_keywords_strip_level_words_from_pattern():
 def test_shortcuts_skip_pick(filters, tmp_path):
     source = payload(**filters)
     with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock) as pick:
-        assert pipeline._apply_title_clusters(source, GROUPS)["role_search_filters"]["bm25_queries"] == ["Senior AI Engineer"]
+        assert pipeline._apply_title_clusters(source, GROUPS, adjacent_clusters=GROUPS)["role_search_filters"]["bm25_queries"] == ["Senior AI Engineer"]
         pipeline.apply_local_title_clustering(source, tmp_path / "absent.duckdb")
     pick.assert_not_called()
 
@@ -95,7 +97,7 @@ def test_shortcuts_skip_pick(filters, tmp_path):
 def test_no_role_makes_no_pick(filters, tmp_path):
     source = {"intent_type": "person_lookup" if not filters else "role_search", "role_search_filters": filters}
     with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock) as pick:
-        result = pipeline._apply_title_clusters(source, GROUPS)
+        result = pipeline._apply_title_clusters(source, GROUPS, adjacent_clusters=GROUPS)
         pipeline.apply_local_title_clustering(source, tmp_path / "absent.duckdb")
     pick.assert_not_called()
     assert not result["role_search_filters"].get("role_core_patterns")
@@ -112,7 +114,8 @@ def test_card_edit_keeps_level_words_and_one_pattern(tmp_path):
 
 
 @pytest.mark.parametrize("model", [None, "gpt-5.6-luna"])
-def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, monkeypatch, model):
+@pytest.mark.parametrize("adjacent", [False, True])
+def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, monkeypatch, model, adjacent):
     usage_log = tmp_path / "usage.jsonl"
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-key")
     monkeypatch.setenv("POWERPACKS_USAGE_LOG", str(usage_log))
@@ -128,7 +131,9 @@ def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, mo
                "titles": [f"Title {i}", "Second Title", "Third Title", "Fourth Title"]} for i in range(101)]
     with mock.patch.object(openai_client.openai, "AsyncOpenAI", return_value=client):
         result = asyncio.run(title_selection.pick_title_clusters("chief of staff", groups,
-                                                               model=model, reasoning_effort="high"))
+                                                               model=model, reasoning_effort="high",
+                                                               **({"system_prompt": title_selection.ADJACENT_TITLE_SELECTION_PROMPT}
+                                                                  if adjacent else {})))
     assert result.keywords == ["Chief of Staff"]
     request = create.call_args.kwargs
     assert request["model"] == (model or title_selection.EXTRACTOR_MODELS["role"])
@@ -137,7 +142,8 @@ def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, mo
     else:
         assert request["temperature"] == 0.0
         assert "reasoning_effort" not in request
-    assert request["messages"][0]["content"] == title_selection.TITLE_SELECTION_PROMPT
+    assert request["messages"][0]["content"] == (title_selection.ADJACENT_TITLE_SELECTION_PROMPT if adjacent
+                                                  else title_selection.TITLE_SELECTION_PROMPT)
     content = request["messages"][1]["content"]
     assert content.startswith('Query: "chief of staff"\n\nTitle clusters (stemmed form, count, raw examples):\n')
     assert '  "title 0" (count=120, e.g.: Title 0, Second Title, Third Title)' in content
@@ -148,7 +154,8 @@ def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, mo
     assert pipeline.os.environ["POWERPACKS_USAGE_STAGE"] == "previous"
 
 
-def test_local_title_read_uses_widened_role_ids_with_other_filters(tmp_path):
+@pytest.mark.parametrize("prepare", [False, True])
+def test_local_title_read_uses_neighbouring_role_ids_with_other_filters(tmp_path, prepare):
     db = tmp_path / "local.duckdb"
     with duckdb.connect(str(db)) as conn:
         conn.execute("CREATE TABLE local_people_positions (id VARCHAR, person_id VARCHAR, "
@@ -163,17 +170,33 @@ def test_local_title_read_uses_widened_role_ids_with_other_filters(tmp_path):
     with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
                            return_value=title_selection.TitleSelection(["appli scientist"], ["Applied Scientist"])) as pick, \
             mock.patch.object(pipeline.cloud_search.powerset_api, "call", side_effect=AssertionError("no API")):
-        result = pipeline.apply_local_title_clustering(source, db, model="synthetic-model", reasoning_effort="high")
-    groups = pick.call_args.args[1]
+        if prepare:
+            args = pipeline.build_parser().parse_args([
+                "prepare", "--backend", "local", "--db", str(db), "--query", "ai engineers",
+                "--output-dir", str(tmp_path), "--expand-model", "synthetic-model",
+                "--expand-reasoning-effort", "high",
+            ])
+            with mock.patch.object(pipeline, "_expand_query", return_value={"status": "completed", **source}), \
+                    mock.patch.dict("os.environ"):
+                assert pipeline.cmd_prepare(args) == 0
+            result = json.loads((tmp_path / "expand_search_request.json").read_text())
+        else:
+            result = pipeline.apply_local_title_clustering(source, db, model="synthetic-model", reasoning_effort="high")
+    groups = pick.call_args_list[0].args[1]
     assert {group["display_title"] for group in groups} == {"AI Engineer", "Applied Scientist"}
-    assert pick.call_args.kwargs == {"model": "synthetic-model", "reasoning_effort": "high"}
-    assert result["role_search_filters"]["bm25_queries"] == ["Applied Scientist"]
+    assert pick.call_args_list[0].kwargs == {"model": "synthetic-model", "reasoning_effort": "high"}
+    adjacent = pick.call_args_list[1]
+    assert {group["display_title"] for group in adjacent.args[1]} == {"Applied Scientist"}
+    assert adjacent.kwargs == {"model": "synthetic-model", "reasoning_effort": "high",
+                               "system_prompt": title_selection.ADJACENT_TITLE_SELECTION_PROMPT}
+    assert result["role_search_filters"]["bm25_queries"] == ["Senior AI Engineer", "Applied Scientist"]
     assert source == payload(cities=["Austin"])
 
 
 def test_set_prepare_passes_resolved_groups_and_applies_edits_after_pick(tmp_path):
     expansion = {"status": "completed", **payload()}
     groups = [{"stem": "appli scientist", "count": 10, "titles": ["Applied Scientist"]}]
+    adjacent_groups = [{"stem": "softwar engin", "count": 5, "titles": ["Software Engineer"]}]
     edits = tmp_path / "edits.json"
     edits.write_text(json.dumps({"filters": {"bm25_queries": ["Chief of Staff"]}}))
     args = pipeline.build_parser().parse_args([
@@ -183,19 +206,36 @@ def test_set_prepare_passes_resolved_groups_and_applies_edits_after_pick(tmp_pat
         "--edits-json", str(edits),
     ])
     with mock.patch.object(pipeline, "_expand_query", return_value=expansion), \
-            mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={"title_clusters": groups}), \
+            mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={"title_clusters": groups,
+                                                                                      "adjacent_title_clusters": adjacent_groups}), \
             mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
-                              return_value=title_selection.TitleSelection(["appli scientist"], ["Applied Scientist"])) as pick, \
+                              side_effect=[title_selection.TitleSelection(["appli scientist"], ["Applied Scientist"]),
+                                           title_selection.TitleSelection(["softwar engin"], ["Ignored"])]) as pick, \
             mock.patch.object(pipeline, "emit"), mock.patch.dict("os.environ"):
         assert pipeline.cmd_prepare(args) == 0
-    pick.assert_awaited_once_with("ai engineers", [{**groups[0], "display_title": "Applied Scientist"}],
-                                  model="synthetic-model", reasoning_effort="high")
-    filters = json.loads((tmp_path / "expand_search_request.json").read_text())["role_search_filters"]
+    assert pick.await_args_list == [
+        mock.call("ai engineers", [{**groups[0], "display_title": "Applied Scientist"}],
+                  model="synthetic-model", reasoning_effort="high"),
+        mock.call("ai engineers", [{**adjacent_groups[0], "display_title": "Software Engineer"}],
+                  model="synthetic-model", reasoning_effort="high",
+                  system_prompt=title_selection.ADJACENT_TITLE_SELECTION_PROMPT),
+    ]
+    prepared = json.loads((tmp_path / "expand_search_request.json").read_text())
+    filters = prepared["role_search_filters"]
     assert filters["bm25_queries"] == ["Chief of Staff"]
     assert filters["role_core_patterns"] == [{"regex": r"\b(chief\ of\ staff)\b", "examples": ["Chief of Staff"]}]
     assert filters["semantic_query"] == "ai engineers"
     assert filters["seniority_bands"] == ["senior", "staff"]
     assert filters["is_current_role"] is True
+    assert filters["role_adjacent_patterns"] == [{
+        "regex": r"\bsoftware\ engineer\b", "examples": ["Software Engineer"],
+        "display_value": "Software Engineer",
+    }]
+    with mock.patch.object(pipeline.cloud_search.powerset_api, "call", side_effect=AssertionError("no lookup")):
+        body = pipeline.cloud_search.api_request(None, prepared, query="ai engineers", set_id="s1", limit=0)
+    assert body["role_adjacent_patterns"] == [{
+        "regex": r"\bsoftware\ engineer\b", "examples": ["Software Engineer"],
+    }]
 
 
 def test_model_error_uses_agent_keywords_through_real_picker(monkeypatch):
@@ -210,3 +250,78 @@ def test_model_error_uses_agent_keywords_through_real_picker(monkeypatch):
     assert filters["local_title_clustering_status"]["fallback"] == "role_agent"
     assert filters["local_title_clustering_status"]["status"] == "error"
     create.assert_awaited_once()
+
+
+ADJACENT_GROUPS = [{"stem": f"related {i}", "count": 20 - i,
+                    "titles": [f"Related Title {i}", "Second Title", "Third Title", "Fourth Title"],
+                    "display_title": f"Related Title {i}"} for i in range(17)]
+
+
+def test_adjacent_patterns_use_selected_titles_cap_15_and_ignore_keywords():
+    async def pick(query, groups, **kwargs):
+        if "system_prompt" in kwargs:
+            return title_selection.TitleSelection([g["stem"] for g in groups] + ["unknown"], ["Ignored Keyword"])
+        return title_selection.TitleSelection(["appli scientist"], ["Applied Scientist"])
+
+    with mock.patch.object(title_selection, "pick_title_clusters", side_effect=pick):
+        result = pipeline._apply_title_clusters(payload(), GROUPS, adjacent_clusters=ADJACENT_GROUPS)
+    filters = result["role_search_filters"]
+    assert filters["role_adjacent_patterns"] == [{
+        "regex": rf"\b{re.escape(group['display_title'].lower())}\b",
+        "examples": group["titles"][:3], "display_value": group["display_title"],
+    } for group in ADJACENT_GROUPS[:15]]
+    assert filters["bm25_queries"] == ["Senior AI Engineer", "Applied Scientist"]
+    assert re.search(filters["role_adjacent_patterns"][0]["regex"], "Related Title 0", re.I)
+
+
+@pytest.mark.parametrize("failed", ["direct", "adjacent"])
+def test_picks_run_concurrently_and_failed_calls_leave_no_adjacent_patterns(failed):
+    started = set()
+
+    async def pick(query, groups, **kwargs):
+        kind = "adjacent" if "system_prompt" in kwargs else "direct"
+        started.add(kind)
+        for _ in range(5):
+            await asyncio.sleep(0)
+            if len(started) == 2:
+                break
+        assert started == {"direct", "adjacent"}
+        if kind == failed:
+            raise RuntimeError("synthetic failure")
+        return title_selection.TitleSelection(
+            ["related 0"] if kind == "adjacent" else ["appli scientist"], ["Applied Scientist"])
+
+    with mock.patch.object(title_selection, "pick_title_clusters", side_effect=pick):
+        result = pipeline._apply_title_clusters(payload(), GROUPS, adjacent_clusters=ADJACENT_GROUPS)
+    filters = result["role_search_filters"]
+    assert filters["role_adjacent_patterns"] == []
+    assert filters["bm25_queries"] == (["Senior AI Engineer"] if failed == "direct"
+                                        else ["Senior AI Engineer", "Applied Scientist"])
+
+
+def test_adjacent_pick_runs_without_direct_groups():
+    with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
+                           return_value=title_selection.TitleSelection(["related 0"], ["Ignored"])) as pick:
+        result = pipeline._apply_title_clusters(payload(), [], adjacent_clusters=ADJACENT_GROUPS)
+    pick.assert_awaited_once()
+    assert pick.call_args.kwargs["system_prompt"] == title_selection.ADJACENT_TITLE_SELECTION_PROMPT
+    assert len(result["role_search_filters"]["role_adjacent_patterns"]) == 1
+    assert result["role_search_filters"]["bm25_queries"] == ["Senior AI Engineer"]
+
+
+def test_no_adjacent_groups_means_no_adjacent_patterns():
+    with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
+                           return_value=title_selection.TitleSelection([], ["Applied Scientist"])) as pick:
+        result = pipeline._apply_title_clusters(payload(), GROUPS)
+    pick.assert_awaited_once()
+    assert result["role_search_filters"]["role_adjacent_patterns"] == []
+
+
+def test_keyword_merge_deduplicates_case_insensitively_and_appends_fixed_titles():
+    source = payload(role_agent_ids=["ai_researcher"], bm25_queries=["Chief of Staff", "CHIEF OF STAFF"])
+    with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
+                           return_value=title_selection.TitleSelection([], ["chief of staff", "Applied Scientist"])):
+        result = pipeline._apply_title_clusters(source, GROUPS)
+    assert result["role_search_filters"]["bm25_queries"] == [
+        "Chief of Staff", "Applied Scientist", "Research Fellow", "Research Scientist",
+    ]

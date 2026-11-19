@@ -468,9 +468,9 @@ class LocalSearchPipelineTests(unittest.TestCase):
                     if prepared:
                         pick.assert_not_awaited()
                     else:
-                        pick.assert_awaited_once()
+                        self.assertEqual(pick.await_count, 2)
                         self.assertEqual(os.environ.get("TITLE_PICK_TEST_ENV"), "from-run-env")
-                        self.assertEqual(pick.call_args.kwargs, {
+                        self.assertEqual(pick.call_args_list[0].kwargs, {
                             "model": defaults.expand_model, "reasoning_effort": defaults.expand_reasoning_effort,
                         })
 
@@ -527,7 +527,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 "--query", "backend engineers", "--payload-json", str(payload),
                 "--edits-json", str(edits), "--limit", "1",
             ], cwd=ROOT, capture_output=True, text=True, timeout=60,
-                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"})
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""})
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
             state = json.loads(Path(json.loads(proc.stdout)["state"]).read_text())
             filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
@@ -682,7 +682,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             filters = expand["output"]["role_search_filters"]
             self.assertEqual(filters["role_ids"], ["software_engineer"])
             self.assertIn("software engineer", filters["bm25_queries"])
-            self.assertIn("Software Engineer", filters["bm25_queries"])
+            self.assertEqual(filters["bm25_queries"], ["software engineer"])
             self.assertEqual(filters["local_title_clustering_status"]["fallback"], "role_agent")
             self.assertFalse(filters["local_title_clustering_status"]["model_used"])
             self.assertEqual(len(filters["role_core_patterns"]), 1)
@@ -740,6 +740,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -804,6 +805,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -876,7 +878,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
-                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -933,7 +935,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
-                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -1019,6 +1021,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -1080,6 +1083,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -1134,6 +1138,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
 
             env = dict(os.environ)
             env.update({
+                "OPENAI_API_KEY": "",
                 "POWERPACKS_DEFAULT_SET_ID": "wrong-default-set",
                 "POWERSET_DEFAULT_SET_ID": "wrong-default-set",
                 "DATABASE_URL": "postgresql://should-not-be-used",
