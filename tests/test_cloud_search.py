@@ -68,6 +68,51 @@ class CloudSearchTests(unittest.TestCase):
                                                        timeout=60, write_state=False, rerank=False, rerank_rest=False))
         self.assertEqual(out["candidate_count"], 2)
 
+    def test_company_and_school_names_keep_all_matching_ids_in_expansion_order(self) -> None:
+        for key, card_key, kind in (("company_ids", "company_names", "companies"),
+                                    ("education_ids", "education_names", "schools")):
+            expanded = {key: [{"id": id_, "display_value": name} for id_, name in
+                              [("A", "Google"), ("D", "Other"), ("B", "Google"),
+                               ("C", "Google"), ("A", "Google")]]}
+            for names, expected, lookup in (
+                    (["Google", "Google", "Google"], ["A", "B", "C"], False),
+                    (["google"], ["A", "B", "C"], False),
+                    (["Other", "Google"], ["A", "D", "B", "C"], False),
+                    (["Other"], ["D"], False),
+                    ([], None, False),
+                    (["Google", "Added"], ["A", "B", "C", "E"], True)):
+                with self.subTest(key=key, names=names), mock.patch.object(
+                        cloud_search.powerset_api, "call", return_value={"suggestions": [{"id": "E"}]}) as api:
+                    request = cloud_search.api_request(
+                        None, {"api_filters": expanded, "role_search_filters": {card_key: names}},
+                        query="q", set_id="s1", limit=0)
+                    self.assertEqual(request.get(key), expected)
+                    if lookup:
+                        api.assert_called_once_with(None, f"/v2/autocomplete/{kind}?limit=1&q=Added")
+                    else:
+                        api.assert_not_called()
+
+    def test_long_query_is_shortened_only_for_expand(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        query = "job description " * 250
+        self.assertEqual(len(query), 4000)
+        with tempfile.TemporaryDirectory() as directory:
+            args = pipeline.build_parser().parse_args(
+                ["prepare", "--query", query, "--set-id", "s1", "--output-dir", directory])
+            with mock.patch.object(cloud_search.powerset_api, "call", return_value={}) as api, \
+                    mock.patch.object(pipeline, "emit"), mock.patch.dict("os.environ"):
+                self.assertEqual(pipeline.cmd_prepare(args), 0)
+                self.assertEqual(api.call_args.args[2]["query"], query[:2048])
+                payload = json.loads((Path(directory) / "expand_search_request.json").read_text())
+                state = Path(directory) / "state.json"
+                state.write_text(json.dumps({"query": query, "steps": [
+                    {"id": "expand_search_request", "output": payload}]}))
+                cloud_search.run(SimpleNamespace(state=str(state), env_file=None, set_id="s1", limit=0,
+                                                timeout=60, write_state=False, rerank=False, rerank_rest=False))
+                self.assertEqual(api.call_args.args[1], "/v2/search/execute")
+                self.assertEqual(api.call_args.args[2]["query"], query)
+
     def _api(self, good, bad, sent, *, answer=None):
         """The API of one ranked search, which answers only once its results are saved."""
         def api(env_file, path, body=None, **kwargs):
