@@ -426,8 +426,9 @@ def pace_gmail_sync(home: Path) -> None:
 # through extra projects, each at its own 95 messages a minute (measured 2026-11-19: 94, 187 and
 # 266 a minute through 1, 2 and 3 projects, no refusal). Daily syncs use the one main project.
 GMAIL_QUOTA_APPS = tuple(f"quota{n}" for n in range(2, 11))
-# One project reads about 5,700 messages an hour; each extra one is set up per this many messages.
-GMAIL_MESSAGES_PER_QUOTA_APP = 5000
+# The first sync aims to finish in about an hour: one project reads about this many messages an
+# hour (94 a minute), so a mailbox gets one project per this many messages, ten at most.
+GMAIL_MESSAGES_PER_PROJECT_HOUR = 5600
 
 
 def msgvault_has_quota_apps() -> bool:

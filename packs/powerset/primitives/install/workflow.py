@@ -42,8 +42,9 @@ Changelog:
       user before its consent. A run prepares every tool, then collects every
       login back to back (LinkedIn, Google, Full Disk Access, WhatsApp QR),
       then syncs and imports on its own.
-  2026-11-19: a large first Gmail sync reads through extra Google projects (one per 5,000
-      messages, up to nine), each set up and signed in before the sync; a refresh uses the main one.
+  2026-11-19: a first Gmail sync aims for about an hour: one Google project per 5,600 messages
+      in the window, ten at most, the extra ones set up and signed in before the sync; a refresh
+      uses the main one.
   2026-10-03: LinkedIn is a default source, runs first, and reads the
       connections list in Chrome instead of waiting for LinkedIn's emailed export.
 """
@@ -299,7 +300,8 @@ class SourceOnboarding:
         login = self.gmail_emails[0]
         window = f"after:{self.sync_after}" if self.sync_after else ""
         messages = sum(count_messages(home, email, window) or 0 for email in self.gmail_emails)
-        wanted = msgvault_home.GMAIL_QUOTA_APPS[:messages // msgvault_home.GMAIL_MESSAGES_PER_QUOTA_APP]
+        # What one project reads in an hour needs no extra one.
+        wanted = msgvault_home.GMAIL_QUOTA_APPS[:max(messages - 1, 0) // msgvault_home.GMAIL_MESSAGES_PER_PROJECT_HOUR]
         ready: list[str] = []
         for app in wanted:
             base = ["--home", str(home), "--oauth-app", app,
