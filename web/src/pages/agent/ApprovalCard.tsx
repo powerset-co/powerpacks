@@ -5,7 +5,7 @@ const TITLE: Readonly<Record<Approval["kind"], string>> = {
   command: "Codex wants to run a command",
   files: "Codex wants to edit files",
   permissions: "Codex wants more access",
-  tool: "Codex wants to change your email archive",
+  tool: "Codex wants to use a tool",
 }
 
 function detail(approval: Approval): string | null {
@@ -14,6 +14,7 @@ function detail(approval: Approval): string | null {
     const parts = [approval.network ? "Network access" : "", ...approval.paths].filter(Boolean)
     return parts.length ? parts.join("\n") : null
   }
+  if (approval.kind === "tool") return approval.details.length ? approval.details.join("\n") : null
   return null
 }
 

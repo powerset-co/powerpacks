@@ -161,7 +161,31 @@ describe("decodeThreadSummary", () => {
       kind: "tool",
       requestId: 9,
       reason: "Create a draft?",
+      details: [],
       confirm: { confirm: true },
+    })
+    const approval = {
+      id: 0,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "msgvault",
+        mode: "form",
+        message: 'Allow the msgvault MCP server to run tool "draft_reply"?',
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          tool_params_display: [
+            { name: "to", value: ["casey@example.com"], display_name: "to" },
+            { name: "subject", value: "Hello", display_name: "subject" },
+          ],
+        },
+      },
+    }
+    expect(decodeRequest(approval)).toEqual({
+      kind: "tool",
+      requestId: 0,
+      reason: 'Allow the msgvault MCP server to run tool "draft_reply"?',
+      details: ['to: ["casey@example.com"]', "subject: Hello"],
+      confirm: {},
     })
     const typed = { type: "object", properties: { name: { type: "string" } } }
     expect(decodeRequest({ ...raw, params: { ...raw.params, requestedSchema: typed } })).toBeNull()
