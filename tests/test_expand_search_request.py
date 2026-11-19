@@ -1,8 +1,10 @@
 import asyncio
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +19,96 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
+    def _expand_with_model_answers(self, answers, **kwargs):
+        mod = load_module()
+        prompts = mod.load_prompt_bundle()
+        names_by_prompt = {body: name for name, body in prompts.items()}
+        started = set()
+        ready = asyncio.Event()
+
+        async def complete(**request):
+            name = names_by_prompt[request["messages"][0]["content"]]
+            started.add(name)
+            if len(started) == len(prompts):
+                ready.set()
+            await asyncio.wait_for(ready.wait(), timeout=1)
+            answer = answers.get(name, {})
+            if isinstance(answer, Exception):
+                raise answer
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(answer)))])
+
+        create = mock.AsyncMock(side_effect=complete)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with mock.patch.object(mod, "make_async_openai_client", return_value=client):
+            result = asyncio.run(mod.expand_query_parallel("fintech engineers", api_key="test", **kwargs))
+        return result, create
+
+    def test_adjacency_and_interaction_model_answers_merge_without_changing_other_filters(self):
+        answers = {
+            "role": {"semantic_query": "Engineers building payment systems.", "bm25_queries": ["engineer"]},
+            "company": {"sector_types": ["fintech"]},
+            "trait_generation": {"traits": [{"value": "Payments experience"}], "has_domain_intent": True},
+        }
+        baseline, _ = self._expand_with_model_answers(answers)
+        additions = {
+            "company_adjacency_queries": ["CTO", "VP of Engineering"],
+            "operator_interaction_min": 10,
+            "operator_interaction_max": 50,
+            "set_interaction_min": 100,
+            "set_interaction_max": 200,
+        }
+        result, create = self._expand_with_model_answers({
+            **answers,
+            "company_adjacency": {"has_sector_context": True, "adjacency_queries": additions["company_adjacency_queries"]},
+            "interaction": {key: value for key, value in additions.items() if key != "company_adjacency_queries"},
+        }, model_override="gpt-5.4", reasoning_effort="medium")
+
+        self.assertEqual(result["role_search_filters"], {**baseline["role_search_filters"], **additions})
+        self.assertEqual(result["traits"], baseline["traits"])
+        self.assertEqual(create.await_count, 10)
+        self.assertEqual(set(result["extractor_timings"]), {
+            "role", "company", "location", "education", "temporal", "seniority", "social",
+            "trait_generation", "company_adjacency", "interaction",
+        })
+        for call in create.call_args_list:
+            self.assertEqual(call.kwargs["model"], "gpt-5.4")
+            self.assertEqual(call.kwargs["reasoning_effort"], "medium")
+
+    def test_failed_new_extractor_preserves_other_model_answers(self):
+        answers = {
+            "company": {"company_names": ["Stripe"]},
+            "company_adjacency": {"has_sector_context": True, "adjacency_queries": ["CTO"]},
+            "interaction": {"operator_interaction_min": 10},
+        }
+        for failed, missing, surviving in (
+            ("company_adjacency", "company_adjacency_queries", "operator_interaction_min"),
+            ("interaction", "operator_interaction_min", "company_adjacency_queries"),
+        ):
+            with self.subTest(failed=failed):
+                result, _ = self._expand_with_model_answers({**answers, failed: RuntimeError("model unavailable")})
+                filters = result["role_search_filters"]
+                self.assertEqual(filters["company_names"], ["Stripe"])
+                self.assertNotIn(missing, filters)
+                self.assertIn(surviving, filters)
+
+    def test_absent_interaction_and_sector_signals_leave_keys_absent(self):
+        result, _ = self._expand_with_model_answers({
+            "company_adjacency": {"has_sector_context": False, "adjacency_queries": ["CTO"]},
+            "interaction": {"operator_interaction_min": None, "operator_interaction_max": None,
+                            "set_interaction_min": None, "set_interaction_max": None},
+        })
+        self.assertEqual(result["role_search_filters"], {"has_domain_intent": False})
+
+    def test_interaction_numbers_are_integers_and_zero_is_preserved(self):
+        result, _ = self._expand_with_model_answers({
+            "interaction": {"operator_interaction_min": "10", "operator_interaction_max": None,
+                            "set_interaction_max": 0},
+        })
+        self.assertEqual(result["role_search_filters"], {
+            "has_domain_intent": False, "operator_interaction_min": 10, "set_interaction_max": 0,
+        })
+
     def test_excluded_executive_words_do_not_override_extracted_occupation(self):
         mod = load_module()
         queries = [

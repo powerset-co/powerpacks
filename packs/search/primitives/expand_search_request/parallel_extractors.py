@@ -154,7 +154,14 @@ EXTRACTOR_MODELS = {
     "social": "gpt-4.1",
     "role": "gpt-4.1",
     "trait_generation": "gpt-4.1",
+    "company_adjacency": "gpt-5.4",
+    "interaction": "gpt-4.1-nano",
 }
+
+INTERACTION_FIELDS = (
+    "operator_interaction_min", "operator_interaction_max",
+    "set_interaction_min", "set_interaction_max",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +258,7 @@ def role_agent_system_prompt() -> str:
 PROMPT_NAMES = (
     "temporal", "company", "location", "education", "seniority", "social",
     "role", "trait_generation",
+    "company_adjacency", "interaction",
 )
 
 
@@ -288,6 +296,11 @@ async def _extract(
         user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false}}'
     elif name == "role":
         user_content = role_agent_user_content(query)
+    elif name == "company_adjacency":
+        user_content = (
+            f'Query: "{query}"\n\n'
+            'Return JSON with: {"has_sector_context": true/false, "adjacency_queries": ["..."]}'
+        )
     else:
         user_content = query
     try:
@@ -310,7 +323,10 @@ async def _extract(
             **kwargs,
         )
         content = resp.choices[0].message.content or "{}"
-        return json.loads(content)
+        result = json.loads(content)
+        if name == "interaction":
+            return {key: int(result[key]) for key in INTERACTION_FIELDS if result.get(key) is not None}
+        return result
     except Exception as e:
         logger.error(f"[{name}] extraction failed: {e}")
         return {}
@@ -845,7 +861,7 @@ async def expand_query_parallel(
         timings[name] = round(time.monotonic() - t0, 3)
         return result
 
-    role, company, location, education, temporal, seniority, social, traits = await asyncio.gather(
+    role, company, location, education, temporal, seniority, social, traits, adjacency, interaction = await asyncio.gather(
         timed_extract("role"),
         timed_extract("company"),
         timed_extract("location"),
@@ -854,12 +870,17 @@ async def expand_query_parallel(
         timed_extract("seniority"),
         timed_extract("social"),
         timed_extract("trait_generation"),
+        timed_extract("company_adjacency"),
+        timed_extract("interaction"),
     )
 
     total_ms = int((time.monotonic() - started) * 1000)
 
     # Merge
     filters = _merge(role, company, location, education, temporal, seniority, social, query)
+    if adjacency.get("has_sector_context") and adjacency.get("adjacency_queries"):
+        filters["company_adjacency_queries"] = adjacency["adjacency_queries"]
+    filters.update(interaction)
 
     # Extract traits and has_domain_intent from trait generator
     generated_traits = traits.get("traits") or []

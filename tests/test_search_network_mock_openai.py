@@ -297,6 +297,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(set(manifest["files"]), {
             "company.txt", "education.txt", "location.txt", "role.txt",
             "seniority.txt", "social.txt", "temporal.txt", "trait_generation.txt",
+            "company_adjacency.txt", "interaction.txt",
         })
         self.assertGreaterEqual(MockOpenAIHandler.request_count, 8)
         self.assertTrue(all(path.endswith("/chat/completions") for path in MockOpenAIHandler.request_paths))

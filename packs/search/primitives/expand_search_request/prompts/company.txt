@@ -228,6 +228,9 @@ Extract customer/business model type:
 Extract investor/VC names:
 - investors: List of investor/VC names
 - Include both full names and common abbreviations
+- **Do NOT add `venture_backed_startup` to `entity_types` just because an investor is present.**
+  Investor filters already mean "backed by this investor" and should stand alone; adding the startup entity-type
+  can incorrectly drop valid portfolio companies whose company classification tag is missing.
 
 **CRITICAL: INVESTOR VS COMPANY NAME DISAMBIGUATION**
 When a name could be BOTH an investor and a company, use EXPLICIT VERBS to determine the correct field.
