@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import ANY
+from unittest.mock import ANY, Mock
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -430,12 +430,13 @@ class SourceOnboardingTests(unittest.TestCase):
              patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}), \
              patch.object(msgvault_home, 'msgvault_has_quota_apps', return_value=True), \
              patch.object(workflow, 'count_messages', return_value=90000), \
-             patch.object(BrowserSetup, 'from_args', return_value=SimpleNamespace(run=lambda: {'status': 'error'})) as created, \
+             patch.object(BrowserSetup, 'from_args', return_value=SimpleNamespace(run=Mock(return_value={'status': 'error'}))) as created, \
              patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')) as sync, \
              patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
             result = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',),
                                       sync_after='2023-01-01').run()
         created.assert_called_once()
+        self.assertEqual(created.return_value.run.call_count, 2)  # one retry, then the sync goes ahead
         sync.assert_called_once()
         self.assertFalse(msgvault_home.config_path(home).exists())
         self.assertEqual(result['event'], 'sources.ready')

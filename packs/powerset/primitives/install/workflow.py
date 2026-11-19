@@ -306,9 +306,11 @@ class SourceOnboarding:
         for app in wanted:
             base = ["--home", str(home), "--oauth-app", app,
                     "--project", msgvault_home.default_project_id(f"{login} {app}")]
-            created = BrowserSetup.from_args(msgvault_parser().parse_args(
-                ["browser-setup", *base, "--email", login, "--no-init-db"])).run()
-            if created["status"] not in _SUCCESS:
+            # Google's console stalls now and then (seen at "Create client" and on the scopes page);
+            # the same setup run again picks up where it stopped.
+            setup = BrowserSetup.from_args(msgvault_parser().parse_args(
+                ["browser-setup", *base, "--email", login, "--no-init-db"]))
+            if setup.run()["status"] not in _SUCCESS and setup.run()["status"] not in _SUCCESS:
                 break
             allowed = set(msgvault_home.load_setup_state(home, app).test_users)
             if not set(self.gmail_emails) <= allowed and TestUsers.from_args(msgvault_parser().parse_args(
