@@ -143,4 +143,27 @@ describe("decodeThreadSummary", () => {
     expect(viewed?.updatedAt.toISOString()).toBe("2026-10-16T09:05:25.000Z")
     expect(plain?.updatedAt.getTime()).toBe(1_700_000_000_000)
   })
+
+  it("reads a tool's yes/no confirmation and skips forms the page cannot answer", () => {
+    const requestedSchema = { type: "object", properties: { confirm: { type: "boolean" } } }
+    const raw = {
+      id: 9,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "msgvault",
+        threadId: "t1",
+        mode: "form",
+        message: "Create a draft?",
+        requestedSchema,
+      },
+    }
+    expect(decodeRequest(raw)).toEqual({
+      kind: "tool",
+      requestId: 9,
+      reason: "Create a draft?",
+      confirm: { confirm: true },
+    })
+    const typed = { type: "object", properties: { name: { type: "string" } } }
+    expect(decodeRequest({ ...raw, params: { ...raw.params, requestedSchema: typed } })).toBeNull()
+  })
 })

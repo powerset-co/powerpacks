@@ -235,6 +235,15 @@ export function decodeRequest(raw: unknown): Approval | null {
         grant,
       }
     }
+    case "mcpServer/elicitation/request": {
+      // A form of yes/no fields (msgvault asks `confirm`); anything else the page cannot answer.
+      const properties = record(record(params, "requestedSchema") ?? {}, "properties") ?? {}
+      const fields = Object.entries(properties)
+      if (text(params, "mode") === "url") return null
+      if (!fields.every(([, field]) => isRecord(field) && field.type === "boolean")) return null
+      const confirm = Object.fromEntries(fields.map(([name]) => [name, true]))
+      return { kind: "tool", requestId: id, reason: text(params, "message"), confirm }
+    }
     default:
       return null
   }

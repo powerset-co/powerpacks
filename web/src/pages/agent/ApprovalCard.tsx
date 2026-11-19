@@ -5,6 +5,7 @@ const TITLE: Readonly<Record<Approval["kind"], string>> = {
   command: "Codex wants to run a command",
   files: "Codex wants to edit files",
   permissions: "Codex wants more access",
+  tool: "Codex wants to change your email archive",
 }
 
 function detail(approval: Approval): string | null {

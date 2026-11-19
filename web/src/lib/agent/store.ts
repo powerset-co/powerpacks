@@ -169,7 +169,8 @@ function wire(): void {
   onAgentEvent((event) => set(reduce(state, event)))
   onApproval((approval) => {
     // A turn started before Full access was switched on still asks; approve it for the chat.
-    if (state.fullAccess) void answerApproval(approval, "session")
+    // A change to the email archive always asks.
+    if (state.fullAccess && approval.kind !== "tool") void answerApproval(approval, "session")
     else set({ ...state, approvals: [...state.approvals, approval] })
   })
   onCodexExit(() => {

@@ -179,6 +179,9 @@ function approvalResult(approval: Approval, choice: ApprovalChoice): Record<stri
       ? { permissions: {}, scope: "turn" }
       : { permissions: approval.grant, scope: choice === "session" ? "session" : "turn" }
   }
+  if (approval.kind === "tool") {
+    return choice === "decline" ? { action: "decline" } : { action: "accept", content: approval.confirm }
+  }
   const decision = { once: "accept", session: "acceptForSession", decline: "decline" }[choice]
   return { decision }
 }
@@ -207,10 +210,11 @@ export function onApproval(handler: (approval: Approval) => void): () => void {
       handler(approval)
       return
     }
-    if (isRecord(payload) && payload.method === "item/tool/requestUserInput") {
-      const id = payload.id
-      if (typeof id === "string" || typeof id === "number") void declineRequest(id, { answers: {} })
-    }
+    if (!isRecord(payload)) return
+    const id = payload.id
+    if (typeof id !== "string" && typeof id !== "number") return
+    if (payload.method === "item/tool/requestUserInput") void declineRequest(id, { answers: {} })
+    if (payload.method === "mcpServer/elicitation/request") void declineRequest(id, { action: "decline" })
   })
 }
 
