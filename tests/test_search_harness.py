@@ -390,6 +390,7 @@ class SearchHarnessTests(unittest.TestCase):
         self.assertNotIn("--evaluation-traits-json", command)
         self.assertEqual(command[command.index("--timeout") + 1], "600")
         self.assertGreater(run.call_args.kwargs["timeout"], 630)
+        self.assertEqual(command[command.index("--set-id") + 1], "set-1")
         self.assertEqual(saved["pending_payload"]["payload"]["traits"], _payload()["traits"])
         self.assertFalse((run_dir / "evaluation-traits.json").exists())
 

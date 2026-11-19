@@ -10,7 +10,7 @@ from unittest import mock
 import duckdb
 import pytest
 
-from packs.search.primitives.expand_search_request import title_selection
+from packs.search.primitives.expand_search_request import parallel_extractors, title_selection
 from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 from packs.search.primitives.shared import openai_client
 
@@ -71,6 +71,41 @@ def test_no_model_keywords_adds_only_fixed_titles():
         "regex": r"\b(senior\ ai\ engineer|research\ fellow|research\ scientist)\b",
         "examples": filters["bm25_queries"],
     }]
+
+
+@pytest.mark.parametrize("groups", [GROUPS, []])
+@pytest.mark.parametrize("model_keywords", [
+    ["Applied Scientist"], ["research scientist", "Applied Scientist", "Research Fellow"],
+])
+def test_expander_fixed_titles_follow_model_keywords(groups, model_keywords):
+    filters = parallel_extractors._merge(
+        {"role_ids": ["ai_researcher"], "bm25_queries": ["AI Researcher"]},
+        {}, {}, {}, {}, {}, {}, "AI researchers",
+    )
+    assert filters["bm25_queries"] == ["AI Researcher", "Research Fellow", "Research Scientist"]
+    source = payload(**filters)
+    with mock.patch.object(title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
+                           return_value=title_selection.TitleSelection([], model_keywords)) as pick:
+        result = pipeline._apply_title_clusters(source, groups)
+    assert result["role_search_filters"]["bm25_queries"] == (
+        ["AI Researcher", "Applied Scientist", "Research Fellow", "Research Scientist"]
+        if groups else filters["bm25_queries"]
+    )
+    assert source["role_search_filters"] == filters
+    assert pick.await_count == bool(groups)
+
+
+def test_title_choice_preserves_model_failure(monkeypatch):
+    monkeypatch.setenv("POWERPACKS_USAGE_STAGE", "previous")
+    error = RuntimeError("synthetic model failure")
+    create = mock.AsyncMock(side_effect=error)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with mock.patch.object(title_selection, "make_async_openai_client", return_value=client):
+        with pytest.raises(RuntimeError, match="synthetic model failure") as raised:
+            asyncio.run(title_selection.pick_title_clusters("AI researchers", GROUPS))
+    assert raised.value is error
+    create.assert_awaited_once()
+    assert pipeline.os.environ["POWERPACKS_USAGE_STAGE"] == "previous"
 
 
 @pytest.mark.parametrize("filters", [

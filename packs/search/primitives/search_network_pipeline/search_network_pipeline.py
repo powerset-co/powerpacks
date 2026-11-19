@@ -716,8 +716,14 @@ def _apply_title_clusters(
     out_filters["role_adjacent_patterns"] = adjacent_patterns
     if direct is not None:
         role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
+        fixed_titles = injected_role_titles(role_ids)
+        fixed_keys = {title.casefold() for title in fixed_titles}
         unique_keywords = {}
-        for title in [*(filters.get("bm25_queries") or []), *direct.keywords, *injected_role_titles(role_ids)]:
+        for title in [*(filters.get("bm25_queries") or []), *direct.keywords]:
+            if title.casefold() in fixed_keys:
+                continue
+            unique_keywords.setdefault(title.casefold(), title)
+        for title in fixed_titles:
             unique_keywords.setdefault(title.casefold(), title)
         keywords = list(unique_keywords.values())
         out_filters["bm25_queries"] = keywords

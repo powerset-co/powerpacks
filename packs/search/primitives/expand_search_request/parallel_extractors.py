@@ -419,6 +419,8 @@ async def _extract(
         content = resp.choices[0].message.content or "{}"
         return json.loads(content)
     except Exception as e:
+        if name == "title_selection":
+            raise
         logger.error(f"[{name}] extraction failed: {e}")
         return {}
 

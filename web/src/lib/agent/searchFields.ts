@@ -68,8 +68,6 @@ export const FIELDS: Field[] = [
     label: "Position dates",
     control: { kind: "pair", keys: ["position_after_date", "position_before_date"], type: "date" },
   },
-  { label: "Current role only", control: { kind: "toggle", key: "is_current_role" } },
-  { label: "Current company only", control: { kind: "toggle", key: "is_current_company" } },
   { label: "Location", control: { kind: "kinds", keys: LOCATION_KINDS } },
   { label: "Companies", control: { kind: "chips", key: "company_names" } },
   { label: "Company ids", control: { kind: "chips", key: "company_ids", readonly: true } },

@@ -822,6 +822,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
         "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
         "--timeout", "600",
         "--limit", str(limit),
+        *(["--set-id", set_id] if set_id else []),
         *_backend_args(backend, db),
     ], run_dir=run_dir, log=pond_dir / "compile.log",
        stage=f"search_harness.pond_{pond_n:02d}.compile", timeout=660)
