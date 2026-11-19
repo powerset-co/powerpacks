@@ -15,12 +15,15 @@ METROS = ["San Francisco Bay Area", "New York Metropolitan Area"]
 
 class JobLocationTests(unittest.TestCase):
     def test_query_extractor_locations_survive_compile_review_and_run(self):
-        for query, extracted, expected in (
+        for query, extracted, expected, geography in (
             ("Software engineers in San Francisco or New York",
              {"cities": ["San Francisco", "New York"], "countries": ["United States"]},
-             {"metro_areas": METROS}),
-            ("Software engineers in New York", {"metro_areas": METROS[1:]}, {"metro_areas": METROS[1:]}),
-            ("Software engineers worldwide", {}, {}),
+             {"cities": ["San Francisco", "New York", "New York City"], "metro_areas": METROS},
+             "San Francisco or New York (cities) and "
+             "San Francisco Bay Area or New York Metropolitan Area (metro_areas)"),
+            ("Software engineers in New York", {"metro_areas": METROS[1:]},
+             {"metro_areas": METROS[1:]}, "New York Metropolitan Area"),
+            ("Software engineers worldwide", {}, {}, ""),
         ):
             with self.subTest(query=query), tempfile.TemporaryDirectory() as tmp:
                 run_dir = Path(tmp)
@@ -53,7 +56,7 @@ class JobLocationTests(unittest.TestCase):
                                   if k in search_harness.LOCATION_FIELDS}, expected)
                 self.assertEqual(final_filters, before["pending_payload"]["payload"]["role_search_filters"])
                 self.assertEqual(final_filters["set_id"], "set-1")
-                self.assertEqual(saved["brief"]["geography"], " or ".join(expected.get("metro_areas", [])))
+                self.assertEqual(saved["brief"]["geography"], geography)
                 self.assertFalse((run_dir / "epoch0").exists())
                 self.assertFalse((run_dir / "plan_binding.json").exists())
 
