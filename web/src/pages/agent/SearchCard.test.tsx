@@ -388,9 +388,14 @@ it("omits current-only rows from the field list and hides old payload keys", () 
     { key: "is_current_role", value: true },
     { key: "is_current_company", value: false },
   ]
-  expect(previewFields(new Map([
-    ["is_current_role", true], ["is_current_company", false],
-  ]))).toEqual([])
+  expect(
+    previewFields(
+      new Map([
+        ["is_current_role", true],
+        ["is_current_company", false],
+      ]),
+    ),
+  ).toEqual([])
   render(<SearchCard search={{ ...SEARCH, filters }} actions={true} />)
   expect(screen.queryByText(/Current role only|Current company only/i)).toBeNull()
   expect(screen.queryByText(/Is Current Role|Is Current Company/i)).toBeNull()
