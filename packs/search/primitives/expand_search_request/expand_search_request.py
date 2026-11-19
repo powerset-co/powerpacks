@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Expand a natural-language search query into role_search_filters via parallel extractors.
 
-Runs 7 domain-specific extractors in parallel (role, company, location, education,
-temporal, seniority, social) using the OpenAI SDK, then merges results into the
-powerpacks role_search_filters schema.
+Runs domain-specific extractors in parallel using the OpenAI SDK, then merges
+results into the powerpacks role_search_filters schema.
 
 Prompts are ported from network-search-api's battle-tested extractors.
 

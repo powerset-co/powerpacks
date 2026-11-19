@@ -68,8 +68,6 @@ export const FIELDS: Field[] = [
     label: "Position dates",
     control: { kind: "pair", keys: ["position_after_date", "position_before_date"], type: "date" },
   },
-  { label: "Current role only", control: { kind: "toggle", key: "is_current_role" } },
-  { label: "Current company only", control: { kind: "toggle", key: "is_current_company" } },
   { label: "Location", control: { kind: "kinds", keys: LOCATION_KINDS } },
   { label: "Companies", control: { kind: "chips", key: "company_names" } },
   { label: "Company ids", control: { kind: "chips", key: "company_ids", readonly: true } },
@@ -81,8 +79,6 @@ export const FIELDS: Field[] = [
   { label: "Company location", control: { kind: "kinds", keys: COMPANY_LOCATION_KINDS } },
   { label: "Sector", control: { kind: "chips", key: "sector_types" } },
   { label: "Entity type", control: { kind: "chips", key: "entity_types" } },
-  { label: "Technology", control: { kind: "chips", key: "technology_types" } },
-  { label: "Customers", control: { kind: "chips", key: "customer_types" } },
   {
     label: "Stage",
     control: {
@@ -255,6 +251,7 @@ export const HIDDEN_KEYS = new Set([
   "company_semantic_query",
   "company_adjacency_queries",
   "customer_types",
+  "technology_types",
   "role_query_type",
   "role_function",
   "seniority_intent",

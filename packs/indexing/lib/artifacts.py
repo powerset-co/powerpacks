@@ -283,7 +283,7 @@ def _education_record(row: dict[str, Any], edu: dict[str, Any], default_operator
     person_uuid = stable_person_uuid(row)
     school_payload = {**edu, "school_name": school_name}
     school_uuid = stable_school_uuid(school_payload)
-    parent = parent_row(school_uuid)
+    parent = parent_row(school_uuid, school_name, school_canonical_key(school_payload))
     degree = _first(edu, "degree", "degree_name")
     field = _first(edu, "field_of_study", "fieldOfStudy", "field", "major")
     start_year = _year(edu, "start_year", "starts_at", "start_date")
@@ -320,7 +320,7 @@ def build_education_corpus(people_rows: list[dict[str, Any]], default_operator_i
                 continue
             education_by_id[rec["id"]] = rec
             sid = rec["canonical_education_id"]
-            parent = parent_row(rec["education_id"])
+            parent = parent_row(rec["education_id"], rec["school_name"], rec["school_canonical_key"])
             school_name, canonical_key = (parent["school_name"], parent["key"]) if parent else (rec["school_name"], rec["school_canonical_key"])
             schools.setdefault(sid, {"id": sid, "school_name": school_name, "person_count": 0, "canonical_key": canonical_key})
             school_people.setdefault(sid, set()).add(rec["person_id"])

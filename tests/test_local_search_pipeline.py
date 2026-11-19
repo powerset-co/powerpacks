@@ -28,6 +28,17 @@ OPERATOR_ID = "20000000-0000-0000-0000-000000000001"
 STANFORD_ID = "linkedin:school:stanford-university"
 
 
+_no_title_pick_credentials = mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""})
+
+
+def setUpModule():
+    _no_title_pick_credentials.start()
+
+
+def tearDownModule():
+    _no_title_pick_credentials.stop()
+
+
 def load_pipeline_module():
     spec = importlib.util.spec_from_file_location("search_network_pipeline_test", PIPELINE)
     module = importlib.util.module_from_spec(spec)
@@ -430,6 +441,97 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
+    def test_run_never_chooses_titles_or_loads_title_credentials(self) -> None:
+        mod = load_pipeline_module()
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ):
+            root = Path(directory)
+            db = root / "local.duckdb"
+            write_local_search_db(db)
+            env_file = root / "run.env"
+            env_file.write_text("TITLE_PICK_TEST_ENV=from-run-env\n")
+            payload_path = root / "payload.json"
+            command = [
+                "run", "--backend", "local", "--db", str(db), "--search-only",
+                "--query", "software engineers", "--payload-json", str(payload_path),
+                "--env-file", str(env_file),
+            ]
+
+            for prepared in (False, True):
+                with self.subTest(prepared=prepared):
+                    args = mod.build_parser().parse_args([*command, "--ledger", str(root / f"ledger-{prepared}.json")])
+                    filters = {"role_ids": ["software_engineer"], "bm25_queries": ["Software Engineer"]}
+                    if prepared:
+                        filters["local_title_clustering_status"] = {"status": "completed"}
+                    payload_path.write_text(json.dumps({"role_search_filters": filters}))
+                    with mock.patch.object(mod.title_selection, "pick_title_clusters",
+                                           return_value=mod.title_selection.TitleSelection([], ["Software Engineer"])) as pick, \
+                            mock.patch.object(mod, "init_state_local", side_effect=RuntimeError("stop before retrieval")):
+                        with self.assertRaisesRegex(RuntimeError, "stop before retrieval"):
+                            mod.run_pipeline_local(args)
+                    pick.assert_not_called()
+                    self.assertNotIn("TITLE_PICK_TEST_ENV", os.environ)
+
+    def test_prepare_leaves_keywords_and_patterns_unchanged_without_title_groups(self) -> None:
+        mod = load_pipeline_module()
+        keywords = ["Head of Sales", "Senior Product Manager", "sales director"]
+        patterns = [{"regex": r"\b(sales|product\ manager|sales\ director)\b",
+                     "examples": ["Sales", "Product Manager", "sales director"]}]
+        expansion = {"status": "completed", "traits": ["sales and product leaders"], "role_search_filters": {
+            "bm25_queries": keywords, "role_core_patterns": patterns,
+        }}
+        for backend in ("local", "powerset"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                command = ["prepare", "--query", "sales and product leaders", "--backend", backend,
+                           "--output-dir", directory]
+                if backend == "local":
+                    db = root / "local.duckdb"
+                    write_local_search_db(db)
+                    command += ["--db", str(db)]
+                else:
+                    command += ["--set-id", "s1"]
+                args = mod.build_parser().parse_args(command)
+                with mock.patch.object(mod, "run", return_value={"returncode": 0, "json": expansion}), \
+                        mock.patch.object(mod.cloud_search.powerset_api, "call", return_value={}) as api, \
+                        mock.patch.object(mod, "_local_title_clusters", return_value=([], [])), \
+                        mock.patch.object(mod, "emit"), mock.patch.dict(os.environ):
+                    self.assertEqual(mod.cmd_prepare(args), 0)
+                    payload = json.loads((root / "expand_search_request.json").read_text())
+                    expected = keywords
+                    self.assertEqual(payload["role_search_filters"]["bm25_queries"], expected)
+                    self.assertEqual(payload["role_search_filters"]["role_core_patterns"], patterns)
+                    if backend == "local":
+                        api.assert_not_called()
+                    else:
+                        request = mod.cloud_search.api_request(None, payload, query=args.query, set_id="s1", limit=0)
+                        self.assertEqual(request["role_bm25_queries"], expected)
+
+    def test_local_run_does_not_restore_a_removed_keyword_from_pattern_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "local.duckdb"
+            write_local_search_db(db)
+            payload = root / "payload.json"
+            payload.write_text(json.dumps({"role_search_filters": {
+                "bm25_queries": ["Senior Backend Engineer", "backend engineer"],
+                "role_core_patterns": [{"regex": "backend engineer", "examples": ["Backend Engineer"]}],
+                "local_title_clustering_status": {"status": "completed"},
+            }}))
+            edits = root / "edits.json"
+            keywords = ["Senior Backend Engineer"]
+            edits.write_text(json.dumps({"filters": {"bm25_queries": keywords}}))
+            proc = subprocess.run([
+                sys.executable, str(PIPELINE), "run", "--backend", "local", "--search-only",
+                "--db", str(db), "--ledger", str(root / "ledger.json"),
+                "--query", "backend engineers", "--payload-json", str(payload),
+                "--edits-json", str(edits), "--limit", "1",
+            ], cwd=ROOT, capture_output=True, text=True, timeout=60,
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""})
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            state = json.loads(Path(json.loads(proc.stdout)["state"]).read_text())
+            filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
+            self.assertEqual(filters["bm25_queries"], keywords)
+
     def test_removed_keyword_stays_removed_beside_the_older_alias(self) -> None:
         # The card's edit writes bm25_queries; the alias from the expand step must not merge it back.
         mod = load_pipeline_module()
@@ -473,7 +575,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
         self.assertEqual(filters["seniority_bands"], ["senior"])
         self.assertEqual(
             filters["bm25_queries"],
-            ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
+            ["software engineer", "backend engineer"],
         )
         self.assertEqual(normalized["traits"], payload["traits"])
         self.assertTrue(filters["is_current_role"])
@@ -565,6 +667,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -578,12 +681,8 @@ class LocalSearchPipelineTests(unittest.TestCase):
             filters = expand["output"]["role_search_filters"]
             self.assertEqual(filters["role_ids"], ["software_engineer"])
             self.assertIn("software engineer", filters["bm25_queries"])
-            self.assertIn("Software Engineer", filters["bm25_queries"])
-            self.assertIn("Senior Software Engineer", filters["bm25_queries"])
-            self.assertEqual(filters["local_title_clusters"][0]["stemmed"], "softwar engin")
-            self.assertEqual(filters["local_title_clustering_status"]["status"], "completed")
-            self.assertGreater(filters["local_title_clustering_status"]["selected_count"], 0)
-            self.assertTrue(any(pattern.get("source") == "local_title_cluster" for pattern in filters["role_core_patterns"]))
+            self.assertEqual(filters["bm25_queries"], ["software engineer"])
+            self.assertEqual(len(filters["role_core_patterns"]), 1)
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
             candidate = retrieval["output"]["candidates"][0]
             self.assertIn("hybrid", candidate["vertical_sources"])
@@ -638,6 +737,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -702,6 +802,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -774,7 +875,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
-                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -831,7 +932,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
-                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+                env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -917,6 +1018,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -978,6 +1080,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 timeout=60,
+                env={**os.environ, "OPENAI_API_KEY": ""},
             )
 
             self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
@@ -1032,6 +1135,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
 
             env = dict(os.environ)
             env.update({
+                "OPENAI_API_KEY": "",
                 "POWERPACKS_DEFAULT_SET_ID": "wrong-default-set",
                 "POWERSET_DEFAULT_SET_ID": "wrong-default-set",
                 "DATABASE_URL": "postgresql://should-not-be-used",
@@ -1102,7 +1206,6 @@ class LocalSearchPipelineTests(unittest.TestCase):
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
             # Without extracted role phrases, retrieval respects the hard filters
             # without inventing BM25 hints from unrelated words in the query.
-            self.assertEqual(filters["local_title_clustering_status"]["selected_count"], 0)
             self.assertIn("filter_only", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
@@ -1132,7 +1235,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(rows[0]["hydrated"], "True")
 
 
-class LocalTitleExpansionTests(unittest.TestCase):
+class LocalRunKeywordsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -1163,41 +1266,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
         store_profiles(conn)
         conn.close()
 
-    def cluster(self, role_filters):
-        filters = {
-            "company_ids": ["linkedin:company:one", "linkedin:company:two", "linkedin:company:signals"],
-            **role_filters,
-        }
-        payload = {
-            "normalized_query": "general partners who can lead our software company's Series B with a $20M check",
-            "role_search_filters": filters,
-        }
-        before = json.dumps(payload, sort_keys=True)
-        result = self.mod.apply_local_title_clustering(payload, self.db)
-        self.assertEqual(json.dumps(payload, sort_keys=True), before)
-        result_filters = result["role_search_filters"]
-        self.assertEqual(result_filters["local_title_clustering_status"]["status"], "completed")
-        return result_filters
-
-    def test_investor_role_phrases_do_not_admit_other_occupations(self):
-        result = self.cluster({"bm25_queries": ["general partner", "venture partner"]})
-        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
-
-    def test_role_words_from_separate_phrases_do_not_form_a_new_occupation(self):
-        result = self.cluster({"bm25_queries": ["general partners", "investment managers"]})
-        self.assertEqual(set(result["local_title_cluster_keywords"]), {"General Partner", "Investment Manager"})
-
-    def test_role_pattern_examples_match_plurals_and_seniority_prefixes(self):
-        result = self.cluster({"role_core_patterns": [{"regex": r"software\s+engineer", "examples": ["software engineers"]}]})
-        self.assertEqual(result["local_title_cluster_keywords"], ["Senior Software Engineer"])
-
-    def test_without_extracted_role_phrases_adds_no_titles(self):
-        result = self.cluster({})
-        self.assertEqual(result["local_title_clustering_status"]["selected_count"], 0)
-        self.assertNotIn("bm25_queries", result)
-        self.assertNotIn("role_core_patterns", result)
-
-    def test_investor_cli_persists_role_titles_and_honors_limit_one(self):
+    def test_investor_cli_keeps_prepared_keywords_and_honors_limit_one(self):
         tmp = Path(self.tmp.name)
         query = "general partners at any seniority who can lead our software company's Series B with a $20M check"
         payload_path = tmp / "payload.json"
@@ -1213,7 +1282,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
              "--db", str(self.db), "--ledger", str(tmp / "ledger.json"),
              "--query", query, "--payload-json", str(payload_path), "--limit", "1"],
             cwd=ROOT, text=True, capture_output=True, timeout=60,
-            env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1"},
+            env={**os.environ, "POWERPACKS_FAKE_EMBEDDINGS": "1", "OPENAI_API_KEY": ""},
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         output = json.loads(result.stdout)
@@ -1222,7 +1291,7 @@ class LocalTitleExpansionTests(unittest.TestCase):
         self.assertEqual(output["summary"]["hydrated"], 1)
         state = json.loads(Path(output["state"]).read_text())
         filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
-        self.assertEqual(set(filters["local_title_cluster_keywords"]), {"General Partner", "Venture Partner"})
+        self.assertEqual(filters["bm25_queries"], ["general partner", "venture partner"])
         self.assertNotIn("seniority_bands", filters)
         self.assertNotIn("funding_amount_min", filters)
         with Path(output["artifacts"]["csv"]).open(newline="") as handle:
@@ -1292,22 +1361,26 @@ class PreviewFilterKeysTests(unittest.TestCase):
         self.assertEqual(module.preview_filters(payload), {"cities": ["Boston"], "is_current_role": True})
 
     def test_local_payload_drops_investors_and_set_interactions_with_a_note(self):
-        """The local index has no investors and knows no set: those keys are dropped and named,
-        the search still runs; interactions with the owner are a local filter."""
+        """Unsupported filters are dropped; owner interactions and company adjacency stay local."""
         module = load_pipeline_module()
         payload = {"role_search_filters": {
             "cities": ["Boston"], "investor_names": ["Example Capital"], "set_interaction_min": 2,
-            "operator_interaction_min": 5, "set_id": "remote-set",
+            "operator_interaction_min": 5, "operator_interaction_max": 20, "set_id": "remote-set",
+            "set_interaction_max": 100, "company_adjacency_queries": ["CTO"],
         }}
         out, ignored = module.prepare_local_payload(payload)
-        self.assertEqual(ignored, ["set_id", "investor_names", "set_interaction_min"])
-        self.assertEqual(out["role_search_filters"], {"cities": ["Boston"], "operator_interaction_min": 5})
-        self.assertIn("the local index has no investors or set interactions; ignored: investor_names, set_interaction_min",
+        self.assertEqual(ignored, ["set_id", "investor_names", "set_interaction_max", "set_interaction_min"])
+        self.assertEqual(out["role_search_filters"], {
+            "cities": ["Boston"], "operator_interaction_min": 5, "operator_interaction_max": 20,
+            "company_adjacency_queries": ["CTO"],
+        })
+        self.assertIn("the local index has no investors or set interactions; ignored: "
+                      "investor_names, set_interaction_max, set_interaction_min",
                       out["notes"])
 
     def test_card_edits_apply_to_the_payload_and_log_each_one(self):
         """The card's JSON edits the prepared payload in code: null removes a key, the older alias
-        goes with it, a kept keyword list prunes the patterns, traits are replaced; every edit
+        goes with it, the keywords rebuild the patterns, traits are replaced; every edit
         lands in user-edits.jsonl."""
         module = load_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -1330,7 +1403,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             out = module.apply_card_edits(payload, edits, run_dir)
             self.assertEqual(out["role_search_filters"], {
                 "cities": ["Boston", "Austin"], "bm25_queries": ["backend engineer"],
-                "role_core_patterns": [{"regex": "backend", "examples": ["backend engineer"]}],
+                "role_core_patterns": [{"regex": r"\b(backend\ engineer)\b", "examples": ["backend engineer"]}],
             })
             self.assertEqual(out["traits"][0]["temporal"], "past")
             self.assertEqual(payload["role_search_filters"]["seniority_bands"], ["senior", "staff"])

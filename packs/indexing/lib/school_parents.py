@@ -50,10 +50,26 @@ def school_rows() -> dict[str, dict[str, Any]]:
     return read_rows()
 
 
-def parent_row(school_id: str) -> dict[str, Any] | None:
+def parent_row(school_id: str, school_name: str, school_key: str) -> dict[str, Any] | None:
     """The row a school rolls up to, or None when it is its own parent."""
-    row = school_rows().get(school_id)
-    return school_rows().get(row["parent_id"]) if row and row["parent_id"] else None
+    rows = school_rows()
+    if school_id in rows:
+        return rows.get(rows[school_id]["parent_id"])
+    if not school_key.startswith("name:"):
+        return None
+    return _parents_by_name().get(normalize_name(school_name))
+
+
+@lru_cache(maxsize=1)
+def _parents_by_name() -> dict[str, dict[str, Any]]:
+    rows = {school_id: dict(row) for school_id, row in school_rows().items()}
+    flatten(rows)
+    parents = {}
+    for name, group, providers in _name_groups(rows):
+        tops = {row["parent_id"] or row["id"] for row in providers or group}
+        if len(tops) == 1:
+            parents[name] = rows[tops.pop()]
+    return parents
 
 
 def normalize_name(name: str) -> str:
@@ -62,6 +78,16 @@ def normalize_name(name: str) -> str:
     text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
     text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
     return re.sub(r"^the ", "", text)
+
+
+def _name_groups(rows: dict[str, dict[str, Any]]) -> Iterable[tuple[str, list[dict[str, Any]], list[dict[str, Any]]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows.values():
+        groups.setdefault(normalize_name(row["school_name"]), []).append(row)
+    for name, group in groups.items():
+        providers = [row for row in group if (row["key"] or "").startswith("provider:")]
+        if name and len(providers) <= 1:
+            yield name, group, providers
 
 
 def add_schools(rows: dict[str, dict[str, Any]], schools: Iterable[dict[str, Any]]) -> int:
@@ -87,16 +113,8 @@ def apply_same_names(rows: dict[str, dict[str, Any]], counts: dict[str, int]) ->
     two provider-keyed schools stay apart even when their names match. Without
     a provider-keyed school the largest name-keyed one wins.
     """
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for row in rows.values():
-        groups.setdefault(normalize_name(row["school_name"]), []).append(row)
     matched = 0
-    for name, group in groups.items():
-        if not name or len(group) < 2:
-            continue
-        providers = [row for row in group if (row["key"] or "").startswith("provider:")]
-        if len(providers) > 1:
-            continue
+    for _name, group, providers in _name_groups(rows):
         target = providers[0] if providers else max(group, key=lambda row: (counts.get(row["id"], 0), row["id"]))
         for row in group:
             if row is not target and row["source"] is None and not (row["key"] or "").startswith("provider:"):

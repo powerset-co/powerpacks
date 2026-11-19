@@ -18,6 +18,9 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 `prepare` runs `expand_search_request`, writes `expand_search_request.json`,
 emits a compact preview, and returns an `execute_command` to run after the user
 chooses `execute`. Company-only requests follow this same prepare/run path.
+Role keywords are chosen from title groups only during `prepare`; `run` uses the
+prepared keywords and patterns. Traits alone determine current versus past roles.
+A set search always includes the summary search.
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \
@@ -47,9 +50,8 @@ The runner then executes without another gate:
 5. `llm_rerank_candidates`
 6. `persist_search_results`
 
-A set search never reads Postgres or TurboPuffer: `prepare` asks POST
-/v2/search/expand for the filters (the Powerset web app's own), and the run
-maps the card's names back to the expansion's ids.
+A set search never reads Postgres or TurboPuffer: `prepare` calls POST
+/v2/search/resolve, then the run sends the edited card to POST /v2/search/execute.
 
 Use `--search-only` only when the user explicitly wants retrieval/hydration
 without LLM filtering/reranking, or when the deep loop owns downstream triage

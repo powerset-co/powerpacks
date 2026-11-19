@@ -1,9 +1,13 @@
 import asyncio
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+
+from packs.search.primitives.deep_search.location_scope import query_location_label
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "packs/search/primitives/expand_search_request/parallel_extractors.py"
@@ -17,6 +21,182 @@ def load_module():
 
 
 class ExpandSearchRequestTests(unittest.TestCase):
+    def _expand_with_model_answers(self, answers, *, query="fintech engineers", **kwargs):
+        mod = load_module()
+        prompts = mod.load_prompt_bundle()
+        names_by_prompt = {body: name for name, body in prompts.items()}
+        started = set()
+        ready = asyncio.Event()
+
+        async def complete(**request):
+            name = names_by_prompt[request["messages"][0]["content"]]
+            started.add(name)
+            if len(started) == len(prompts):
+                ready.set()
+            await asyncio.wait_for(ready.wait(), timeout=1)
+            answer = answers.get(name, {})
+            if isinstance(answer, Exception):
+                raise answer
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(answer)))])
+
+        create = mock.AsyncMock(side_effect=complete)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        with mock.patch.object(mod, "make_async_openai_client", return_value=client):
+            result = asyncio.run(mod.expand_query_parallel(query, api_key="test", **kwargs))
+        return result, create
+
+    def test_person_location_model_answers_preserve_city_granularity(self):
+        cases = [
+            ("marketing managers in London", {"cities": ["London"]}, {"cities": ["London"]}),
+            ("engineers in San Francisco", {"cities": ["San Francisco"]},
+             {"cities": ["San Francisco"], "metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers in the Bay Area", {"metro_areas": ["San Francisco Bay Area"]},
+             {"metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers in Greater Boston", {"metro_areas": ["Boston Metropolitan Area"]},
+             {"metro_areas": ["Boston Metropolitan Area"]}),
+            ("marketing managers in London", {"cities": ["London"], "states": ["England"],
+             "countries": ["United Kingdom"], "macro_regions": ["Western Europe"]},
+             {"cities": ["London"]}),
+            ("engineers in Germany", {"countries": ["Germany"]}, {"countries": ["Germany"]}),
+            ("engineers in California", {"states": ["California"], "countries": ["United States"]},
+             {"states": ["California"], "countries": ["United States"]}),
+            ("engineers in Europe", {"macro_regions": ["Western Europe", "Eurasia"]},
+             {"macro_regions": ["Western Europe", "Eurasia"]}),
+            ("engineers in London or San Francisco", {"cities": ["London", "San Francisco"]},
+             {"cities": ["London", "San Francisco"], "metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers at SF companies", {"company_cities": ["San Francisco"]},
+             {"company_metro_areas": ["San Francisco Bay Area"]}),
+        ]
+        for query, location, expected in cases:
+            with self.subTest(query=query, location=location):
+                result, _ = self._expand_with_model_answers({"location": location}, query=query)
+                self.assertEqual(result["role_search_filters"], {**expected, "has_domain_intent": False})
+
+    def test_dallas_omits_unsupported_table_metro_and_labels_for_deep_search(self):
+        result, _ = self._expand_with_model_answers(
+            {"location": {"cities": ["Dallas"]}}, query="engineers in Dallas",
+        )
+        filters = dict(result["role_search_filters"])
+        filters.pop("has_domain_intent")
+        label = query_location_label(filters)
+        self.assertEqual(filters, {"cities": ["Dallas"]})
+        self.assertIn("Dallas", label)
+
+    def test_adjacency_and_interaction_model_answers_merge_without_changing_other_filters(self):
+        answers = {
+            "role": {"semantic_query": "Engineers building payment systems.", "bm25_queries": ["engineer"]},
+            "company": {"sector_types": ["fintech"]},
+            "trait_generation": {"traits": [{"value": "Payments experience"}], "has_domain_intent": True},
+        }
+        baseline, _ = self._expand_with_model_answers(answers)
+        additions = {
+            "company_adjacency_queries": ["CTO", "VP of Engineering"],
+            "operator_interaction_min": 10,
+            "operator_interaction_max": 50,
+            "set_interaction_min": 100,
+            "set_interaction_max": 200,
+        }
+        result, create = self._expand_with_model_answers({
+            **answers,
+            "company_adjacency": {"has_sector_context": True, "adjacency_queries": additions["company_adjacency_queries"]},
+            "interaction": {key: value for key, value in additions.items() if key != "company_adjacency_queries"},
+        }, model_override="gpt-5.4", reasoning_effort="medium")
+
+        self.assertEqual(result["role_search_filters"], {**baseline["role_search_filters"], **additions})
+        self.assertEqual(result["traits"], baseline["traits"])
+        self.assertEqual(create.await_count, 10)
+        self.assertEqual(set(result["extractor_timings"]), {
+            "role", "company", "location", "education", "temporal", "seniority", "social",
+            "trait_generation", "company_adjacency", "interaction",
+        })
+        for call in create.call_args_list:
+            self.assertEqual(call.kwargs["model"], "gpt-5.4")
+            self.assertEqual(call.kwargs["reasoning_effort"], "medium")
+
+    def test_company_technology_and_customers_do_not_become_filters(self):
+        company = {
+            "company_names": ["Example Robotics"],
+            "sector_types": ["software"],
+            "entity_types": ["startup"],
+            "company_semantic_queries": ["B2B robotics companies"],
+            "headcount_min": 10,
+        }
+        answers = {"company": company, "trait_generation": {
+            "traits": [{"value": "B2B robotics experience"}], "has_domain_intent": True,
+        }}
+        query = "engineers at B2B robotics companies"
+        baseline, _ = self._expand_with_model_answers(answers, query=query)
+        result, _ = self._expand_with_model_answers({
+            **answers,
+            "company": {**company, "technology_types": ["robotics"],
+                        "customer_types": ["Business (B2B)"]},
+        }, query=query)
+        self.assertNotIn("technology_types", result["role_search_filters"])
+        self.assertNotIn("customer_types", result["role_search_filters"])
+        self.assertEqual(result["role_search_filters"], baseline["role_search_filters"])
+        self.assertEqual(result["traits"], baseline["traits"])
+        self.assertEqual(result["normalized_query"], query)
+
+    def test_person_name_selects_lookup_without_another_model_call(self):
+        result, create = self._expand_with_model_answers({
+            "role": {"bm25_queries": ["engineer"]},
+            "company": {"company_names": ["Stripe"]},
+            "trait_generation": {"person_name": "Jordan Bravo"},
+        }, query="who is Jordan Bravo")
+        self.assertEqual(result["intent_type"], "person_lookup")
+        self.assertEqual(result["person_name"], "Jordan Bravo")
+        self.assertEqual(result["role_search_filters"], {})
+        self.assertEqual(result["traits"], [])
+        self.assertEqual(create.await_count, 10)
+
+    def test_null_person_name_does_not_change_search_output(self):
+        answers = {"role": {"bm25_queries": ["engineer"]},
+                   "trait_generation": {"traits": [], "has_domain_intent": False}}
+        baseline, _ = self._expand_with_model_answers(answers)
+        result, _ = self._expand_with_model_answers({
+            **answers, "trait_generation": {**answers["trait_generation"], "person_name": None},
+        })
+        for output in (baseline, result):
+            output.pop("extractor_timings")
+            output.pop("total_ms")
+        self.assertEqual(result, baseline)
+        self.assertNotIn("person_name", result)
+
+    def test_failed_new_extractor_preserves_other_model_answers(self):
+        answers = {
+            "company": {"company_names": ["Stripe"]},
+            "company_adjacency": {"has_sector_context": True, "adjacency_queries": ["CTO"]},
+            "interaction": {"operator_interaction_min": 10},
+        }
+        for failed, missing, surviving in (
+            ("company_adjacency", "company_adjacency_queries", "operator_interaction_min"),
+            ("interaction", "operator_interaction_min", "company_adjacency_queries"),
+        ):
+            with self.subTest(failed=failed):
+                result, _ = self._expand_with_model_answers({**answers, failed: RuntimeError("model unavailable")})
+                filters = result["role_search_filters"]
+                self.assertEqual(filters["company_names"], ["Stripe"])
+                self.assertNotIn(missing, filters)
+                self.assertIn(surviving, filters)
+
+    def test_absent_interaction_and_sector_signals_leave_keys_absent(self):
+        result, _ = self._expand_with_model_answers({
+            "company_adjacency": {"has_sector_context": False, "adjacency_queries": ["CTO"]},
+            "interaction": {"operator_interaction_min": None, "operator_interaction_max": None,
+                            "set_interaction_min": None, "set_interaction_max": None},
+        })
+        self.assertEqual(result["role_search_filters"], {"has_domain_intent": False})
+
+    def test_interaction_numbers_are_integers_and_zero_is_preserved(self):
+        result, _ = self._expand_with_model_answers({
+            "interaction": {"operator_interaction_min": "10", "operator_interaction_max": None,
+                            "set_interaction_max": 0},
+        })
+        self.assertEqual(result["role_search_filters"], {
+            "has_domain_intent": False, "operator_interaction_min": 10, "set_interaction_max": 0,
+        })
+
     def test_excluded_executive_words_do_not_override_extracted_occupation(self):
         mod = load_module()
         queries = [
@@ -189,7 +369,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("Return JSON with exactly these keys: semantic_query, bm25_queries, role_ids, departments, seniority", prompt)
         self.assertEqual(mod.role_agent_user_content("engineering leaders"), 'Query: "engineering leaders"')
 
-    def test_sf_in_phrase_prefers_person_metro(self):
+    def test_sf_in_phrase_keeps_person_city_and_adds_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
@@ -203,7 +383,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
-        self.assertNotIn("cities", filters)
+        self.assertEqual(filters["cities"], ["San Francisco"])
         self.assertNotIn("company_cities", filters)
 
     def test_sf_company_phrase_prefers_company_metro(self):
@@ -460,10 +640,22 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("Never emit a location trait", prompts["trait_generation"])
         self.assertIn("3-8 observable titles or true title aliases", prompts["role"])
 
-    def test_temporal_current_flag_maps_to_local_current_filters(self):
+    def test_chief_of_staff_keeps_chief_while_other_levels_are_stripped(self):
         mod = load_module()
         filters = mod._merge(
-            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"]},
+            {"bm25_queries": ["Chief of Staff", "Senior Software Engineer"]},
+            {}, {}, {}, {}, {}, {}, "chief of staff and senior software engineers",
+        )
+        self.assertEqual(filters["role_core_patterns"], [{
+            "regex": r"\b(chief\ of\ staff|software\ engineer)\b",
+            "examples": ["Chief of Staff", "Software Engineer"],
+        }])
+
+    def test_expander_ignores_role_and_temporal_current_flags(self):
+        mod = load_module()
+        filters = mod._merge(
+            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"],
+             "is_current_role": False, "is_current_company": False},
             {},
             {},
             {},
@@ -473,10 +665,10 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "currently CTOs",
         )
 
-        self.assertTrue(filters["is_current_role"])
-        self.assertTrue(filters["is_current_company"])
+        self.assertNotIn("is_current_role", filters)
+        self.assertNotIn("is_current_company", filters)
 
-    def test_temporal_past_flag_maps_to_local_current_filters(self):
+    def test_expander_ignores_temporal_past_flag(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
@@ -489,10 +681,10 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "ex-Stripe engineers",
         )
 
-        self.assertFalse(filters["is_current_role"])
-        self.assertFalse(filters["is_current_company"])
+        self.assertNotIn("is_current_role", filters)
+        self.assertNotIn("is_current_company", filters)
 
-    def test_city_filters_prefer_unambiguous_indexed_metro(self):
+    def test_city_filters_keep_spelling_aliases_with_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "blockchain engineering work", "bm25_queries": ["blockchain engineer"]},
@@ -506,12 +698,12 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["metro_areas"], ["New York Metropolitan Area"])
-        self.assertNotIn("cities", filters)
+        self.assertEqual(filters["cities"], ["New York City", "New York City, New York", "New York"])
 
         unmapped = mod._expand_city_filter_aliases(["Austin", "  ", "Austin"])
         self.assertEqual(unmapped, ["Austin"])
 
-    def test_city_filters_fall_back_exact_when_any_city_is_not_unambiguous(self):
+    def test_city_filters_add_each_fixed_table_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "engineering work", "bm25_queries": ["engineer"]},
@@ -525,7 +717,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["cities"], ["San Francisco", "Raleigh"])
-        self.assertNotIn("metro_areas", filters)
+        self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area", "Raleigh-Durham Metropolitan Area"])
 
     def test_seniority_bands_normalize_to_canonical_index_values(self):
         mod = load_module()

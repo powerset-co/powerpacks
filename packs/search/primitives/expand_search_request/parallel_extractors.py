@@ -31,6 +31,8 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.deep_search.location_scope import (  # noqa: E402
+    METRO_VOCABULARY,
+    _norm as _normalize_location_value,
     prefer_metro_area_filters,
 )
 ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
@@ -47,6 +49,98 @@ CITY_ALIASES = {
 CITY_FILTER_ALIASES = {
     "new york city": ["New York City", "New York City, New York", "New York"],
     "new york": ["New York", "New York City"],
+}
+
+# Matches network-search-api/api_v2/search/query/location_extraction.py.
+CITY_TO_METRO_AREA = {
+    # San Francisco Bay Area
+    "san francisco": "San Francisco Bay Area",
+    "sf": "San Francisco Bay Area",
+    "oakland": "San Francisco Bay Area",
+    "berkeley": "San Francisco Bay Area",
+    "palo alto": "San Francisco Bay Area",
+    "mountain view": "San Francisco Bay Area",
+    "sunnyvale": "San Francisco Bay Area",
+    "san jose": "San Francisco Bay Area",
+    "fremont": "San Francisco Bay Area",
+    "redwood city": "San Francisco Bay Area",
+    "menlo park": "San Francisco Bay Area",
+    "cupertino": "San Francisco Bay Area",
+    "santa clara": "San Francisco Bay Area",
+    # New York Metropolitan Area
+    "new york": "New York Metropolitan Area",
+    "new york city": "New York Metropolitan Area",
+    "nyc": "New York Metropolitan Area",
+    "manhattan": "New York Metropolitan Area",
+    "brooklyn": "New York Metropolitan Area",
+    "queens": "New York Metropolitan Area",
+    "bronx": "New York Metropolitan Area",
+    "jersey city": "New York Metropolitan Area",
+    "hoboken": "New York Metropolitan Area",
+    "newark": "New York Metropolitan Area",
+    # Los Angeles Metropolitan Area
+    "los angeles": "Los Angeles Metropolitan Area",
+    "la": "Los Angeles Metropolitan Area",
+    "santa monica": "Los Angeles Metropolitan Area",
+    "pasadena": "Los Angeles Metropolitan Area",
+    "long beach": "Los Angeles Metropolitan Area",
+    "burbank": "Los Angeles Metropolitan Area",
+    "glendale": "Los Angeles Metropolitan Area",
+    "culver city": "Los Angeles Metropolitan Area",
+    # Seattle Metropolitan Area
+    "seattle": "Seattle Metropolitan Area",
+    "bellevue": "Seattle Metropolitan Area",
+    "redmond": "Seattle Metropolitan Area",
+    "kirkland": "Seattle Metropolitan Area",
+    "tacoma": "Seattle Metropolitan Area",
+    # Chicago Metropolitan Area
+    "chicago": "Chicago Metropolitan Area",
+    "evanston": "Chicago Metropolitan Area",
+    "oak park": "Chicago Metropolitan Area",
+    # Boston Metropolitan Area
+    "boston": "Boston Metropolitan Area",
+    "cambridge": "Boston Metropolitan Area",
+    "somerville": "Boston Metropolitan Area",
+    # Washington DC Metropolitan Area
+    "washington": "Washington DC Metropolitan Area",
+    "washington dc": "Washington DC Metropolitan Area",
+    "dc": "Washington DC Metropolitan Area",
+    "arlington": "Washington DC Metropolitan Area",
+    "alexandria": "Washington DC Metropolitan Area",
+    "bethesda": "Washington DC Metropolitan Area",
+    # Denver Metropolitan Area
+    "denver": "Denver Metropolitan Area",
+    "boulder": "Denver Metropolitan Area",
+    # Austin Metropolitan Area
+    "austin": "Austin Metropolitan Area",
+    # Dallas Metropolitan Area
+    "dallas": "Dallas Metropolitan Area",
+    "fort worth": "Dallas Metropolitan Area",
+    "plano": "Dallas Metropolitan Area",
+    # Miami Metropolitan Area
+    "miami": "Miami Metropolitan Area",
+    "fort lauderdale": "Miami Metropolitan Area",
+    # Atlanta Metropolitan Area
+    "atlanta": "Atlanta Metropolitan Area",
+    # Philadelphia Metropolitan Area
+    "philadelphia": "Philadelphia Metropolitan Area",
+    # San Diego Metropolitan Area
+    "san diego": "San Diego Metropolitan Area",
+    # Phoenix Metropolitan Area
+    "phoenix": "Phoenix Metropolitan Area",
+    "scottsdale": "Phoenix Metropolitan Area",
+    # Minneapolis Metropolitan Area
+    "minneapolis": "Minneapolis Metropolitan Area",
+    "st paul": "Minneapolis Metropolitan Area",
+    "saint paul": "Minneapolis Metropolitan Area",
+    # Detroit Metropolitan Area
+    "detroit": "Detroit Metropolitan Area",
+    # Portland Metropolitan Area
+    "portland": "Portland Metropolitan Area",
+    # Raleigh-Durham Metropolitan Area
+    "raleigh": "Raleigh-Durham Metropolitan Area",
+    "durham": "Raleigh-Durham Metropolitan Area",
+    "chapel hill": "Raleigh-Durham Metropolitan Area",
 }
 
 FOUNDER_BM25_QUERIES = ["founder", "co-founder", "cofounder", "founding", "CEO", "Chief Executive Officer"]
@@ -154,7 +248,14 @@ EXTRACTOR_MODELS = {
     "social": "gpt-4.1",
     "role": "gpt-4.1",
     "trait_generation": "gpt-4.1",
+    "company_adjacency": "gpt-5.4",
+    "interaction": "gpt-4.1-nano",
 }
+
+INTERACTION_FIELDS = (
+    "operator_interaction_min", "operator_interaction_max",
+    "set_interaction_min", "set_interaction_max",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +352,7 @@ def role_agent_system_prompt() -> str:
 PROMPT_NAMES = (
     "temporal", "company", "location", "education", "seniority", "social",
     "role", "trait_generation",
+    "company_adjacency", "interaction",
 )
 
 
@@ -285,9 +387,14 @@ async def _extract(
     model = model or EXTRACTOR_MODELS.get(name, "gpt-4o-mini")
     # Trait generation uses a specific user prompt format
     if name == "trait_generation":
-        user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false}}'
+        user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false, "person_name": "..."/null}}'
     elif name == "role":
         user_content = role_agent_user_content(query)
+    elif name == "company_adjacency":
+        user_content = (
+            f'Query: "{query}"\n\n'
+            'Return JSON with: {"has_sector_context": true/false, "adjacency_queries": ["..."]}'
+        )
     else:
         user_content = query
     try:
@@ -312,6 +419,8 @@ async def _extract(
         content = resp.choices[0].message.content or "{}"
         return json.loads(content)
     except Exception as e:
+        if name == "title_selection":
+            raise
         logger.error(f"[{name}] extraction failed: {e}")
         return {}
 
@@ -366,10 +475,6 @@ def _merge(
         filters["role_departments"] = _dedupe_strings(role["departments"])
     if role.get("seniority"):
         filters["seniority_bands"] = _normalize_seniority_bands(role["seniority"])
-    if role.get("is_current_role") is not None:
-        filters["is_current_role"] = role["is_current_role"]
-    if role.get("is_current_company") is not None:
-        filters["is_current_company"] = role["is_current_company"]
 
     # Company
     if company.get("company_names"):
@@ -414,10 +519,6 @@ def _merge(
         filters["last_funding_after"] = company["last_funding_after"]
     if company.get("yc_batches"):
         filters["yc_batches"] = company["yc_batches"]
-    if company.get("technology_types"):
-        filters["technology_types"] = company["technology_types"]
-    if company.get("customer_types"):
-        filters["customer_types"] = company["customer_types"]
 
     # Auto-add company_sector_strategy when both semantic + sector present
     if filters.get("company_semantic_queries") and filters.get("sector_types"):
@@ -461,10 +562,6 @@ def _merge(
     # Years of experience is extracted but not emitted, matching cloud
     # (multi_index_strategy_v2: "YOE filter disabled until data quality
     # improves"). A value typed on the search card still filters.
-    if temporal.get("is_current") is not None:
-        current = bool(temporal["is_current"])
-        filters.setdefault("is_current_role", current)
-        filters.setdefault("is_current_company", current)
 
     # Seniority
     if "seniority_bands" in seniority:
@@ -483,16 +580,9 @@ def _merge(
         if val is not None:
             filters[key] = int(val)
 
-    # If date range is set, drop is_current flags — the date window handles time scoping.
-    # is_current=false + date range causes the prefilter to look for non-current positions
-    # which is almost never what the user wants when they specify explicit years.
-    if filters.get("position_after_date") or filters.get("position_before_date"):
-        filters.pop("is_current_role", None)
-        filters.pop("is_current_company", None)
-
     _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
-    _prefer_extracted_metro_areas(filters)
+    _apply_extracted_location_granularity(filters)
     for key in ("cities", "company_cities"):
         if filters.get(key):
             filters[key] = _expand_city_filter_aliases(filters[key])
@@ -503,23 +593,30 @@ def _merge(
     return filters
 
 
-def _prefer_extracted_metro_areas(filters: dict[str, Any]) -> None:
-    """Apply the canonical city-to-metro preference to person and company geo."""
-    for prefix in ("", "company_"):
-        scoped = {
-            field: filters[f"{prefix}{field}"]
-            for field in ("cities", "states", "metro_areas", "countries", "macro_regions")
-            if filters.get(f"{prefix}{field}")
-        }
-        if not scoped or "cities" not in scoped:
-            continue
-        preferred = prefer_metro_area_filters(scoped)
-        if preferred == scoped:
-            continue
-        for field in ("cities", "states", "metro_areas", "countries", "macro_regions"):
-            filters.pop(f"{prefix}{field}", None)
-        for field, values in preferred.items():
-            filters[f"{prefix}{field}"] = values
+def _apply_extracted_location_granularity(filters: dict[str, Any]) -> None:
+    """Keep person cities with API table metros; preserve company metro preference."""
+    if filters.get("cities"):
+        for field in ("states", "countries", "macro_regions"):
+            filters.pop(field, None)
+        for city in filters["cities"]:
+            metro = CITY_TO_METRO_AREA.get(city.lower())
+            if metro and METRO_VOCABULARY.get(_normalize_location_value(metro)):
+                _add_unique(filters, "metro_areas", metro)
+
+    company_location = {
+        field: filters[f"company_{field}"]
+        for field in ("cities", "states", "metro_areas", "countries", "macro_regions")
+        if filters.get(f"company_{field}")
+    }
+    if "cities" not in company_location:
+        return
+    preferred = prefer_metro_area_filters(company_location)
+    if preferred == company_location:
+        return
+    for field in company_location:
+        filters.pop(f"company_{field}")
+    for field, values in preferred.items():
+        filters[f"company_{field}"] = values
 
 
 def _dedupe_strings(items: list[Any]) -> list[str]:
@@ -590,17 +687,15 @@ def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
-    seniority_prefixes = re.compile(
-        r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
-        r"vp of|chief|associate|intern|executive|managing|group)\s+",
-        re.IGNORECASE,
-    )
+def injected_role_titles(role_ids: list[str]) -> list[str]:
+    return sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
+
+
+def role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     examples: list[str] = []
     seen: set[str] = set()
     for query in queries:
-        phrase = seniority_prefixes.sub("", str(query)).strip()
-        phrase = re.split(r"[|,]", phrase)[0].strip()
+        phrase = str(query)
         if len(phrase) < 3:
             continue
         key = phrase.lower()
@@ -741,12 +836,19 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
             filters["role_function"] = role_function
 
     agent_and_shortcut_ids = _dedupe_strings([*role_ids, *(filters.get("role_ids") or [])])
-    injected_titles = [title for role_id in agent_and_shortcut_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])]
+    injected_titles = injected_role_titles(agent_and_shortcut_ids)
     if injected_titles:
-        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *sorted(set(injected_titles))])
+        filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *injected_titles])
 
     if filters.get("bm25_queries") and not filters.get("role_core_patterns"):
-        filters["role_core_patterns"] = _role_core_patterns_from_bm25(filters["bm25_queries"])
+        seniority_prefixes = re.compile(
+            r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
+            r"vp of|associate|intern|executive|managing|group)\s+",
+            re.IGNORECASE,
+        )
+        phrases = [re.split(r"[|,]", seniority_prefixes.sub("", title).strip())[0].strip()
+                   for title in filters["bm25_queries"]]
+        filters["role_core_patterns"] = role_core_patterns_from_bm25(phrases)
 
 
 def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:
@@ -842,10 +944,16 @@ async def expand_query_parallel(
                 model=model_override or EXTRACTOR_MODELS.get(name),
                 reasoning_effort=reasoning_effort,
             )
+        if name == "interaction":
+            try:
+                result = {key: int(result[key]) for key in INTERACTION_FIELDS if result.get(key) is not None}
+            except Exception as e:
+                logger.error(f"[{name}] extraction failed: {e}")
+                result = {}
         timings[name] = round(time.monotonic() - t0, 3)
         return result
 
-    role, company, location, education, temporal, seniority, social, traits = await asyncio.gather(
+    role, company, location, education, temporal, seniority, social, traits, adjacency, interaction = await asyncio.gather(
         timed_extract("role"),
         timed_extract("company"),
         timed_extract("location"),
@@ -854,12 +962,32 @@ async def expand_query_parallel(
         timed_extract("seniority"),
         timed_extract("social"),
         timed_extract("trait_generation"),
+        timed_extract("company_adjacency"),
+        timed_extract("interaction"),
     )
 
     total_ms = int((time.monotonic() - started) * 1000)
 
+    if traits.get("person_name"):
+        return {
+            "intent_type": "person_lookup",
+            "person_name": traits["person_name"],
+            "source_type": "query",
+            "normalized_query": query,
+            "vertical": "people",
+            "role_search_filters": {},
+            "traits": [],
+            "has_domain_intent": False,
+            "notes": [],
+            "extractor_timings": timings,
+            "total_ms": total_ms,
+        }
+
     # Merge
     filters = _merge(role, company, location, education, temporal, seniority, social, query)
+    if adjacency.get("has_sector_context") and adjacency.get("adjacency_queries"):
+        filters["company_adjacency_queries"] = adjacency["adjacency_queries"]
+    filters.update(interaction)
 
     # Extract traits and has_domain_intent from trait generator
     generated_traits = traits.get("traits") or []

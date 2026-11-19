@@ -158,6 +158,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "status": "completed",
             "normalized_query": "software engineers in sf",
             "intent_type": "role_search",
+            "traits": [{"value": "Software engineer", "meaning": "role", "temporal": "current"}],
             "role_search_filters": {
                 "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
                 "bm25_queries": ["software engineer"],
@@ -168,7 +169,6 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         payload = search.payload_from_expand_output(expand)
         self.assertNotIn("primitive", payload)
         self.assertNotIn("status", payload)
-        self.assertEqual(search.payload_quality_issues(payload), [])
 
         preview = search.compact_preview(payload, Path("payload.json"), [])
         self.assertEqual(preview["payload_json"], "payload.json")
@@ -204,35 +204,13 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 self.assertEqual(preview["filters"], expected)
                 self.assertEqual(local_preview["filters"], expected)
 
-    def test_prepare_quality_gate_rejects_short_title_semantic_query(self):
-        payload = {
-            "role_search_filters": {
-                "semantic_query": "software engineer",
-                "bm25_queries": ["software engineer"],
-            }
-        }
-
-        issues = search.payload_quality_issues(payload)
-
-        self.assertTrue(issues)
-        self.assertIn("semantic_query", issues[0])
-
-    def test_prepare_quality_gate_allows_filter_only_search(self):
-        payload = {
-            "role_search_filters": {
-                "company_names": ["Meta"],
-                "position_after_date": "2020-01-01",
-            }
-        }
-
-        self.assertEqual(search.payload_quality_issues(payload), [])
-
     def test_cmd_prepare_invokes_expand_and_emits_execute_command_without_openai(self):
         expand = {
             "primitive": "expand_search_request",
             "status": "completed",
             "normalized_query": "software engineers in sf",
             "intent_type": "role_search",
+            "traits": [{"value": "Software engineer", "meaning": "role", "temporal": "current"}],
             "source_type": "query",
             "vertical": "people_by_role",
             "role_search_filters": {
@@ -245,6 +223,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         emitted = []
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}) as run_mock, \
+             mock.patch.object(search.cloud_search.powerset_api, "call", return_value={}), \
+             mock.patch.object(search.cloud_search.powerset_api, "personal_set_id", return_value="personal"), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="software engineers in sf",
@@ -277,6 +257,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "status": "completed",
             "normalized_query": "people who work at OpenAI",
             "intent_type": "role_search",
+            "traits": [{"value": "Works at OpenAI", "meaning": "company", "temporal": "current"}],
             "source_type": "query",
             "vertical": "people_by_role",
             "role_search_filters": {
@@ -289,6 +270,9 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         emitted = []
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}), \
+             mock.patch.object(search.cloud_search.powerset_api, "call", return_value={
+                 "company_ids": [{"id": "example-company", "display_value": "OpenAI"}]}), \
+             mock.patch.object(search.cloud_search.powerset_api, "personal_set_id", return_value="personal"), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="people who work at OpenAI",

@@ -19,6 +19,13 @@ from typing import Any, Iterable, Sequence
 from uuid import UUID
 
 K_RRF = 60
+# network-search-api's people TurboPufferHybridConfig banding values.
+ROLE_BAND_SIZE = 30
+ROLE_MIN_RESULTS_FLOOR = 100
+ROLE_MIN_REGEX_RATIO = 0.20
+ROLE_CONSERVATIVE_BANDS = 1
+ROLE_HIGH_CONFIDENCE_THRESHOLD = 0.50
+ROLE_EXTENDED_BANDS = 2
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 TITLE_SPLIT_RE = re.compile(r"[,|@\-–—/\(]")
 _STEMMER: Any | None = None
@@ -910,7 +917,9 @@ class LocalDuckDBSearchStore:
             meaningful.pop(0)
         return " ".join(self._stem_words(meaningful)) if meaningful else ""
 
-    def title_clusters_for_filters(self, filters: Any, *, max_titles: int = 10000) -> list[dict[str, Any]]:
+    def title_clusters_for_filters(self, filters: Any, *, role_ids: list[str], max_titles: int = 10000) -> list[dict[str, Any]]:
+        role_filter = ("role_ids", "ContainsAny", role_ids)
+        filters = ("And", [filters, role_filter]) if filters else role_filter
         rows = self._filtered_rows_sql("people", filters, limit=max_titles)
         clusters: dict[str, Counter[str]] = {}
         for row in rows:
@@ -925,10 +934,9 @@ class LocalDuckDBSearchStore:
         for stemmed, raw_counts in sorted(clusters.items(), key=lambda item: (-sum(item[1].values()), item[0])):
             raw_titles = [title for title, _count in raw_counts.most_common()]
             out.append({
-                "stemmed": stemmed,
+                "stem": stemmed,
                 "count": sum(raw_counts.values()),
-                "raw_titles": raw_titles[:5],
-                "display_title": raw_titles[0],
+                "titles": raw_titles[:5],
             })
         return out
 
@@ -988,6 +996,34 @@ class LocalDuckDBSearchStore:
             if field in columns:
                 return field
         return None
+
+    def _cut_and_bucket_role_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        cutoff = len(rows)
+        if len(rows) > ROLE_MIN_RESULTS_FLOOR:
+            for start in range(0, len(rows), ROLE_BAND_SIZE):
+                end = min(start + ROLE_BAND_SIZE, len(rows))
+                if end <= ROLE_MIN_RESULTS_FLOOR:
+                    continue
+                band = rows[start:end]
+                matches = sum(bool(row.get("has_core_regex") or row.get("has_adjacent_regex")) for row in band)
+                if matches / len(band) < ROLE_MIN_REGEX_RATIO:
+                    cutoff = min(end + ROLE_CONSERVATIVE_BANDS * ROLE_BAND_SIZE, len(rows))
+                    break
+
+        for start in range(0, cutoff, ROLE_BAND_SIZE):
+            band = rows[start:min(start + ROLE_BAND_SIZE, cutoff)]
+            matches = sum(bool(row.get("has_core_regex") or row.get("has_adjacent_regex")) for row in band)
+            high_confidence = matches / len(band) >= ROLE_HIGH_CONFIDENCE_THRESHOLD
+            for row in band:
+                has_match = row.get("has_core_regex") or row.get("has_adjacent_regex")
+                row["bucket"] = "good" if high_confidence or has_match else "maybe"
+
+        kept = rows[:cutoff]
+        for row in rows[cutoff:cutoff + ROLE_EXTENDED_BANDS * ROLE_BAND_SIZE]:
+            if row.get("has_core_regex") or row.get("has_adjacent_regex"):
+                row["bucket"] = "hail_mary"
+                kept.append(row)
+        return kept
 
     async def hybrid_role_rows(
         self,
@@ -1052,11 +1088,24 @@ class LocalDuckDBSearchStore:
 
         by_id = {self._row_id(row): row for rows in result_lists for row in rows}
         fused = self._rrf(result_lists, weights) if result_lists else []
-        return [
+        if has_regex_patterns:
+            # Banding counts title matches even outside the top_k regex channel.
+            for row in regex_ranked:
+                row_id = self._row_id(row)
+                if row_id in by_id:
+                    by_id[row_id]["has_core_regex"] = row["has_core_regex"]
+                    by_id[row_id]["has_adjacent_regex"] = row["has_adjacent_regex"]
+        rows = [
             self._role_output_row(by_id[row_id], include_attributes, score, "hybrid")
-            for row_id, score in fused[:top_k]
+            for row_id, score in fused
             if row_id in by_id
         ]
+        if has_regex_patterns and (
+            self._compile_patterns(payload.get("role_core_patterns"))
+            or self._compile_patterns(payload.get("role_adjacent_patterns"))
+        ):
+            rows = self._cut_and_bucket_role_rows(rows)
+        return rows[:top_k]
 
     def summary_search_rows(
         self,

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Search a Powerset set through the Powerset API, the same search the Powerset web app runs.
 
-prepare: POST /v2/search/expand turns the query into the API's filters; the card shows them under
-its own keys (card_filters). run: the card's filters go back to the API's (api_request) and POST
-/v2/search/execute searches the set. With --rerank the API also filters and ranks the people and
+prepare: the app expands the query, then POST /v2/search/resolve turns its names into ids and
+returns the set's title groups. run: api_request builds the execute body from the edited card,
+resolving added names together through /v2/search/resolve; POST /v2/search/execute searches the set.
+With --rerank the API also filters and ranks the people and
 saves them to a conversation, and this downloads them back from GET /v2/conversations/{id}/results,
 500 a request, gzipped on the wire, into gzip files of the API's rows: good_results.jsonl.gz (score
 0.3 and up with no zero trait, the API's own split) and bad/bad_results.jsonl.gz. Those files are
@@ -19,6 +20,7 @@ reads them only when asked, and shows them loading until their rows file exists.
 TurboPuffer.
 
 Changelog:
+  2026-11-18: Prepare resolves the app's expansion through /v2/search/resolve.
   2026-11-17: --rerank: the API filters, ranks and stores a set search and the app downloads the
       result back in pages, good and bad apart; the app no longer filters or ranks a set search.
   2026-11-16: created; replaces the direct TurboPuffer/Postgres set search (resolve_set_operators,
@@ -46,77 +48,124 @@ if str(ROOT) not in sys.path:
 
 from packs.shared import powerset_api  # noqa: E402
 
-# The API's names for what the card calls otherwise; every other key is the same on both.
-CARD_KEYS = {"role_semantic_query": "semantic_query", "is_current": "is_current_role",
-             "company_ids": "company_names", "investors": "investor_names", "education_ids": "education_names"}
-API_KEYS = {card: api for api, card in CARD_KEYS.items()}
-# A name the expansion did not resolve is looked up here (GET /v2/autocomplete/<kind>?q=).
-LOOKUPS = {"company_ids": "companies", "education_ids": "schools"}
-# Card-only keys with no API field.
-CARD_ONLY = {"bm25_queries", "set_id", "is_current_company"}
 LIMIT = 2000  # /v2/search/execute caps a page at 2000
-EXPAND_QUERY_LIMIT = 2048  # /v2/search/expand's query limit
+ENTITY_KEYS = {"company_names": "company_ids", "education_names": "education_ids", "investor_names": "investors"}
+RESOLVE_KEYS = {**ENTITY_KEYS,
+                **{key: key for key in ("cities", "states", "countries", "metro_areas", "macro_regions")}}
+LIST_FILTERS = (
+    "role_ids",
+    "company_cities", "company_states", "company_countries", "company_metro_areas", "company_macro_regions",
+    "yc_batches", "entity_types", "sector_types", "seniority_bands", "role_tracks", "degree_levels",
+    "fields_of_study", "company_semantic_queries", "company_adjacency_queries",
+)
+SCALAR_FILTERS = (
+    "funding_stage_min", "funding_stage_max", "funding_amount_min", "funding_amount_max",
+    "headcount_min", "headcount_max", "last_funding_before", "last_funding_after",
+    "founded_year_min", "founded_year_max", "valuation_min", "valuation_max",
+    "graduation_year_min", "graduation_year_max", "years_experience_min", "years_experience_max",
+    "age_min", "age_max", "role_function", "x_followers_min", "x_followers_max",
+    "li_followers_min", "li_followers_max", "ig_followers_min", "ig_followers_max",
+    "li_connections_min", "li_connections_max", "operator_interaction_min", "operator_interaction_max",
+    "set_interaction_min", "set_interaction_max", "position_after_date", "position_before_date",
+)
 PAGE = 500  # GET /v2/conversations/{id}/results caps a page at 500
 GOOD_SCORE = 0.3  # the API's line between good and bad (with no zero trait)
+
+
+def lookup_person(env_file: Path | None, set_id: str, name: str) -> list[dict[str, Any]]:
+    """Read the set's contacts once and keep only names containing every requested word."""
+    response = powerset_api.call(
+        env_file, f"/v2/set-contacts/{powerset_api.quote(set_id)}?search={powerset_api.quote(name)}&page_size=200",
+    )
+    words = name.casefold().split()
+    profiles = []
+    for lead in response["leads"]:
+        if not all(word in lead["name"].casefold() for word in words):
+            continue
+        operators = lead.get("operators") or []
+        profiles.append({
+            **lead,
+            "headline": lead.get("title"),
+            "source_operators": [operator["operator_name"] for operator in operators],
+            "source_channels": sorted({channel for operator in operators for channel in operator["source_channels"]}),
+        })
+    return profiles
 
 
 def _label(item: Any) -> Any:
     return (item.get("display_value") or item.get("id")) if isinstance(item, dict) else item
 
 
-def card_filters(api_filters: dict[str, Any]) -> dict[str, Any]:
-    """The API's filters as the card shows them: entities by name, keywords from the role patterns."""
-    out: dict[str, Any] = {}
-    for key, value in api_filters.items():
-        if value in (None, "", [], {}):
-            continue
-        out[CARD_KEYS.get(key, key)] = [_label(item) for item in value] if isinstance(value, list) and key not in ("role_core_patterns", "role_adjacent_patterns") else value
-    keywords = [example for pattern in api_filters.get("role_core_patterns") or [] for example in pattern.get("examples") or []]
-    if keywords:
-        out["bm25_queries"] = list(dict.fromkeys(keywords))
-    return out
+def resolve(env_file: Path | None, payload: dict[str, Any], set_id: str | None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve the app's names, keeping the returned ids and displaying their labels on the card."""
+    filters = dict(payload.get("role_search_filters") or {})
+    request = {key: filters.get(key) or [] for key in RESOLVE_KEYS}
+    request.update(role_ids=filters.get("role_agent_ids") or filters.get("role_ids") or [], set_id=set_id)
+    resolved = powerset_api.call(env_file, "/v2/search/resolve", request)
+    api_filters = {key: resolved.get(key) or [] for key in RESOLVE_KEYS.values()}
+    notes = list(payload.get("notes") or [])
+    for card_key, api_key in RESOLVE_KEYS.items():
+        names = list(dict.fromkeys(_label(item) for item in api_filters[api_key]))
+        returned = {name.casefold() for name in names}
+        missing = [name for name in request[card_key] if not any(label.startswith(name.casefold()) for label in returned)]
+        if missing:
+            notes.append(f"resolve did not return {card_key}: {', '.join(missing)}")
+        filters.pop(card_key, None)
+        if names:
+            filters[card_key] = names
+    return ({**payload, "role_search_filters": filters, "api_filters": api_filters, "notes": notes},
+            resolved.get("title_clusters") or [], resolved.get("adjacent_title_clusters") or [])
 
 
-def expand(env_file: Path | None, query: str, set_id: str | None) -> dict[str, Any]:
-    """The prepared payload for a query: the card's filters, the API's as expanded, and the traits."""
-    out = powerset_api.call(env_file, "/v2/search/expand", {"query": query[:EXPAND_QUERY_LIMIT], "set_id": set_id})
-    api_filters = out.get("filters") or {}
-    return {"normalized_query": query, "role_search_filters": card_filters(api_filters), "api_filters": api_filters,
-            "traits": out.get("traits") or [], "has_domain_intent": bool(out.get("has_domain_intent"))}
-
-
-def _resolve(env_file: Path | None, key: str, names: list[Any], expanded: list[Any]) -> list[str]:
-    known = {str(_label(item)).lower(): str(item.get("id") or _label(item)) for item in expanded if isinstance(item, dict)}
-    if key not in LOOKUPS:
-        return [known.get(str(name).lower(), str(name)) for name in names]
-
-    selected = {str(name).lower() for name in names}
-    ids = []
-    for item in expanded:
-        if isinstance(item, dict) and str(_label(item)).lower() in selected:
-            ids.append(str(item.get("id") or _label(item)))
-    for name in names:
-        if str(name).lower() not in known:
-            hits = powerset_api.call(env_file, f"/v2/autocomplete/{LOOKUPS[key]}?limit=1&q={powerset_api.quote(str(name))}").get("suggestions") or []
-            ids += [str(hit["id"]) for hit in hits[:1] if hit.get("id")]
-    return list(dict.fromkeys(ids))
+def _resolved_ids(env_file: Path | None, filters: dict[str, Any], resolved: dict[str, Any],
+                set_id: str | None) -> dict[str, list[str]]:
+    ids: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    for card_key, api_key in RESOLVE_KEYS.items():
+        records = resolved.get(api_key) or []
+        known = {str(_label(item)).casefold() for item in records}
+        names = filters.get(card_key) or []
+        selected = {name.casefold() for name in names}
+        ids[api_key] = [item["id"] for item in records if str(_label(item)).casefold() in selected]
+        missing = list(dict.fromkeys(name for name in names if name.casefold() not in known))
+        if missing and card_key in ENTITY_KEYS:
+            added[card_key] = missing
+        elif missing:
+            ids[api_key].extend(missing)
+    if added:
+        response = powerset_api.call(env_file, "/v2/search/resolve", {**added, "set_id": set_id})
+        for card_key in added:
+            api_key = ENTITY_KEYS[card_key]
+            ids[api_key].extend(item["id"] for item in response.get(api_key) or [])
+    return {key: list(dict.fromkeys(values)) for key, values in ids.items()}
 
 
 def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, set_id: str | None, limit: int,
                 conversation_id: str | None = None) -> dict[str, Any]:
-    """The card's filters as a /v2/search/execute request; names map back to the expansion's ids."""
-    expanded = payload.get("api_filters") or {}
-    request: dict[str, Any] = {}
-    for card_key, value in (payload.get("role_search_filters") or {}).items():
-        if card_key in CARD_ONLY or value in (None, "", [], {}):
-            continue
-        key = API_KEYS.get(card_key, card_key)
-        is_entities = isinstance(expanded.get(key), list) or key in LOOKUPS
-        request[key] = _resolve(env_file, key, value, expanded.get(key) or []) if is_entities and isinstance(value, list) and key not in ("role_core_patterns", "role_adjacent_patterns") else value
+    """The edited card as /v2/search/execute fields, with every selected resolved id."""
+    filters = payload.get("role_search_filters") or {}
+    request: dict[str, Any] = _resolved_ids(env_file, filters, payload.get("api_filters") or {}, set_id)
+    for key in LIST_FILTERS:
+        request[key] = [item["id"] if isinstance(item, dict) else item for item in filters.get(key) or []]
+    for key in SCALAR_FILTERS:
+        if filters.get(key) is not None:
+            request[key] = filters[key]
+    for key in ("role_core_patterns", "role_adjacent_patterns"):
+        request[key] = [{"regex": pattern["regex"], "examples": pattern.get("examples") or []}
+                        for pattern in filters.get(key) or []]
+    request.update(role_semantic_query=filters.get("semantic_query", ""),
+                   role_bm25_queries=filters.get("bm25_queries") or [],
+                   education_op=filters.get("education_op") or "or")
     if request.get("role_semantic_query") and not request.get("role_core_patterns"):
         request.pop("role_semantic_query")  # the API takes a role query only with its patterns
-    return {**request, "query": query, "traits": payload.get("traits") or [],
-            "has_domain_intent": bool(payload.get("has_domain_intent")), "set_id": set_id,
+    traits = []
+    for item in payload.get("traits") or []:
+        trait = {"value": item} if isinstance(item, str) else item
+        traits.append({"value": trait["value"], "temporal": trait.get("temporal") or "all",
+                       "meaning": trait.get("meaning") or "general"})
+    domain = bool(payload.get("has_domain_intent"))
+    return {**request, "query": query, "traits": traits,
+            "has_domain_intent": domain, "search_summary": True, "search_company_signal": domain, "set_id": set_id,
             "limit": min(limit or LIMIT, LIMIT), "rerank": bool(conversation_id), "skip_llm_filter": not conversation_id,
             # A ranked search is answered only once every result is saved, so there is no saving to wait for.
             "conversation_id": conversation_id, "save_before_response": bool(conversation_id)}

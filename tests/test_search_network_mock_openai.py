@@ -76,7 +76,8 @@ class MockOpenAIHandler(BaseHTTPRequestHandler):
 
         content: dict[str, object]
         if "Generate traits for this query" in body_text:
-            content = {"traits": [], "has_domain_intent": False}
+            content = {"traits": [{"value": "Software engineer", "temporal": "current", "meaning": "role"}],
+                       "has_domain_intent": False}
         elif "extracting company" in system_prompt:
             content = {}
         elif "extracting location" in system_prompt:
@@ -284,11 +285,13 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(out["status"], "preview_ready")
         self.assertEqual(out["preview"]["filters"]["metro_areas"], ["San Francisco Bay Area"])
-        self.assertNotIn("cities", out["preview"]["filters"])
+        self.assertEqual(out["preview"]["filters"]["cities"], ["San Francisco"])
         self.assertEqual(out["preview"]["filters"]["seniority_bands"], ["mid", "senior"])
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertTrue(payload_exists)
-        self.assertEqual(payload_value["traits"], [])
+        self.assertEqual(payload_value["traits"], [
+            {"value": "Software engineer", "temporal": "current", "meaning": "role"},
+        ])
         self.assertIs(payload_value["has_domain_intent"], False)
         self.assertIs(payload_value["role_search_filters"]["has_domain_intent"], False)
         self.assertTrue(prompt_manifest_exists)
@@ -297,6 +300,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(set(manifest["files"]), {
             "company.txt", "education.txt", "location.txt", "role.txt",
             "seniority.txt", "social.txt", "temporal.txt", "trait_generation.txt",
+            "company_adjacency.txt", "interaction.txt",
         })
         self.assertGreaterEqual(MockOpenAIHandler.request_count, 8)
         self.assertTrue(all(path.endswith("/chat/completions") for path in MockOpenAIHandler.request_paths))
