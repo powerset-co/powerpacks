@@ -31,6 +31,8 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.deep_search.location_scope import (  # noqa: E402
+    METRO_VOCABULARY,
+    _norm as _normalize_location_value,
     prefer_metro_area_filters,
 )
 ROLE_TAXONOMY_PATH = ROOT / "packs/search/data/roles/canonical_role_taxonomy.json"
@@ -47,6 +49,98 @@ CITY_ALIASES = {
 CITY_FILTER_ALIASES = {
     "new york city": ["New York City", "New York City, New York", "New York"],
     "new york": ["New York", "New York City"],
+}
+
+# Matches network-search-api/api_v2/search/query/location_extraction.py.
+CITY_TO_METRO_AREA = {
+    # San Francisco Bay Area
+    "san francisco": "San Francisco Bay Area",
+    "sf": "San Francisco Bay Area",
+    "oakland": "San Francisco Bay Area",
+    "berkeley": "San Francisco Bay Area",
+    "palo alto": "San Francisco Bay Area",
+    "mountain view": "San Francisco Bay Area",
+    "sunnyvale": "San Francisco Bay Area",
+    "san jose": "San Francisco Bay Area",
+    "fremont": "San Francisco Bay Area",
+    "redwood city": "San Francisco Bay Area",
+    "menlo park": "San Francisco Bay Area",
+    "cupertino": "San Francisco Bay Area",
+    "santa clara": "San Francisco Bay Area",
+    # New York Metropolitan Area
+    "new york": "New York Metropolitan Area",
+    "new york city": "New York Metropolitan Area",
+    "nyc": "New York Metropolitan Area",
+    "manhattan": "New York Metropolitan Area",
+    "brooklyn": "New York Metropolitan Area",
+    "queens": "New York Metropolitan Area",
+    "bronx": "New York Metropolitan Area",
+    "jersey city": "New York Metropolitan Area",
+    "hoboken": "New York Metropolitan Area",
+    "newark": "New York Metropolitan Area",
+    # Los Angeles Metropolitan Area
+    "los angeles": "Los Angeles Metropolitan Area",
+    "la": "Los Angeles Metropolitan Area",
+    "santa monica": "Los Angeles Metropolitan Area",
+    "pasadena": "Los Angeles Metropolitan Area",
+    "long beach": "Los Angeles Metropolitan Area",
+    "burbank": "Los Angeles Metropolitan Area",
+    "glendale": "Los Angeles Metropolitan Area",
+    "culver city": "Los Angeles Metropolitan Area",
+    # Seattle Metropolitan Area
+    "seattle": "Seattle Metropolitan Area",
+    "bellevue": "Seattle Metropolitan Area",
+    "redmond": "Seattle Metropolitan Area",
+    "kirkland": "Seattle Metropolitan Area",
+    "tacoma": "Seattle Metropolitan Area",
+    # Chicago Metropolitan Area
+    "chicago": "Chicago Metropolitan Area",
+    "evanston": "Chicago Metropolitan Area",
+    "oak park": "Chicago Metropolitan Area",
+    # Boston Metropolitan Area
+    "boston": "Boston Metropolitan Area",
+    "cambridge": "Boston Metropolitan Area",
+    "somerville": "Boston Metropolitan Area",
+    # Washington DC Metropolitan Area
+    "washington": "Washington DC Metropolitan Area",
+    "washington dc": "Washington DC Metropolitan Area",
+    "dc": "Washington DC Metropolitan Area",
+    "arlington": "Washington DC Metropolitan Area",
+    "alexandria": "Washington DC Metropolitan Area",
+    "bethesda": "Washington DC Metropolitan Area",
+    # Denver Metropolitan Area
+    "denver": "Denver Metropolitan Area",
+    "boulder": "Denver Metropolitan Area",
+    # Austin Metropolitan Area
+    "austin": "Austin Metropolitan Area",
+    # Dallas Metropolitan Area
+    "dallas": "Dallas Metropolitan Area",
+    "fort worth": "Dallas Metropolitan Area",
+    "plano": "Dallas Metropolitan Area",
+    # Miami Metropolitan Area
+    "miami": "Miami Metropolitan Area",
+    "fort lauderdale": "Miami Metropolitan Area",
+    # Atlanta Metropolitan Area
+    "atlanta": "Atlanta Metropolitan Area",
+    # Philadelphia Metropolitan Area
+    "philadelphia": "Philadelphia Metropolitan Area",
+    # San Diego Metropolitan Area
+    "san diego": "San Diego Metropolitan Area",
+    # Phoenix Metropolitan Area
+    "phoenix": "Phoenix Metropolitan Area",
+    "scottsdale": "Phoenix Metropolitan Area",
+    # Minneapolis Metropolitan Area
+    "minneapolis": "Minneapolis Metropolitan Area",
+    "st paul": "Minneapolis Metropolitan Area",
+    "saint paul": "Minneapolis Metropolitan Area",
+    # Detroit Metropolitan Area
+    "detroit": "Detroit Metropolitan Area",
+    # Portland Metropolitan Area
+    "portland": "Portland Metropolitan Area",
+    # Raleigh-Durham Metropolitan Area
+    "raleigh": "Raleigh-Durham Metropolitan Area",
+    "durham": "Raleigh-Durham Metropolitan Area",
+    "chapel hill": "Raleigh-Durham Metropolitan Area",
 }
 
 FOUNDER_BM25_QUERIES = ["founder", "co-founder", "cofounder", "founding", "CEO", "Chief Executive Officer"]
@@ -504,7 +598,7 @@ def _merge(
 
     _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
-    _prefer_extracted_metro_areas(filters)
+    _apply_extracted_location_granularity(filters)
     for key in ("cities", "company_cities"):
         if filters.get(key):
             filters[key] = _expand_city_filter_aliases(filters[key])
@@ -515,23 +609,30 @@ def _merge(
     return filters
 
 
-def _prefer_extracted_metro_areas(filters: dict[str, Any]) -> None:
-    """Apply the canonical city-to-metro preference to person and company geo."""
-    for prefix in ("", "company_"):
-        scoped = {
-            field: filters[f"{prefix}{field}"]
-            for field in ("cities", "states", "metro_areas", "countries", "macro_regions")
-            if filters.get(f"{prefix}{field}")
-        }
-        if not scoped or "cities" not in scoped:
-            continue
-        preferred = prefer_metro_area_filters(scoped)
-        if preferred == scoped:
-            continue
-        for field in ("cities", "states", "metro_areas", "countries", "macro_regions"):
-            filters.pop(f"{prefix}{field}", None)
-        for field, values in preferred.items():
-            filters[f"{prefix}{field}"] = values
+def _apply_extracted_location_granularity(filters: dict[str, Any]) -> None:
+    """Keep person cities with API table metros; preserve company metro preference."""
+    if filters.get("cities"):
+        for field in ("states", "countries", "macro_regions"):
+            filters.pop(field, None)
+        for city in filters["cities"]:
+            metro = CITY_TO_METRO_AREA.get(city.lower())
+            if metro and METRO_VOCABULARY.get(_normalize_location_value(metro)):
+                _add_unique(filters, "metro_areas", metro)
+
+    company_location = {
+        field: filters[f"company_{field}"]
+        for field in ("cities", "states", "metro_areas", "countries", "macro_regions")
+        if filters.get(f"company_{field}")
+    }
+    if "cities" not in company_location:
+        return
+    preferred = prefer_metro_area_filters(company_location)
+    if preferred == company_location:
+        return
+    for field in company_location:
+        filters.pop(f"company_{field}")
+    for field, values in preferred.items():
+        filters[f"company_{field}"] = values
 
 
 def _dedupe_strings(items: list[Any]) -> list[str]:

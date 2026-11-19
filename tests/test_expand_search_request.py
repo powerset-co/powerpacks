@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from packs.search.primitives.deep_search.location_scope import query_location_label
+
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = ROOT / "packs/search/primitives/expand_search_request/parallel_extractors.py"
 
@@ -43,6 +45,43 @@ class ExpandSearchRequestTests(unittest.TestCase):
         with mock.patch.object(mod, "make_async_openai_client", return_value=client):
             result = asyncio.run(mod.expand_query_parallel(query, api_key="test", **kwargs))
         return result, create
+
+    def test_person_location_model_answers_preserve_city_granularity(self):
+        cases = [
+            ("marketing managers in London", {"cities": ["London"]}, {"cities": ["London"]}),
+            ("engineers in San Francisco", {"cities": ["San Francisco"]},
+             {"cities": ["San Francisco"], "metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers in the Bay Area", {"metro_areas": ["San Francisco Bay Area"]},
+             {"metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers in Greater Boston", {"metro_areas": ["Boston Metropolitan Area"]},
+             {"metro_areas": ["Boston Metropolitan Area"]}),
+            ("marketing managers in London", {"cities": ["London"], "states": ["England"],
+             "countries": ["United Kingdom"], "macro_regions": ["Western Europe"]},
+             {"cities": ["London"]}),
+            ("engineers in Germany", {"countries": ["Germany"]}, {"countries": ["Germany"]}),
+            ("engineers in California", {"states": ["California"], "countries": ["United States"]},
+             {"states": ["California"], "countries": ["United States"]}),
+            ("engineers in Europe", {"macro_regions": ["Western Europe", "Eurasia"]},
+             {"macro_regions": ["Western Europe", "Eurasia"]}),
+            ("engineers in London or San Francisco", {"cities": ["London", "San Francisco"]},
+             {"cities": ["London", "San Francisco"], "metro_areas": ["San Francisco Bay Area"]}),
+            ("engineers at SF companies", {"company_cities": ["San Francisco"]},
+             {"company_metro_areas": ["San Francisco Bay Area"]}),
+        ]
+        for query, location, expected in cases:
+            with self.subTest(query=query, location=location):
+                result, _ = self._expand_with_model_answers({"location": location}, query=query)
+                self.assertEqual(result["role_search_filters"], {**expected, "has_domain_intent": False})
+
+    def test_dallas_omits_unsupported_table_metro_and_labels_for_deep_search(self):
+        result, _ = self._expand_with_model_answers(
+            {"location": {"cities": ["Dallas"]}}, query="engineers in Dallas",
+        )
+        filters = dict(result["role_search_filters"])
+        filters.pop("has_domain_intent")
+        label = query_location_label(filters)
+        self.assertEqual(filters, {"cities": ["Dallas"]})
+        self.assertIn("Dallas", label)
 
     def test_adjacency_and_interaction_model_answers_merge_without_changing_other_filters(self):
         answers = {
@@ -330,7 +369,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("Return JSON with exactly these keys: semantic_query, bm25_queries, role_ids, departments, seniority", prompt)
         self.assertEqual(mod.role_agent_user_content("engineering leaders"), 'Query: "engineering leaders"')
 
-    def test_sf_in_phrase_prefers_person_metro(self):
+    def test_sf_in_phrase_keeps_person_city_and_adds_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
@@ -344,7 +383,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area"])
-        self.assertNotIn("cities", filters)
+        self.assertEqual(filters["cities"], ["San Francisco"])
         self.assertNotIn("company_cities", filters)
 
     def test_sf_company_phrase_prefers_company_metro(self):
@@ -633,7 +672,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertFalse(filters["is_current_role"])
         self.assertFalse(filters["is_current_company"])
 
-    def test_city_filters_prefer_unambiguous_indexed_metro(self):
+    def test_city_filters_keep_spelling_aliases_with_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "blockchain engineering work", "bm25_queries": ["blockchain engineer"]},
@@ -647,12 +686,12 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["metro_areas"], ["New York Metropolitan Area"])
-        self.assertNotIn("cities", filters)
+        self.assertEqual(filters["cities"], ["New York City", "New York City, New York", "New York"])
 
         unmapped = mod._expand_city_filter_aliases(["Austin", "  ", "Austin"])
         self.assertEqual(unmapped, ["Austin"])
 
-    def test_city_filters_fall_back_exact_when_any_city_is_not_unambiguous(self):
+    def test_city_filters_add_each_fixed_table_metro(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "engineering work", "bm25_queries": ["engineer"]},
@@ -666,7 +705,7 @@ class ExpandSearchRequestTests(unittest.TestCase):
         )
 
         self.assertEqual(filters["cities"], ["San Francisco", "Raleigh"])
-        self.assertNotIn("metro_areas", filters)
+        self.assertEqual(filters["metro_areas"], ["San Francisco Bay Area", "Raleigh-Durham Metropolitan Area"])
 
     def test_seniority_bands_normalize_to_canonical_index_values(self):
         mod = load_module()

@@ -284,7 +284,7 @@ class SearchNetworkMockOpenAITests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertEqual(out["status"], "preview_ready")
         self.assertEqual(out["preview"]["filters"]["metro_areas"], ["San Francisco Bay Area"])
-        self.assertNotIn("cities", out["preview"]["filters"])
+        self.assertEqual(out["preview"]["filters"]["cities"], ["San Francisco"])
         self.assertEqual(out["preview"]["filters"]["seniority_bands"], ["mid", "senior"])
         self.assertIn("--execute-approved", out["execute_command"])
         self.assertTrue(payload_exists)
