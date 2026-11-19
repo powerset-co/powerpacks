@@ -18,6 +18,9 @@ uv run --env-file .env --project . python packs/search/primitives/search_network
 `prepare` runs `expand_search_request`, writes `expand_search_request.json`,
 emits a compact preview, and returns an `execute_command` to run after the user
 chooses `execute`. Company-only requests follow this same prepare/run path.
+Role keywords are chosen from title groups only during `prepare`; `run` uses the
+prepared keywords and patterns. Traits alone determine current versus past roles.
+A set search always includes the summary search.
 
 ```bash
 uv run --env-file .env --project . python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run \

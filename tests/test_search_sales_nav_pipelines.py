@@ -158,6 +158,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "status": "completed",
             "normalized_query": "software engineers in sf",
             "intent_type": "role_search",
+            "traits": [{"value": "Software engineer", "meaning": "role", "temporal": "current"}],
             "role_search_filters": {
                 "semantic_query": "Experienced software engineers who build production systems, own backend or full-stack implementation, and show evidence of technical execution in product or infrastructure teams.",
                 "bm25_queries": ["software engineer"],
@@ -233,6 +234,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "status": "completed",
             "normalized_query": "software engineers in sf",
             "intent_type": "role_search",
+            "traits": [{"value": "Software engineer", "meaning": "role", "temporal": "current"}],
             "source_type": "query",
             "vertical": "people_by_role",
             "role_search_filters": {
@@ -246,6 +248,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}) as run_mock, \
              mock.patch.object(search.cloud_search.powerset_api, "call", return_value={}), \
+             mock.patch.object(search.cloud_search.powerset_api, "personal_set_id", return_value="personal"), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="software engineers in sf",
@@ -278,6 +281,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
             "status": "completed",
             "normalized_query": "people who work at OpenAI",
             "intent_type": "role_search",
+            "traits": [{"value": "Works at OpenAI", "meaning": "company", "temporal": "current"}],
             "source_type": "query",
             "vertical": "people_by_role",
             "role_search_filters": {
@@ -292,6 +296,7 @@ class SearchNetworkPipelineTests(unittest.TestCase):
              mock.patch.object(search, "run", return_value={"returncode": 0, "json": expand}), \
              mock.patch.object(search.cloud_search.powerset_api, "call", return_value={
                  "company_ids": [{"id": "example-company", "display_value": "OpenAI"}]}), \
+             mock.patch.object(search.cloud_search.powerset_api, "personal_set_id", return_value="personal"), \
              mock.patch.object(search, "emit", side_effect=emitted.append):
             args = SimpleNamespace(
                 query="people who work at OpenAI",

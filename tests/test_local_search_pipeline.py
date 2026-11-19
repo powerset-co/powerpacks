@@ -437,9 +437,8 @@ def write_local_search_db(path: Path) -> None:
 
 
 class LocalSearchPipelineTests(unittest.TestCase):
-    def test_unprepared_run_title_pick_uses_prepare_defaults_and_run_env_file(self) -> None:
+    def test_run_never_chooses_titles_or_loads_title_credentials(self) -> None:
         mod = load_pipeline_module()
-        defaults = mod.build_parser().parse_args(["prepare", "--query", "software engineers"])
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ):
             root = Path(directory)
             db = root / "local.duckdb"
@@ -465,20 +464,15 @@ class LocalSearchPipelineTests(unittest.TestCase):
                             mock.patch.object(mod, "init_state_local", side_effect=RuntimeError("stop before retrieval")):
                         with self.assertRaisesRegex(RuntimeError, "stop before retrieval"):
                             mod.run_pipeline_local(args)
-                    if prepared:
-                        pick.assert_not_awaited()
-                    else:
-                        self.assertEqual(pick.await_count, 2)
-                        self.assertEqual(os.environ.get("TITLE_PICK_TEST_ENV"), "from-run-env")
-                        self.assertEqual(pick.call_args_list[0].kwargs, {
-                            "model": defaults.expand_model, "reasoning_effort": defaults.expand_reasoning_effort,
-                        })
+                    pick.assert_not_called()
+                    self.assertNotIn("TITLE_PICK_TEST_ENV", os.environ)
 
-    def test_prepare_adds_shortened_pattern_examples_to_keywords_on_both_backends(self) -> None:
+    def test_prepare_leaves_keywords_and_patterns_unchanged_without_title_groups(self) -> None:
         mod = load_pipeline_module()
         keywords = ["Head of Sales", "Senior Product Manager", "sales director"]
-        patterns = mod._role_core_patterns_from_bm25(keywords)
-        expansion = {"status": "completed", "role_search_filters": {
+        patterns = [{"regex": r"\b(sales|product\ manager|sales\ director)\b",
+                     "examples": ["Sales", "Product Manager", "sales director"]}]
+        expansion = {"status": "completed", "traits": ["sales and product leaders"], "role_search_filters": {
             "bm25_queries": keywords, "role_core_patterns": patterns,
         }}
         for backend in ("local", "powerset"):
@@ -495,10 +489,11 @@ class LocalSearchPipelineTests(unittest.TestCase):
                 args = mod.build_parser().parse_args(command)
                 with mock.patch.object(mod, "run", return_value={"returncode": 0, "json": expansion}), \
                         mock.patch.object(mod.cloud_search.powerset_api, "call", return_value={}) as api, \
+                        mock.patch.object(mod, "_local_title_clusters", return_value=([], [])), \
                         mock.patch.object(mod, "emit"), mock.patch.dict(os.environ):
                     self.assertEqual(mod.cmd_prepare(args), 0)
                     payload = json.loads((root / "expand_search_request.json").read_text())
-                    expected = [*keywords, "Sales", "Product Manager"]
+                    expected = keywords
                     self.assertEqual(payload["role_search_filters"]["bm25_queries"], expected)
                     self.assertEqual(payload["role_search_filters"]["role_core_patterns"], patterns)
                     if backend == "local":
@@ -576,7 +571,7 @@ class LocalSearchPipelineTests(unittest.TestCase):
         self.assertEqual(filters["seniority_bands"], ["senior"])
         self.assertEqual(
             filters["bm25_queries"],
-            ["software engineer", "backend engineer", "Software Engineer", "Backend Engineer"],
+            ["software engineer", "backend engineer"],
         )
         self.assertEqual(normalized["traits"], payload["traits"])
         self.assertTrue(filters["is_current_role"])
@@ -683,8 +678,6 @@ class LocalSearchPipelineTests(unittest.TestCase):
             self.assertEqual(filters["role_ids"], ["software_engineer"])
             self.assertIn("software engineer", filters["bm25_queries"])
             self.assertEqual(filters["bm25_queries"], ["software engineer"])
-            self.assertEqual(filters["local_title_clustering_status"]["fallback"], "role_agent")
-            self.assertFalse(filters["local_title_clustering_status"]["model_used"])
             self.assertEqual(len(filters["role_core_patterns"]), 1)
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
             candidate = retrieval["output"]["candidates"][0]
@@ -1209,7 +1202,6 @@ class LocalSearchPipelineTests(unittest.TestCase):
             retrieval = next(step for step in state["steps"] if step["id"] == "execute_role_search")
             # Without extracted role phrases, retrieval respects the hard filters
             # without inventing BM25 hints from unrelated words in the query.
-            self.assertEqual(filters["local_title_clustering_status"]["selected_count"], 0)
             self.assertIn("filter_only", retrieval["output"]["candidates"][0]["vertical_sources"])
 
             ledger_doc = json.loads(ledger.read_text())
@@ -1296,7 +1288,6 @@ class LocalTitleExpansionTests(unittest.TestCase):
         state = json.loads(Path(output["state"]).read_text())
         filters = next(step for step in state["steps"] if step["id"] == "expand_search_request")["output"]["role_search_filters"]
         self.assertEqual(filters["bm25_queries"], ["general partner", "venture partner"])
-        self.assertFalse(filters["local_title_clustering_status"]["model_used"])
         self.assertNotIn("seniority_bands", filters)
         self.assertNotIn("funding_amount_min", filters)
         with Path(output["artifacts"]["csv"]).open(newline="") as handle:

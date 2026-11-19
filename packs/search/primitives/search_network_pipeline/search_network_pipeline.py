@@ -45,7 +45,7 @@ if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
-from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_current_role, pin_payload_semantic_query  # noqa: E402
+from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_semantic_query  # noqa: E402
 from search_common import adjacent_role_ids_for, apply_trait_currentness, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
 from packs.shared import powerset_api  # noqa: E402
@@ -322,11 +322,8 @@ def uv_python_command(args, subcommand: str, lp: Path, extra: str = "") -> str:
 def payload_from_expand_output(out: dict[str, Any], *, backend: str = "powerset") -> dict[str, Any]:
     keys = LOCAL_PAYLOAD_KEYS if backend == "local" else PAYLOAD_KEYS
     payload = {k:v for k,v in out.items() if k in keys}
-    filters = payload.get("role_search_filters") or {}
-    examples = _pattern_examples(filters.get("role_core_patterns"))
-    if examples:
-        keywords = filters.get("bm25_queries", filters.get("role_bm25_queries")) or []
-        payload["role_search_filters"] = {**filters, "bm25_queries": _dedupe_present([*keywords, *examples])}
+    if payload.get("intent_type", "role_search") == "role_search" and not payload.get("traits"):
+        raise Failed("expand_search_request returned a role search without traits; prepare requires traits")
     return payload
 
 def comparable_text(s: str) -> str:
@@ -517,7 +514,7 @@ def apply_card_edits(payload: dict[str, Any], edits: dict[str, Any], run_dir: Pa
         # The run would restore a cleared value from the older alias.
         filters.pop(EDIT_ALIASES.get(key, ""), None)
         if key == "bm25_queries":
-            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [], strip_seniority=False)
+            filters["role_core_patterns"] = _role_core_patterns_from_bm25(value or [])
         log_edit(run_dir, kind="filter_edit", note=key, before=json.dumps(before), after=json.dumps(value))
     if "traits" in edits:
         log_edit(run_dir, kind="query_edit", note="traits",
@@ -539,19 +536,6 @@ def apply_prepare_edits(args, payload: dict[str, Any], payload_json: Path, out_d
         payload = apply_card_edits(payload, {"filters": edits["filters"]}, out_dir)
     return payload
 
-def _dedupe_present(values: list[Any]) -> list[Any]:
-    out: list[Any] = []
-    seen: set[str] = set()
-    for value in values:
-        if value in (None, "", [], {}):
-            continue
-        marker = json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        out.append(value)
-    return out
-
 def _entity_values(values: Any, *, prefer_display: bool = False) -> list[str]:
     out: list[str] = []
     for value in values or []:
@@ -567,19 +551,8 @@ def _entity_values(values: Any, *, prefer_display: bool = False) -> list[str]:
             out.append(str(raw))
     return list(dict.fromkeys(out))
 
-def _pattern_examples(patterns: Any) -> list[str]:
-    """Extract safe lexical hints from prod role pattern metadata."""
-    examples: list[str] = []
-    for item in patterns or []:
-        if not isinstance(item, dict):
-            continue
-        for example in item.get("examples") or []:
-            if isinstance(example, str) and example.strip():
-                examples.append(example.strip())
-    return list(dict.fromkeys(examples))
-
 def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | None = None) -> dict[str, Any]:
-    """Return local DuckDB payload shape for Powerpacks or prod/API expansion.
+    """Normalize the prepared payload for set and local searches.
 
     Prod/network expansion uses `filters.role_semantic_query`,
     `filters.role_bm25_queries`, and entity objects. Local DuckDB primitives use
@@ -600,11 +573,8 @@ def normalize_query_expansion_payload(payload: dict[str, Any], *, query: str | N
 
     if "role_semantic_query" in normalized and "semantic_query" not in normalized:
         normalized["semantic_query"] = normalized.get("role_semantic_query")
-    # The card's keywords are authoritative; aliases and pattern examples only fill an absent list.
     if "bm25_queries" not in normalized:
-        normalized["bm25_queries"] = _dedupe_present([
-            *(normalized.get("role_bm25_queries") or []), *_pattern_examples(normalized.get("role_core_patterns")),
-        ])
+        normalized["bm25_queries"] = normalized.get("role_bm25_queries") or []
 
     id_entity_keys = {
         "company_ids", "cities", "states", "countries", "metro_areas", "macro_regions",
@@ -674,12 +644,6 @@ def _with_local_title_clustering_status(payload: dict[str, Any], status: dict[st
     filters = payload_filters(out)
     filters["local_title_clustering_status"] = status
     out["role_search_filters"] = filters
-    notes = out.get("notes")
-    if not isinstance(notes, list):
-        notes = []
-    if status.get("status") == "error":
-        notes.append(f"local title clustering skipped: {status.get('error')}")
-    out["notes"] = notes
     return out
 
 def _title_pick_skip_reason(filters: dict[str, Any]) -> str | None:
@@ -691,59 +655,45 @@ def _title_pick_skip_reason(filters: dict[str, Any]) -> str | None:
     return None
 
 
-def apply_local_title_clustering(
-    payload: dict[str, Any], db_path: Path, *, model: str | None = None,
-    reasoning_effort: str | None = None, env_file: str = ".env",
-) -> dict[str, Any]:
-    """Read role-scoped local title groups, then use the shared title pick."""
+def _local_title_clusters(payload: dict[str, Any], db_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read direct and adjacent role-scoped title groups from the local index."""
     filters = payload_filters(payload)
-    if _title_pick_skip_reason(filters) or not db_path.exists():
-        return _apply_title_clusters(payload, [])
+    if _title_pick_skip_reason(filters):
+        return [], []
+    for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
+        if str(_path) not in sys.path:
+            sys.path.insert(0, str(_path))
+    # Lazy by design: the import firewall requires this module to import
+    # cleanly with DuckDB/local modules absent (remote-only installs).
+    from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
+    from search_common import filters_from_role_payload  # type: ignore
+
+    role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
+    adjacent_ids = adjacent_role_ids_for(role_ids)
+    widened_ids = list(dict.fromkeys([*role_ids, *adjacent_ids]))
+    store = LocalDuckDBSearchStore(str(db_path))
     try:
-        for _path in [LIB_DIR, SHARED_DIR, LOCAL_DIR]:
-            if str(_path) not in sys.path:
-                sys.path.insert(0, str(_path))
-        # Lazy by design: the import firewall requires this module to import
-        # cleanly with DuckDB/local modules absent (remote-only installs).
-        from local_duckdb_store import LocalDuckDBSearchStore  # type: ignore
-        from search_common import filters_from_role_payload  # type: ignore
-
-        role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
-        adjacent_ids = adjacent_role_ids_for(role_ids)
-        widened_ids = list(dict.fromkeys([*role_ids, *adjacent_ids]))
-        store = LocalDuckDBSearchStore(str(db_path))
-        try:
-            title_filters = filters_from_role_payload(filters)
-            clusters = store.title_clusters_for_filters(title_filters, role_ids=widened_ids, max_titles=10000)
-            adjacent_clusters = (store.title_clusters_for_filters(title_filters, role_ids=adjacent_ids, max_titles=10000)
-                                 if adjacent_ids else [])
-        finally:
-            store.conn.close()
-    except Exception as exc:
-        fallback = _apply_title_clusters(payload, [])
-        status = payload_filters(fallback)["local_title_clustering_status"]
-        return _with_local_title_clustering_status(fallback, {**status, "status": "error", "error": str(exc)[:300]})
-
-    return _apply_title_clusters(payload, clusters, adjacent_clusters=adjacent_clusters,
-                                 model=model, reasoning_effort=reasoning_effort, env_file=env_file)
+        title_filters = filters_from_role_payload(filters)
+        clusters = store.title_clusters_for_filters(title_filters, role_ids=widened_ids, max_titles=10000)
+        adjacent_clusters = (store.title_clusters_for_filters(title_filters, role_ids=adjacent_ids, max_titles=10000)
+                             if adjacent_ids else [])
+    finally:
+        store.conn.close()
+    return clusters, adjacent_clusters
 
 
 def _apply_title_clusters(
     payload: dict[str, Any], clusters: list[dict[str, Any]], *,
     adjacent_clusters: list[dict[str, Any]] | None = None, model: str | None = None,
-    reasoning_effort: str | None = None, env_file: str = ".env",
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Pick direct and adjacent titles, keeping the role agent's keywords first."""
     filters = payload_filters(payload)
-    status = {"status": "completed", "cluster_count": len(clusters), "shown_count": 0,
-              "selected_count": 0, "model_used": False}
     skip_reason = _title_pick_skip_reason(filters)
-    if skip_reason:
-        return _with_local_title_clustering_status(payload, {**status, "status": skip_reason})
+    if skip_reason or not (clusters or adjacent_clusters):
+        return _with_local_title_clustering_status(payload, {"status": skip_reason or "completed"})
 
-    shown = clusters[:title_selection.MAX_TITLE_GROUPS]
     adjacent_shown = (adjacent_clusters or [])[:title_selection.MAX_TITLE_GROUPS]
-    status["shown_count"] = len(shown)
 
     async def pick(groups, **kwargs):
         if groups:
@@ -754,12 +704,10 @@ def _apply_title_clusters(
 
     async def pick_both():
         return await asyncio.gather(
-            pick(shown), pick(adjacent_shown, system_prompt=title_selection.ADJACENT_TITLE_SELECTION_PROMPT),
-            return_exceptions=True,
+            pick(clusters), pick(adjacent_shown, system_prompt=title_selection.ADJACENT_TITLE_SELECTION_PROMPT),
         )
 
     # Both calls share the stage until both finish; neither can restore it early.
-    load_env_file(Path(env_file))
     previous_stage = os.environ.get("POWERPACKS_USAGE_STAGE")
     os.environ["POWERPACKS_USAGE_STAGE"] = "expand"
     try:
@@ -770,24 +718,8 @@ def _apply_title_clusters(
         else:
             os.environ["POWERPACKS_USAGE_STAGE"] = previous_stage
 
-    selected = []
-    keywords = list(filters.get("bm25_queries") or [])
-    strip_seniority = True
-    if isinstance(direct, Exception):
-        status.update(status="error", error=str(direct)[:300], fallback="role_agent")
-    elif direct is not None:
-        status["model_used"] = True
-        selected = [group for group in shown if (group.get("stemmed") or group.get("stem")) in direct.selected]
-        picked_keywords = direct.keywords or [group["display_title"] for group in selected]
-        keywords.extend(picked_keywords)
-        strip_seniority = not bool(direct.keywords)
-        if not picked_keywords:
-            status["fallback"] = "role_agent"
-    else:
-        status["fallback"] = "role_agent"
-
     adjacent_patterns = []
-    if adjacent is not None and not isinstance(adjacent, Exception) and not isinstance(direct, Exception):
+    if adjacent is not None:
         for group in adjacent_shown:
             if (group.get("stemmed") or group.get("stem")) not in adjacent.selected:
                 continue
@@ -800,19 +732,18 @@ def _apply_title_clusters(
             if len(adjacent_patterns) == title_selection.MAX_ADJACENT_PATTERNS:
                 break
 
-    role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
-    injected = sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
-    unique_keywords = {}
-    for title in [*keywords, *injected]:
-        unique_keywords.setdefault(title.casefold(), title)
-    keywords = list(unique_keywords.values())
-    status["selected_count"] = len(selected)
-    out = _with_local_title_clustering_status(payload, status)
+    out = _with_local_title_clustering_status(payload, {"status": "completed"})
     out_filters = payload_filters(out)
-    out_filters["local_title_clusters"] = selected
     out_filters["role_adjacent_patterns"] = adjacent_patterns
-    out_filters["bm25_queries"] = keywords
-    out_filters["role_core_patterns"] = _role_core_patterns_from_bm25(keywords, strip_seniority=strip_seniority)
+    if direct is not None:
+        role_ids = filters.get("role_agent_ids") or filters.get("role_ids") or []
+        injected = sorted({title for role_id in role_ids for title in ROLE_ID_TITLE_INJECTIONS.get(role_id, [])})
+        unique_keywords = {}
+        for title in [*(filters.get("bm25_queries") or []), *direct.keywords, *injected]:
+            unique_keywords.setdefault(title.casefold(), title)
+        keywords = list(unique_keywords.values())
+        out_filters["bm25_queries"] = keywords
+        out_filters["role_core_patterns"] = _role_core_patterns_from_bm25(keywords)
     out["role_search_filters"] = out_filters
     return out
 
@@ -920,12 +851,9 @@ def local_run_kwargs(args, db_path: Path) -> dict[str, Any]:
 
 def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     pinned_bands=pinned_bands_from_args(args)
-    pin_current=bool(getattr(args,"current_role",False))
     if args.state or l.get("state"):
         if pinned_bands:
             raise Failed("--seniority-bands only applies when the run starts from --query plus --payload-json; an existing --state already recorded its expand_search_request filters")
-        if pin_current:
-            raise Failed("--current-role only applies when the run starts from --query plus --payload-json; an existing --state already recorded its expand_search_request filters")
         if args.state:
             state=Path(args.state); l["state"]=str(state); save(lp,l); return state
         return Path(l["state"])
@@ -940,8 +868,6 @@ def init_state(args, lp: Path, l: dict[str, Any]) -> Path:
     expand_output = payload if isinstance(payload, dict) and "role_search_filters" in payload else {"role_search_filters": payload}
     if pinned_bands:
         expand_output=pin_payload_seniority_bands(expand_output, pinned_bands)
-    if pin_current:
-        expand_output=pin_payload_current_role(expand_output, True)
     cmd=[sys.executable,str(ROOT/"packs/search/primitives/task_state/task_state.py"),"record-step","--state",str(state),"--step-id","expand_search_request","--status","completed","--output-json",json.dumps(expand_output)]
     out=require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout),"record expand_search_request")
     mark(lp,l,"record_expand_search_request","completed",summary=compact_summary(out),command=" ".join(cmd))
@@ -1149,11 +1075,8 @@ def run_pipeline_local(args) -> dict[str, Any]:
     configure_local_backend_mode(db_path)
     run_kwargs=local_run_kwargs(args, db_path)
     pinned_bands=pinned_bands_from_args(args)
-    pin_current=bool(getattr(args,"current_role",False))
     if pinned_bands and args.state and not args.payload_json:
         raise Failed("--seniority-bands only applies when the run starts from --payload-json; an existing --state already recorded its expand_search_request filters")
-    if pin_current and args.state and not args.payload_json:
-        raise Failed("--current-role only applies when the run starts from --payload-json; an existing --state already recorded its expand_search_request filters")
 
     lp=ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
     os.environ.setdefault("POWERPACKS_USAGE_LOG", str(lp.parent/"usage.jsonl"))
@@ -1177,13 +1100,7 @@ def run_pipeline_local(args) -> dict[str, Any]:
     payload=normalize_query_expansion_payload(payload, query=args.query)
     if pinned_bands:
         payload=pin_payload_seniority_bands(payload, pinned_bands)
-    if pin_current:
-        payload=pin_payload_current_role(payload, True)
     payload, ignored_scope_keys=prepare_local_payload(payload)
-    # Clustered once, at prepare; clustering again at run would add back a keyword the user removed.
-    if payload.get("intent_type") != "person_lookup" and not payload_filters(payload).get("local_title_clustering_status"):
-        payload=apply_local_title_clustering(payload, db_path, model=DEFAULT_EXPAND_MODEL,
-                                             reasoning_effort=DEFAULT_EXPAND_REASONING_EFFORT, env_file=args.env_file)
     if args.payload_json:
         sanitized_path=lp.parent/f"{lp.stem}.local-payload.json"
         write_json(sanitized_path,payload)
@@ -1397,23 +1314,22 @@ def cmd_prepare(args):
         clusters = []
         adjacent_clusters = []
         if payload.get("intent_type") != "person_lookup":
+            set_id=set_id or payload_filters(payload).get("set_id") or powerset_api.personal_set_id(Path(args.env_file))
             payload, clusters, adjacent_clusters=cloud_search.resolve(Path(args.env_file), payload, set_id)
         if getattr(args,"preserve_query_semantic",False):
             payload=pin_payload_semantic_query(payload,args.query)
         pinned_bands=pinned_bands_from_args(args)
         if pinned_bands:
             payload=pin_payload_seniority_bands(payload,pinned_bands)
-        if getattr(args,"current_role",False):
-            payload=pin_payload_current_role(payload,True)
         if set_id:
             payload=pin_payload_set_id(payload,set_id)
         if payload.get("intent_type") != "person_lookup":
+            load_env_file(ROOT / args.env_file)
             payload=_apply_title_clusters(payload,[{**group,"display_title":group["titles"][0]}
                                                   for group in clusters if group["titles"]],
                                           adjacent_clusters=[{**group,"display_title":group["titles"][0]}
                                                              for group in adjacent_clusters if group["titles"]],
-                                          model=args.expand_model, reasoning_effort=args.expand_reasoning_effort,
-                                          env_file=args.env_file)
+                                          model=args.expand_model, reasoning_effort=args.expand_reasoning_effort)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         issues=[]
@@ -1422,7 +1338,6 @@ def cmd_prepare(args):
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
-        if getattr(args,"current_role",False): extra += " --current-role"
         emit({
             "primitive":"search_network_pipeline",
             "status":"preview_ready" if not issues else "blocked_user_action",
@@ -1458,12 +1373,12 @@ def cmd_prepare_local(args):
         pinned_bands=pinned_bands_from_args(args)
         if pinned_bands:
             payload=pin_payload_seniority_bands(payload,pinned_bands)
-        if getattr(args,"current_role",False):
-            payload=pin_payload_current_role(payload,True)
         payload, removed_scope_keys=prepare_local_payload(payload)
         if payload.get("intent_type") != "person_lookup":
-            payload=apply_local_title_clustering(payload, db_path, model=args.expand_model,
-                                             reasoning_effort=args.expand_reasoning_effort, env_file=args.env_file)
+            clusters, adjacent_clusters=_local_title_clusters(payload, db_path)
+            load_env_file(ROOT / args.env_file)
+            payload=_apply_title_clusters(payload, clusters, adjacent_clusters=adjacent_clusters,
+                                          model=args.expand_model, reasoning_effort=args.expand_reasoning_effort)
         payload=apply_prepare_edits(args,payload,payload_json,out_dir)
         write_json(expand_json,expand); write_json(payload_json,payload)
         extra=(
@@ -1473,7 +1388,6 @@ def cmd_prepare_local(args):
         extra+=execution_contract_suffix(args)
         if getattr(args,"limit",0): extra += f" --limit {int(args.limit)}"
         if pinned_bands: extra += f" --seniority-bands {shlex.quote(','.join(pinned_bands))}"
-        if getattr(args,"current_role",False): extra += " --current-role"
         emit({
             "primitive":"search_network_pipeline",
             "status":"preview_ready",
@@ -1538,7 +1452,6 @@ def add_run(p):
     p.add_argument("--rerank-system-file", help="Reviewed rerank system prompt")
     p.add_argument("--env-file",default=".env")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands (e.g. senior,staff) pinned as a hard retrieval filter; REPLACES any expansion-derived role_search_filters.seniority_bands")
-    p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true as a hard retrieval filter so only CURRENT in-band positions qualify a person (a current founder who was once a senior engineer no longer matches on the old role)")
     p.add_argument("--limit",type=int,default=0,help="Max unique people to keep locally after retrieval; 0 means keep full retrieved frontier")
     p.add_argument("--top-k",type=int,default=None,help="Retrieval top_k; defaults to 10000 (powerset) or 5000 (local)")
     p.add_argument("--extra-candidates-json",help="JSON file with agentic SQL vertical people (search-sql skill output); unioned into retrieval so they go through the same hydration and LLM filter/rerank as every other candidate (local backend only)")
@@ -1582,7 +1495,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout",type=int,default=60)
     p.add_argument("--limit",type=int,default=0,help="Cap unique people kept after retrieval; threaded into the emitted execute_command")
     p.add_argument("--seniority-bands",help="Comma-separated canonical seniority bands pinned as a hard retrieval filter; applied to the prepared payload and threaded into the emitted execute_command")
-    p.add_argument("--current-role",action="store_true",help="Pin is_current_role=true on the prepared payload and thread --current-role into the emitted execute_command so only CURRENT in-band positions qualify a person")
     p.add_argument("--preserve-query-semantic",action="store_true",help="Use the raw --query verbatim as role_search_filters.semantic_query instead of the LLM-rewritten prose; keeps expansion's bm25 + structured filters. Higher recall (the vector stays specific per probe) — recommended for recall/ground-truth sourcing and wide-search probes.")
     p.set_defaults(func=cmd_prepare)
     r=sub.add_parser("run"); add_run(r); r.set_defaults(func=cmd_run)

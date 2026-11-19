@@ -82,10 +82,10 @@ class CloudSearchTests(unittest.TestCase):
                 "role_semantic_query": "finance leaders", "role_bm25_queries": ["CFO"],
                 "role_core_patterns": [{"regex": "CFO", "examples": ["CFO"]}],
                 "role_adjacent_patterns": [{"regex": "finance", "examples": ["Finance Leader"]}],
-                "is_current": None, "traits": [{"value": "builds banks", "temporal": "all", "meaning": "general"},
+                "traits": [{"value": "builds banks", "temporal": "all", "meaning": "general"},
                                                 {"value": "CFO", "temporal": "past", "meaning": "role"},
                                                 {"value": "owns finance", "temporal": "all", "meaning": "general"}],
-                "has_domain_intent": domain, "search_summary": domain, "search_company_signal": domain,
+                "has_domain_intent": domain, "search_summary": True, "search_company_signal": domain,
                 "query": "full original query", "set_id": "s1", "limit": 1500, "rerank": True,
                 "skip_llm_filter": False, "conversation_id": "c1", "save_before_response": True,
             })
@@ -96,7 +96,7 @@ class CloudSearchTests(unittest.TestCase):
                 request = cloud_search.api_request(None, {"role_search_filters": {
                     "is_current_role": current, "semantic_query": "", "headcount_min": None,
                     "role_function": None, "bm25_queries": []}}, query="q", set_id="s1", limit=3000)
-                self.assertIs(request["is_current"], current)
+                self.assertNotIn("is_current", request)
                 self.assertEqual(request["role_semantic_query"], "")
                 self.assertEqual(request["role_bm25_queries"], [])
                 self.assertEqual(request["limit"], 2000)
@@ -173,7 +173,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         self.assertEqual(request["education_ids"], ["urn:edu:1"])
         self.assertEqual(request["investors"], ["urn:vc:1"])
         self.assertEqual(request["cities"], ["San Francisco"])
-        self.assertTrue(request["is_current"])
+        self.assertNotIn("is_current", request)
         self.assertEqual(request["role_core_patterns"], EXPANDED["role_core_patterns"])
         self.assertEqual((request["set_id"], request["limit"], request["rerank"], request["skip_llm_filter"]),
                          ("s1", 2000, False, True))
@@ -299,7 +299,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             args = pipeline.build_parser().parse_args(
                 ["prepare", "--query", query, "--set-id", "s1", "--output-dir", directory])
             with mock.patch.object(cloud_search.powerset_api, "call", return_value={}) as api, \
-                    mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {}}) as expand, \
+                    mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {"traits": ["builds storage"]}}) as expand, \
                     mock.patch.object(pipeline, "emit"), mock.patch.dict("os.environ"):
                 self.assertEqual(pipeline.cmd_prepare(args), 0)
                 command = expand.call_args.args[0]
@@ -319,7 +319,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
 
         with tempfile.TemporaryDirectory() as directory:
             args = pipeline.build_parser().parse_args(["prepare", "--query", "q", "--output-dir", directory])
-            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {}}), \
+            with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": {"traits": ["role"]}}), \
                     mock.patch.object(cloud_search.powerset_api, "call", side_effect=SystemExit("signed out")), \
                     mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"):
                 self.assertEqual(pipeline.cmd_prepare(args), 1)
@@ -341,14 +341,15 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
     def test_set_prepare_preserves_pins_and_applies_edits_last(self) -> None:
         from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 
-        expansion = {"role_search_filters": {"semantic_query": "expanded", "seniority_bands": ["junior"],
+        expansion = {"traits": [{"value": "Engineer", "temporal": "current", "meaning": "role"}],
+                     "role_search_filters": {"semantic_query": "expanded", "seniority_bands": ["junior"],
                                              "is_current_role": False, "set_id": "wrong"}}
         with tempfile.TemporaryDirectory() as directory:
             edits = Path(directory) / "edits.json"
             edits.write_text(json.dumps({"filters": {"cities": ["Edited"], "is_current_role": False}}))
             args = pipeline.build_parser().parse_args([
                 "prepare", "--query", "raw query", "--output-dir", directory, "--set-id", "s1",
-                "--preserve-query-semantic", "--seniority-bands", "staff", "--current-role",
+                "--preserve-query-semantic", "--seniority-bands", "staff",
                 "--edits-json", str(edits)])
             with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": expansion}), \
                     mock.patch.object(cloud_search.powerset_api, "call", return_value={}), \
@@ -358,11 +359,10 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             self.assertEqual(filters["semantic_query"], "raw query")
             self.assertEqual(filters["seniority_bands"], ["staff"])
             self.assertTrue(filters["seniority_bands_pinned"])
-            self.assertTrue(filters["is_current_role_pinned"])
             self.assertFalse(filters["is_current_role"])
             self.assertEqual((filters["set_id"], filters["cities"]), ("s1", ["Edited"]))
             command = emit.call_args.args[0]["execute_command"]
-            for flag in ("--set-id s1", "--current-role", "--seniority-bands staff", "--execute-approved"):
+            for flag in ("--set-id s1", "--seniority-bands staff", "--execute-approved"):
                 self.assertIn(flag, command)
 
     def _api(self, good, bad, sent, *, answer=None):

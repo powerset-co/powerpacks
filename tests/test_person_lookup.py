@@ -36,7 +36,7 @@ class PersonLookupTests(unittest.TestCase):
                 with mock.patch.object(pipeline, "_expand_query", return_value=lookup_payload()), \
                      mock.patch.object(pipeline, "emit") as emit, \
                      mock.patch.object(powerset_api, "call", side_effect=AssertionError("no API during prepare")), \
-                     mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=AssertionError("no titles")), \
+                     mock.patch.object(pipeline, "_local_title_clusters", side_effect=AssertionError("no titles")), \
                      mock.patch.object(pipeline, "local_pool_estimate", side_effect=AssertionError("no filters")), \
                      mock.patch.dict("os.environ"):
                     self.assertEqual(pipeline.cmd_prepare(args), 0)
@@ -85,7 +85,7 @@ class PersonLookupTests(unittest.TestCase):
                                  [person_id, name, json.dumps({"name": name})])
             with mock.patch.object(powerset_api, "call", side_effect=AssertionError("no API")), \
                  mock.patch.object(pipeline, "_expand_query", side_effect=AssertionError("no model")), \
-                 mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=AssertionError("no titles")):
+                 mock.patch.object(pipeline, "_local_title_clusters", side_effect=AssertionError("no titles")):
                 output, rows = self._run(directory, "local")
             self.assertEqual([row["person_id"] for row in rows], ["p1", "p2"])
             self.assertEqual(output["summary"]["returned_people"], 2)

@@ -476,10 +476,6 @@ def _merge(
         filters["role_departments"] = _dedupe_strings(role["departments"])
     if role.get("seniority"):
         filters["seniority_bands"] = _normalize_seniority_bands(role["seniority"])
-    if role.get("is_current_role") is not None:
-        filters["is_current_role"] = role["is_current_role"]
-    if role.get("is_current_company") is not None:
-        filters["is_current_company"] = role["is_current_company"]
 
     # Company
     if company.get("company_names"):
@@ -567,10 +563,6 @@ def _merge(
     # Years of experience is extracted but not emitted, matching cloud
     # (multi_index_strategy_v2: "YOE filter disabled until data quality
     # improves"). A value typed on the search card still filters.
-    if temporal.get("is_current") is not None:
-        current = bool(temporal["is_current"])
-        filters.setdefault("is_current_role", current)
-        filters.setdefault("is_current_company", current)
 
     # Seniority
     if "seniority_bands" in seniority:
@@ -588,13 +580,6 @@ def _merge(
         val = social.get(key)
         if val is not None:
             filters[key] = int(val)
-
-    # If date range is set, drop is_current flags — the date window handles time scoping.
-    # is_current=false + date range causes the prefilter to look for non-current positions
-    # which is almost never what the user wants when they specify explicit years.
-    if filters.get("position_after_date") or filters.get("position_before_date"):
-        filters.pop("is_current_role", None)
-        filters.pop("is_current_company", None)
 
     _apply_role_expansion_parity(filters, query)
     _apply_location_alias_fallback(filters, query)
@@ -703,19 +688,11 @@ def _detect_csuite_expansions(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _role_core_patterns_from_bm25(queries: list[str], *, strip_seniority: bool = True) -> list[dict[str, Any]]:
-    seniority_prefixes = re.compile(
-        r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
-        r"vp of|chief|associate|intern|executive|managing|group)\s+",
-        re.IGNORECASE,
-    )
+def _role_core_patterns_from_bm25(queries: list[str]) -> list[dict[str, Any]]:
     examples: list[str] = []
     seen: set[str] = set()
     for query in queries:
         phrase = str(query)
-        if strip_seniority:
-            phrase = seniority_prefixes.sub("", phrase).strip()
-            phrase = re.split(r"[|,]", phrase)[0].strip()
         if len(phrase) < 3:
             continue
         key = phrase.lower()
@@ -861,7 +838,14 @@ def _apply_role_expansion_parity(filters: dict[str, Any], query: str) -> None:
         filters["bm25_queries"] = _dedupe_strings([*(filters.get("bm25_queries") or []), *sorted(set(injected_titles))])
 
     if filters.get("bm25_queries") and not filters.get("role_core_patterns"):
-        filters["role_core_patterns"] = _role_core_patterns_from_bm25(filters["bm25_queries"])
+        seniority_prefixes = re.compile(
+            r"^(senior|staff|lead|principal|junior|founding|head of|director of|"
+            r"vp of|associate|intern|executive|managing|group)\s+",
+            re.IGNORECASE,
+        )
+        phrases = [re.split(r"[|,]", seniority_prefixes.sub("", title).strip())[0].strip()
+                   for title in filters["bm25_queries"]]
+        filters["role_core_patterns"] = _role_core_patterns_from_bm25(phrases)
 
 
 def _add_unique(filters: dict[str, Any], key: str, value: str) -> None:

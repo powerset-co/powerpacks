@@ -14,9 +14,9 @@ RULES:
 - "keywords": Output keyword phrases covering selected titles. Same rules as direct: strip seniority, 2+ word minimum, deduplicate substrings. Aim for 5-10 keywords.
 
 Respond with JSON only:
-{{
+{
     "selected": ["stemmed_form_1", "stemmed_form_2", ...],
     "keywords": ["keyword1", "keyword2", ...]
-}}
+}
 
 Only use stemmed forms from the provided list for selected. Max 15 selected.

@@ -29,8 +29,6 @@ async def pick_title_clusters(
     model: str | None = None,
     reasoning_effort: str | None = None,
 ) -> TitleSelection:
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY not set")
     lines = []
     for group in groups[:MAX_TITLE_GROUPS]:
         stem = group.get("stemmed") or group["stem"]

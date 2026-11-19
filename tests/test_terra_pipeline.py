@@ -37,7 +37,6 @@ class TerraPipelineTests(unittest.TestCase):
                     with mock.patch.dict(os.environ, {}, clear=True), \
                             mock.patch.object(pipeline, "ROOT", root), \
                             mock.patch.object(pipeline, "configure_local_backend_mode"), \
-                            mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db, **_: p), \
                             mock.patch.object(pipeline, "run", return_value=result) as run:
                         output = (pipeline.run_pipeline_local if backend == "local" else pipeline.run_pipeline)(args)
                     self.assertEqual(output["status"], "completed")

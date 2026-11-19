@@ -155,8 +155,6 @@ def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, s
     request.update(role_semantic_query=filters.get("semantic_query", ""),
                    role_bm25_queries=filters.get("bm25_queries") or [],
                    education_op=filters.get("education_op") or "or")
-    if "is_current_role" in filters:
-        request["is_current"] = filters["is_current_role"]
     if request.get("role_semantic_query") and not request.get("role_core_patterns"):
         request.pop("role_semantic_query")  # the API takes a role query only with its patterns
     traits = []
@@ -166,7 +164,7 @@ def api_request(env_file: Path | None, payload: dict[str, Any], *, query: str, s
                        "meaning": trait.get("meaning") or "general"})
     domain = bool(payload.get("has_domain_intent"))
     return {**request, "query": query, "traits": traits,
-            "has_domain_intent": domain, "search_summary": domain, "search_company_signal": domain, "set_id": set_id,
+            "has_domain_intent": domain, "search_summary": True, "search_company_signal": domain, "set_id": set_id,
             "limit": min(limit or LIMIT, LIMIT), "rerank": bool(conversation_id), "skip_llm_filter": not conversation_id,
             # A ranked search is answered only once every result is saved, so there is no saving to wait for.
             "conversation_id": conversation_id, "save_before_response": bool(conversation_id)}

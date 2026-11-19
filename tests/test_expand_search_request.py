@@ -640,10 +640,22 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("Never emit a location trait", prompts["trait_generation"])
         self.assertIn("3-8 observable titles or true title aliases", prompts["role"])
 
-    def test_temporal_current_flag_maps_to_local_current_filters(self):
+    def test_chief_of_staff_keeps_chief_while_other_levels_are_stripped(self):
         mod = load_module()
         filters = mod._merge(
-            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"]},
+            {"bm25_queries": ["Chief of Staff", "Senior Software Engineer"]},
+            {}, {}, {}, {}, {}, {}, "chief of staff and senior software engineers",
+        )
+        self.assertEqual(filters["role_core_patterns"], [{
+            "regex": r"\b(chief\ of\ staff|software\ engineer)\b",
+            "examples": ["Chief of Staff", "Software Engineer"],
+        }])
+
+    def test_expander_ignores_role_and_temporal_current_flags(self):
+        mod = load_module()
+        filters = mod._merge(
+            {"semantic_query": "technology executives", "bm25_queries": ["technology executive"],
+             "is_current_role": False, "is_current_company": False},
             {},
             {},
             {},
@@ -653,10 +665,10 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "currently CTOs",
         )
 
-        self.assertTrue(filters["is_current_role"])
-        self.assertTrue(filters["is_current_company"])
+        self.assertNotIn("is_current_role", filters)
+        self.assertNotIn("is_current_company", filters)
 
-    def test_temporal_past_flag_maps_to_local_current_filters(self):
+    def test_expander_ignores_temporal_past_flag(self):
         mod = load_module()
         filters = mod._merge(
             {"semantic_query": "software engineering work", "bm25_queries": ["software engineer"]},
@@ -669,8 +681,8 @@ class ExpandSearchRequestTests(unittest.TestCase):
             "ex-Stripe engineers",
         )
 
-        self.assertFalse(filters["is_current_role"])
-        self.assertFalse(filters["is_current_company"])
+        self.assertNotIn("is_current_role", filters)
+        self.assertNotIn("is_current_company", filters)
 
     def test_city_filters_keep_spelling_aliases_with_metro(self):
         mod = load_module()

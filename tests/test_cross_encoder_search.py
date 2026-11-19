@@ -89,11 +89,13 @@ class CrossEncoderSearchTests(unittest.TestCase):
 class PlainSearchPipelineTests(unittest.TestCase):
     def test_prepare_has_no_cross_encoder_flags(self):
         with tempfile.TemporaryDirectory() as directory:
-            payload = {"normalized_query": "Storage engineers", "traits": [],
+            payload = {"normalized_query": "Storage engineers",
+                       "traits": [{"value": "Storage engineer", "temporal": "all", "meaning": "role"}],
                        "role_search_filters": {"semantic_query": "Engineers who build and operate distributed storage systems, recovery protocols and database infrastructure"}}
             stdout = io.StringIO()
             with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": payload}), \
                     mock.patch.object(pipeline.cloud_search.powerset_api, "call", return_value={}), \
+                    mock.patch.object(pipeline.cloud_search.powerset_api, "personal_set_id", return_value="personal"), \
                     contextlib.redirect_stdout(stdout):
                 args = pipeline.build_parser().parse_args([
                     "prepare", "--query", "Storage engineers", "--output-dir", directory])
@@ -192,7 +194,6 @@ class PlainSearchPipelineTests(unittest.TestCase):
                 mock.patch.object(pipeline, "QUICK_SEARCH_ROOT", root / "search"), \
                 mock.patch.object(pipeline, "DEEP_SEARCH_ROOT", catalog_root), \
                 mock.patch.object(pipeline, "configure_local_backend_mode"), \
-                mock.patch.object(pipeline, "apply_local_title_clustering", side_effect=lambda p, db, **_: p), \
                 mock.patch.object(pipeline, "run", side_effect=child), \
                 mock.patch.object(screening, "score_batches", new_callable=mock.AsyncMock, return_value=([], scores)) as filtered, \
                 mock.patch.object(reranker, "rerank_all", side_effect=rank) as ranked, \

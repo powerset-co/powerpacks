@@ -20,9 +20,9 @@ RULES:
   → keywords: ["Machine Learning", "AI Engineer", "Applied Scientist", "Research Scientist", "Computer Vision"]
 
 Respond with JSON only:
-{{
+{
     "selected": ["stemmed_form_1", "stemmed_form_2", ...],
     "keywords": ["Machine Learning", "AI Engineer", ...]
-}}
+}
 
 Only use stemmed forms from the provided list for selected. Max 20 selected.
