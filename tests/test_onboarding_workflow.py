@@ -389,6 +389,57 @@ class SourceOnboardingTests(unittest.TestCase):
                                  gmail_emails=('casey@example.com',), sync_after=requested).run()
             init.assert_called_once_with(account_emails=['casey@example.com'], unsynced_emails=(), sync_after=requested, on_progress=ANY)
 
+    def test_a_large_first_gmail_sync_reads_through_extra_projects_and_a_refresh_does_not(self):
+        home = self.root / 'msgvault'
+        home.mkdir()
+        seen = []
+        setup = SimpleNamespace(run=lambda: {'status': 'ok'})
+
+        def discovery():
+            seen.append(msgvault_home.config_path(home).read_text() if msgvault_home.config_path(home).exists() else '')
+            return payload(status='completed')
+
+        # 12,000 messages: two extra projects. The third sign-in of a run would be the stop.
+        with patch.dict(os.environ, {'MSGVAULT_HOME': str(home)}), \
+             patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}), \
+             patch.object(msgvault_home, 'msgvault_has_quota_apps', return_value=True), \
+             patch.object(workflow, 'count_messages', return_value=12000) as count, \
+             patch.object(BrowserSetup, 'from_args', return_value=setup) as created, \
+             patch.object(TestUsers, 'from_args', return_value=setup) as allowed, \
+             patch.object(workflow.oauth_browser, 'authorize_account', return_value={'status': 'ok'}) as authorize, \
+             patch.object(GmailDiscovery, 'run', side_effect=discovery), \
+             patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',),
+                             sync_after='2023-01-01').run()
+            SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',), refresh=True).run()
+        count.assert_called_once_with(home, 'casey@example.com', 'after:2023-01-01')
+        self.assertEqual([call.args[0].oauth_app for call in created.call_args_list], ['quota2', 'quota3'])
+        self.assertEqual(len({call.args[0].project for call in created.call_args_list}), 2)
+        self.assertEqual(allowed.call_count, 2)
+        self.assertEqual([(call.args[2], call.kwargs['quota']) for call in authorize.call_args_list],
+                         [('quota2', True), ('quota3', True)])
+        # The first sync ran with both named; the refresh ran with none, and none are left behind.
+        self.assertIn('quota_apps = ["quota2", "quota3"]', seen[0])
+        self.assertIn('quota_apps = []', seen[1])
+        self.assertIn('quota_apps = []', msgvault_home.config_path(home).read_text())
+
+    def test_an_extra_gmail_project_that_does_not_finish_never_stops_the_sync(self):
+        home = self.root / 'msgvault'
+        home.mkdir()
+        with patch.dict(os.environ, {'MSGVAULT_HOME': str(home)}), \
+             patch.object(accounts, 'check_accounts_payload', return_value={'status': 'ok'}), \
+             patch.object(msgvault_home, 'msgvault_has_quota_apps', return_value=True), \
+             patch.object(workflow, 'count_messages', return_value=90000), \
+             patch.object(BrowserSetup, 'from_args', return_value=SimpleNamespace(run=lambda: {'status': 'error'})) as created, \
+             patch.object(GmailDiscovery, 'run', return_value=payload(status='completed')) as sync, \
+             patch.object(GmailImport, 'run', lambda instance: setattr(instance, 'written', {'status': 'completed'})):
+            result = SourceOnboarding(self.root, sources=('gmail',), gmail_emails=('casey@example.com',),
+                                      sync_after='2023-01-01').run()
+        created.assert_called_once()
+        sync.assert_called_once()
+        self.assertFalse(msgvault_home.config_path(home).exists())
+        self.assertEqual(result['event'], 'sources.ready')
+
     def test_gmail_unknown_or_filtered_history_is_not_proof_of_coverage(self):
         current = import_common.ImportManifest.from_payload('gmail', {
             'status': 'completed', 'input': {'accounts': [{'account_email': 'casey@example.com'}]}})

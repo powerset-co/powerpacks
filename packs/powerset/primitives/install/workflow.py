@@ -42,6 +42,8 @@ Changelog:
       user before its consent. A run prepares every tool, then collects every
       login back to back (LinkedIn, Google, Full Disk Access, WhatsApp QR),
       then syncs and imports on its own.
+  2026-11-19: a large first Gmail sync reads through extra Google projects (one per 5,000
+      messages, up to nine), each set up and signed in before the sync; a refresh uses the main one.
   2026-10-03: LinkedIn is a default source, runs first, and reads the
       connections list in Chrome instead of waiting for LinkedIn's emailed export.
 """
@@ -70,7 +72,8 @@ from packs.ingestion.primitives.discover.messages.wacli.runtime import Primitive
 from packs.ingestion.primitives.imports import common as import_common
 from packs.ingestion.primitives.imports.gmail.importer import GmailImport
 from packs.ingestion.primitives.imports.messages.importer import MessagesImport
-from packs.ingestion.primitives.setup.automations import accounts, msgvault_home
+from packs.ingestion.primitives.setup.automations import accounts, msgvault_home, oauth_browser
+from packs.ingestion.primitives.setup.automations.gmail_token import count_messages
 from packs.ingestion.primitives.setup.automations.browser_flows import BrowserSetup, TestUsers
 from packs.ingestion.primitives.setup.automations.oauth_browser import chromium_installed
 from packs.ingestion.primitives.setup.msgvault_setup import build_parser as msgvault_parser
@@ -288,6 +291,33 @@ class SourceOnboarding:
                             action={"command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
                                                          if "authorize_command" in item)})
 
+    def _gmail_quota_apps(self, home: Path) -> list[str]:
+        """Set up the extra Google projects a large first sync reads through; the ones that are ready.
+
+        Each one is a project, an OAuth client and a sign-in per mailbox. Any step that does not
+        finish ends the setup there: the sync runs through what is ready, never waits on these."""
+        login = self.gmail_emails[0]
+        window = f"after:{self.sync_after}" if self.sync_after else ""
+        messages = sum(count_messages(home, email, window) or 0 for email in self.gmail_emails)
+        wanted = msgvault_home.GMAIL_QUOTA_APPS[:messages // msgvault_home.GMAIL_MESSAGES_PER_QUOTA_APP]
+        ready: list[str] = []
+        for app in wanted:
+            base = ["--home", str(home), "--oauth-app", app,
+                    "--project", msgvault_home.default_project_id(f"{login} {app}")]
+            created = BrowserSetup.from_args(msgvault_parser().parse_args(
+                ["browser-setup", *base, "--email", login, "--no-init-db"])).run()
+            if created["status"] not in _SUCCESS:
+                break
+            allowed = set(msgvault_home.load_setup_state(home, app).test_users)
+            if not set(self.gmail_emails) <= allowed and TestUsers.from_args(msgvault_parser().parse_args(
+                    ["add-test-users", *base, "--login-email", login, *self.gmail_emails])).run()["status"] != "ok":
+                break
+            if any(oauth_browser.authorize_account(home, email, app, force=False, quota=True)["status"] != "ok"
+                   for email in self.gmail_emails):
+                break
+            ready.append(app)
+        return ready
+
     def _gmail_stage(self, stage: str) -> None:
         """A stage the Google Cloud automation reached, as its page line."""
         self._write(f"gmail.app.{stage}")
@@ -303,11 +333,20 @@ class SourceOnboarding:
         self._write("gmail.syncing")
         count = GmailCount()
         # A refresh syncs each mailbox from its own last sync; the window is the first import's.
-        result = GmailDiscovery(
-            account_emails=list(emails), unsynced_emails=self.gmail_unsynced,
-            sync_after="" if self.refresh else self.sync_after,
-            on_progress=lambda email, read, total: self._write("gmail.syncing.count", **count.add(email, read, total),
-                                                               details=count.add(email, read, total))).run()
+        # Only the first sync reads through extra Google projects; a refresh uses the main one.
+        home = Path(os.environ.get("MSGVAULT_HOME", "~/.msgvault")).expanduser()
+        quota = self._gmail_quota_apps(home) if not self.refresh and msgvault_home.msgvault_has_quota_apps() else []
+        if quota:
+            msgvault_home.set_gmail_quota_apps(home, quota)
+        try:
+            result = GmailDiscovery(
+                account_emails=list(emails), unsynced_emails=self.gmail_unsynced,
+                sync_after="" if self.refresh else self.sync_after,
+                on_progress=lambda email, read, total: self._write(
+                    "gmail.syncing.count", **count.add(email, read, total), details=count.add(email, read, total))).run()
+        finally:
+            if quota:
+                msgvault_home.set_gmail_quota_apps(home, [])
         if not self._result(result.to_payload(), "gmail.synced", waiting="gmail.sync.waiting", failed="gmail.sync.failed"):
             return False
         self._write("gmail.importing")

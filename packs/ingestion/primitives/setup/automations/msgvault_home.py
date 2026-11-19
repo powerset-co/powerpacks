@@ -40,6 +40,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -363,7 +364,7 @@ def configured_client_secret(home: Path, app_name: str) -> dict[str, Any] | None
     }
 
 
-def set_toml_value(text: str, table: str, key: str, value: str | int) -> str:
+def set_toml_value(text: str, table: str, key: str, value: str | int | list[str]) -> str:
     """Set key = value inside a TOML table, appending the table when absent."""
     lines = text.splitlines()
     header = f"[{table}]"
@@ -419,6 +420,29 @@ def pace_gmail_sync(home: Path) -> None:
     path = config_path(home)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     path.write_text(set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS), encoding="utf-8")
+
+
+# Gmail counts a person's quota per Google project, so the first sync of a large mailbox reads
+# through extra projects, each at its own 95 messages a minute (measured 2026-11-19: 94, 187 and
+# 266 a minute through 1, 2 and 3 projects, no refusal). Daily syncs use the one main project.
+GMAIL_QUOTA_APPS = tuple(f"quota{n}" for n in range(2, 11))
+# One project reads about 5,700 messages an hour; each extra one is set up per this many messages.
+GMAIL_MESSAGES_PER_QUOTA_APP = 5000
+
+
+def msgvault_has_quota_apps() -> bool:
+    """True when the installed msgvault reads through quota apps (the powerset-co fork, 0.22.2 on)."""
+    try:
+        return subprocess.run(["msgvault", "add-quota-app", "--help"], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def set_gmail_quota_apps(home: Path, apps: list[str]) -> None:
+    """Name the extra OAuth apps msgvault's next Gmail sync also reads through ([] for none)."""
+    path = config_path(home)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    path.write_text(set_toml_value(text, "sync", "quota_apps", apps), encoding="utf-8")
 
 
 def init_db(home: Path) -> dict[str, Any]:
