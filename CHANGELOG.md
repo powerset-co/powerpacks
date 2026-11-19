@@ -1,5 +1,32 @@
 # Changelog
 
+## [3.66.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.65.0...powerpacks-v3.66.0) (2026-11-19)
+
+
+### Features
+
+* **gmail:** the app ships the powerset-co msgvault fork: about 95 messages a minute, a count that moves every 100 ([#1232](https://github.com/powerset-co/powerpacks/issues/1232)) ([d0f7fa7](https://github.com/powerset-co/powerpacks/commit/d0f7fa79d0a91d234ae93b03b6320ca9029d86ed))
+* **index:** the build stores each person's full profile; local search reads it and sync sends it ([#1237](https://github.com/powerset-co/powerpacks/issues/1237)) ([09af12b](https://github.com/powerset-co/powerpacks/commit/09af12bf3fcdc4d2f5becd86de36d1eeb9e957c6))
+* **logbook:** update saved logbooks in the scheduled refresh ([#1238](https://github.com/powerset-co/powerpacks/issues/1238)) ([7fe41de](https://github.com/powerset-co/powerpacks/commit/7fe41deacefa7e6dabcf46f640dd8f354961e68b))
+* **people:** the owner's family is the top warmth ([#1235](https://github.com/powerset-co/powerpacks/issues/1235)) ([75b3799](https://github.com/powerset-co/powerpacks/commit/75b379927cceab10b703cfb4e1c77dec5cba7282))
+* **refresh:** a Powerset team refresh ends by uploading the network to the cloud ([#1236](https://github.com/powerset-co/powerpacks/issues/1236)) ([c8d0a9c](https://github.com/powerset-co/powerpacks/commit/c8d0a9c0ebc16df8df99ccabe76c7b9615befe49))
+* **search:** Powerpacks expands every query itself; a set search calls resolve then execute ([#1241](https://github.com/powerset-co/powerpacks/issues/1241)) ([5c9935a](https://github.com/powerset-co/powerpacks/commit/5c9935a071a81e6d1b37b3651ec75df7f7d66dda))
+
+
+### Bug Fixes
+
+* **gmail:** the bundled msgvault fork is numbered above 0.22.0 so it replaces a running older one ([#1234](https://github.com/powerset-co/powerpacks/issues/1234)) ([54a70ec](https://github.com/powerset-co/powerpacks/commit/54a70ec2d1e93a385e8c40efa46bda931aed3703))
+* **gmail:** the Google Cloud sign-in is done when the browser reaches gcloud's callback ([#1231](https://github.com/powerset-co/powerpacks/issues/1231)) ([ba1c664](https://github.com/powerset-co/powerpacks/commit/ba1c664819e4d111595cc501b121d780467b8704))
+* **onboarding:** the ChatGPT screen is one line and one button ([#1230](https://github.com/powerset-co/powerpacks/issues/1230)) ([d2f9b06](https://github.com/powerset-co/powerpacks/commit/d2f9b06b2f14003f5689df388bbc3a4c41276ef7))
+* **refresh:** the page server raises its open-file limit so a refresh from the Mac app does not run out ([#1239](https://github.com/powerset-co/powerpacks/issues/1239)) ([b561455](https://github.com/powerset-co/powerpacks/commit/b561455d4f7dd03e367952e8d05933830f4acd6d))
+* **remote assist:** a teammate's agent starts the app's own workflows when asked ([#1245](https://github.com/powerset-co/powerpacks/issues/1245)) ([2c0d067](https://github.com/powerset-co/powerpacks/commit/2c0d06736e431a59f92ae5074c094670564994cf))
+* **search:** a set search sends every company and school id; a long query no longer fails ([#1240](https://github.com/powerset-co/powerpacks/issues/1240)) ([a617578](https://github.com/powerset-co/powerpacks/commit/a6175787355e1df18d350f4cec7f56b26eb2fef9))
+
+
+### Documentation
+
+* **search:** the docs map and the filter README match the merged search flow ([#1242](https://github.com/powerset-co/powerpacks/issues/1242)) ([9f9f8ce](https://github.com/powerset-co/powerpacks/commit/9f9f8ce21bc0e577859c9a31182deb659c10af72))
+
 ## [3.65.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.64.1...powerpacks-v3.65.0) (2026-11-18)
 
 
