@@ -416,10 +416,15 @@ function waitForHumanLogin(page, timeoutMs) {
 
 async function gotoPage(page, url, label, timeout = 30000) {
   log(`opening ${label}`);
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-  } catch (error) {
-    log(`open ${label} did not finish cleanly: ${error.message}`);
+  // A console page that never answers left the steps after it waiting on a blank page for ten
+  // minutes (seen 2026-11-19 on the scopes page); asking again loads it.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+      break;
+    } catch (error) {
+      log(`open ${label} did not finish cleanly (try ${attempt}): ${error.message}`);
+    }
   }
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await snapshot(page);
@@ -822,7 +827,12 @@ async function createClient(page, project, email, clientName, downloadDir, timeo
     await settle(page);
   }
 
-  const selectedType = await chooseOption(page, [/Application type/i], [/Desktop app/i, "Desktop app"]);
+  // The type menu sometimes opens after the one look chooseOption gives it (seen 2026-11-19).
+  let selectedType = false;
+  for (let attempt = 1; attempt <= 5 && !selectedType; attempt++) {
+    selectedType = await chooseOption(page, [/Application type/i], [/Desktop app/i, "Desktop app"]);
+    if (!selectedType) await page.waitForTimeout(2000);
+  }
   if (!selectedType) {
     throw new StepError("clients.application_type", "Application type dropdown was visible, but Desktop app could not be selected.");
   }
