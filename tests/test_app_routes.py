@@ -91,7 +91,7 @@ class AppRoutesTests(unittest.TestCase):
                   "rows": [{"url": "u", "slug": "ann", "status": "looked_up", "count": 3, "people": []}]}
         with patch("packs.ingestion.primitives.discover.linkedin.linkedin_session.mutuals", return_value=result) as mutuals:
             status, body = self._post("/api/linkedin/mutuals", {"url": "https://www.linkedin.com/in/ann"})
-        mutuals.assert_called_once_with(["https://www.linkedin.com/in/ann"])
+        mutuals.assert_called_once_with(["https://www.linkedin.com/in/ann"], skip_connected=False)
         self.assertEqual((status, body["status"], body["count"], body["requests_today"]), (200, "looked_up", 3, 2))
         with patch("packs.ingestion.primitives.discover.linkedin.linkedin_session.mutuals",
                    side_effect=RuntimeError("LinkedIn is signed out")):

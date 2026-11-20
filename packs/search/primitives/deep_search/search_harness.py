@@ -759,11 +759,13 @@ def _backend_args(backend: str, db: str) -> list[str]:
     return ["--backend", "local", "--db", db] if backend == "local" else ["--backend", "powerset"]
 
 
-def _approved_retrieval(run_dir: Path, backend: str,
-                        db: str) -> tuple[str | None, str]:
+def _approved_retrieval(run_dir: Path, backend: str, db: str,
+                        set_id: str | None = None) -> tuple[str | None, str]:
     approved = _read_json(run_dir / "results.json")["retrieval"]
     if approved.get("backend") != backend:
         raise ValueError("decision backend differs from the approved retrieval corpus")
+    if set_id and set_id != approved.get("set_id"):
+        raise ValueError("--set-id differs from the set bound to this run")
     requested_db = str(approved.get("db_path") or db)
     identity, set_id, resolved_db = resolve_retrieval_identity(
         backend, approved.get("set_id"), requested_db)
@@ -801,7 +803,7 @@ def _run_command(command: list[str], *, run_dir: Path, log: Path,
 
 
 def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-                 db: str = DEFAULT_LOCAL_DB, limit: int = RETRIEVAL_LIMIT,
+                 db: str = DEFAULT_LOCAL_DB, set_id: str | None = None, limit: int = RETRIEVAL_LIMIT,
                  client: Any | None = None) -> Path:
     """Compile the pending query into a payload; `limit` caps retrieval for this pond and is
     carried on the pending payload so run-pond executes the same cap."""
@@ -815,7 +817,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     prepare_dir = pond_dir / "prepare"
     backend = _decision_backend(run_dir, backend)
-    set_id, db = _approved_retrieval(run_dir, backend, db)
+    set_id, db = _approved_retrieval(run_dir, backend, db, set_id)
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
@@ -1441,7 +1443,7 @@ def _finish_team(run_dir: Path, results: dict[str, Any], future) -> None:
 
 
 def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
-             db: str = DEFAULT_LOCAL_DB,
+             db: str = DEFAULT_LOCAL_DB, set_id: str | None = None,
              capability_judge: str = "luna",
              client: Any | None = None) -> Path:
     if capability_judge not in {"terra", "luna"}:
@@ -1454,7 +1456,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     pond_n = int(pending["pond_n"])
     pond_dir = run_dir / "ponds" / f"pond-{pond_n:02d}"
     backend = _decision_backend(run_dir, backend)
-    set_id, db = _approved_retrieval(run_dir, backend, db)
+    set_id, db = _approved_retrieval(run_dir, backend, db, set_id)
     payload = _read_json(Path(str(pending["payload_json"])))
     _apply_retrieval_scope(payload, backend=backend, set_id=set_id)
     validate_standard_traits(payload)
@@ -1958,6 +1960,7 @@ def main() -> None:
             if name in {"compile-pond", "run-pond"}:
                 command.add_argument("--backend", choices=("powerset", "local"))
                 command.add_argument("--db", default=str(ROOT / DEFAULT_LOCAL_DB))
+                command.add_argument("--set-id", help="The run's set; must match the one the run was started with")
             if name == "compile-pond":
                 command.add_argument("--limit", type=int, default=RETRIEVAL_LIMIT,
                                      help="Retrieval cap for this pond (default 1000)")
@@ -1988,7 +1991,7 @@ def main() -> None:
         path = update_pending_query(run_dir=run_dir, query=args.query)
     elif args.command == "compile-pond":
         path = compile_pond(run_dir=run_dir, env_file=args.env_file,
-                            backend=args.backend, db=args.db, limit=args.limit)
+                            backend=args.backend, db=args.db, set_id=args.set_id, limit=args.limit)
     elif args.command == "review-payload":
         path = review_payload(run_dir=run_dir,
                               payload_path=Path(args.payload_json) if args.payload_json else None,
@@ -1996,7 +1999,8 @@ def main() -> None:
                               human_reviewed=args.human_reviewed)
     elif args.command == "run-pond":
         path = run_pond(run_dir=run_dir, env_file=args.env_file,
-                        backend=args.backend, db=args.db, capability_judge=args.capability_judge)
+                        backend=args.backend, db=args.db, set_id=args.set_id,
+                        capability_judge=args.capability_judge)
     elif args.command == "reannotate-saved":
         path = reannotate_saved(run_dir=run_dir, env_file=args.env_file, pond=args.pond)
     elif args.command == "pin-saved":

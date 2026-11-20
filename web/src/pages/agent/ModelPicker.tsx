@@ -5,10 +5,11 @@ import { useState, type ReactNode } from "react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { frontier } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
-import { fetchModels, type CodexModel } from "@/lib/api/codex"
+import { fetchDefaults, fetchModels, type CodexModel } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
 
 const MODELS_KEY = ["codex-models"] as const
+const DEFAULTS_KEY = ["codex-defaults"] as const
 const ROW =
   "flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-s)] border-0 bg-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors duration-fast ease-out hover:bg-secondary data-[open=true]:bg-secondary"
 
@@ -74,6 +75,7 @@ export function ModelPicker() {
   const [open, setOpen] = useState(false)
   const [flyout, setFlyout] = useState<Flyout>(null)
   const models = useQuery({ queryKey: MODELS_KEY, queryFn: fetchModels, staleTime: Infinity })
+  const defaults = useQuery({ queryKey: DEFAULTS_KEY, queryFn: fetchDefaults, staleTime: Infinity })
   const list = models.data ?? []
   // The list could not be read: say why in the pill's place, so the cause is on screen.
   if (models.error)
@@ -83,11 +85,18 @@ export function ModelPicker() {
       </span>
     )
   const picked =
-    list.find((model) => model.id === agent.model) ?? list.find((model) => model.isDefault) ?? list[0]
+    list.find((model) => model.id === agent.model) ??
+    list.find((model) => model.id === defaults.data?.model) ??
+    list.find((model) => model.isDefault) ??
+    list[0]
   if (!picked) return null
-  const effort = picked.efforts.some((option) => option.id === agent.effort)
+  // No effort picked: a turn runs at the default effort, whichever model is picked.
+  const offered = (id: string | null | undefined) => picked.efforts.some((option) => option.id === id)
+  const effort = offered(agent.effort)
     ? agent.effort
-    : picked.defaultEffort
+    : offered(defaults.data?.effort)
+      ? defaults.data?.effort
+      : picked.defaultEffort
   const front = frontier(list)
   const shown = front.includes(picked) ? front : [...front, picked]
   const more = list.filter((model) => !shown.includes(model))

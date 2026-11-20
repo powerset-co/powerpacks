@@ -11,7 +11,7 @@ count lives in the home folder, one per Mac whatever folder a command runs from,
 `mutuals`: for up to 25 profile URLs, how many of the user's connections each person
 shares, and the first ten of them, from the people search "1st degree, connections of X"
 (one request per person, two when the profile id is not cached, all in one browser run;
-nothing shows in the person's profile views). First-degree connections (Connections.csv) are skipped. Answers
+nothing shows in the person's profile views). First-degree connections (Connections.csv) are skipped in a batch; the drawer's one person is not. Answers
 are kept CACHE_DAYS in MUTUALS; a failed request is not kept, so the next ask tries again.
 
 `sales-nav companies|titles <query>`: Sales Navigator's typeahead ids for a filter.
@@ -194,13 +194,15 @@ def mutuals_from(answer: dict[str, Any]) -> dict[str, Any]:
 
 
 def mutuals(urls: list[str], *, folder: Path = FOLDER, usage_path: Path = USAGE, profile_dir: Path = BROWSER_PROFILE,
-            runner=run_streaming_command) -> dict[str, Any]:
-    """Mutual counts for up to BATCH_CAP profile URLs: cached answers first, then the budget."""
+            runner=run_streaming_command, skip_connected: bool = True) -> dict[str, Any]:
+    """Mutual counts for up to BATCH_CAP profile URLs: cached answers first, then the budget.
+    `skip_connected=False` (the drawer's one person, asked for by a click) also looks up a
+    first-degree connection; a batch skips them to save the budget."""
     cache_path, ids_path = folder / MUTUALS.name, folder / PROFILE_IDS.name
     errors: dict[str, str] = {}
     cache, ids = read_json(cache_path, {}) or {}, read_json(ids_path, {}) or {}
     fresh_after = (datetime.now(timezone.utc) - timedelta(days=CACHE_DAYS)).isoformat()
-    connected = first_degree_slugs(folder / CONNECTIONS_CSV.name)
+    connected = first_degree_slugs(folder / CONNECTIONS_CSV.name) if skip_connected else set()
     rows: dict[str, dict[str, Any]] = {}
     pending: list[str] = []
     for url in urls[:BATCH_CAP]:

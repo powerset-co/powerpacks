@@ -142,6 +142,17 @@ export async function fetchModels(): Promise<CodexModel[]> {
   })
 }
 
+/** What a turn runs with when the picker has no choice: the model and effort of the user's own
+ *  Codex, else Codex's model at medium effort (the app sets them when it starts Codex). */
+export async function fetchDefaults(): Promise<TurnChoice> {
+  const read = await call("config/read", { includeLayers: false })
+  const config = isRecord(read) && isRecord(read.config) ? read.config : {}
+  return {
+    model: typeof config.model === "string" ? config.model : null,
+    effort: typeof config.model_reasoning_effort === "string" ? config.model_reasoning_effort : null,
+  }
+}
+
 /** The chat's model and effort; null keeps Codex's own default for each. */
 export interface TurnChoice {
   model: string | null
@@ -179,6 +190,9 @@ function approvalResult(approval: Approval, choice: ApprovalChoice): Record<stri
       ? { permissions: {}, scope: "turn" }
       : { permissions: approval.grant, scope: choice === "session" ? "session" : "turn" }
   }
+  if (approval.kind === "tool") {
+    return choice === "decline" ? { action: "decline" } : { action: "accept", content: approval.confirm }
+  }
   const decision = { once: "accept", session: "acceptForSession", decline: "decline" }[choice]
   return { decision }
 }
@@ -207,10 +221,11 @@ export function onApproval(handler: (approval: Approval) => void): () => void {
       handler(approval)
       return
     }
-    if (isRecord(payload) && payload.method === "item/tool/requestUserInput") {
-      const id = payload.id
-      if (typeof id === "string" || typeof id === "number") void declineRequest(id, { answers: {} })
-    }
+    if (!isRecord(payload)) return
+    const id = payload.id
+    if (typeof id !== "string" && typeof id !== "number") return
+    if (payload.method === "item/tool/requestUserInput") void declineRequest(id, { answers: {} })
+    if (payload.method === "mcpServer/elicitation/request") void declineRequest(id, { action: "decline" })
   })
 }
 

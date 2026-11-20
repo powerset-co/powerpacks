@@ -48,6 +48,15 @@ export type Approval =
       // The requested profile, echoed back as the grant when the user allows it.
       grant: Record<string, unknown>
     }
+  // An MCP tool (the Gmail archive) asking before it writes: `details` is what it would write,
+  // one "name: value" line each, and `confirm` is the answer it wants.
+  | {
+      kind: "tool"
+      requestId: RequestId
+      reason: string | null
+      details: string[]
+      confirm: Record<string, unknown>
+    }
 
 export type ApprovalChoice = "once" | "session" | "decline"
 

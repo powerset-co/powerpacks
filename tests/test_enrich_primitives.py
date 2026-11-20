@@ -183,6 +183,9 @@ class PowersetAuthTests(unittest.TestCase):
                         "--timeout", "20",
                     ],
                     cwd=ROOT,
+                    # Sign-in pulls the account's runtime keys: from the fake server (a 404),
+                    # never the hosted API, whose answer time this test must not depend on.
+                    env={**os.environ, "POWERSET_API_URL": f"http://127.0.0.1:{port}"},
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,

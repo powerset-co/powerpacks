@@ -46,7 +46,7 @@ Profile handoff:
 
 - `--profile-scope auto` is the default.
 - Auto uses compact `llm_profiles_path` only when role filters are current-role
-  scoped (`is_current: true`).
+  scoped (`is_current_role: true`, derived from the traits).
 - Auto uses full `profiles_path` for all-time/past-role queries.
 - Override with `--profile-scope current` or `--profile-scope all`.
 

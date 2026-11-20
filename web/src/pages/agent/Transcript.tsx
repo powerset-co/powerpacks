@@ -3,7 +3,9 @@ import type { ReactNode } from "react"
 import { Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
+  ASKS,
   failedRefine,
+  isRunNote,
   preparedSearch,
   ranSearch,
   refineStep,
@@ -329,7 +331,8 @@ function WentBackLine({ back }: { back: WentBack }) {
 }
 
 export function Transcript({ entries, running }: { entries: Entry[]; running: boolean }) {
-  const turns = group(entries)
+  // The app's own note to the agent after Run Search is not something the user said.
+  const turns = group(entries.filter((entry) => !isRunNote(entry)))
   // Only the newest search card asks Execute or Modify, while the agent waits and until the
   // search ran after it (its run printed a result): then the card is the search's record. Other
   // commands after the card (logging an edit beside the prepare) leave it asking.
@@ -343,8 +346,16 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
     search.run !== null ? <StepAction runId={search.run} stepId="s1" running={running} /> : null
   return (
     <>
-      {turns.map((turn) => {
-        if (turn.kind === "say") return <Say key={turn.entry.id} entry={turn.entry} />
+      {turns.map((turn, at) => {
+        if (turn.kind === "say") {
+          // The agent's question belongs to the card that is asking: it goes when its buttons go.
+          if (turn.entry.kind !== "agent" || !turn.entry.text.includes(ASKS))
+            return <Say key={turn.entry.id} entry={turn.entry} />
+          if (asking && newest && at > turns.indexOf(newest))
+            return <Say key={turn.entry.id} entry={turn.entry} />
+          const text = turn.entry.text.replace(ASKS, "").trim()
+          return text ? <Say key={turn.entry.id} entry={{ ...turn.entry, text }} /> : null
+        }
         if (turn.kind === "search")
           return (
             <SearchCard

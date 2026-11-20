@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
+import { runNote } from "@/lib/agent/preparedSearch"
 import type { Entry } from "@/types/agent"
 
 import { Transcript } from "./Transcript"
@@ -225,6 +226,54 @@ it("never offers a search again once the search ran after its card", () => {
   expect(screen.getByRole("region", { name: "Search" })).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
   expect(screen.queryByRole("button", { name: "Modify" })).toBeNull()
+})
+
+it("drops the question once Run Search ran the search, and never shows the app's note to the agent", () => {
+  // Run Search runs the prepared command with no agent turn; the app then tells the agent, who replies.
+  const run = (status: "running" | "done"): Entry => ({
+    kind: "command",
+    id: "c2",
+    command: "uv run python search_network_pipeline.py run --execute-approved",
+    status,
+    exitCode: status === "done" ? 0 : null,
+    output:
+      status === "done"
+        ? JSON.stringify(
+            { primitive: "search_network_pipeline", status: "completed", summary: { rows: 172 } },
+            null,
+            2,
+          )
+        : "",
+    durationMs: status === "done" ? 62600 : null,
+  })
+  const asked: Entry[] = [
+    prepared("c1", PREVIEW),
+    { kind: "agent", id: "a1", text: "Search prepared. Execute or modify?" },
+  ]
+  const { rerender } = render(<Transcript entries={asked} running={false} />)
+  expect(screen.getByText("Search prepared. Execute or modify?")).toBeTruthy()
+
+  rerender(<Transcript entries={[...asked, run("running")]} running={true} />)
+  expect(screen.queryByText("Search prepared. Execute or modify?")).toBeNull()
+
+  const note = runNote(run("done"))
+  if (note === null) throw new Error("Expected a note for the finished search")
+  expect(note).toContain("saved 172 people")
+  rerender(
+    <Transcript
+      entries={[
+        ...asked,
+        run("done"),
+        { kind: "user", id: "u1", text: note },
+        { kind: "agent", id: "a2", text: "Showing 172 candidates." },
+      ]}
+      running={false}
+    />,
+  )
+  expect(screen.queryByText("Search prepared. Execute or modify?")).toBeNull()
+  expect(screen.queryByText(/Run Search finished/)).toBeNull()
+  expect(screen.getByText("Showing 172 candidates.")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
 })
 
 it("shows a blocked search's blockers under its notes and offers only Send changes", () => {
