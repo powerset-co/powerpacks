@@ -112,7 +112,7 @@ reuses the same cap from the pending payload).
 ```bash
 uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/search_harness.py compile-pond \
-  --run-dir <run>
+  --run-dir <run> --set-id <set>
 ```
 
 Before execution, review the compiled payload yourself and call
@@ -151,13 +151,13 @@ uv run --project . python \
   --rerank-exclusion '<named specialty to penalize>'
 ```
 
-Then execute it. Add `--backend local --db <db>` to the compile and run commands
-when `decision.json` selected local search.
+Then execute it. On local search (`decision.json` selected it) the compile and
+run commands take `--backend local --db <db>` in place of `--set-id <set>`.
 
 ```bash
 uv run --env-file .env --project . python \
   packs/search/primitives/deep_search/search_harness.py run-pond \
-  --run-dir <run>
+  --run-dir <run> --set-id <set>
 ```
 
 The iteration record contains the query/payload snapshot, `edit_delta`,

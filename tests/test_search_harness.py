@@ -368,6 +368,23 @@ class SearchHarnessTests(unittest.TestCase):
             "created_at": results["created_at"], "updated_at": results["updated_at"],
         })
 
+    def test_compile_accepts_the_runs_set_id_and_refuses_another(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            run_dir = Path(raw)
+            _start(run_dir)
+            expanded = run_dir / "expanded.json"
+            expanded.write_text(json.dumps(_payload()), encoding="utf-8")
+            with mock.patch.object(search_harness, "_run_command", return_value={
+                    "payload_json": str(expanded),
+                  }), mock.patch.object(
+                      search_harness, "_ensure_hiring_company_context"), mock.patch.object(
+                      search_harness, "_llm_pattern_defaults",
+                      side_effect=lambda **kwargs: (kwargs["payload"], [])):
+                with self.assertRaisesRegex(ValueError, "differs from the set bound to this run"):
+                    search_harness.compile_pond(run_dir=run_dir, env_file="/dev/null", set_id="set-2")
+                search_harness.compile_pond(run_dir=run_dir, env_file="/dev/null", set_id="set-1")
+            self.assertIn("pending_payload", json.loads((run_dir / "results.json").read_text()))
+
     def test_compile_uses_native_expansion_traits_without_evaluation_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
