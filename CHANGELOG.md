@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.68.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.67.1...powerpacks-v3.68.0) (2026-11-20)
+
+
+### Features
+
+* **chat:** the chat reads and drafts in the Gmail archive through msgvault, and defaults to the user's own Codex model ([#1243](https://github.com/powerset-co/powerpacks/issues/1243)) ([f5b127d](https://github.com/powerset-co/powerpacks/commit/f5b127d16ed856b08bf4ac0c1bfdb172d70dd4f1))
+
+
+### Bug Fixes
+
+* **search:** a set search drops places the query did not mean ("York" for "New York") ([#1252](https://github.com/powerset-co/powerpacks/issues/1252)) ([bc2588d](https://github.com/powerset-co/powerpacks/commit/bc2588d0ff54ef35a4650286e927b3dd0e395ee0))
+* **search:** Get mutuals also looks up a first-degree connection ([#1246](https://github.com/powerset-co/powerpacks/issues/1246)) ([7c08410](https://github.com/powerset-co/powerpacks/commit/7c08410332fa5b7b8160076c6b9a3efd43febfdb))
+
 ## [3.67.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.67.0...powerpacks-v3.67.1) (2026-11-20)
 
 
