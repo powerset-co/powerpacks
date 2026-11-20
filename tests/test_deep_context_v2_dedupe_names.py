@@ -97,6 +97,32 @@ class DedupeNameRecallTests(unittest.TestCase):
         self.assertNotEqual(queries_dedupe.current_parents(self.conn)["a"],
                             queries_dedupe.current_parents(self.conn)["b"])
 
+    def test_names_spelled_alike_reach_judge_without_sharing_a_bucket(self) -> None:
+        self.add("a", "Nasser AlMutairy", "")
+        self.add("b", "Naser Al Mutairi", "")
+        plan = self.node().plan()
+        self.assertEqual(([(a, b) for a, b, _ in plan.todo], plan.blocking.pairs, plan.neighbours), ([("a", "b")], [], 1))
+
+    def merged_at(self, confidence: float) -> tuple[bool, int]:
+        """A same verdict at this confidence on two names that fail the gate: (joined, unsure count)."""
+        self.assertFalse(written_names_can_match("Jordan Bravo", "Bravo Jordan Quincy"))
+        self.add("a", "Jordan Bravo", "")
+        self.add("b", "Bravo Jordan Quincy", "")
+        node = self.node()
+        self.assertEqual([(a, b) for a, b, _ in node.plan().todo], [("a", "b")])
+        queries_dedupe.insert_pair_verdict(self.conn, ("a", "b", node.signature("a", "b"), 1, confidence,
+                                                       "Synthetic identity evidence", NOW))
+        with patch.object(Dedupe, "_judge_all", return_value={}):
+            counts = self.node().execute()
+        parents = queries_dedupe.current_parents(self.conn)
+        return parents["a"] == parents["b"], counts["unsure_same"]
+
+    def test_unsure_same_verdict_on_names_that_fail_the_gate_writes_nothing(self) -> None:
+        self.assertEqual(self.merged_at(0.9), (False, 1))
+
+    def test_sure_same_verdict_on_names_that_fail_the_gate_merges(self) -> None:
+        self.assertEqual(self.merged_at(0.97), (True, 0))
+
     def test_deleted_family_is_not_considered(self) -> None:
         self.add("a", "Jordan Bravo Photography", "Jordan Bravo")
         self.add("b", "Jordan Bravo", "Jordan Bravo")

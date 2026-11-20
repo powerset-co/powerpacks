@@ -5,6 +5,7 @@ In order:
 1. Block: every candidate with facts goes into name buckets and an email-handle bucket (blocking.py).
 2. Gate: a blocked pair goes on only when the two names could be one person's
    (names.written_names_can_match). A recall gate for the judge, not the identity decision.
+   Neighbour pairs (neighbours.py: names spelled alike, found without blocking) join them ungated.
 3. Skip pairs already in one family, and pairs with any saved verdict: a pair is judged once, ever.
 4. Judge: one gpt-6.1-sol call per remaining pair: same, different or uncertain, saved in
    pair_verdicts as it arrives. A failed pair is counted and the run fails before any parent row.
@@ -13,7 +14,8 @@ In order:
    exactly one component and is never split. Each component joins into one id: the li: among them, else
    the lowest existing p:, else a fresh p:; only the candidates moving onto it get a row (an absorb). A
    different verdict between two families in a component blocks the join; two li: ids write nothing;
-   uncertain writes nothing.
+   uncertain writes nothing. A same verdict on names that fail the gate counts only at confidence
+   SURE or more: on such pairs Sol says same whenever nothing contradicts it.
 6. Singletons, last: every candidate still without a parent gets a fresh p: id of its own.
 
 The evidence signature saved with each verdict (facts fingerprints, written names, identifiers,
@@ -42,7 +44,7 @@ from packs.ingestion.primitives.deep_context_v2.db.owner import read_owner
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import Identifier, ParentRow
 from packs.ingestion.primitives.deep_context_v2.db.schema import LINKEDIN_PARENT_PREFIX, MINTED_PARENT_HEX, MINTED_PARENT_PREFIX, MergeReason
 from packs.ingestion.primitives.deep_context_v2.db.store import now_iso, open_store, store_path
-from packs.ingestion.primitives.deep_context_v2.dedupe import judge
+from packs.ingestion.primitives.deep_context_v2.dedupe import judge, neighbours
 from packs.ingestion.primitives.deep_context_v2.dedupe.judge import SolDecision, SolSide
 from packs.ingestion.primitives.deep_context_v2.dedupe.blocking import Blocking, block
 from packs.ingestion.primitives.deep_context_v2.names import names_for_matching, written_names_can_match
@@ -51,12 +53,14 @@ from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCal
 
 OUTPUT_TOKENS_PER_PAIR = 1500  # assumed output+reasoning tokens per Sol call, estimate only
 DEFAULT_LIMIT = 100_000        # more pairs than any store has; --limit N judges the first N
+SURE = 0.95                    # the confidence a same verdict needs when the names fail the gate
 
 
 @dataclass(frozen=True)
 class Plan:
     blocking: Blocking
     gated: int
+    neighbours: int                           # neighbour pairs the gate did not already pass
     already_joined: int
     already_judged: int
     todo: list[tuple[str, str, str]]          # (a, b, signature) for Sol
@@ -85,9 +89,15 @@ class Dedupe(Node):
         # and is the reference any parent row carries.
         self.current: dict[tuple[str, str], int | None] = {}
         self.signatures: dict[tuple[str, str], str] = {}
+        self.confidence: dict[tuple[str, str], float] = {}
         for saved in queries.saved_verdicts(conn):
             self.current[(saved.candidate_a, saved.candidate_b)] = saved.same_person
             self.signatures[(saved.candidate_a, saved.candidate_b)] = saved.signature
+            self.confidence[(saved.candidate_a, saved.candidate_b)] = saved.confidence
+
+    def names_match(self, a: str, b: str) -> bool:
+        """The gate: any name of one could be one person's with any name of the other."""
+        return any(written_names_can_match(first, second) for first in self.names[a] for second in self.names[b])
 
     def signature(self, a: str, b: str) -> str:
         """The pair's evidence: facts fingerprints, written names, identifiers, prompt version."""
@@ -102,18 +112,20 @@ class Dedupe(Node):
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def plan(self) -> Plan:
+        """Rules 1 to 3: block, gate, add the neighbours, skip the joined and the judged; the pairs for Sol
+        with their signatures."""
         # Rule 1: block every candidate with facts.
-        """Rules 1 to 3: block, gate, skip the joined and the judged; the pairs for Sol with their signatures."""
         blocking: Blocking = block(sorted(self.fingerprints), self.names, self.identifiers)
-        gated: int = 0
+        # Rule 2: a blocked pair's two names must be able to be one person's; neighbour pairs go on ungated.
+        passed: set[tuple[str, str]] = set()
+        for a, b in blocking.pairs:
+            if self.names_match(a, b):
+                passed.add((a, b))
+        near: set[tuple[str, str]] = neighbours.pairs({candidate_id: self.names[candidate_id] for candidate_id in self.fingerprints})
         joined: int = 0
         skipped: int = 0
         todo: list[tuple[str, str, str]] = []
-        for a, b in blocking.pairs:
-            # Rule 2: the two names must be able to be one person's.
-            if not any(written_names_can_match(first, second) for first in self.names[a] for second in self.names[b]):
-                continue
-            gated += 1
+        for a, b in sorted(passed | near):
             # Rule 3: already one family, or already judged.
             if a in self.parents and self.parents.get(b) == self.parents[a]:
                 joined += 1
@@ -124,7 +136,7 @@ class Dedupe(Node):
             signature: str = self.signature(a, b)
             self.signatures[(a, b)] = signature
             todo.append((a, b, signature))
-        return Plan(blocking, gated, joined, skipped, todo[: self.limit])
+        return Plan(blocking, len(passed), len(near - passed), joined, skipped, todo[: self.limit])
 
     def prompts(self, todo: list[tuple[str, str, str]]) -> list[str]:
         """The user prompt of each pair going to Sol, in order."""
@@ -156,7 +168,7 @@ class Dedupe(Node):
         output: int = len(plan.todo) * OUTPUT_TOKENS_PER_PAIR
         return {
             "candidates_bucketed": plan.blocking.bucketed, "buckets": buckets,
-            "blocked_pairs": len(plan.blocking.pairs), "gated_pairs": plan.gated,
+            "blocked_pairs": len(plan.blocking.pairs), "gated_pairs": plan.gated, "neighbour_pairs": plan.neighbours,
             "already_joined": plan.already_joined, "already_judged": plan.already_judged,
             "pairs_for_sol": len(plan.todo), "input_tokens": tokens, "output_tokens_assumed": output,
             "model": judge.MODEL, "reasoning_effort": self.config.effort, "prompt_version": judge.PROMPT_VERSION,
@@ -164,7 +176,7 @@ class Dedupe(Node):
         }
 
     def execute(self) -> dict[str, int]:
-        """Rules 4 to 7: judge the planned pairs, join families over the same verdicts, then a parent for everyone else."""
+        """Rules 4 to 6: judge the planned pairs, join families over the same verdicts, then a parent for everyone else."""
         plan: Plan = self.plan()
         # Rule 4: judge; every answer is saved as it arrives.
         answers: dict[tuple[str, str], int | None] = asyncio.run(self._judge_all(plan.todo, self.prompts(plan.todo)))
@@ -177,6 +189,12 @@ class Dedupe(Node):
             verdicts[pair] = same_person
         for pair, same_person in answers.items():
             verdicts[pair] = same_person
+        # A same verdict on names that fail the gate counts only when Sol is sure; otherwise nothing is written.
+        unsure: int = 0
+        for pair in sorted(verdicts):
+            if verdicts[pair] == 1 and not self.names_match(*pair) and self.confidence[pair] < SURE:
+                del verdicts[pair]
+                unsure += 1
         # Rule 5: join families over the same verdicts; rule 6: a parent of their own for everyone else.
         rows: list[ParentRow]
         counts: dict[str, int]
@@ -192,6 +210,8 @@ class Dedupe(Node):
                 singletons += 1
         queries.append_parent_rows(self.conn, rows)
         counts["gated_pairs"] = plan.gated
+        counts["neighbour_pairs"] = plan.neighbours
+        counts["unsure_same"] = unsure
         counts["judged"] = len(answers)
         counts["singletons"] = singletons
         return counts
@@ -292,6 +312,7 @@ class Dedupe(Node):
                                                         decision.reason, now_iso()))
                 self.conn.commit()
                 answers[(a, b)] = decision.same_person
+                self.confidence[(a, b)] = decision.confidence
         return answers
 
     async def _guarded(self, caller: OpenAIResponsesCaller, index: int, prompt: str) -> tuple[int, SolDecision | None]:
