@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.67.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.66.0...powerpacks-v3.67.0) (2026-11-20)
+
+
+### Features
+
+* **gmail:** the first sync reads through several Google projects at once, and the console "Create client" stall is fixed ([#1244](https://github.com/powerset-co/powerpacks/issues/1244)) ([af1cf56](https://github.com/powerset-co/powerpacks/commit/af1cf56ab3145c9db275d974a660bfcb35f7927d))
+
+
+### Bug Fixes
+
+* **search:** deep search's compile and run commands take the run's --set-id ([#1249](https://github.com/powerset-co/powerpacks/issues/1249)) ([b214865](https://github.com/powerset-co/powerpacks/commit/b214865e5856107659ee22804df75c31cde1926a))
+
 ## [3.66.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.65.0...powerpacks-v3.66.0) (2026-11-19)
 
 
