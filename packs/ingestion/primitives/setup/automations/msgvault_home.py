@@ -40,6 +40,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -419,6 +420,42 @@ def pace_gmail_sync(home: Path) -> None:
     path = config_path(home)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     path.write_text(set_toml_value(text, "sync", "rate_limit_qps", GMAIL_RATE_LIMIT_QPS), encoding="utf-8")
+
+
+GMAIL_DRAFTS_SOURCE_RE = re.compile(r"^\[\[gmail\.drafts\]\]\s*\n(?:(?!\[).*\n?)*?\s*source_id\s*=\s*(\d+)", re.MULTILINE)
+
+
+def gmail_source_ids(home: Path) -> list[int]:
+    """msgvault's ids for the home's Gmail mailboxes, `[]` when there is no archive yet."""
+    path = db_path(home)
+    if not path.exists():
+        return []
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as con:
+            rows = con.execute(
+                "SELECT id FROM sources WHERE source_type IS NULL OR LOWER(source_type) = 'gmail' ORDER BY id"
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [int(row[0]) for row in rows]
+
+
+def grant_gmail_drafts(home: Path) -> list[int]:
+    """Let msgvault create reply drafts in every Gmail mailbox of the home; returns the ids added.
+
+    msgvault refuses a draft (`draft_disabled`) until config.toml holds a `[[gmail.drafts]]`
+    block for the mailbox's source id. It never sends; the app's chat asks before each draft.
+    A block already there, enabled or not, is left as the user has it. msgvault's background
+    process reads the blocks when it starts."""
+    path = config_path(home)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    granted = {int(source_id) for source_id in GMAIL_DRAFTS_SOURCE_RE.findall(text)}
+    missing = [source_id for source_id in gmail_source_ids(home) if source_id not in granted]
+    if not missing:
+        return []
+    blocks = "".join(f"\n[[gmail.drafts]]\nsource_id = {source_id}\nenabled = true\n" for source_id in missing)
+    path.write_text((text.rstrip() + "\n" if text.strip() else "") + blocks, encoding="utf-8")
+    return missing
 
 
 def init_db(home: Path) -> dict[str, Any]:
