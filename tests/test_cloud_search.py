@@ -250,11 +250,15 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             with mock.patch.object(pipeline, "run", return_value={"returncode": 0, "json": expansion}) as run, \
                     mock.patch.object(cloud_search.powerset_api, "call", return_value=resolved) as api, \
                     mock.patch.object(pipeline, "emit") as emit, mock.patch.dict("os.environ"), \
+                    mock.patch.object(pipeline.place_review, "unintended_places", new_callable=mock.AsyncMock,
+                                      return_value=set()) as review, \
                     mock.patch.object(pipeline.title_selection, "pick_title_clusters", new_callable=mock.AsyncMock,
                                       return_value=pipeline.title_selection.TitleSelection(
                                           ["senior software engin"], ["Software Engineer"])) as pick:
                 self.assertEqual(pipeline.cmd_prepare(args), 0)
             run.assert_called_once()
+            review.assert_awaited_once()
+            self.assertEqual(review.await_args.args[1], ["Austin", "Texas", "USA", "Austin Metro", "North America"])
             command = run.call_args.args[0]
             self.assertEqual(Path(command[1]).stem, "expand_search_request")
             for flag, value in (("--query", args.query), ("--model", "synthetic-model"),
@@ -602,6 +606,40 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         self.assertEqual(steps["hydrate_people"]["source"]["backend"], "powerset_api")
         self.assertEqual((profile["name"], profile["total_interactions"], profile["source_channels"]),
                          ("Avery Stone", 3, ["gmail"]))
+
+
+class PlaceReviewTests(unittest.TestCase):
+    """Resolve returns every place its lookup matched; the app keeps the ones the query meant."""
+
+    def _payload(self, cities: list[str], metros: list[str]) -> dict:
+        return {"normalized_query": "product leaders in New York City",
+                "role_search_filters": {"cities": cities, "metro_areas": metros},
+                "api_filters": {"cities": [{"id": name, "display_value": name} for name in cities],
+                                "metro_areas": [{"id": name, "display_value": name} for name in metros]}}
+
+    def test_a_place_the_query_did_not_mean_leaves_the_card_and_the_request(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        async def review(query, places, **_kwargs):
+            self.assertIn("York", places)
+            return {"York", "York Metropolitan Area"}
+
+        payload = self._payload(["New York City", "York"], ["New York Metropolitan Area", "York Metropolitan Area"])
+        with mock.patch.object(pipeline.place_review, "unintended_places", review):
+            out = pipeline._drop_unintended_places(payload)
+        self.assertEqual(out["role_search_filters"],
+                         {"cities": ["New York City"], "metro_areas": ["New York Metropolitan Area"]})
+        self.assertEqual([item["id"] for item in out["api_filters"]["cities"]], ["New York City"])
+        self.assertEqual([item["id"] for item in out["api_filters"]["metro_areas"]], ["New York Metropolitan Area"])
+        self.assertIn("York Metropolitan Area", out["notes"][-1])
+
+    def test_one_place_is_not_reviewed(self) -> None:
+        from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
+
+        payload = self._payload(["London"], [])
+        with mock.patch.object(pipeline.place_review, "unintended_places",
+                               side_effect=AssertionError("no model call for one place")):
+            self.assertIs(pipeline._drop_unintended_places(payload), payload)
 
 
 if __name__ == "__main__":
