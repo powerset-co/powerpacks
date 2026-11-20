@@ -109,6 +109,14 @@ def is_project_taken_error(text: str) -> bool:
     )
 
 
+def is_project_limit_error(text: str) -> bool:
+    """Return True when gcloud says the account may own no more projects.
+
+    The limit is Google's and differs by account (12 on a fresh Gmail account, seen 2026-11-19);
+    projects the person already owns count toward it."""
+    return "allotted project quota" in text.lower()
+
+
 def is_terms_error(text: str) -> bool:
     """Return True when gcloud says the account has not accepted the Google Cloud Terms of Service.
 

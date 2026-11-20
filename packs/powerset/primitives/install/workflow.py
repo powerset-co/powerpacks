@@ -292,22 +292,25 @@ class SourceOnboarding:
                             action={"command": "; ".join(item["authorize_command"] for item in health.get("accounts", [])
                                                          if "authorize_command" in item)})
 
-    def _gmail_quota_apps(self, home: Path, synced: threading.Event) -> None:
+    def _gmail_quota_apps(self, home: Path, synced: threading.Event, apps: list[str]) -> None:
         """Set up extra Google projects while the first sync runs; each joins the sync once ready.
 
         Each one is a project, an OAuth client and a sign-in per mailbox. The sync never waits on
-        these: it started on the main project, and a step that does not finish ends the setup."""
+        these: it started on the main project. Setup ends when the sync does, when Google says the
+        account may own no more projects, or at a step that does not finish."""
         login = self.gmail_emails[0]
-        for app in msgvault_home.GMAIL_QUOTA_APPS:
+        for app in apps:
             if synced.is_set():
                 return
             base = ["--home", str(home), "--oauth-app", app,
                     "--project", msgvault_home.default_project_id(f"{login} {app}")]
-            # Google's console stalls now and then (seen at "Create client" and on the scopes page);
-            # the same setup run again picks up where it stopped.
             setup = BrowserSetup.from_args(msgvault_parser().parse_args(
                 ["browser-setup", *base, "--email", login, "--no-init-db"]))
-            if setup.run()["status"] not in _SUCCESS and setup.run()["status"] not in _SUCCESS:
+            result = setup.run()
+            if result.get("project_limit"):
+                return  # the sync reads through the projects it has
+            # Google's console stalls now and then; the same setup run again picks up where it stopped.
+            if result["status"] not in _SUCCESS and setup.run()["status"] not in _SUCCESS:
                 return
             allowed = set(msgvault_home.load_setup_state(home, app).test_users)
             if not set(self.gmail_emails) <= allowed and TestUsers.from_args(msgvault_parser().parse_args(
@@ -320,14 +323,13 @@ class SourceOnboarding:
     def _gmail_quota_setup(self, home: Path, synced: threading.Event) -> threading.Thread | None:
         """Start the extra projects' setup for a first sync that is worth it; None when it is not."""
         window = f"after:{self.sync_after}" if self.sync_after else ""
-        if (self.refresh or not msgvault_home.msgvault_has_quota_apps()
-                or sum(count_messages(home, email, window) or 0 for email in self.gmail_emails)
-                < msgvault_home.GMAIL_QUOTA_MIN_MESSAGES):
-            # A refresh reads through the main project only.
-            msgvault_home.name_gmail_quota_apps(home, [])
+        # A refresh reads through the main project only.
+        apps = [] if self.refresh or not msgvault_home.msgvault_has_quota_apps() else msgvault_home.gmail_quota_apps(
+            sum(count_messages(home, email, window) or 0 for email in self.gmail_emails))
+        msgvault_home.name_gmail_quota_apps(home, apps)
+        if not apps:
             return None
-        msgvault_home.name_gmail_quota_apps(home, list(msgvault_home.GMAIL_QUOTA_APPS))
-        setup = threading.Thread(target=self._gmail_quota_apps, args=(home, synced), daemon=True)
+        setup = threading.Thread(target=self._gmail_quota_apps, args=(home, synced, apps), daemon=True)
         setup.start()
         return setup
 

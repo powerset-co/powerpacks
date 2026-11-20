@@ -413,7 +413,9 @@ class SourceOnboardingTests(unittest.TestCase):
         count.assert_called_with(home, 'casey@example.com', 'after:2023-01-01')
         # Only the large first sync sets extra projects up, and it does not wait for them to start.
         setup.assert_called_once()
-        self.assertIn('quota_apps = ["quota2", "quota3", "quota4", "quota5", "quota6", "quota7", "quota8", "quota9", "quota10"]', seen[0])
+        # 12,000 messages at 5,600 an hour per project: three projects, so two extra.
+        self.assertIn('quota_apps = ["quota2", "quota3"]', seen[0])
+        self.assertEqual(len(msgvault_home.gmail_quota_apps(10**6)), msgvault_home.GMAIL_QUOTA_MAX_APPS)
         self.assertIn(f'[oauth.apps.quota2]\nclient_secrets = "{home / "client_secret_quota2.json"}"', seen[0])
         self.assertIn('quota_apps = []', seen[1])
         self.assertIn('quota_apps = []', seen[2])
@@ -432,7 +434,7 @@ class SourceOnboardingTests(unittest.TestCase):
         with patch.object(BrowserSetup, 'from_args', return_value=ok) as created, \
              patch.object(TestUsers, 'from_args', return_value=ok) as allowed, \
              patch.object(workflow.oauth_browser, 'authorize_account', side_effect=authorize) as signed_in:
-            onboarding._gmail_quota_apps(home, synced)
+            onboarding._gmail_quota_apps(home, synced, ['quota2', 'quota3', 'quota4'])
         self.assertEqual([call.args[0].oauth_app for call in created.call_args_list], ['quota2', 'quota3'])
         self.assertEqual(len({call.args[0].project for call in created.call_args_list}), 2)
         self.assertEqual(allowed.call_count, 2)
@@ -442,9 +444,16 @@ class SourceOnboardingTests(unittest.TestCase):
         # A project whose setup fails twice ends it: no later project is tried.
         failing = SimpleNamespace(run=Mock(return_value={'status': 'error'}))
         with patch.object(BrowserSetup, 'from_args', return_value=failing) as created:
-            onboarding._gmail_quota_apps(home, threading.Event())
+            onboarding._gmail_quota_apps(home, threading.Event(), ['quota2', 'quota3'])
         created.assert_called_once()
         self.assertEqual(failing.run.call_count, 2)
+
+        # Google saying the account may own no more projects ends it at once, with no second try.
+        full = SimpleNamespace(run=Mock(return_value={'status': 'error', 'project_limit': True}))
+        with patch.object(BrowserSetup, 'from_args', return_value=full) as created:
+            onboarding._gmail_quota_apps(home, threading.Event(), ['quota2', 'quota3'])
+        created.assert_called_once()
+        full.run.assert_called_once()
 
     def test_gmail_unknown_or_filtered_history_is_not_proof_of_coverage(self):
         current = import_common.ImportManifest.from_payload('gmail', {
