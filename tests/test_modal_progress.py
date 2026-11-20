@@ -96,6 +96,21 @@ class ModalProgressTests(unittest.TestCase):
                 self.assertEqual(output.getvalue().splitlines(), ["enrich.count 1/2", f"{terminal['code']} None/None"])
                 self.assertEqual(sleep.call_count, 3)
 
+    def test_watcher_keeps_asking_after_a_network_error(self):
+        """A read timeout (the laptop slept) is not the run failing: the watch asks again."""
+        terminal = {"status": "completed", "code": "done"}
+        answers = iter([TimeoutError("The read operation timed out"), OSError("network is down"), terminal])
+
+        def read():
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch.object(linkedin_modal_pipeline.time, "sleep"), patch.object(sys, "stdout", io.StringIO()) as output:
+            self.assertEqual(linkedin_modal_pipeline.watch_run(read), terminal)
+        self.assertIn("status check failed (The read operation timed out); asking again", output.getvalue())
+
     def test_company_fetch_keeps_its_line_until_finished(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
