@@ -113,9 +113,12 @@ def login_gcloud(cmd: list[str], email: str, *, profile_dir: Path = DEFAULT_BROW
 def authorize_account(
     home: Path, email: str, app_name: str, *, force: bool,
     profile_dir: Path = DEFAULT_BROWSER_PROFILE.expanduser(), timeout_seconds: int = 900,
-    on_progress: Callable[[dict], None] | None = None,
+    on_progress: Callable[[dict], None] | None = None, quota: bool = False,
 ) -> dict[str, Any]:
-    """Run msgvault's callback server and consent in the saved Google profile."""
+    """Run msgvault's callback server and consent in the saved Google profile.
+
+    `quota`: sign the mailbox in on `app_name` as an extra quota app (`add-quota-app`), whose
+    token msgvault keeps apart from the account's own."""
     configured = configured_client_secret(home, app_name)
     if not configured or configured["status"] != "configured":
         return {"status": "error", "message": "msgvault OAuth client is not configured."}
@@ -124,7 +127,7 @@ def authorize_account(
     if not data_dir.is_absolute():
         data_dir = home / data_dir
     safe_email = email.replace("/", "_").replace("\\", "_").replace("..", "_")
-    token = data_dir / "tokens" / f"{safe_email}.json"
+    token = data_dir / "tokens" / (f"quota/{app_name}" if quota else "") / f"{safe_email}.json"
     backup = token.with_suffix(".json.bkup")
     saved_token = force and token.exists()
     if saved_token:
@@ -140,7 +143,8 @@ def authorize_account(
             opener = Path(temporary) / "open"
             opener.write_text("#!/bin/sh\nexit 0\n")
             opener.chmod(0o700)
-            cmd = ["msgvault", "--home", str(home), "--local", "--no-log-file", "add-account", email]
+            cmd = ["msgvault", "--home", str(home), "--local", "--no-log-file",
+                   "add-quota-app" if quota else "add-account", email]
             if force:
                 cmd.append("--force")
             if app_name:

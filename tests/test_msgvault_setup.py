@@ -646,6 +646,19 @@ class MsgvaultSetupTests(unittest.TestCase):
             self.assertEqual(create.call_count, 2)
             self.assertEqual(mode.call_args.args, ("accept-terms",))
 
+    def test_browser_setup_reports_googles_project_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            refused = {"status": "error", "project": "local-msg-vault-test",
+                       "message": "ERROR: (gcloud.projects.create) The project cannot be created because you "
+                                  "have exceeded your allotted project quota."}
+            with mock.patch.object(msgvault_home, "ensure_msgvault", return_value={"installed": True, "path": "/bin/msgvault"}), \
+                mock.patch.object(gcloud_project, "ensure_gcloud_auth", return_value={"status": "ok", "account": "me@example.com"}), \
+                mock.patch.object(gcloud_project, "create_gcloud_project", return_value=refused):
+                _, payload = self.invoke(["browser-setup", "--home", str(Path(tmp) / "msgvault"),
+                                          "--project", "local-msg-vault-test", "--email", "me@example.com"])
+            self.assertEqual(payload["status"], "error")
+            self.assertTrue(payload["project_limit"])
+
     def test_add_test_users_uses_saved_project_and_browser_flow(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "msgvault"
