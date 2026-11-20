@@ -74,6 +74,15 @@ class MutualsTests(unittest.TestCase):
         self.assertEqual(len(browser.plans), 1)
 
     @with_folder
+    def test_a_connection_is_looked_up_when_asked(self, folder, profile):
+        (folder / "Connections.csv").write_text("First Name,Last Name,URL\nA,B,https://www.linkedin.com/in/friend\n")
+        browser = FakeBrowser(lambda r: {"status": 200, "text": PROFILE_URN} if r["name"].startswith("profile")
+                              else {"status": 200, "text": clusters(2, ["Ann", "Bob"])})
+        out = ls.mutuals(["https://www.linkedin.com/in/friend"], folder=folder, usage_path=folder / "usage.json",
+                         profile_dir=profile, runner=browser, skip_connected=False)
+        self.assertEqual((out["rows"][0]["status"], out["rows"][0]["count"]), ("looked_up", 2))
+
+    @with_folder
     def test_budget_bounds_the_batch(self, folder, profile):
         ls.spend(ls.DAY_CAP - 3, folder / "usage.json")
         browser = FakeBrowser(lambda r: {"status": 200, "text": PROFILE_URN} if r["name"].startswith("profile") else {"status": 200, "text": clusters(1, ["Ann"])})

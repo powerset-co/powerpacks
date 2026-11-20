@@ -222,6 +222,7 @@ class BrowserSetup:
                     "status": "error",
                     "message": "Google Cloud project creation failed.",
                     "project": project_result,
+                    "project_limit": gcloud_project.is_project_limit_error(str(project_result.get("message", ""))),
                 }
             # create_gcloud_project may have fallen back to a fresh id when the
             # deterministic one was globally reserved. Adopt the id that was really

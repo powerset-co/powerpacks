@@ -286,51 +286,40 @@ async function fillScoped(root, labels, value, timeout = 1500) {
   return false;
 }
 
-async function chooseOption(page, labelCandidates, optionCandidates) {
-  for (const label of labelCandidates) {
-    const labelText = label instanceof RegExp ? label.toString() : String(label);
-    const combo = page.getByRole("combobox", { name: label });
-    if (await visible(combo, 1200)) {
-      log(`opening ${labelText}`);
-      await combo.first().click();
-      if (await clickFirst(page, optionCandidates, 1200)) return true;
-    }
-    const select = page.getByLabel(label, { exact: false });
-    if (await visible(select, 1200)) {
-      for (const option of optionCandidates) {
-        try {
-          log(`selecting ${option} for ${labelText}`);
-          await select.first().selectOption({ label: option });
-          return true;
-        } catch (_) {}
+// Open the menu named by one of `labelCandidates` and pick one of `optionCandidates`. The form
+// can draw a few seconds after its page, so this looks for the named menu until `deadlineMs` runs
+// out. It only ever clicks a menu that carries the label: the page's first menu is the console's
+// search box, and opening that covers the form (2026-11-19: three setups stalled 15 minutes on it).
+async function chooseOption(page, labelCandidates, optionCandidates, deadlineMs = 30000) {
+  const until = Date.now() + deadlineMs;
+  while (Date.now() < until) {
+    for (const label of labelCandidates) {
+      const labelText = label instanceof RegExp ? label.toString() : String(label);
+      const select = page.getByLabel(label, { exact: false });
+      if (await visible(select, 500)) {
+        for (const option of optionCandidates) {
+          try {
+            await select.first().selectOption({ label: option }, { timeout: 1500 });
+            log(`selected ${option} for ${labelText}`);
+            return true;
+          } catch (_) {}
+        }
+      }
+      const menus = [
+        page.getByRole("combobox", { name: label }),
+        page.locator("cfc-select, mat-select, .mat-mdc-select, [aria-haspopup='listbox']").filter({ hasText: label }),
+        page.getByText(label, { exact: false }),
+      ];
+      for (const menu of menus) {
+        if (!(await visible(menu, 500))) continue;
+        log(`opening ${labelText}`);
+        await menu.first().click({ timeout: 2500 }).catch(() => {});
+        await page.waitForTimeout(600);
+        if (await clickFirst(page, optionCandidates, 2500)) return true;
+        await page.keyboard.press("Escape").catch(() => {});
       }
     }
-    const customSelect = page
-      .locator("cfc-select, mat-select, .mat-mdc-select, [aria-haspopup='listbox']")
-      .filter({ hasText: label })
-      .first();
-    if (await visible(customSelect, 1200)) {
-      log(`opening custom select ${labelText}`);
-      await customSelect.click({ timeout: 2500 }).catch(() => {});
-      await page.waitForTimeout(600);
-      if (await clickFirst(page, optionCandidates, 2500)) return true;
-    }
-    const visibleLabel = page.getByText(label, { exact: false }).first();
-    if (await visible(visibleLabel, 1200)) {
-      log(`opening visible label ${labelText}`);
-      await visibleLabel.click({ timeout: 2500 }).catch(() => {});
-      await page.waitForTimeout(600);
-      if (await clickFirst(page, optionCandidates, 2500)) return true;
-    }
-    const genericSelect = page
-      .locator("cfc-select, mat-select, .mat-mdc-select, [role='combobox'], [aria-haspopup='listbox'], material-dropdown-select")
-      .first();
-    if (await visible(genericSelect, 1200)) {
-      log(`opening first visible select for ${labelText}`);
-      await genericSelect.click({ timeout: 2500 }).catch(() => {});
-      await page.waitForTimeout(600);
-      if (await clickFirst(page, optionCandidates, 2500)) return true;
-    }
+    await page.waitForTimeout(500);
   }
   return false;
 }
@@ -416,10 +405,15 @@ function waitForHumanLogin(page, timeoutMs) {
 
 async function gotoPage(page, url, label, timeout = 30000) {
   log(`opening ${label}`);
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-  } catch (error) {
-    log(`open ${label} did not finish cleanly: ${error.message}`);
+  // A console page that never answers left the steps after it waiting on a blank page for ten
+  // minutes (seen 2026-11-19 on the scopes page); asking again loads it.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
+      break;
+    } catch (error) {
+      log(`open ${label} did not finish cleanly (try ${attempt}): ${error.message}`);
+    }
   }
   await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
   await snapshot(page);
