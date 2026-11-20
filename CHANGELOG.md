@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.67.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.67.0...powerpacks-v3.67.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **search:** a finished Run Search drops its buttons and question, and the agent replies ([#1248](https://github.com/powerset-co/powerpacks/issues/1248)) ([cd92ba1](https://github.com/powerset-co/powerpacks/commit/cd92ba1f0ba706940c10778f5fef17931367c3fe))
+
 ## [3.67.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.66.0...powerpacks-v3.67.0) (2026-11-20)
 
 
