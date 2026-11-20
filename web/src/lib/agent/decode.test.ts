@@ -143,4 +143,51 @@ describe("decodeThreadSummary", () => {
     expect(viewed?.updatedAt.toISOString()).toBe("2026-10-16T09:05:25.000Z")
     expect(plain?.updatedAt.getTime()).toBe(1_700_000_000_000)
   })
+
+  it("reads a tool's yes/no confirmation and skips forms the page cannot answer", () => {
+    const requestedSchema = { type: "object", properties: { confirm: { type: "boolean" } } }
+    const raw = {
+      id: 9,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "msgvault",
+        threadId: "t1",
+        mode: "form",
+        message: "Create a draft?",
+        requestedSchema,
+      },
+    }
+    expect(decodeRequest(raw)).toEqual({
+      kind: "tool",
+      requestId: 9,
+      reason: "Create a draft?",
+      details: [],
+      confirm: { confirm: true },
+    })
+    const approval = {
+      id: 0,
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "msgvault",
+        mode: "form",
+        message: 'Allow the msgvault MCP server to run tool "draft_reply"?',
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          tool_params_display: [
+            { name: "to", value: ["casey@example.com"], display_name: "to" },
+            { name: "subject", value: "Hello", display_name: "subject" },
+          ],
+        },
+      },
+    }
+    expect(decodeRequest(approval)).toEqual({
+      kind: "tool",
+      requestId: 0,
+      reason: 'Allow the msgvault MCP server to run tool "draft_reply"?',
+      details: ['to: ["casey@example.com"]', "subject: Hello"],
+      confirm: {},
+    })
+    const typed = { type: "object", properties: { name: { type: "string" } } }
+    expect(decodeRequest({ ...raw, params: { ...raw.params, requestedSchema: typed } })).toBeNull()
+  })
 })

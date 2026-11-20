@@ -235,6 +235,22 @@ export function decodeRequest(raw: unknown): Approval | null {
         grant,
       }
     }
+    case "mcpServer/elicitation/request": {
+      // A form with no fields (Codex asking to run a tool) or yes/no fields (msgvault's own
+      // `confirm`); anything else the page cannot answer.
+      const properties = record(record(params, "requestedSchema") ?? {}, "properties") ?? {}
+      const fields = Object.entries(properties)
+      if (text(params, "mode") === "url") return null
+      if (!fields.every(([, field]) => isRecord(field) && field.type === "boolean")) return null
+      const confirm = Object.fromEntries(fields.map(([name]) => [name, true]))
+      // Codex's own approval of a tool call lists the call's arguments.
+      const details = list(record(params, "_meta") ?? {}, "tool_params_display").flatMap((row) => {
+        if (!isRecord(row)) return []
+        const value = typeof row.value === "string" ? row.value : JSON.stringify(row.value)
+        return [`${text(row, "display_name") ?? text(row, "name") ?? ""}: ${value}`]
+      })
+      return { kind: "tool", requestId: id, reason: text(params, "message"), details, confirm }
+    }
     default:
       return null
   }

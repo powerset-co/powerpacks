@@ -109,6 +109,38 @@ class MsgvaultSetupTests(unittest.TestCase):
                 '[oauth]\nclient_secrets = "x.json"\n\n[sync]\nrate_limit_qps = 0\n',
             )
 
+    def test_every_gmail_mailbox_gets_a_drafts_grant_once_and_an_existing_block_is_kept(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.assertEqual(msgvault_home.grant_gmail_drafts(home), [])  # no archive yet
+            self.assertFalse((home / "config.toml").exists())
+            with sqlite3.connect(home / "msgvault.db") as con:
+                con.execute("CREATE TABLE sources (id INTEGER PRIMARY KEY, source_type TEXT, identifier TEXT)")
+                con.executemany(
+                    "INSERT INTO sources VALUES (?, ?, ?)",
+                    [(1, "gmail", "a@example.com"), (2, "gmail", "b@example.com"), (3, "whatsapp", "x")],
+                )
+            config = home / "config.toml"
+            config.write_text(
+                "[sync]\nrate_limit_qps = 0\n\n[[gmail.drafts]]\nsource_id = 1\nenabled = false\n", encoding="utf-8"
+            )
+            self.assertEqual(msgvault_home.grant_gmail_drafts(home), [2])
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                "[sync]\nrate_limit_qps = 0\n\n[[gmail.drafts]]\nsource_id = 1\nenabled = false\n"
+                "\n[[gmail.drafts]]\nsource_id = 2\nenabled = true\n",
+            )
+            self.assertEqual(msgvault_home.grant_gmail_drafts(home), [])
+            import tomllib
+
+            parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(parsed["gmail"]["drafts"], [
+                {"source_id": 1, "enabled": False}, {"source_id": 2, "enabled": True},
+            ])
+            self.assertEqual(parsed["sync"], {"rate_limit_qps": 0})
+
     def test_parse_json_fragment_skips_msgvault_log_lines(self):
         text = 'time=2026 level=INFO msg="startup"\n[{"email":"me@example.com"}]\ntime=2026 level=INFO msg="exit"\n'
         self.assertEqual(shell.parse_json_fragment(text), [{"email": "me@example.com"}])
