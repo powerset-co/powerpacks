@@ -293,8 +293,11 @@ ASKS = "Search prepared. Execute or modify?"
 def search_run_done(app: App) -> None:
     """Run Search runs the prepared search with no agent turn, so the chat said nothing after it:
     the agent's "Search prepared. Execute or modify?" stayed under a finished search and only "Ran
-    1 command" followed. Now the question goes with the card's buttons and the chat says "Showing N
-    candidates". Prepares a search in a new chat (a model turn) and runs it (a real search)."""
+    1 command" followed, with Run Search and Edit Filters still on the card (the run's stderr landed
+    after its printed result, so the app did not see the search had run). Now the buttons and the
+    question go and the agent replies once
+    the search ends (the app tells it; that note never shows). Prepares a search in a new chat (a
+    model turn), runs it (a real search) and waits for the reply (a second model turn)."""
     app.go("/agent", {"css": "#agent-message"}, PAGE)
     app.click({"css": "[aria-label='New chat']"})
     app.click({"css": "#agent-message"})
@@ -302,11 +305,17 @@ def search_run_done(app: App) -> None:
     app.click({"css": "[aria-label='Send']"})
     app.wait_for(f"{RUN_DISABLED} === false && {SAID}.includes({json.dumps(ASKS)})", PREPARE,
                  "the prepared search asks Execute or modify")
+    before = json.dumps(app.js(SAID))
     app.js("[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Run Search').click()")
-    app.wait_for(f"{SAID}.some((line) => /^Showing [\\d,]+ candidates?$/.test(line))", RUN,
-                 "the finished search says how many candidates it shows")
-    if app.js(f"{SAID}.includes({json.dumps(ASKS)})"):
+    app.wait_for(f"document.querySelector(\"[aria-label='Send']\") && {SAID}.some((line) => line && line !== 'Working' && !{before}.includes(line))",
+                 RUN, "the agent replies once the search has run")
+    said = app.js(SAID)
+    if ASKS in said:
         raise Failed("the finished search still asks Execute or modify")
+    if app.js("[...document.querySelectorAll('button')].some((b) => ['Run Search', 'Edit Filters'].includes(b.innerText.trim()))"):
+        raise Failed("the finished search still offers Run Search and Edit Filters")
+    if any(line.startswith("Run Search ") for line in said):
+        raise Failed("the app's note to the agent shows in the chat")
     app.wait_for({"css": "[aria-label='Search results'] .result-row"}, PAGE, "the results open beside the chat")
 
 

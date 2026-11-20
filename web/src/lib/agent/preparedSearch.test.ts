@@ -1,8 +1,17 @@
-import { expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 
 import type { Entry } from "@/types/agent"
 
-import { preparedSearch, ranSearch, refineStep, stepCount, stepVerb, wentBack } from "./preparedSearch"
+import {
+  isRunNote,
+  preparedSearch,
+  ranSearch,
+  refineStep,
+  runNote,
+  stepCount,
+  stepVerb,
+  wentBack,
+} from "./preparedSearch"
 
 // The agent may run the primitive inside a script: the card comes from what it printed.
 function prepared(printed: Record<string, unknown>): Entry {
@@ -156,4 +165,61 @@ it("knows a go-back by its command: its printed step is not a refinement", () =>
   })
   expect(wentBack(reranked(`${RERANK} --criteria 'x'`, step("s2", "s1", "x", "rerank")))).toBeNull()
   expect(wentBack(prepared({ status: "completed", summary: { rows: 207 } }))).toBeNull()
+})
+
+describe("runNote", () => {
+  const command = (over: Partial<Extract<Entry, { kind: "command" }>>): Entry => ({
+    kind: "command",
+    id: "c",
+    command: "uv run python packs/search/primitives/search_network_pipeline/search_network_pipeline.py run",
+    status: "done",
+    exitCode: 0,
+    output: "",
+    durationMs: 1000,
+    ...over,
+  })
+  const printedResult = (value: unknown) => JSON.stringify(value, null, 2)
+
+  it("tells the agent how many people a finished search saved", () => {
+    const note = runNote(
+      command({
+        output: printedResult({
+          primitive: "search_network_pipeline",
+          status: "completed",
+          summary: { rows: 1 },
+        }),
+      }),
+    )
+    expect(note).toContain("Run Search finished: the search above ran and saved 1 person;")
+    expect(isRunNote({ kind: "user", id: "u", text: note ?? "" })).toBe(true)
+  })
+
+  it("reads the result when the command's stderr lands after it", () => {
+    const ran = command({
+      output: `${printedResult({
+        artifacts: { csv: "x.csv" },
+        primitive: "search_network_pipeline",
+        status: "completed",
+        summary: { hydrated: 172, rows: 172 },
+      })}\nsearch: the first 172 are on the results page; downloading the rest\n`,
+    })
+    expect(ranSearch(ran)).toBe(true)
+    expect(runNote(ran)).toContain("saved 172 people")
+  })
+
+  it("tells the agent a search command failed", () => {
+    const note = runNote(command({ status: "failed", exitCode: 1, output: "Traceback" }))
+    expect(note).toContain("Run Search failed: ")
+    expect(isRunNote({ kind: "user", id: "u", text: note ?? "" })).toBe(true)
+  })
+
+  it("says nothing for a refinement, a running command or the user's own words", () => {
+    expect(
+      runNote(command({ command: "uv run python search_network_pipeline.py rerank --use s1" })),
+    ).toBeNull()
+    expect(runNote(command({ status: "running" }))).toBeNull()
+    expect(runNote(command({ output: "no result printed" }))).toBeNull()
+    expect(runNote(undefined)).toBeNull()
+    expect(isRunNote({ kind: "user", id: "u", text: "Run Search again please" })).toBe(false)
+  })
 })

@@ -90,9 +90,13 @@ function lines(value: unknown): string[] {
 /** What the search primitive printed last, or null for any other command or output still arriving. */
 function printed(entry: Entry): Record<string, unknown> | null {
   if (entry.kind !== "command") return null
+  // The object runs from its `{` line to its `}` line (nested ones are indented); the command's
+  // stderr can land after it ("search: the first 172 are on the results page; …").
+  const start = entry.output.lastIndexOf("\n{") + 1
+  const end = entry.output.indexOf("\n}", start)
   let value: unknown
   try {
-    value = JSON.parse(entry.output.slice(entry.output.lastIndexOf("\n{") + 1))
+    value = JSON.parse(end === -1 ? entry.output.slice(start) : entry.output.slice(start, end + 2))
   } catch {
     return null
   }
@@ -105,12 +109,32 @@ export function ranSearch(entry: Entry): boolean {
   return value !== null && !("preview" in value) && "summary" in value
 }
 
-/** How many people the finished search saved (its summary's `rows`), or null for any other command. */
-export function ranCount(entry: Entry): number | null {
-  const summary = printed(entry)?.summary
-  if (entry.kind !== "command" || entry.status !== "done" || !ranSearch(entry) || !isRecord(summary))
+// What the app tells the agent when a search it ran itself (Run Search, with no agent turn) ends,
+// so the agent answers as it does after running one. The transcript never shows these as the user's.
+const FINISHED = "Run Search finished: "
+const FAILED = "Run Search failed: "
+
+/** True for the app's own note to the agent after Run Search, which is not the user's message. */
+export function isRunNote(entry: Entry): boolean {
+  return entry.kind === "user" && (entry.text.startsWith(FINISHED) || entry.text.startsWith(FAILED))
+}
+
+/**
+ * The note for the agent once this command, a search the app ran itself, has ended: how many people
+ * it saved (its summary's `rows`), or that it failed. Null for any other command or one still running.
+ */
+export function runNote(entry: Entry | undefined): string | null {
+  if (entry?.kind !== "command" || entry.status === "running") return null
+  if (ranSearch(entry) && entry.status === "done") {
+    const summary = printed(entry)?.summary
+    const rows = isRecord(summary) && typeof summary.rows === "number" ? summary.rows : null
+    const found = rows === null ? "" : ` and saved ${rows} ${rows === 1 ? "person" : "people"}`
+    return `${FINISHED}the search above ran${found}; the results are open beside the chat. Reply briefly, as you do after running a search yourself. Do not run it again.`
+  }
+  const failed = entry.status === "failed" || (entry.exitCode ?? 0) !== 0
+  if (!failed || !entry.command.includes("search_network_pipeline.py") || RERANK.test(entry.command))
     return null
-  return typeof summary.rows === "number" ? summary.rows : null
+  return `${FAILED}the search command above ended with an error. Tell me briefly what went wrong and what to do next. Do not run it again unless I ask.`
 }
 
 /** The question the agent asks under a prepared search's card. */
