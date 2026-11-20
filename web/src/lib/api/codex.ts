@@ -142,6 +142,17 @@ export async function fetchModels(): Promise<CodexModel[]> {
   })
 }
 
+/** What a turn runs with when the picker has no choice: the model and effort of the user's own
+ *  Codex, else Codex's model at medium effort (the app sets them when it starts Codex). */
+export async function fetchDefaults(): Promise<TurnChoice> {
+  const read = await call("config/read", { includeLayers: false })
+  const config = isRecord(read) && isRecord(read.config) ? read.config : {}
+  return {
+    model: typeof config.model === "string" ? config.model : null,
+    effort: typeof config.model_reasoning_effort === "string" ? config.model_reasoning_effort : null,
+  }
+}
+
 /** The chat's model and effort; null keeps Codex's own default for each. */
 export interface TurnChoice {
   model: string | null

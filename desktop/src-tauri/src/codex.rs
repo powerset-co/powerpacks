@@ -39,6 +39,7 @@ const EXIT_EVENT: &str = "codex://exit";
 /// `start_thread` and `open_thread`, which set the folder, sandbox and instructions.
 pub const PAGE_METHODS: &[&str] = &[
     "account/read",
+    "config/read",
     "account/login/cancel",
     "account/logout",
     "model/list",
@@ -89,6 +90,7 @@ impl Connection {
         let mut command = Command::new(binary);
         command
             .args(["-c", CREDENTIALS_IN_FILE, "app-server"])
+            .args(default_model_args(&own_codex_config()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -385,6 +387,55 @@ impl Codex {
     }
 }
 
+/// Effort when the user's own Codex names none: a model's own default can be `low`.
+const DEFAULT_EFFORT: &str = "medium";
+
+/// The user's own Codex settings (`~/.codex/config.toml`), "" when there are none. The app keeps
+/// its sign-in and chats in its own Codex home, so Codex itself never reads this file.
+fn own_codex_config() -> String {
+    dirs::home_dir()
+        .and_then(|home| fs::read_to_string(home.join(".codex/config.toml")).ok())
+        .unwrap_or_default()
+}
+
+/// A top-level `key = "value"` of a Codex config: a line before the first `[table]`. Only a plain
+/// name passes (letters, digits, `.`, `_`, `-`), since it goes onto Codex's command line.
+fn config_value(config: &str, key: &str) -> Option<String> {
+    config
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.starts_with('['))
+        .filter_map(|line| line.split_once('='))
+        .find(|(name, _)| name.trim() == key)
+        .map(|(_, value)| {
+            value
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_owned()
+        })
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+        })
+}
+
+/// The chat's defaults, as Codex `-c` overrides: the model and effort of the user's own Codex,
+/// else Codex's model at medium effort. The page's picker still wins for a turn.
+fn default_model_args(own_config: &str) -> Vec<String> {
+    let effort = config_value(own_config, "model_reasoning_effort")
+        .unwrap_or_else(|| DEFAULT_EFFORT.to_owned());
+    let mut args = vec![
+        "-c".to_owned(),
+        format!("model_reasoning_effort=\"{effort}\""),
+    ];
+    if let Some(model) = config_value(own_config, "model") {
+        args.extend(["-c".to_owned(), format!("model=\"{model}\"")]);
+    }
+    args
+}
+
 /// The Gmail archive as an MCP server (`msgvault mcp`, stdio: its read tools, drafts, saved views
 /// and staged deletion; msgvault never sends), or `None` when this machine has no
 /// archive yet or the app ships no msgvault for it. The home is msgvault's own: `MSGVAULT_HOME`,
@@ -539,5 +590,36 @@ mod scope_instruction_tests {
         let text = settings["developerInstructions"].as_str().expect("text");
         assert!(text.contains("pass `--set-id abc`"));
         assert!(text.ends_with(INBOX_INSTRUCTIONS));
+    }
+}
+
+#[cfg(test)]
+mod default_model_tests {
+    use super::*;
+
+    #[test]
+    fn the_users_own_codex_model_and_effort_are_the_chats_defaults() {
+        let own = "model = \"gpt-6.1-terra\"\nmodel_reasoning_effort = \"high\"\n\n[mcp_servers.x]\nmodel = \"other\"\n";
+        assert_eq!(
+            default_model_args(own),
+            [
+                "-c",
+                "model_reasoning_effort=\"high\"",
+                "-c",
+                "model=\"gpt-6.1-terra\""
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_settings_of_their_own_the_chat_runs_codexs_model_at_medium() {
+        assert_eq!(
+            default_model_args(""),
+            ["-c", "model_reasoning_effort=\"medium\""]
+        );
+        // A table's key is not the top-level one, and a value that is not a plain name is dropped.
+        let own = "[profiles.fast]\nmodel = \"x\"\n";
+        assert_eq!(default_model_args(own).len(), 2);
+        assert_eq!(config_value("model = \"a b; rm\"", "model"), None);
     }
 }
