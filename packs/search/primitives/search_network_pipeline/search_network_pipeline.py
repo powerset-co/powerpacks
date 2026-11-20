@@ -55,7 +55,7 @@ from packs.shared import powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
 from packs.search.primitives.expand_search_request.parallel_extractors import injected_role_titles, role_core_patterns_from_bm25  # noqa: E402
-from packs.search.primitives.expand_search_request import title_selection  # noqa: E402
+from packs.search.primitives.expand_search_request import place_review, title_selection  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -659,6 +659,35 @@ def _local_title_clusters(payload: dict[str, Any], db_path: Path) -> tuple[list[
     finally:
         store.conn.close()
     return clusters, adjacent_clusters
+
+
+def _drop_unintended_places(payload: dict[str, Any], *, model: str | None = None,
+                            reasoning_effort: str | None = None) -> dict[str, Any]:
+    """Resolve returns every place its lookup matched ("York" for "New York"); keep the ones meant."""
+    filters = payload_filters(payload)
+    places = [name for key in place_review.PLACE_KEYS for name in filters.get(key) or []]
+    if len(places) < 2:  # one result cannot be a near-match of another
+        return payload
+    previous_stage = os.environ.get("POWERPACKS_USAGE_STAGE")
+    os.environ["POWERPACKS_USAGE_STAGE"] = "expand"
+    try:
+        removed = asyncio.run(place_review.unintended_places(
+            str(payload.get("normalized_query") or ""), places, model=model, reasoning_effort=reasoning_effort))
+    finally:
+        if previous_stage is None:
+            os.environ.pop("POWERPACKS_USAGE_STAGE", None)
+        else:
+            os.environ["POWERPACKS_USAGE_STAGE"] = previous_stage
+    if not removed:
+        return payload
+    filters, api_filters = dict(filters), dict(payload.get("api_filters") or {})
+    for key in place_review.PLACE_KEYS:
+        kept = [name for name in filters.pop(key, None) or [] if name not in removed]
+        if kept:
+            filters[key] = kept
+        api_filters[key] = [item for item in api_filters.get(key) or [] if cloud_search._label(item) not in removed]
+    return {**payload, "role_search_filters": filters, "api_filters": api_filters,
+            "notes": [*(payload.get("notes") or []), f"places dropped as not meant: {', '.join(sorted(removed))}"]}
 
 
 def _apply_title_clusters(
@@ -1310,6 +1339,7 @@ def cmd_prepare(args):
             payload=pin_payload_set_id(payload,set_id)
         if payload.get("intent_type") != "person_lookup":
             load_env_file(ROOT / args.env_file)
+            payload=_drop_unintended_places(payload, model=args.expand_model, reasoning_effort=args.expand_reasoning_effort)
             payload=_apply_title_clusters(payload,[group for group in clusters if group["titles"]],
                                           adjacent_clusters=[group for group in adjacent_clusters if group["titles"]],
                                           model=args.expand_model, reasoning_effort=args.expand_reasoning_effort)
