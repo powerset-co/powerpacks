@@ -324,8 +324,10 @@ class SourceOnboarding:
         """Start the extra projects' setup for a first sync that is worth it; None when it is not."""
         window = f"after:{self.sync_after}" if self.sync_after else ""
         # A refresh reads through the main project only.
-        apps = [] if self.refresh or not msgvault_home.msgvault_has_quota_apps() else msgvault_home.gmail_quota_apps(
-            sum(count_messages(home, email, window) or 0 for email in self.gmail_emails))
+        apps = list(msgvault_home.GMAIL_QUOTA_APPS) if (
+            not self.refresh and msgvault_home.msgvault_has_quota_apps()
+            and sum(count_messages(home, email, window) or 0 for email in self.gmail_emails)
+            >= msgvault_home.GMAIL_QUOTA_MIN_MESSAGES) else []
         msgvault_home.name_gmail_quota_apps(home, apps)
         if not apps:
             return None

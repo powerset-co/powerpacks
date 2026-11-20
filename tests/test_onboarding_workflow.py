@@ -413,9 +413,7 @@ class SourceOnboardingTests(unittest.TestCase):
         count.assert_called_with(home, 'casey@example.com', 'after:2023-01-01')
         # Only the large first sync sets extra projects up, and it does not wait for them to start.
         setup.assert_called_once()
-        # 12,000 messages at 5,600 an hour per project: three projects, so two extra.
-        self.assertIn('quota_apps = ["quota2", "quota3"]', seen[0])
-        self.assertEqual(len(msgvault_home.gmail_quota_apps(10**6)), msgvault_home.GMAIL_QUOTA_MAX_APPS)
+        self.assertIn('quota_apps = [' + ', '.join(f'"quota{n}"' for n in range(2, 13)) + ']', seen[0])
         self.assertIn(f'[oauth.apps.quota2]\nclient_secrets = "{home / "client_secret_quota2.json"}"', seen[0])
         self.assertIn('quota_apps = []', seen[1])
         self.assertIn('quota_apps = []', seen[2])

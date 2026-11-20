@@ -430,21 +430,11 @@ def pace_gmail_sync(home: Path) -> None:
 # Gmail counts a person's quota per Google project, so the first sync of a mailbox reads through
 # extra projects, each at its own 95 messages a minute (measured 2026-11-19: 94, 187, 266 and 717 a
 # minute through 1, 2, 3 and 10 projects, no refusal). Daily syncs use the one main project.
-# One project reads about 5,600 messages an hour; the first sync aims to finish in an hour.
-GMAIL_QUOTA_MESSAGES_PER_HOUR = 5600
-# An extra project takes about two minutes to set up, so an hour-long sync has time for about 30.
-# How many an account may own is Google's to say: setup stops when Google refuses another.
-GMAIL_QUOTA_MAX_APPS = 30
-# A sync shorter than a few project setups gains nothing from them.
+# A fresh Google account may own 12 projects: the main one and these 11. Setup makes them one after
+# another while the sync runs and stops when the sync ends or Google refuses another project.
+GMAIL_QUOTA_APPS = tuple(f"quota{n}" for n in range(2, 13))
+# An extra project takes about two minutes to set up; a sync shorter than a few of those gains nothing.
 GMAIL_QUOTA_MIN_MESSAGES = 1000
-
-
-def gmail_quota_apps(messages: int) -> list[str]:
-    """The extra projects a first sync of this many messages asks for, to finish in about an hour."""
-    if messages < GMAIL_QUOTA_MIN_MESSAGES:
-        return []
-    extra = min(-(-messages // GMAIL_QUOTA_MESSAGES_PER_HOUR) - 1, GMAIL_QUOTA_MAX_APPS)
-    return [f"quota{n}" for n in range(2, extra + 2)]
 
 
 def msgvault_has_quota_apps() -> bool:
