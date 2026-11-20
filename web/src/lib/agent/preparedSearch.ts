@@ -105,6 +105,17 @@ export function ranSearch(entry: Entry): boolean {
   return value !== null && !("preview" in value) && "summary" in value
 }
 
+/** How many people the finished search saved (its summary's `rows`), or null for any other command. */
+export function ranCount(entry: Entry): number | null {
+  const summary = printed(entry)?.summary
+  if (entry.kind !== "command" || entry.status !== "done" || !ranSearch(entry) || !isRecord(summary))
+    return null
+  return typeof summary.rows === "number" ? summary.rows : null
+}
+
+/** The question the agent asks under a prepared search's card. */
+export const ASKS = "Search prepared. Execute or modify?"
+
 /** The command's search, or null for any other command or output still arriving. */
 export function preparedSearch(entry: Entry): PreparedSearch | null {
   const value = printed(entry)

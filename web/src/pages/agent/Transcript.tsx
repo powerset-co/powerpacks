@@ -1,10 +1,12 @@
-import type { ReactNode } from "react"
+import { Fragment, type ReactNode } from "react"
 
 import { Spinner } from "@/components/shared"
 import { Button } from "@/components/ui/button"
 import {
+  ASKS,
   failedRefine,
   preparedSearch,
+  ranCount,
   ranSearch,
   refineStep,
   stepCount,
@@ -343,8 +345,16 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
     search.run !== null ? <StepAction runId={search.run} stepId="s1" running={running} /> : null
   return (
     <>
-      {turns.map((turn) => {
-        if (turn.kind === "say") return <Say key={turn.entry.id} entry={turn.entry} />
+      {turns.map((turn, at) => {
+        if (turn.kind === "say") {
+          // The agent's question belongs to the card that is asking: it goes when its buttons go.
+          if (turn.entry.kind !== "agent" || !turn.entry.text.includes(ASKS))
+            return <Say key={turn.entry.id} entry={turn.entry} />
+          if (asking && newest && at > turns.indexOf(newest))
+            return <Say key={turn.entry.id} entry={turn.entry} />
+          const text = turn.entry.text.replace(ASKS, "").trim()
+          return text ? <Say key={turn.entry.id} entry={{ ...turn.entry, text }} /> : null
+        }
         if (turn.kind === "search")
           return (
             <SearchCard
@@ -358,41 +368,52 @@ export function Transcript({ entries, running }: { entries: Entry[]; running: bo
         if (turn.kind === "back") return <WentBackLine key={turn.id} back={turn.back} />
         if (turn.kind === "failed")
           return <FailedCard key={turn.id} failed={turn.failed} retried={turn.retried} running={running} />
+        // A finished search says how many people it shows, unless the agent goes on to say so.
+        const next = turns[at + 1]
+        const told = next ? next.kind === "say" && next.entry.kind === "agent" : running
+        const count = told ? null : (turn.entries.map(ranCount).find((rows) => rows !== null) ?? null)
         return (
           // Folded to one line until the reader asks for the commands behind it.
-          <details key={turn.id} className="rise-in group/work">
-            <summary className={WORK_LINE}>
-              <TerminalIcon className="size-3.5 shrink-0 text-faint" />
-              <span className="min-w-0 truncate">{workSummary(turn.entries)}</span>
-              {turn.entries.some((entry) => "status" in entry && entry.status === "running") ? (
-                <Spinner className="text-muted-foreground" />
-              ) : null}
-              <svg
-                viewBox="0 0 16 16"
-                aria-hidden="true"
-                className="size-3 shrink-0 text-faint transition-transform duration-fast group-open/work:rotate-180"
+          <Fragment key={turn.id}>
+            <details className="rise-in group/work">
+              <summary className={WORK_LINE}>
+                <TerminalIcon className="size-3.5 shrink-0 text-faint" />
+                <span className="min-w-0 truncate">{workSummary(turn.entries)}</span>
+                {turn.entries.some((entry) => "status" in entry && entry.status === "running") ? (
+                  <Spinner className="text-muted-foreground" />
+                ) : null}
+                <svg
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                  className="size-3 shrink-0 text-faint transition-transform duration-fast group-open/work:rotate-180"
+                >
+                  <path
+                    d="M4 6l4 4 4-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </summary>
+              <ol
+                aria-label="Work"
+                className="m-0 mt-2 list-none divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line bg-card p-0"
               >
-                <path
-                  d="M4 6l4 4 4-4"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </summary>
-            <ol
-              aria-label="Work"
-              className="m-0 mt-2 list-none divide-y divide-line overflow-hidden rounded-[var(--radius-m)] border border-line bg-card p-0"
-            >
-              {turn.entries.map((entry) => (
-                <li key={entry.id}>
-                  <WorkRow entry={entry} />
-                </li>
-              ))}
-            </ol>
-          </details>
+                {turn.entries.map((entry) => (
+                  <li key={entry.id}>
+                    <WorkRow entry={entry} />
+                  </li>
+                ))}
+              </ol>
+            </details>
+            {count === null ? null : (
+              <p className="rise-in m-0 text-[15px]">
+                Showing {count.toLocaleString()} {count === 1 ? "candidate" : "candidates"}
+              </p>
+            )}
+          </Fragment>
         )
       })}
     </>

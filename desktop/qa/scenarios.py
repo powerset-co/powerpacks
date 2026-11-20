@@ -285,6 +285,31 @@ def search_no_keywords(app: App) -> None:
         raise Failed("the warning stays after a keyword was added back")
 
 
+RUN = 300000  # Run Search on a prepared search: the cloud ranks it, the app downloads and saves it
+SAID = "[...document.querySelectorAll('[aria-live=polite] p')].map((p) => p.innerText.trim())"
+ASKS = "Search prepared. Execute or modify?"
+
+
+def search_run_done(app: App) -> None:
+    """Run Search runs the prepared search with no agent turn, so the chat said nothing after it:
+    the agent's "Search prepared. Execute or modify?" stayed under a finished search and only "Ran
+    1 command" followed. Now the question goes with the card's buttons and the chat says "Showing N
+    candidates". Prepares a search in a new chat (a model turn) and runs it (a real search)."""
+    app.go("/agent", {"css": "#agent-message"}, PAGE)
+    app.click({"css": "[aria-label='New chat']"})
+    app.click({"css": "#agent-message"})
+    app.type("software engineers in the Bay Area")
+    app.click({"css": "[aria-label='Send']"})
+    app.wait_for(f"{RUN_DISABLED} === false && {SAID}.includes({json.dumps(ASKS)})", PREPARE,
+                 "the prepared search asks Execute or modify")
+    app.js("[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Run Search').click()")
+    app.wait_for(f"{SAID}.some((line) => /^Showing [\\d,]+ candidates?$/.test(line))", RUN,
+                 "the finished search says how many candidates it shows")
+    if app.js(f"{SAID}.includes({json.dumps(ASKS)})"):
+        raise Failed("the finished search still asks Execute or modify")
+    app.wait_for({"css": "[aria-label='Search results'] .result-row"}, PAGE, "the results open beside the chat")
+
+
 FAILED_CARDS = "[...document.querySelectorAll(\"[aria-label='Refinement']\")].filter((card) => card.innerText.includes('Refine failed'))"
 RETRIES = f"{FAILED_CARDS}.flatMap((card) => [...card.querySelectorAll('button')].filter((b) => b.innerText.trim() === 'Retry'))"
 
@@ -511,6 +536,7 @@ SCENARIOS = {
     "search-set-picker": search_set_picker,
     "search-refine": search_refine,
     "search-no-keywords": search_no_keywords,
+    "search-run-done": search_run_done,
     "search-refine-retry": search_refine_retry,
     "search-card-narrow": search_card_narrow,
     "search-mutuals": search_mutuals,

@@ -227,6 +227,72 @@ it("never offers a search again once the search ran after its card", () => {
   expect(screen.queryByRole("button", { name: "Modify" })).toBeNull()
 })
 
+it("drops the question and says how many candidates show once Run Search ran the search itself", () => {
+  // Run Search runs the prepared command with no agent turn, so nothing is said after it.
+  const run = (status: "running" | "done"): Entry => ({
+    kind: "command",
+    id: "c2",
+    command: "uv run python search_network_pipeline.py run --execute-approved",
+    status,
+    exitCode: status === "done" ? 0 : null,
+    output:
+      status === "done"
+        ? JSON.stringify(
+            { primitive: "search_network_pipeline", status: "completed", summary: { rows: 172 } },
+            null,
+            2,
+          )
+        : "",
+    durationMs: status === "done" ? 62600 : null,
+  })
+  const asked: Entry[] = [
+    prepared("c1", PREVIEW),
+    { kind: "agent", id: "a1", text: "Search prepared. Execute or modify?" },
+  ]
+  const { rerender } = render(<Transcript entries={asked} running={false} />)
+  expect(screen.getByText("Search prepared. Execute or modify?")).toBeTruthy()
+
+  rerender(<Transcript entries={[...asked, run("running")]} running={true} />)
+  expect(screen.queryByText("Search prepared. Execute or modify?")).toBeNull()
+  expect(screen.queryByText(/Showing .* candidates/)).toBeNull()
+
+  rerender(<Transcript entries={[...asked, run("done")]} running={false} />)
+  expect(screen.queryByText("Search prepared. Execute or modify?")).toBeNull()
+  expect(screen.getByText("Showing 172 candidates")).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Run Search" })).toBeNull()
+})
+
+it("leaves the count to the agent when the agent ran the search and answers", () => {
+  const ran: Entry = {
+    kind: "command",
+    id: "c2",
+    command: "uv run python search_network_pipeline.py run --execute-approved",
+    status: "done",
+    exitCode: 0,
+    output: JSON.stringify(
+      { primitive: "search_network_pipeline", status: "completed", summary: { rows: 207 } },
+      null,
+      2,
+    ),
+    durationMs: 26000,
+  }
+  render(
+    <Transcript
+      entries={[
+        prepared("c1", PREVIEW),
+        { kind: "agent", id: "a1", text: "Search prepared. Execute or modify?" },
+        { kind: "user", id: "u1", text: "execute" },
+        ran,
+        { kind: "agent", id: "a2", text: "207 found." },
+      ]}
+      running={false}
+    />,
+  )
+  expect(screen.queryByText("Search prepared. Execute or modify?")).toBeNull()
+  expect(screen.queryByText(/Showing .* candidates/)).toBeNull()
+  expect(screen.getByText("207 found.")).toBeTruthy()
+})
+
 it("shows a blocked search's blockers under its notes and offers only Send changes", () => {
   render(
     <Transcript
