@@ -33,9 +33,7 @@ class OnboardingTests(unittest.TestCase):
                               is_personal=False, role="member")]
         self.fail_path = None
         self.fail_code = 503
-        self.count = 120
         self.missing_keys = set()
-        self.empty_contacts = False
         self.blank_keys = set()
         self.operator_id = ""
         self.reject_old_token = False
@@ -59,8 +57,6 @@ class OnboardingTests(unittest.TestCase):
                     return self.reply(case.networks)
                 if self.path.startswith("/v2/sets/"):
                     return self.reply({"members": [{"user_id": case.owner_id, "role": "owner"}]})
-                if self.path.startswith("/v2/set-contacts/"):
-                    return self.reply({"leads": [] if case.empty_contacts else [{"id": "person-one"}]})
                 return self.reply({}, 404)
 
             def do_POST(self):
@@ -70,8 +66,6 @@ class OnboardingTests(unittest.TestCase):
                     return self.reply({"detail": "mock failure"}, case.fail_code)
                 if self.path == "/oauth/token":
                     return self.reply({"access_token": "refreshed-token", "expires_in": 3600})
-                if self.path == "/v2/search/count":
-                    return self.reply({"count": case.count})
                 return self.reply({}, 404)
 
             def reply(self, payload, status=200):
@@ -129,10 +123,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(state["steps"]["account"]["status"], "skipped")
         self.assertEqual(state["person_count"], 120)
         self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
-        self.assertIn(("GET", "/v2/set-contacts/own?page_size=1", None), self.calls)
-        count_call = next(call for call in self.calls if call[1] == "/v2/search/count")
-        self.assertEqual(count_call[2], {"set_id": "own", "is_current": True,
-                                      "search_summary": False, "search_company_signal": False})
 
     def test_account_lines_carry_the_runs_plan(self):
         """The run's own rows from its first line, never the last run's (LinkedIn setup's)."""
@@ -200,28 +190,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertTrue(output.startswith("FAILED:"))
         self.assertEqual(self.calls, [])
 
-    def test_zero_personal_does_not_switch_to_largest(self):
-        self.networks[0]["person_count"] = 0
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 10)
-        self.assertIn("jordan@example.com has 0 people", state["message"])
-        self.assertEqual(state["action"]["details"]["alternative"]["person_count"], 40000)
-        self.assertIn("POWERPACKS_DEFAULT_SET_ID=own", (self.root / ".env").read_text())
-        self.assertFalse(any(call[0] == "POST" for call in self.calls))
-
-    def test_all_empty_networks_explain_account_problem(self):
-        for network in self.networks:
-            network["person_count"] = 0
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 10)
-        self.assertIn("Every network for jordan@example.com has 0 people", state["message"])
-
-    def test_small_personal_network_is_ready_with_nonblocking_advice(self):
-        self.networks[0]["person_count"] = 4
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 0)
-        self.assertIn("small network", state["message"])
-
     def test_existing_accessible_default_is_preserved(self):
         with (self.root / ".env").open("a") as stream:
             stream.write("POWERPACKS_DEFAULT_SET_ID=shared\n")
@@ -264,18 +232,6 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(sources.call_args.kwargs["gmail_emails"], ("personal@gmail.com",))
         self.assertEqual(sources.call_args.kwargs["sync_after"], "2025-10-03")
 
-    def test_unindexed_hosted_network_does_not_block_local_imports(self):
-        self.count = 0
-        code, sources = self.run_install_command()
-        self.assertEqual(code, 10)
-        sources.return_value.run.assert_called_once()
-
-    def test_empty_hosted_network_does_not_block_local_imports(self):
-        self.networks[0]["person_count"] = 0
-        code, sources = self.run_install_command()
-        self.assertEqual(code, 10)
-        sources.return_value.run.assert_called_once()
-
     def test_unprovisioned_hosted_search_does_not_block_local_imports(self):
         self.missing_keys.add("OPENAI_API_KEY")
         code, sources = self.run_install_command()
@@ -299,13 +255,6 @@ class OnboardingTests(unittest.TestCase):
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 10)
 
-    def test_catalog_count_does_not_claim_index_readiness(self):
-        self.count = 0
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 10)
-        self.assertIn("profiles are not ready", state["message"])
-        self.assertEqual(state["person_count"], 120)
-
     def test_missing_required_access_waits_but_optional_providers_do_not(self):
         self.missing_keys = {"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "PARALLEL_API_KEY"}
         code, _, _ = self.run_onboarding()
@@ -325,14 +274,14 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(state["event"], "credentials.not_provisioned")
 
     def test_keys_already_in_env_count_when_the_account_returns_none(self):
-        self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
+        self.blank_keys.add("POWERSET_API_KEY")
         env = self.root / ".env"
         with env.open("a") as stream:
-            stream.write("\nTURBOPUFFER_API_KEY=synthetic-local-key\nDATABASE_URL=synthetic-local-db\n")
+            stream.write("\nPOWERSET_API_KEY=synthetic-local-key\n")
         code, state, _ = self.run_onboarding()
         self.assertEqual(code, 0)
         self.assertEqual(state["steps"]["credentials"]["status"], "completed")
-        self.assertIn("TURBOPUFFER_API_KEY=synthetic-local-key", env.read_text())
+        self.assertIn("POWERSET_API_KEY=synthetic-local-key", env.read_text())
 
     def test_the_accounts_operator_id_is_saved_for_modal_runs(self):
         self.operator_id = "33333333-3333-3333-3333-333333333333"
@@ -340,15 +289,8 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("POWERPACKS_OPERATOR_ID=33333333-3333-3333-3333-333333333333", (self.root / ".env").read_text())
 
-    def test_unprovisioned_hosted_search_is_a_warning_and_setup_continues(self):
-        self.blank_keys.update({"TURBOPUFFER_API_KEY", "DATABASE_URL"})
-        code, state, _ = self.run_onboarding()
-        self.assertEqual(code, 10)
-        self.assertEqual(state["steps"]["credentials"]["status"], "skipped")
-        self.assertIn("Hosted search isn't enabled", state["steps"]["credentials"]["message"])
-
     def test_service_failure_is_failed_and_not_mistaken_for_login(self):
-        self.fail_path = "/v2/search/count"
+        self.fail_path = "/v2/sets"
         with patch.object(auth, "cmd_login") as login:
             code, state, output = self.run_onboarding()
         self.assertEqual(code, 1)
