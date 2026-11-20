@@ -109,13 +109,14 @@ class AppRoutes:
 
 
 def _mutuals(handler: BaseHTTPRequestHandler) -> tuple[bytes, HTTPStatus]:
-    """The drawer's Get Mutuals: one person through linkedin_session.mutuals (its budget, cache and
-    first-degree skip), answered as that person's row plus the day's count."""
+    """The drawer's Get Mutuals: one person through linkedin_session.mutuals (its budget and cache;
+    a first-degree connection is looked up too, since the click asks for this person), answered as
+    that person's row plus the day's count."""
     from packs.ingestion.primitives.discover.linkedin import linkedin_session
 
     try:
         url = str(json.loads(handler.rfile.read(int(handler.headers.get("Content-Length", 0))))["url"])
-        result = linkedin_session.mutuals([url])
+        result = linkedin_session.mutuals([url], skip_connected=False)
     except (ValueError, KeyError) as error:
         return json.dumps({"error": str(error)}).encode(), HTTPStatus.BAD_REQUEST
     except RuntimeError as error:  # signed out, profile in use, no browser
