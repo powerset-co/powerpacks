@@ -1,6 +1,9 @@
 """Page actions launch the same detached coordinator and open permission guidance.
 
 Changelog:
+  2026-11-15: `cancel` writes `install.stopped` itself once the run is gone. The run no longer writes
+      it on SIGTERM: a run cut off by a quit or a restart keeps its record and continues at the
+      app's next launch (desktop onboard.rs); only the person's Stop waits for a click.
   2026-11-04: the Connect record carries `qr_failed` once WhatsApp refused a scan and the link
       waits for a phone number instead.
   2026-11-02: `POST /api/install/whatsapp-phone` links WhatsApp by phone number when the QR won't
@@ -211,11 +214,18 @@ class InstallController:
 
     def cancel(self) -> dict:
         """Stop the run that owns a record (the import, or a Connect sign-in): SIGTERM, which onboard
-        turns into an orderly stop that writes install.stopped (onboard.main)."""
+        turns into an orderly stop (onboard.main). The stop is the person's, so it is written once the
+        run is gone; a run that merely died is left as it was and continues at the app's next launch."""
         for name in ("manifest", "connect"):
-            pid = int(InstallStatus(self.root, name).read()["installer_pid"])
+            status = InstallStatus(self.root, name)
+            pid = int(status.read()["installer_pid"])
             if alive(pid):
                 os.kill(pid, signal.SIGTERM)
+                # Written after the run's own last write: it unwinds in well under this.
+                deadline = time.monotonic() + 3
+                while alive(pid) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                status.write("install.stopped", pid=0, retry_command=status.read()["retry_command"])
                 return {"status": "stopping", "record": name}
         return {"status": "idle"}
 

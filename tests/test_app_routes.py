@@ -282,6 +282,9 @@ class AccountRoutesTests(unittest.TestCase):
         InstallStatus(self.root).write("discover.reading", step=InstallStep.DEEP_CONTEXT, pid=child.pid)
         self.assertEqual(self._post("/api/install/cancel", {}), (HTTPStatus.ACCEPTED, {"status": "stopping", "record": "manifest"}))
         self.assertEqual(child.wait(timeout=5), -signal.SIGTERM)
+        # The person's stop is written; a run that merely died is not (onboard.main).
+        record = InstallStatus(self.root).read()
+        self.assertEqual((record["status"], record["event"], record["installer_pid"]), ("failed", "install.stopped", 0))
 
 
 if __name__ == "__main__":

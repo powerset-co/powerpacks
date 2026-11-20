@@ -259,8 +259,8 @@ def main() -> None:
     report.install(root)
     status = InstallStatus(root)
     status.directory.mkdir(parents=True, exist_ok=True)
-    # A cancel (the page's Cancel, the app quitting) is SIGTERM: unwind like Ctrl-C, so children
-    # started along the way are stopped on the way out, then record the stop before the lock goes.
+    # A cancel (the page's Stop, the app quitting) is SIGTERM: unwind like Ctrl-C, so children
+    # started along the way are stopped on the way out.
     signal.signal(signal.SIGTERM, _stop)
     # The server and agent can both request a resume. Only this process owns work.
     with (status.directory / "onboard.lock").open("a") as lock:
@@ -274,8 +274,9 @@ def main() -> None:
                                         wacli_store=args.wacli_store, record="connect").connect()
                        if args.logins_only else _setup(root, args, parser, status))
         except KeyboardInterrupt:
-            record = InstallStatus(root, "connect" if args.logins_only else "manifest")
-            record.write("install.stopped", pid=0, retry_command=record.read()["retry_command"])
+            # The record stays the run's with its process gone: the page reads that as stopped
+            # (InstallStatus.read) and the app continues the run at its next launch (onboard.rs).
+            # A stop the person asked for is written by the page's Stop (controller.cancel).
             print("STOPPED: The import was stopped.", flush=True)
             raise SystemExit(1) from None
     prefix = {"completed": "DONE", "waiting": "NEEDS YOU", "running": "NEEDS YOU", "failed": "FAILED"}
