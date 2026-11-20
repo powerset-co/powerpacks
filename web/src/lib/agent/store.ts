@@ -15,6 +15,7 @@ import {
   startTurn,
 } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
+import { runNote } from "@/lib/agent/preparedSearch"
 import { readStored, writeStored } from "@/lib/storage"
 import type { AgentEvent, Approval, ApprovalChoice, Entry } from "@/types/agent"
 import type { ChatScope } from "@/types/searches"
@@ -166,7 +167,14 @@ function wire(): void {
   wired = true
   const reopen = recalled(OPEN_CHAT_KEY)
   if (reopen && state.threadId === null) void openChat(reopen)
-  onAgentEvent((event) => set(reduce(state, event)))
+  onAgentEvent((event) => {
+    set(reduce(state, event))
+    // A search the app ran itself has no agent turn: when it ends, the agent is told so it replies.
+    if (event.type !== "turnCompleted" || !direct || state.running) return
+    direct = false
+    const note = event.error === null && !stopped ? runNote(state.entries.at(-1)) : null
+    if (note) void send(note)
+  })
   onApproval((approval) => {
     // A turn started before Full access was switched on still asks; approve it for the chat.
     if (state.fullAccess) void answerApproval(approval, "session")
@@ -210,12 +218,18 @@ export async function send(message: string): Promise<void> {
   }
 }
 
+// A command the app is running itself, and whether Stop ended it.
+let direct = false
+let stopped = false
+
 /** A search pipeline command run on the open chat straight away, with no model turn; false when it did not start. */
 export async function runCommand(command: string): Promise<boolean> {
   wire()
   if (state.threadId === null) return false
   try {
     await runShellCommand(state.threadId, command)
+    direct = true
+    stopped = false
     return true
   } catch {
     return false
@@ -224,6 +238,7 @@ export async function runCommand(command: string): Promise<boolean> {
 
 export async function stop(): Promise<void> {
   if (state.threadId === null || state.turnId === null) return
+  stopped = true
   await interruptTurn(state.threadId, state.turnId)
 }
 
