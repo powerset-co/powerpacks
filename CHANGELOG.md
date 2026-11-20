@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.68.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.0...powerpacks-v3.68.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **index:** the wait for the cloud index build survives a network error and a sleeping Mac ([#1254](https://github.com/powerset-co/powerpacks/issues/1254)) ([d0a82df](https://github.com/powerset-co/powerpacks/commit/d0a82df958aa4660e3fb975fa21ffe4c0b2b6a3e))
+
 ## [3.68.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.67.1...powerpacks-v3.68.0) (2026-11-20)
 
 
