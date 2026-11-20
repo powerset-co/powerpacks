@@ -15,10 +15,11 @@ CODEX_VERSION="0.161.0"
 NODE_VERSION="22.16.0"
 PLAYWRIGHT_VERSION="1.64.1"
 # The powerset-co fork of msgvault 0.22.0: Gmail paced to Google's 2026 quota (a full message is
-# 60 units against 6,000 a person a minute) and a count that moves every 100 messages. Numbered
+# 60 units against 6,000 a person a minute), a count that moves every 100 messages, and from
+# 0.22.2 a first sync that reads through several Google projects (`add-quota-app`). Numbered
 # above 0.22.0 on purpose: msgvault replaces a running background process only with a newer
 # version, and it ranks 0.22.0-anything below 0.22.0, so an updated app would keep the old one.
-MSGVAULT_VERSION="0.22.1-powerset.1"
+MSGVAULT_VERSION="0.22.2-powerset.1"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 repo="$(cd "$here/.." && pwd)"
