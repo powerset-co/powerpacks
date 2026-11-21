@@ -19,6 +19,7 @@ from packs.indexing.lib.io import write_json
 from packs.search.primitives.deep_search.results_web.model import original_quick_step, refine_interrupted, select_quick_step
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
 from packs.search.primitives.persist_search_results.results_io import hydrated_profiles, now_iso, read_jsonl
+from packs.shared import models
 from packs.search.primitives.shared.openai_client import _usage_row as usage_row, make_openai_client
 from packs.search.primitives.search_network_pipeline.refine_prompt import build_prompt, candidate_xml, cohort_summary
 
@@ -74,7 +75,7 @@ def _has_zero_trait_score(traits):
 def _score_batch(client, model, batch, query, criteria, summary):
     xml = "\n".join(["<candidates>", *(candidate_xml(profile) for profile in batch), "</candidates>"])
     params = {"model": model, "messages": [{"role": "user", "content": build_prompt(query, criteria, summary, xml)}]}
-    if "gpt-5" in model.lower():
+    if models.takes_reasoning_effort(model):
         params.update(max_completion_tokens=4096, reasoning_effort="low")
     else:
         params.update(max_tokens=4096, temperature=0.1)

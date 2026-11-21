@@ -10,6 +10,15 @@ Created: 2026-11-21
 """
 from __future__ import annotations
 
+import re
+
+# Models that take reasoning_effort and refuse a custom temperature: gpt-5 and later, o1/o3/o4.
+_REASONING = re.compile(r"(gpt-([5-9]|[1-9]\d)|o[134])")
+
+
+def takes_reasoning_effort(model: str) -> bool:
+    return bool(_REASONING.match(str(model or "").lower().split("/")[-1]))
+
 # ── A query becomes a search (search_network_pipeline prepare) ─────────────────────────────────
 # One model for every extractor, title selection and the place review.
 SEARCH_EXPAND = "gpt-5.6-luna"

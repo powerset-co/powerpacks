@@ -431,9 +431,7 @@ async def call_openai(
             },
         },
     }
-    normalized_model = str(model or "").lower().split("/")[-1]
-    supports_reasoning = normalized_model.startswith(("gpt-5", "o1", "o3", "o4"))
-    if supports_reasoning:
+    if models.takes_reasoning_effort(model):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
     else:

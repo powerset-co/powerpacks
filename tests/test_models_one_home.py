@@ -27,5 +27,13 @@ class ModelsOneHomeTests(unittest.TestCase):
         self.assertEqual(found, [], "write the default in packs/shared/models.py and import it")
 
 
+    def test_gpt_6_models_take_reasoning_effort(self) -> None:
+        from packs.shared import models
+
+        for model in ("gpt-6-luna", "gpt-6.1-sol", "gpt-5.6-luna", "gpt-5", "openai/gpt-6-luna", "o3", "o4-mini"):
+            self.assertTrue(models.takes_reasoning_effort(model), model)
+        for model in ("gpt-4.1", "gpt-4o-mini", "gpt-4.1-nano", "text-embedding-3-small", ""):
+            self.assertFalse(models.takes_reasoning_effort(model), model)
+
 if __name__ == "__main__":
     unittest.main()
