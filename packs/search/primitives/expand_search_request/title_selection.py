@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from packs.search.primitives.expand_search_request.parallel_extractors import EXTRACTOR_MODELS, _extract
+from packs.shared import models
+from packs.search.primitives.expand_search_request.parallel_extractors import _extract
 from packs.search.primitives.shared.openai_client import make_async_openai_client
 
 MAX_TITLE_GROUPS = 100
@@ -43,7 +44,7 @@ async def pick_title_clusters(
     os.environ["POWERPACKS_USAGE_STAGE"] = "expand"
     try:
         result = await _extract(client, "title_selection", system_prompt, user_content,
-                                model=model or EXTRACTOR_MODELS["role"], reasoning_effort=reasoning_effort)
+                                model=model or models.SEARCH_EXTRACTORS["role"], reasoning_effort=reasoning_effort)
     finally:
         if previous_stage is None:
             os.environ.pop("POWERPACKS_USAGE_STAGE", None)

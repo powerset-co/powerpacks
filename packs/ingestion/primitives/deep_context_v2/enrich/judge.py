@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import tiktoken
 
+from packs.shared import models
 from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.deep_context_v2.db import queries_enrich
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import ParentRow, append_parent_rows
@@ -242,7 +243,7 @@ def estimate(tasks: list[JudgeTask], owner_block: str) -> dict[str, int | float]
             tokens += len(encoder.encode(sol_identity.SYSTEM_PROMPT + prompt))
             calls += 1
     output = calls * OUTPUT_TOKENS_PER_CALL
-    cost = round(estimate_cost_usd(tokens, output, sol_identity.MODEL), 4)
+    cost = round(estimate_cost_usd(tokens, output, models.DEEP_CONTEXT_LINKEDIN), 4)
     return {"sol_calls_at_most": calls, "sol_input_tokens": tokens, "sol_output_tokens_assumed": output,
             "sol_cost_usd_at_most": cost, "estimated_cost_usd_at_most": cost}
 
@@ -252,7 +253,7 @@ async def decide(conn: sqlite3.Connection, tasks: list[JudgeTask], owner_block: 
     """Write and commit each family's paid answers immediately; reruns skip its fingerprint."""
     if not tasks:
         return {"judge_failed": 0}
-    config = OpenAIResponsesConfig.resolve(model=sol_identity.MODEL, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
+    config = OpenAIResponsesConfig.resolve(model=models.DEEP_CONTEXT_LINKEDIN, effort=sol_identity.REASONING_EFFORT, timeout=300, max_retries=2)
     counts: dict[str, int] = {"judge_failed": 0}
     async with OpenAIResponsesCaller(config) as caller:
         async def guarded(task: JudgeTask) -> tuple[JudgeTask, dict[str, SolVerdict] | None]:

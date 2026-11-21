@@ -8,6 +8,7 @@ from unittest import mock
 
 import httpx
 
+from packs.shared import models
 from packs.search.primitives.deep_search import pin_confidence as pc, search_harness as harness
 from packs.search.primitives.deep_search.results_web import rendering
 from packs.search.primitives.deep_search.results_web.model import (
@@ -37,7 +38,7 @@ def _judge_client(calls: list, *, content: str | None = None, fail: bool = False
         calls.append(kwargs)
         if fail:
             raise RuntimeError("provider down")
-        return SimpleNamespace(model=pc.PIN_JUDGE_MODEL, usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+        return SimpleNamespace(model=models.JD_PIN, usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
                                choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(
                                    content=content if content is not None else "```json\n" + json.dumps(VERDICT) + "\n```"))])
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
@@ -104,14 +105,14 @@ class PinConfidenceHelperTests(unittest.TestCase):
         for bad in (True, 101, 4.5):
             with self.assertRaises(ValueError):
                 _pin_confidence(bad)
-        judgment = _pin_judgment({"model": pc.PIN_JUDGE_MODEL, "decision": "review", "reason": "Data work.", "status": "ok"})
+        judgment = _pin_judgment({"model": models.JD_PIN, "decision": "review", "reason": "Data work.", "status": "ok"})
         self.assertEqual((judgment.decision, judgment.reason, judgment.status), ("review", "Data work.", "ok"))
         with self.assertRaises(ValueError):
-            _pin_judgment({"model": pc.PIN_JUDGE_MODEL, "decision": "pin", "reason": "", "status": "ok"})
+            _pin_judgment({"model": models.JD_PIN, "decision": "pin", "reason": "", "status": "ok"})
 
     def test_viewer_badges_follow_the_judge_decision_and_taste_presence(self):
-        introduce = PinJudgment("introduce", "Built it.", pc.PIN_JUDGE_MODEL, "ok")
-        review = PinJudgment("review", "Data work.", pc.PIN_JUDGE_MODEL, "ok")
+        introduce = PinJudgment("introduce", "Built it.", models.JD_PIN, "ok")
+        review = PinJudgment("review", "Data work.", models.JD_PIN, "ok")
         suggested = _candidate(candidate_judgment=JUDGED, pin_confidence=88, pin_judgment=introduce, taste_score=7.58)
         self.assertTrue(suggested.suggested_pin)
         self.assertIn("Suggested Pin", rendering._suggested_pin_chip(suggested))
@@ -195,7 +196,7 @@ class PinConfidenceStageTests(unittest.TestCase):
                              {"taste", "judge"})
 
     def test_summary_carries_the_fields_from_the_latest_frame(self):
-        judgment = {"model": pc.PIN_JUDGE_MODEL, "decision": "introduce", "reason": "Built it.", "status": "ok"}
+        judgment = {"model": models.JD_PIN, "decision": "introduce", "reason": "Built it.", "status": "ok"}
         results = {"iterations": [{"pond_n": 1, "query": "Engineers", "shortlist_grades": [
             {"person": "p1", "name": "Jordan Bravo", "company": "Acme", "score": 0.9,
              "taste_score": 7.58, "pin_confidence": 88, "pin_judgment": judgment},

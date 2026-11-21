@@ -11,7 +11,8 @@ import json
 import os
 from pathlib import Path
 
-from packs.search.primitives.expand_search_request.parallel_extractors import EXTRACTOR_MODELS, _extract
+from packs.shared import models
+from packs.search.primitives.expand_search_request.parallel_extractors import _extract
 from packs.search.primitives.shared.openai_client import make_async_openai_client
 
 PLACE_KEYS = ("cities", "states", "countries", "metro_areas", "macro_regions")
@@ -22,5 +23,5 @@ async def unintended_places(query: str, places: list[str], *, model: str | None 
                             reasoning_effort: str | None = None) -> set[str]:
     client = make_async_openai_client(os.environ.get("OPENAI_API_KEY"))
     result = await _extract(client, "place_review", PROMPT, f"Query: {query}\nResults: {json.dumps(places)}",
-                            model=model or EXTRACTOR_MODELS["location"], reasoning_effort=reasoning_effort)
+                            model=model or models.SEARCH_EXTRACTORS["location"], reasoning_effort=reasoning_effort)
     return set(result.get("remove") or []) & set(places)

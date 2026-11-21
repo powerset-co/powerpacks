@@ -56,19 +56,10 @@ from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
 from packs.search.primitives.expand_search_request.parallel_extractors import injected_role_titles, role_core_patterns_from_bm25  # noqa: E402
 from packs.search.primitives.expand_search_request import place_review, title_selection  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
-from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
 from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
 from packs.search.primitives.search_feedback.search_feedback import log_edit  # noqa: E402
 from packs.search.primitives.search_network_pipeline.refine import rerank  # noqa: E402
-DEFAULT_MODEL = models.SEARCH_RERANK
-DEFAULT_REASONING_EFFORT = models.SEARCH_RERANK_EFFORT
-DEFAULT_EXPAND_MODEL = models.SEARCH_EXPAND
-DEFAULT_EXPAND_REASONING_EFFORT = models.SEARCH_EXPAND_EFFORT
-DEFAULT_FILTER_MODEL = models.SEARCH_FILTER
-DEFAULT_FILTER_REASONING_EFFORT = models.SEARCH_FILTER_EFFORT
 DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE", "2"))
 DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -937,12 +928,12 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     use_screen = _screened_by_luna(args)
     payload = {
         "state": str(state),
-        "model": (luna_screen.MODEL if use_screen else terra.MODEL) if getattr(args, "jd_file", None) else args.model,
+        "model": (models.DEEP_CONTEXT_DECISIONS if use_screen else models.JD_CAPABILITY) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,
         "rerank_concurrency": args.rerank_concurrency,
-        "reasoning_effort": ("none" if use_screen else terra.REASONING_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
+        "reasoning_effort": ("none" if use_screen else models.JD_CAPABILITY_EFFORT) if getattr(args, "jd_file", None) else args.reasoning_effort,
         "filter_reasoning_effort": args.filter_reasoning_effort,
         "evaluation_query": getattr(args, "evaluation_query", None),
         "evaluation_traits_json": normalized_evaluation_traits_arg(getattr(args, "evaluation_traits_json", None)),
@@ -954,8 +945,8 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
         payload["jd_file"] = args.jd_file
         payload["job_title"] = args.job_title
         payload["job_company"] = args.job_company
-        payload["jd_cleaner_model"] = jd_cleaner.MODEL
-        payload["jd_cleaner_reasoning_effort"] = jd_cleaner.REASONING_EFFORT
+        payload["jd_cleaner_model"] = models.JD_CLEAN
+        payload["jd_cleaner_reasoning_effort"] = models.JD_CLEAN_EFFORT
         payload["jd_cleaner_output_dir"] = getattr(args, "jd_cleaner_output_dir", None)
     return payload
 
@@ -1469,10 +1460,10 @@ def add_run(p):
     p.add_argument("--search-only",action="store_true",help="Skip LLM filter/rerank after retrieval + hydration")
     p.add_argument("--execute-approved",action="store_true",help="User already approved the search preview; run retrieval, hydration, LLM filter/rerank, and persistence without a second gate")
     p.add_argument("--confirm-llm",action="store_true",help="Backward-compatible alias for approving the LLM filter/rerank stage")
-    p.add_argument("--model",default=DEFAULT_MODEL)
-    p.add_argument("--reasoning-effort",default=DEFAULT_REASONING_EFFORT,help="LLM rerank reasoning effort; default is medium")
-    p.add_argument("--filter-model",default=DEFAULT_FILTER_MODEL)
-    p.add_argument("--filter-reasoning-effort",default=DEFAULT_FILTER_REASONING_EFFORT,help="LLM filter reasoning effort; default is none")
+    p.add_argument("--model",default=models.SEARCH_RERANK)
+    p.add_argument("--reasoning-effort",default=models.SEARCH_RERANK_EFFORT,help="LLM rerank reasoning effort; default is medium")
+    p.add_argument("--filter-model",default=models.SEARCH_FILTER)
+    p.add_argument("--filter-reasoning-effort",default=models.SEARCH_FILTER_EFFORT,help="LLM filter reasoning effort; default is none")
     p.add_argument("--filter-batch-size",type=int,default=DEFAULT_FILTER_BATCH_SIZE,help="LLM filter candidates per request; default is 2")
     p.add_argument("--filter-concurrency",type=int,default=DEFAULT_FILTER_CONCURRENCY,help="LLM filter batch fanout; mirrors SEARCH_V2_LLM_FILTER_MAX_CONCURRENT")
     p.add_argument("--rerank-concurrency",type=int,default=DEFAULT_RERANK_CONCURRENCY,help="LLM rerank fanout; mirrors SEARCH_V2_RERANK_MAX_CONCURRENT")
@@ -1497,8 +1488,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir")
     p.add_argument("--edits-json",help="The card's edits as one JSON file: its filters are applied to the prepared payload and logged in the output dir's user-edits.jsonl (the traits come from the query)")
     p.add_argument("--expand-prompts-dir",help="Reviewed complete query-expansion prompt bundle")
-    p.add_argument("--expand-model",default=DEFAULT_EXPAND_MODEL)
-    p.add_argument("--expand-reasoning-effort",default=DEFAULT_EXPAND_REASONING_EFFORT)
+    p.add_argument("--expand-model",default=models.SEARCH_EXPAND)
+    p.add_argument("--expand-reasoning-effort",default=models.SEARCH_EXPAND_EFFORT)
     p.add_argument("--evaluation-query",help="Canonical plan/JD brief threaded only to filter/rerank")
     p.add_argument("--evaluation-traits-json",help="Canonical evaluation traits as JSON, @file, or JSON file path")
     p.add_argument("--filter-system-file",help="Reviewed filter system prompt")

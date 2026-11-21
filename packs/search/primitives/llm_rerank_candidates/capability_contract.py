@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 
+from packs.shared import models
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner
 from packs.search.primitives.llm_rerank_candidates import luna_screen, terra
 
@@ -23,7 +24,7 @@ def _prompt_spec(judge: str, rubric: str | None) -> dict:
     if judge == "terra":
         return {
             "judge": judge,
-            "model": terra.MODEL,
+            "model": models.JD_CAPABILITY,
             "prompt_version": terra.PROMPT_VERSION,
             "rating_rubric": rubric,
         }
@@ -31,7 +32,7 @@ def _prompt_spec(judge: str, rubric: str | None) -> dict:
         raise ValueError("capability judge must be 'terra' or 'luna'")
     return {
         "judge": judge,
-        "model": luna_screen.MODEL,
+        "model": models.DEEP_CONTEXT_DECISIONS,
         "request_version": luna_screen.REQUEST_VERSION,
         "threshold": luna_screen.THRESHOLD,
         "evidence_policy": luna_screen.EVIDENCE_POLICY,

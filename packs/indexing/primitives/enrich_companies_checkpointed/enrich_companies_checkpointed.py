@@ -31,12 +31,13 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.indexing.lib.io import iter_jsonl, read_json, read_jsonl, write_json  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 from packs.indexing.lib.llm_config import (  # noqa: E402
-    DEFAULT_MODEL, DEFAULT_OPENAI_TIMEOUT_SECONDS,
+    DEFAULT_OPENAI_TIMEOUT_SECONDS,
     DEFAULT_OPENAI_CONCURRENCY, CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs,
     openai_price_multiplier,
 )
@@ -644,7 +645,7 @@ def _build_company_context(local: dict[str, Any], rapidapi_context: dict[str, An
 
 
 def openai_classification_payload(local: dict[str, Any], rapidapi_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    model = os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
+    model = os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", models.INDEX_COMPANY_ALONE)
     payload: dict[str, Any] = {
         "model": model,
         "response_format": COMPANY_RESPONSE_SCHEMA,
@@ -875,7 +876,7 @@ def iter_unprocessed(path: Path, start_index: int) -> Iterable[tuple[int, dict[s
 def estimate_payload(input_path: Path, provider: str, artifact: dict[str, dict[str, Any]] | None = None, model_override: str | None = None) -> dict[str, Any]:
     rows = list(read_jsonl(input_path))
     artifact = artifact or {}
-    model = model_override or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", DEFAULT_MODEL)
+    model = model_override or os.getenv("POWERPACKS_COMPANY_OPENAI_MODEL", models.INDEX_COMPANY_ALONE)
     missing = [clean(row.get("company_name")) for row in rows if provider == "artifact" and not lookup_artifact_row(artifact, row)]
     estimated_input_tokens = sum(max(1, len(json.dumps(row, ensure_ascii=False)) // 4) for row in rows)
     estimated_output_tokens = len(rows) * 350

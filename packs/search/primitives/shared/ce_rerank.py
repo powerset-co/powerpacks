@@ -29,7 +29,6 @@ from packs.shared import models  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = models.COMPANY_SCORE
 DEFAULT_BATCH_SIZE = 20
 # Nano-model scoring calls; 10 made large company pools take minutes
 # (3,000 companies = 150 batches = 15 sequential waves). Sibling LLM stages
@@ -148,9 +147,9 @@ async def ce_rerank_companies(
         }
     """
     if not companies:
-        return {"scored_companies": [], "total_scored": 0, "kept": 0, "ce_model": model or DEFAULT_MODEL, "elapsed_ms": 0}
+        return {"scored_companies": [], "total_scored": 0, "kept": 0, "ce_model": model or models.COMPANY_SCORE, "elapsed_ms": 0}
 
-    model = model or DEFAULT_MODEL
+    model = model or models.COMPANY_SCORE
     key = api_key or os.environ.get("OPENAI_API_KEY", "")
     if not key:
         # Without a key every batch would burn a failing HTTP round trip and

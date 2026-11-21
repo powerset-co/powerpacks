@@ -36,7 +36,6 @@ CEO_CTO_RE = re.compile(
 )
 FOUNDER_RE = re.compile(r"\bfounder\b|\bfounding\b|\bco.?found", re.IGNORECASE)
 
-DEFAULT_MODEL = models.INDEX_CEO_FOUNDERS
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 DEFAULT_CONCURRENCY = 30
 CHECKPOINT_EVERY = 200
@@ -266,7 +265,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flattened", required=True, help="Path to flattened_people.jsonl")
     parser.add_argument("--output", required=True, help="Path to founder_enrichment.jsonl")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=models.INDEX_CEO_FOUNDERS)
     parser.add_argument("--confidence-threshold", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--limit", type=int, default=None)

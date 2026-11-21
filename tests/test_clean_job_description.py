@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from packs.shared import models
 from packs.search.primitives.clean_job_description import clean_job_description
 from packs.search.primitives.llm_rerank_candidates import llm_rerank_candidates as reranker
 
@@ -144,7 +145,7 @@ class CleanJobDescriptionTests(unittest.TestCase):
         self._clean(api, jd=self.jd + "\nAnother duty.")
         self._clean(api, title="Principal Storage Engineer")
         self._clean(api, company_name="Example Storage")
-        with mock.patch.object(clean_job_description, "MODEL", "other-model"):
+        with mock.patch.object(models, "JD_CLEAN", "other-model"):
             self._clean(api)
 
         self.assertEqual(api.chat.completions.create.call_count, 5)

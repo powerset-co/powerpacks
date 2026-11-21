@@ -34,6 +34,7 @@ from pathlib import Path
 
 import tiktoken
 
+from packs.shared import models
 from packs.indexing.lib.openai_responses import estimate_cost_usd
 from packs.ingestion.primitives.deep_context_v2.components import connected_components
 from packs.ingestion.primitives.deep_context_v2.db import queries_dedupe as queries
@@ -71,7 +72,7 @@ class Dedupe(Node):
     def __init__(self, conn: sqlite3.Connection, data_root: Path, *, limit: int) -> None:
         super().__init__(conn, data_root)
         self.limit = limit
-        self.config = OpenAIResponsesConfig.resolve(model=judge.MODEL, effort=judge.REASONING_EFFORT, timeout=600, max_retries=3)
+        self.config = OpenAIResponsesConfig.resolve(model=models.DEEP_CONTEXT_DEDUPE, effort=judge.REASONING_EFFORT, timeout=600, max_retries=3)
         self.identifiers: dict[str, list[Identifier]] = queries.candidate_identifiers(conn)
         self.fingerprints: dict[str, str] = queries.facts_fingerprints(conn)
         self.parents: dict[str, str] = queries.current_parents(conn)
@@ -159,8 +160,8 @@ class Dedupe(Node):
             "blocked_pairs": len(plan.blocking.pairs), "gated_pairs": plan.gated,
             "already_joined": plan.already_joined, "already_judged": plan.already_judged,
             "pairs_for_sol": len(plan.todo), "input_tokens": tokens, "output_tokens_assumed": output,
-            "model": judge.MODEL, "reasoning_effort": self.config.effort, "prompt_version": judge.PROMPT_VERSION,
-            "estimated_cost_usd": estimate_cost_usd(tokens, output, judge.MODEL),
+            "model": models.DEEP_CONTEXT_DEDUPE, "reasoning_effort": self.config.effort, "prompt_version": judge.PROMPT_VERSION,
+            "estimated_cost_usd": estimate_cost_usd(tokens, output, models.DEEP_CONTEXT_DEDUPE),
         }
 
     def execute(self) -> dict[str, int]:

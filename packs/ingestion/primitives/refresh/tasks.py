@@ -75,7 +75,6 @@ CODEX_APP_DB = CODEX_HOME / "sqlite" / "codex-dev.db"
 CODEX_THREADS_DB = CODEX_HOME / "state_5.sqlite"
 
 CLAUDE_APP = "Claude"
-CLAUDE_MODEL = models.SCHEDULED_TASK_CLAUDE
 CLAUDE_TASK = Path.home() / ".claude" / "scheduled-tasks" / TASK_ID / "SKILL.md"
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS = Path.home() / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
@@ -334,7 +333,7 @@ def _install_claude(repo: Path, schedule: Schedule) -> None:
         "id": TASK_ID,
         "displayName": TASK_NAME,
         "cronExpression": schedule.cron(),
-        "model": CLAUDE_MODEL,
+        "model": models.SCHEDULED_TASK_CLAUDE,
         "enabled": True,
         "filePath": str(CLAUDE_TASK),
         "createdAt": int(time.time() * 1000),

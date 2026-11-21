@@ -19,10 +19,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2 import assets
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile
-from packs.ingestion.primitives.deep_context_v2.decisions import MODEL, Answer
+from packs.ingestion.primitives.deep_context_v2.decisions import Answer
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts
 from packs.ingestion.primitives.deep_context_v2.synthesize.prompt import batches, render_batch
 from packs.ingestion.primitives.deep_context_v2.synthesize.synthesize import CHUNK_CHARS, MAX_BATCHES
@@ -120,7 +121,7 @@ def build_request(facts: SynthesizedFacts, bundles: Sequence[CollectionBundle], 
     }
     # A cache routing hint keyed by the owner's name: one install's families route together.
     cache_key: str = "powerpacks-worth-" + hashlib.sha256(owner.name.encode("utf-8")).hexdigest()[:16]
-    return {"model": MODEL, "input": json.dumps(state, ensure_ascii=False),
+    return {"model": models.DEEP_CONTEXT_DECISIONS, "input": json.dumps(state, ensure_ascii=False),
             "questions": label_questions() + WORTH_QUESTIONS, "prompt_cache_key": cache_key}
 
 

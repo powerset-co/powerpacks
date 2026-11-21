@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from packs.shared import models
 from packs.search.primitives.deep_search import search_harness, team_similarity
 from packs.search.primitives.deep_search.team_similarity import embedding_input, rank, work_text
 from packs.search.primitives.deep_search.team_department import Department
@@ -61,7 +62,7 @@ class TeamSimilarityTest(unittest.TestCase):
     def test_embedded_employee_request_uses_verified_domain(self):
         response = mock.Mock()
         response.json.return_value = {"company_id_source": "coresignal_company",
-            "company_id": "core-123", "embedding_model": team_similarity.MODEL,
+            "company_id": "core-123", "embedding_model": models.EMBEDDING,
             "embedding_usage_tokens": 24, "embedding_cache_misses": 1,
             "employees": [{"full_name": "Jordan Bravo", "embedding_status": "ready",
                            "embedding": [1.0, 0.0]}]}
@@ -114,7 +115,7 @@ class TeamSimilarityTest(unittest.TestCase):
 
     def test_empty_department_does_not_broaden_to_all_employees(self):
         metadata = {"company_id_source": "coresignal_company", "company_id": "core-123",
-                    "embedding_model": team_similarity.MODEL}
+                    "embedding_model": models.EMBEDDING}
         with tempfile.TemporaryDirectory() as raw, \
              mock.patch.object(Department, "from_jd", return_value=Department("technical")), \
              mock.patch.object(team_similarity, "fetch_embedded_employees",
@@ -148,7 +149,7 @@ class TeamSimilarityTest(unittest.TestCase):
                 path.write_text(original)
                 (run_dir / "team.json").write_text(json.dumps({"members": [{"name": "Old Employee"}]}))
                 metadata = {"company_id_source": "coresignal_company", "company_id": "core-123",
-                            "embedding_model": team_similarity.MODEL}
+                            "embedding_model": models.EMBEDDING}
                 employees = [{"full_name": "Jordan Bravo", "department": "technical",
                               "embedding_status": "ready", "embedding": [1.0, 0.0]}]
                 with mock.patch.object(Department, "from_jd", return_value=Department("technical")), \
@@ -209,7 +210,7 @@ class TeamSimilarityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             run_dir = Path(raw)
             metadata = {"company_id_source": "coresignal_company", "company_id": "core-123",
-                        "embedding_model": team_similarity.MODEL, "embedding_usage_tokens": 24,
+                        "embedding_model": models.EMBEDDING, "embedding_usage_tokens": 24,
                         "embedding_cache_misses": 1}
             employees = [{"full_name": "Teammate", "embedding_status": "ready",
                           "embedding": [1.0, 0.0]}]

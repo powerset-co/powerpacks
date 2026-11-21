@@ -36,8 +36,7 @@ from packs.shared import models
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 TASTE_HOST = "https://reporting.powerset.co"
 TASTE_BATCH_URLS = 100
-PIN_JUDGE_MODEL = models.JD_PIN
-PIN_JUDGE_CONFIG = {"model": PIN_JUDGE_MODEL, "reasoning_effort": models.JD_PIN_EFFORT, "max_completion_tokens": 8192,
+PIN_JUDGE_CONFIG = {"model": models.JD_PIN, "reasoning_effort": models.JD_PIN_EFFORT, "max_completion_tokens": 8192,
                     "response_format": {"type": "json_object"}}
 DECISIONS = ("introduce", "review", "not_supported")
 PIN_ELIGIBLE_OVERALL = (4, 5)

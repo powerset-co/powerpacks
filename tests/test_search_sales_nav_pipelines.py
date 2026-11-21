@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from packs.shared import models
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -232,8 +233,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 env_file=".env",
                 timeout=60,
                 model=None,
-                expand_model=search.DEFAULT_EXPAND_MODEL,
-                expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
+                expand_model=models.SEARCH_EXPAND,
+                expand_reasoning_effort=models.SEARCH_EXPAND_EFFORT,
             )
 
             rc = search.cmd_prepare(args)
@@ -280,8 +281,8 @@ class SearchNetworkPipelineTests(unittest.TestCase):
                 env_file=".env",
                 timeout=60,
                 model=None,
-                expand_model=search.DEFAULT_EXPAND_MODEL,
-                expand_reasoning_effort=search.DEFAULT_EXPAND_REASONING_EFFORT,
+                expand_model=models.SEARCH_EXPAND,
+                expand_reasoning_effort=models.SEARCH_EXPAND_EFFORT,
             )
 
             rc = search.cmd_prepare(args)

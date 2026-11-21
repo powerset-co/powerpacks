@@ -14,6 +14,7 @@ from unittest import mock
 import httpx
 
 from test_people_worth import StoreTests
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import (
     CollectionBundle, MessageChannel, MessageDirection, MessageEntry, Person, ThreadParticipants,
@@ -151,7 +152,7 @@ class DecisionsClientTests(unittest.TestCase):
                                                 on_progress=no_progress, refused=luna.refused))
 
     def test_an_answer_is_paid_once_then_read_from_disk(self) -> None:
-        request = {"model": decisions.MODEL, "input": "facts", "questions": []}
+        request = {"model": models.DEEP_CONTEXT_DECISIONS, "input": "facts", "questions": []}
         digest = decisions.request_digest("v1", request)
         self.assertEqual(self.decide({digest: request}), {digest: ANSWERS})
         self.assertEqual(self.decide({digest: request}), {digest: ANSWERS})
@@ -160,7 +161,7 @@ class DecisionsClientTests(unittest.TestCase):
         self.assertEqual((len(usage), usage[0]["model"], usage[0]["cost_basis"]), (1, "gpt-6-luna", "tiktoken_estimate"))
 
     def test_a_refusal_is_not_saved_and_is_asked_again(self) -> None:
-        request = {"model": decisions.MODEL, "input": "facts", "questions": []}
+        request = {"model": models.DEEP_CONTEXT_DECISIONS, "input": "facts", "questions": []}
         digest = decisions.request_digest("v1", request)
         self.reply = [{"type": "refusal", "name": "relationship_kind"}]
         self.assertEqual(self.decide({digest: request}), {digest: self.reply})
@@ -169,11 +170,11 @@ class DecisionsClientTests(unittest.TestCase):
         self.assertFalse(decisions.cache_path(self.cache, digest).exists())
 
     def test_a_version_bump_asks_again(self) -> None:
-        request = {"model": decisions.MODEL, "input": "facts", "questions": []}
+        request = {"model": models.DEEP_CONTEXT_DECISIONS, "input": "facts", "questions": []}
         self.assertNotEqual(decisions.request_digest("v1", request), decisions.request_digest("v2", request))
 
     def test_cache_only_never_calls_openai(self) -> None:
-        request = {"model": decisions.MODEL, "input": "facts", "questions": []}
+        request = {"model": models.DEEP_CONTEXT_DECISIONS, "input": "facts", "questions": []}
         with self.assertRaisesRegex(ValueError, "not saved yet"):
             self.decide({decisions.request_digest("v1", request): request}, cache_only=True)
         self.assertEqual(self.sent, [])

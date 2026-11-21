@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from packs.shared import models
 from packs.search.primitives.llm_rerank_candidates import terra
 
 
@@ -85,7 +86,7 @@ class TerraCapabilityTests(unittest.IsolatedAsyncioTestCase):
         await self.score(api, as_of="2026-09-18")
         await self.score(api, jd="Different job")
         await self.score(api, profiles={"person-a": {**self.profile, "summary": "New evidence"}})
-        with patch.object(terra, "MODEL", "other-model"):
+        with patch.object(models, "JD_CAPABILITY", "other-model"):
             await self.score(api)
         with patch.object(terra, "system_prompt", return_value="Changed rubric"):
             await self.score(api)

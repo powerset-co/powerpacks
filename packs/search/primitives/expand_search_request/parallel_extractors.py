@@ -239,7 +239,6 @@ def _load_prompt(name: str, prompts_dir: Path | None = None) -> str:
     raise FileNotFoundError(f"Missing prompt: {path}")
 
 
-EXTRACTOR_MODELS = models.SEARCH_EXTRACTORS
 
 INTERACTION_FIELDS = (
     "operator_interaction_min", "operator_interaction_max",
@@ -374,7 +373,7 @@ async def _extract(
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Run one extractor via OpenAI chat completion."""
-    model = model or EXTRACTOR_MODELS[name]
+    model = model or models.SEARCH_EXTRACTORS[name]
     # Trait generation uses a specific user prompt format
     if name == "trait_generation":
         user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false, "person_name": "..."/null}}'
@@ -925,13 +924,13 @@ async def expand_query_parallel(
                 client,
                 query,
                 system_prompt=prompts[name],
-                model=model_override or EXTRACTOR_MODELS.get(name),
+                model=model_override or models.SEARCH_EXTRACTORS.get(name),
                 reasoning_effort=reasoning_effort,
             )
         else:
             result = await _extract(
                 client, name, prompts[name], query,
-                model=model_override or EXTRACTOR_MODELS.get(name),
+                model=model_override or models.SEARCH_EXTRACTORS.get(name),
                 reasoning_effort=reasoning_effort,
             )
         if name == "interaction":

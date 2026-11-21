@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.indexing.lib.artifact_io import iter_artifact_rows  # noqa: E402
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
@@ -32,7 +33,7 @@ from packs.indexing.lib.role_clustering import cluster_title  # noqa: E402
 from packs.indexing.lib.role_prompts import get_system_user_prompts, format_title_with_context  # noqa: E402
 
 from packs.indexing.lib.llm_config import (  # noqa: E402
-    DEFAULT_ROLE_MODEL as DEFAULT_MODEL, DEFAULT_MAX_COMPLETION_TOKENS,
+    DEFAULT_MAX_COMPLETION_TOKENS,
     DEFAULT_OPENAI_TIMEOUT_SECONDS, DEFAULT_OPENAI_CONCURRENCY,
     CHAT_MODEL_PRICES_PER_1K_USD, api_call_kwargs, openai_price_multiplier,
 )
@@ -806,7 +807,7 @@ def estimate_role_call_shape(roles: list[dict[str, Any]], model: str, batch_size
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     roles = collect_role_inputs(Path(args.flattened))
     provider = "input-classifications" if getattr(args, "input_classifications", None) else args.provider
-    model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", models.INDEX_ROLE)
     estimated_calls, input_tokens = estimate_role_call_shape(roles, model)
     output_tokens = 0 if provider == "input-classifications" else len(roles) * DEFAULT_ESTIMATED_OUTPUT_TOKENS_PER_ROLE
     prices = CHAT_MODEL_PRICES_PER_1K_USD.get(model) if provider == "openai" else None
@@ -854,7 +855,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not getattr(args, "input_classifications", None) and not api_key:
         raise SystemExit("role provider requires OPENAI_API_KEY or --api-key; no paid API was called")
     base_url = getattr(args, "base_url", None) or openai_base_url()
-    model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", DEFAULT_MODEL)
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_ROLE_OPENAI_MODEL", models.INDEX_ROLE)
     state = load_state(flattened, output_dir, args.checkpoint_every, args.force, provider, getattr(args, "input_classifications", None))
     if state.get("status") == "completed" and not args.force:
         manifest_path = output_dir / "manifest.json"

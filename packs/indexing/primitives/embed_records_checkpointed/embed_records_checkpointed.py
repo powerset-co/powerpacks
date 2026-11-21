@@ -37,7 +37,6 @@ from packs.shared.endpoints import openai_base_url  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
-DEFAULT_MODEL = models.EMBEDDING
 DEFAULT_COST_PER_1K_TOKENS = 0.00002
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 256
@@ -407,7 +406,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     api_batch_size = int(getattr(args, "api_batch_size", 128) or 128)
     base_url = getattr(args, "base_url", None) or openai_base_url()
-    model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", DEFAULT_MODEL)
+    model = getattr(args, "model", None) or os.getenv("POWERPACKS_OPENAI_EMBEDDING_MODEL", models.EMBEDDING)
     pending: list[tuple[str, str, dict[str, Any]]] = []
     chunks_this_run = 0
 
