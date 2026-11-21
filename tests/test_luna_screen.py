@@ -85,7 +85,7 @@ class LunaScreenTests(unittest.TestCase):
             self.assertEqual(json.loads(job["text"])["job"], JD)
             self.assertIn("profile", json.loads(candidate["text"]))
             self.assertEqual(body["prompt_cache_options"], {"mode": "explicit"})
-            self.assertEqual((body["model"], body["questions"]), (models.DEEP_CONTEXT_DECISIONS, [luna_screen.QUESTION]))
+            self.assertEqual((body["model"], body["questions"]), (models.SEARCH_JD_SCREEN, [luna_screen.QUESTION]))
             jobs.add(job["text"])
         self.assertEqual(len(jobs), 1)
 

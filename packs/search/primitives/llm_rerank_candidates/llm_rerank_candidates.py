@@ -1151,7 +1151,7 @@ async def _rerank_with_luna(items: list[RerankItem], *, jd: str, title: str,
     results = [RerankResult(
         id=item.id, score=by_id[item.id]["score"],
         verdict="pass" if by_id[item.id]["passed"] else "fail",
-        reason=by_id[item.id]["evidence"], model=models.DEEP_CONTEXT_DECISIONS,
+        reason=by_id[item.id]["evidence"], model=models.SEARCH_JD_SCREEN,
         elapsed_ms=0, input=item.payload,
     ) for item in items]
     return results, scores
@@ -1217,7 +1217,7 @@ def main() -> int:
             capability_request_sha256 = capability_contract.request_sha256(
                 jd=raw_jd, title=args.job_title, company_name=args.job_company,
                 evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
-            args.model = (models.DEEP_CONTEXT_DECISIONS if args.capability_judge == "luna" else models.JD_CAPABILITY)
+            args.model = (models.SEARCH_JD_SCREEN if args.capability_judge == "luna" else models.JD_CAPABILITY)
             args.reasoning_effort = "none" if args.capability_judge == "luna" else models.JD_CAPABILITY_EFFORT
             args.concurrency = min(args.concurrency, 32)
             system_prompt = terra.system_prompt(as_of)
@@ -1337,7 +1337,7 @@ def main() -> int:
     else:
         results = []
         if args.jd_file:
-            ce_result = {"status": "empty", "model": (models.DEEP_CONTEXT_DECISIONS if args.capability_judge == "luna" else models.JD_CAPABILITY), "score_type": judge.SCORE_TYPE,
+            ce_result = {"status": "empty", "model": (models.SEARCH_JD_SCREEN if args.capability_judge == "luna" else models.JD_CAPABILITY), "score_type": judge.SCORE_TYPE,
                          "scores": []}
     elapsed = time.monotonic() - started
     elapsed_ms = int(elapsed * 1000)

@@ -119,7 +119,7 @@ async def matching_companies(description: str, rows: list[dict[str, Any]], cache
     requests: dict[str, dict[str, Any]] = {}
     for row in rows:
         text = row.get("semantic_text") or row.get("description") or row.get("company_name") or ""
-        request = {"model": models.DEEP_CONTEXT_DECISIONS, "questions": [question],
+        request = {"model": models.SEARCH_COMPANY_FILTER, "questions": [question],
                    "input": json.dumps({"company": text}, ensure_ascii=False)}
         digest = decisions.request_digest(COMPANY_QUESTION_VERSION, request)
         digests.append(digest)

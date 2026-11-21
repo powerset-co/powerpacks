@@ -117,7 +117,7 @@ def build_request(*, jd: str, profile: dict, as_of: str) -> dict:
     date.fromisoformat(as_of)
     job = {"job": jd, "reference_date": as_of, "evidence_policy": EVIDENCE_POLICY}
     candidate = {"profile": profile_evidence(profile, as_of)}
-    return {"model": models.DEEP_CONTEXT_DECISIONS, "input": [{"role": "user", "content": [
+    return {"model": models.SEARCH_JD_SCREEN, "input": [{"role": "user", "content": [
                 {"type": "input_text", "text": json.dumps(job, ensure_ascii=False),
                  "prompt_cache_breakpoint": {"mode": "explicit"}},
                 {"type": "input_text", "text": json.dumps(candidate, ensure_ascii=False)}]}],
@@ -142,7 +142,7 @@ def _screen(answers: list[dict]) -> dict:
 async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Path, as_of: str) -> dict:
     """Every candidate's qualification score and pass, with exact-request answer caching."""
     result: dict[str, Any] = {
-        "status": "ok" if profiles else "empty", "model": models.DEEP_CONTEXT_DECISIONS, "request_version": REQUEST_VERSION,
+        "status": "ok" if profiles else "empty", "model": models.SEARCH_JD_SCREEN, "request_version": REQUEST_VERSION,
         "assessment_date": as_of, "score_type": SCORE_TYPE, "threshold": THRESHOLD,
         "scores": [], "artifacts": [], "requests": 0, "cached_candidates": 0,
     }
@@ -172,7 +172,7 @@ async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Pa
 async def choose(*, state: dict, question: dict, cache_dir: Path, version: str) -> dict:
     """One choice question over a small state, cached like the screen: the chosen answer."""
     # One request per JD: explicit mode with no breakpoint keeps it out of the prompt cache.
-    request = {"model": models.DEEP_CONTEXT_DECISIONS, "input": json.dumps(state, ensure_ascii=False), "questions": [question],
+    request = {"model": models.SEARCH_JD_SCREEN, "input": json.dumps(state, ensure_ascii=False), "questions": [question],
                "prompt_cache_options": {"mode": "explicit"}}
     digest = decisions.request_digest(version, request)
     answers = await decisions.decide_all(
