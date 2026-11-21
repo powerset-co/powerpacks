@@ -35,10 +35,16 @@ SEARCH_RERANK = "gpt-5.6-luna"
 SEARCH_RERANK_EFFORT = "medium"
 # Refining a finished search by a criterion (search_network_pipeline rerank).
 SEARCH_REFINE = "gpt-5.1"
+# The Luna pass on the Decisions API that decides who a job-description search's judges read
+# (llm_rerank_candidates/luna_screen.py). Part of each saved answer's key.
+SEARCH_JD_SCREEN = "gpt-6-luna"
 
 # ── Companies and embeddings ───────────────────────────────────────────────────────────────────
 # Scores companies against an industry description on the local index (ce_rerank).
 COMPANY_SCORE = "gpt-4.1-nano"
+# Keeps the companies that match an industry on the local index, on the Decisions API
+# (local_resolve_companies); the cloud does the same with its own copy.
+SEARCH_COMPANY_FILTER = "gpt-6-luna"
 EMBEDDING = "text-embedding-3-small"
 
 # ── Job-description (deep) search ──────────────────────────────────────────────────────────────
@@ -76,7 +82,7 @@ INDEX_CEO_FOUNDERS = "gpt-5.1"          # detect_ceo_founders
 # ── Deep Context ───────────────────────────────────────────────────────────────────────────────
 DEEP_CONTEXT_SYNTHESIS = "gpt-6-luna"   # facts from message bundles; as good as gpt-5.2 here, far cheaper
 DEEP_CONTEXT_IDENTITY = "gpt-6-luna"
-DEEP_CONTEXT_DECISIONS = "gpt-6-luna"   # worth, labels and screens on the Decisions API
+DEEP_CONTEXT_DECISIONS = "gpt-6-luna"   # worth and labels on the Decisions API
 DEEP_CONTEXT_DEDUPE = "gpt-6.1-sol"     # are these two people the same person
 DEEP_CONTEXT_LINKEDIN = "gpt-6.1-sol"   # is this LinkedIn profile this person (sol_identity)
 

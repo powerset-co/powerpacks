@@ -928,7 +928,7 @@ def _llm_approval_payload(args, state: Path) -> dict[str, Any]:
     use_screen = _screened_by_luna(args)
     payload = {
         "state": str(state),
-        "model": (models.DEEP_CONTEXT_DECISIONS if use_screen else models.JD_CAPABILITY) if getattr(args, "jd_file", None) else args.model,
+        "model": (models.SEARCH_JD_SCREEN if use_screen else models.JD_CAPABILITY) if getattr(args, "jd_file", None) else args.model,
         "filter_model": args.filter_model,
         "filter_batch_size": args.filter_batch_size,
         "filter_concurrency": args.filter_concurrency,

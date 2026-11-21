@@ -1463,7 +1463,7 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--model", models.DEEP_CONTEXT_DECISIONS if capability_judge == "luna" else models.JD_CAPABILITY,
+        "--model", models.SEARCH_JD_SCREEN if capability_judge == "luna" else models.JD_CAPABILITY,
         "--reasoning-effort", "none" if capability_judge == "luna" else models.JD_CAPABILITY_EFFORT,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],

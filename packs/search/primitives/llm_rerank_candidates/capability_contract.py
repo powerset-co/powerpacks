@@ -32,7 +32,7 @@ def _prompt_spec(judge: str, rubric: str | None) -> dict:
         raise ValueError("capability judge must be 'terra' or 'luna'")
     return {
         "judge": judge,
-        "model": models.DEEP_CONTEXT_DECISIONS,
+        "model": models.SEARCH_JD_SCREEN,
         "request_version": luna_screen.REQUEST_VERSION,
         "threshold": luna_screen.THRESHOLD,
         "evidence_policy": luna_screen.EVIDENCE_POLICY,

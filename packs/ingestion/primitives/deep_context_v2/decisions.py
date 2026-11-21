@@ -26,7 +26,6 @@ from typing import Any, Callable
 import tiktoken
 from openai import AsyncOpenAI
 
-from packs.shared import models
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.shared.endpoints import openai_base_url
 from packs.ingestion.primitives.deep_context_v2.openai import DEFAULT_OPENAI_CONCURRENCY, load_env
@@ -126,7 +125,7 @@ def _log_usage(request: dict[str, Any], response: dict[str, Any], stage: str, la
     details = usage.get("input_tokens_details") or {}  # cache reads and writes, both inside input_tokens
     append_usage_row({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "model": models.DEEP_CONTEXT_DECISIONS,
+        "model": request["model"],
         "stage": stage,
         "prompt_tokens": tokens,
         "cached_tokens": int(details.get("cached_tokens") or 0),
