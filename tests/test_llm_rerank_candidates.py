@@ -635,13 +635,10 @@ class PromptContractTests(unittest.TestCase):
     def test_defaults_use_luna_medium(self) -> None:
         import importlib.util
 
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LLM_RERANK_MODEL", None)
-            os.environ.pop("LLM_RERANK_REASONING_EFFORT", None)
-            spec = importlib.util.spec_from_file_location("llm_rerank_candidates_defaults", RERANK_PY)
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules["llm_rerank_candidates_defaults"] = mod
-            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        spec = importlib.util.spec_from_file_location("llm_rerank_candidates_defaults", RERANK_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["llm_rerank_candidates_defaults"] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
         self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
         self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "medium")

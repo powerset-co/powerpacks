@@ -14,6 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[4]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from packs.shared import models  # noqa: E402
 
 
 def ensure_openai_package() -> None:
@@ -38,6 +45,6 @@ async def embedding(text: str) -> list[float]:
     client = make_async_openai_client()
     response = await client.embeddings.create(
         input=[text],
-        model=os.getenv("POWERPACKS_EMBEDDING_MODEL", "text-embedding-3-small"),
+        model=models.EMBEDDING,
     )
     return response.data[0].embedding

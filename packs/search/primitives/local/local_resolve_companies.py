@@ -766,7 +766,7 @@ def main() -> None:
     parser.add_argument("--ce-all", action="store_true", help="Run CE on ALL rows (semantic + sector filter), not just semantic")
     parser.add_argument("--ce-threshold", type=int, default=500, help="Min companies to trigger CE rerank")
     parser.add_argument("--ce-top-n", type=int, default=0, help="Hard cap after CE (0 = use adaptive threshold only)")
-    parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: gpt-4.1-nano)")
+    parser.add_argument("--ce-model", default=None, help="Model for CE scoring (default: ce_rerank's)")
     parser.add_argument("--ce-batch-size", type=int, default=20, help="Companies per CE API call")
     parser.add_argument("--ce-concurrency", type=int, default=64, help="Max parallel CE API calls")
     parser.add_argument("--local-db", help="The local DuckDB index to resolve against")

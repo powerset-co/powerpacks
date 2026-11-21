@@ -13,16 +13,23 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any
 
 import openai
 
 from openai_client import make_async_openai_client
 
+_ROOT = Path(__file__).resolve().parents[4]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from packs.shared import models  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = os.environ.get("CE_RERANK_MODEL", "gpt-4.1-nano")
+DEFAULT_MODEL = models.COMPANY_SCORE
 DEFAULT_BATCH_SIZE = 20
 # Nano-model scoring calls; 10 made large company pools take minutes
 # (3,000 companies = 150 batches = 15 sequential waves). Sibling LLM stages

@@ -18,7 +18,7 @@ Inputs:
 - `--query STRING` : the search query (for prompt context)
 - `--traits TRAIT` : expected traits (repeatable)
 - `--concurrency N` : asyncio.Semaphore size (default follows API env; 400)
-- `--model NAME` : chat completion model (default gpt-5.6-luna)
+- `--model NAME` : chat completion model (default: models.SEARCH_RERANK)
 - `--reasoning-effort LEVEL` : reasoning effort for supported models (default medium)
 - `--api-base URL` : base URL (default https://api.openai.com)
 - `--api-key KEY` : OpenAI API key (default $OPENAI_API_KEY)
@@ -76,14 +76,15 @@ for _path in [PRIMITIVES_DIR.parents[2], LIB_DIR, SHARED_DIR, LOCAL_DIR]:
 from token_accounting import count_chat_prompt_tokens, summarize_token_counts  # noqa: E402
 from openai_client import make_async_openai_client  # noqa: E402
 from packs.search.primitives.clean_job_description import clean_job_description as jd_cleaner  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import capability_contract  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 
 
 DEFAULT_API_BASE = None  # openai_client resolves it from the environment
-DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
-DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
+DEFAULT_MODEL = models.SEARCH_RERANK
+DEFAULT_REASONING_EFFORT = models.SEARCH_RERANK_EFFORT
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 

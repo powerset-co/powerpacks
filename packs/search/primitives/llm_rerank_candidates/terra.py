@@ -12,9 +12,10 @@ from typing import Any
 from packs.search.primitives.lib.cached_prompt import cached_messages
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
 from packs.search.primitives.shared.openai_client import make_async_openai_client
+from packs.shared import models
 
-MODEL = "gpt-5.6-luna"
-REASONING_EFFORT = "low"
+MODEL = models.JD_CAPABILITY
+REASONING_EFFORT = models.JD_CAPABILITY_EFFORT
 MAX_COMPLETION_TOKENS = 2500
 SCORE_TYPE = "ordinal_rating_1_to_5"
 PROMPT_VERSION = "luna-capability-concise-20260917"

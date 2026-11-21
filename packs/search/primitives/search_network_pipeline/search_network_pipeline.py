@@ -51,7 +51,7 @@ if str(LIB_DIR) not in sys.path:
 from seniority_bands import parse_pinned_seniority_bands, pin_payload_seniority_bands, pin_payload_semantic_query  # noqa: E402
 from search_common import adjacent_role_ids_for, apply_trait_currentness, load_env_file  # noqa: E402
 from powerpacks_contracts import normalize_hydrated_context  # noqa: E402
-from packs.shared import powerset_api  # noqa: E402
+from packs.shared import models, powerset_api  # noqa: E402
 from packs.search.primitives.cloud_search import cloud_search  # noqa: E402
 from packs.search.primitives.hydrate_people.hydrate_people import fetch_local_person_batch, write_jsonl  # noqa: E402
 from packs.search.primitives.expand_search_request.parallel_extractors import injected_role_titles, role_core_patterns_from_bm25  # noqa: E402
@@ -63,12 +63,12 @@ from packs.search.primitives.clean_job_description import clean_job_description 
 from packs.search.primitives.deep_search.results_web.model import record_quick_search  # noqa: E402
 from packs.search.primitives.search_feedback.search_feedback import log_edit  # noqa: E402
 from packs.search.primitives.search_network_pipeline.refine import rerank  # noqa: E402
-DEFAULT_MODEL = os.environ.get("LLM_RERANK_MODEL", "gpt-5.6-luna")
-DEFAULT_REASONING_EFFORT = os.environ.get("LLM_RERANK_REASONING_EFFORT", "medium")
-DEFAULT_EXPAND_MODEL = os.environ.get("EXPAND_SEARCH_MODEL", "gpt-5.6-luna")
-DEFAULT_EXPAND_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT", "medium")
-DEFAULT_FILTER_MODEL = os.environ.get("POWERPACKS_LLM_FILTER_MODEL", "gpt-5.6-luna")
-DEFAULT_FILTER_REASONING_EFFORT = os.environ.get("POWERPACKS_LLM_FILTER_REASONING_EFFORT", "none")
+DEFAULT_MODEL = models.SEARCH_RERANK
+DEFAULT_REASONING_EFFORT = models.SEARCH_RERANK_EFFORT
+DEFAULT_EXPAND_MODEL = models.SEARCH_EXPAND
+DEFAULT_EXPAND_REASONING_EFFORT = models.SEARCH_EXPAND_EFFORT
+DEFAULT_FILTER_MODEL = models.SEARCH_FILTER
+DEFAULT_FILTER_REASONING_EFFORT = models.SEARCH_FILTER_EFFORT
 DEFAULT_FILTER_BATCH_SIZE = int(os.environ.get("POWERPACKS_LLM_FILTER_BATCH_SIZE", "2"))
 DEFAULT_FILTER_CONCURRENCY = int(os.environ.get("POWERPACKS_LLM_FILTER_CONCURRENCY", os.environ.get("SEARCH_V2_LLM_FILTER_MAX_CONCURRENT", "1000")))
 DEFAULT_RERANK_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
@@ -1516,7 +1516,7 @@ def build_parser() -> argparse.ArgumentParser:
     action.add_argument("--criteria", help="The step's name, a short noun phrase for the people kept ('people under 40'); without --sql also the judge's criterion")
     action.add_argument("--use")
     r.add_argument("--sql", help="A hard criterion as DuckDB SQL over the rows showing (tables candidates, positions, education, trait_scores; return person_id): keeps the rows it returns, in its order, free; --criteria is then the step's name")
-    r.add_argument("--model", default="gpt-5.1")
+    r.add_argument("--model", default=models.SEARCH_REFINE)
     r.add_argument("--env-file", default=".env")
     r.set_defaults(func=cmd_rerank)
     s=sub.add_parser("status"); s.add_argument("--ledger"); s.add_argument("--state"); s.set_defaults(func=cmd_status)

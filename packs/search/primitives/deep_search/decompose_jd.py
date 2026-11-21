@@ -28,6 +28,10 @@ SHARED_DIR = Path(__file__).resolve().parents[1] / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_openai_client  # noqa: E402
+_ROOT = Path(__file__).resolve().parents[4]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from packs.shared import models  # noqa: E402
 
 try:
     from pond_prompts import load_pond_prompt
@@ -36,8 +40,8 @@ except ImportError:  # pragma: no cover - package execution
     from .pond_prompts import load_pond_prompt
     from . import precedents
 
-DEFAULT_MODEL = os.environ.get("RECRUIT_DECOMPOSE_MODEL", "gpt-4o")
-DEFAULT_REASONING_EFFORT = os.environ.get("RECRUIT_DECOMPOSE_REASONING_EFFORT")
+DEFAULT_MODEL = models.JD_DECOMPOSE
+DEFAULT_REASONING_EFFORT = None
 
 SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
 

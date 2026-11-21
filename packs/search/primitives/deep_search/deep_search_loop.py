@@ -19,6 +19,9 @@ except ImportError:  # module execution: python -m packs.search.primitives.deep_
     from .subprocess_utils import CommandError, run_checked
 
 ROOT = Path(__file__).resolve().parents[4]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from packs.shared import models  # noqa: E402
 P = ROOT / "packs/search/primitives/deep_search"
 FETCH_JD = P / "fetch_jd.py"
 
@@ -133,12 +136,12 @@ def main() -> None:
     ap.add_argument("--queries-file", default=None,
                     help="Reviewed JSON: one or two objects containing only key/query")
     ap.add_argument("--query-approved", action="store_true", help="Initialize the reviewed query without retrieving candidates")
-    ap.add_argument("--query-model", default="gpt-5.6-luna", help="Pond-1 query generator model")
-    ap.add_argument("--query-reasoning-effort", default="medium", help="Pond-1 query generator reasoning effort")
-    ap.add_argument("--expand-model", default="gpt-5.6-luna", help="Per-pond query expansion model")
-    ap.add_argument("--expand-reasoning-effort", default="medium", help="Per-pond expansion reasoning effort")
-    ap.add_argument("--rerank-model", default="gpt-5.6-luna", help="Per-pond rerank model")
-    ap.add_argument("--rerank-reasoning-effort", default="medium", help="Per-pond rerank reasoning effort")
+    ap.add_argument("--query-model", default=models.JD_QUERY, help="Pond-1 query generator model")
+    ap.add_argument("--query-reasoning-effort", default=models.JD_QUERY_EFFORT, help="Pond-1 query generator reasoning effort")
+    ap.add_argument("--expand-model", default=models.SEARCH_EXPAND, help="Per-pond query expansion model")
+    ap.add_argument("--expand-reasoning-effort", default=models.SEARCH_EXPAND_EFFORT, help="Per-pond expansion reasoning effort")
+    ap.add_argument("--rerank-model", default=models.SEARCH_RERANK, help="Per-pond rerank model")
+    ap.add_argument("--rerank-reasoning-effort", default=models.SEARCH_RERANK_EFFORT, help="Per-pond rerank reasoning effort")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
