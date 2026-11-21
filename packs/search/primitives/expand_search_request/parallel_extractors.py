@@ -325,7 +325,8 @@ Ask yourself: "Would someone searching for this query be surprised to see a [can
 ## OTHER RULES
 - Company/location/industry filters are handled ELSEWHERE — only output role-related fields
 - Occupational specialties and capabilities describe the person, not the person's employer sector. Keep them in role/semantic fields and never turn them into company intent here.
-- If query has NO role intent (just company/location/school) → return ALL fields empty. Do NOT explain why — just return empty strings and empty lists. No "this query is about people" or "no role detected" in semantic_query.
+- A query that names an industry, technology or field of experience and no job ("people with semiconductor experience", "someone with biotech experience", "people who know battery technology") HAS role intent when the taxonomy has specialist jobs for that field (engineers, scientists, researchers, clinicians, and the like): output the 2-4 role_ids of those specialist jobs, with semantic_query and bm25_queries for them in that field. Never fill it with generic jobs that exist in every industry (operations_manager, owner, technician, sales, account roles): when the field has no specialist job in the taxonomy ("commercial fishing", "baby toys"), return ALL fields empty. The employer sector is still handled elsewhere.
+- If query has NO role intent (just a company name, location or school) → return ALL fields empty. Do NOT explain why — just return empty strings and empty lists. No "this query is about people" or "no role detected" in semantic_query.
 - NEVER invent role_ids — only use ones from the taxonomy above
 
 Return JSON with exactly these keys: semantic_query, bm25_queries, role_ids, departments, seniority.

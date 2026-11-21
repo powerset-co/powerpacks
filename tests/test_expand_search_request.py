@@ -369,6 +369,17 @@ class ExpandSearchRequestTests(unittest.TestCase):
         self.assertIn("Return JSON with exactly these keys: semantic_query, bm25_queries, role_ids, departments, seniority", prompt)
         self.assertEqual(mod.role_agent_user_content("engineering leaders"), 'Query: "engineering leaders"')
 
+    def test_role_agent_prompt_gives_a_role_to_a_query_that_names_only_a_field(self):
+        """ "people with semiconductor experience" names no job; gpt-5.6-luna read the old rule
+        ("industry is handled elsewhere") as no role at all, so no titles were looked up and the
+        search ran on the company side only. Fields with no specialist job stay empty."""
+        prompt = load_module().role_agent_system_prompt()
+
+        self.assertIn('"people with semiconductor experience"', prompt)
+        self.assertIn("HAS role intent when the taxonomy has specialist jobs for that field", prompt)
+        self.assertIn('("commercial fishing", "baby toys"), return ALL fields empty', prompt)
+        self.assertIn("just a company name, location or school", prompt)
+
     def test_sf_in_phrase_keeps_person_city_and_adds_metro(self):
         mod = load_module()
         filters = mod._merge(
