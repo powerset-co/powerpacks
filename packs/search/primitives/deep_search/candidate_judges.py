@@ -8,9 +8,10 @@ from typing import Any, Mapping
 
 from packs.search.primitives.lib.cached_prompt import cached_messages
 from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_evidence
+from packs.shared import models
 
 PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
-JUDGE_CONFIG = {"model": "gpt-5.6-terra", "reasoning_effort": "medium",
+JUDGE_CONFIG = {"model": models.JD_DOMAIN, "reasoning_effort": models.JD_DOMAIN_EFFORT,
                 "service_tier": "flex", "max_completion_tokens": 2500,
                 "response_format": {"type": "json_object"},
                 "extra_body": {"prompt_cache_options": {"mode": "explicit"}}}
@@ -74,7 +75,7 @@ def candidate_judge_request(*, dimension: str, opportunity_review: bool = False,
     if dimension == "domain":
         request["response_format"] = _strict_schema(_DOMAIN_PROPERTIES)
     if dimension == "opportunity" and not opportunity_review:
-        request.update(model="gpt-5.6-luna", reasoning_effort="low",
+        request.update(model=models.JD_OPPORTUNITY, reasoning_effort=models.JD_OPPORTUNITY_EFFORT,
                        response_format=_strict_schema(_OPPORTUNITY_PROPERTIES))
         request["messages"][0]["content"] += "\n\n" + JUDGE_GUIDANCE + "\n\n" + OPPORTUNITY_GUIDANCE
     return request

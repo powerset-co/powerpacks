@@ -69,6 +69,7 @@ from openai_client import append_usage_row  # noqa: E402
 from search_common import load_env_file  # noqa: E402
 from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.search.primitives.shared.human_ratings import QUALIFICATION_SCORE_TYPE, score_1_to_5  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
 from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
@@ -712,7 +713,7 @@ def _llm_pattern_defaults(
             os.environ["POWERPACKS_USAGE_STAGE"] = f"search_harness.pond_{pond_n:02d}.pattern_defaults"
             os.environ["OPENAI_SERVICE_TIER"] = "flex"
             response = (client or make_openai_client(os.environ.get("OPENAI_API_KEY"))).chat.completions.create(
-                model="gpt-5.6-terra", reasoning_effort="medium", service_tier="flex",
+                model=models.JD_PATTERN_DEFAULTS, reasoning_effort=models.JD_PATTERN_DEFAULTS_EFFORT, service_tier="flex",
                 messages=[{"role": "system", "content": PATTERN_DEFAULT_PROMPT},
                           {"role": "user", "content": json.dumps(context, indent=2)}],
                 response_format={"type": "json_object"},
@@ -821,7 +822,7 @@ def compile_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     result = _run_command([
         sys.executable, str(PIPELINE), "prepare", "--query", query,
         "--env-file", env_file, "--output-dir", str(prepare_dir),
-        "--expand-model", "gpt-5.6-luna", "--expand-reasoning-effort", "medium",
+        "--expand-model", models.SEARCH_EXPAND, "--expand-reasoning-effort", models.SEARCH_EXPAND_EFFORT,
         "--timeout", "600",
         "--limit", str(limit),
         *(["--set-id", set_id] if set_id else []),
@@ -1099,8 +1100,8 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
             except Exception as exc:
                 return index, dimension, None, {
                     "candidate_index": index, "dimension": dimension,
-                    "model": "gpt-5.6-luna" if dimension == "opportunity" else JUDGE_CONFIG["model"],
-                    "reasoning_effort": "low" if dimension == "opportunity" else JUDGE_CONFIG["reasoning_effort"],
+                    "model": models.JD_OPPORTUNITY if dimension == "opportunity" else JUDGE_CONFIG["model"],
+                    "reasoning_effort": models.JD_OPPORTUNITY_EFFORT if dimension == "opportunity" else JUDGE_CONFIG["reasoning_effort"],
                     "error": f"{type(exc).__name__}: {exc}"}
 
         records = []
@@ -1109,7 +1110,7 @@ def _annotate_candidate_judgments(*, candidates: Sequence[Mapping[str, Any]],
             if annotated[index]["candidate_judgment"] is None:
                 annotated[index]["candidate_judgment"] = {
                     "domain": None, "opportunity": None, "overall_score": None,
-                    "model": "gpt-5.6-terra + gpt-5.6-luna", "models": {}, "status": "ok"}
+                    "model": f"{models.JD_DOMAIN} + {models.JD_OPPORTUNITY}", "models": {}, "status": "ok"}
             combined = annotated[index]["candidate_judgment"]
             combined[dimension] = judgment
             combined["models"][dimension] = record["model"]
@@ -1726,7 +1727,7 @@ def _parse_next_move(raw: str) -> dict[str, Any]:
 def propose_next_move(
     context: Mapping[str, Any], *, selected: str | None,
     user_continue: bool, iteration: Mapping[str, Any], prompt: str,
-    model: str = "gpt-5.6-luna", reasoning_effort: str = "medium",
+    model: str = models.JD_DECIDE, reasoning_effort: str = models.JD_DECIDE_EFFORT,
     client: Any | None = None,
     on_attempt: Callable[[int, str, Mapping[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any]]:
@@ -1845,8 +1846,8 @@ def propose_next_move(
 
 
 def decide(*, run_dir: Path, choice: int | None = None, diagnosis: str | None = None,
-           note: str = "", autonomous: bool = False, model: str = "gpt-5.6-luna",
-           reasoning_effort: str = "medium", client: Any | None = None) -> Path:
+           note: str = "", autonomous: bool = False, model: str = models.JD_DECIDE,
+           reasoning_effort: str = models.JD_DECIDE_EFFORT, client: Any | None = None) -> Path:
     results = scrub_results(_read_json(run_dir / "results.json"), default_limit=RETRIEVAL_LIMIT)
     status = results.get("status")
     user_continue = choice == 2
@@ -1979,8 +1980,8 @@ def main() -> None:
             command.add_argument("--choice", type=int, choices=(2, 3))
             command.add_argument("--diagnosis", choices=NEXT_SEARCH_DIAGNOSES)
             command.add_argument("--note", default="")
-            command.add_argument("--model", default="gpt-5.6-luna")
-            command.add_argument("--reasoning-effort", default="medium")
+            command.add_argument("--model", default=models.JD_DECIDE)
+            command.add_argument("--reasoning-effort", default=models.JD_DECIDE_EFFORT)
     args = parser.parse_args()
     if args.command == "backfill-manifests":
         written = backfill_manifests(Path(args.root).resolve())

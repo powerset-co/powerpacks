@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REASONING_EFFORT = os.environ.get("EXPAND_SEARCH_REASONING_EFFORT")
+DEFAULT_REASONING_EFFORT = None
 DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 
 

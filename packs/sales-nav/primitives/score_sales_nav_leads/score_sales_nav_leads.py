@@ -25,10 +25,11 @@ from typing import Any, Optional
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from packs.shared import models  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 
 DEFAULT_API_BASE = openai_base_url()
-DEFAULT_MODEL = os.environ.get("SALES_NAV_SCORE_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = models.SALES_NAV_SCORE
 DEFAULT_CONCURRENCY = int(os.environ.get("SALES_NAV_SCORE_CONCURRENCY", "50"))
 DEFAULT_THRESHOLD = float(os.environ.get("SALES_NAV_SCORE_THRESHOLD", "0.7"))
 

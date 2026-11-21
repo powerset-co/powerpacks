@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from packs.search.primitives.shared.openai_client import make_openai_client
+from packs.shared import models
 
-MODEL = "gpt-5.6-sol"
-REASONING_EFFORT = "high"
+MODEL = models.JD_CLEAN
+REASONING_EFFORT = models.JD_CLEAN_EFFORT
 SERVICE_TIER = "flex"
 MAX_COMPLETION_TOKENS = 8192
 _PROMPT = Path(__file__).resolve().parents[2] / "prompts" / "jd-cleaning.txt"

@@ -15,12 +15,13 @@ from urllib.parse import urlparse
 import tiktoken
 
 from packs.search.primitives.shared.openai_client import make_openai_client
+from packs.shared import models
 from packs.search.primitives.deep_search.results_web.team import (
     fetch_embedded_employees, team_members,
 )
 from packs.search.primitives.deep_search.team_department import Department
 
-MODEL = "text-embedding-3-small"
+MODEL = models.EMBEDDING
 METHOD = "Titles + descriptions + company names · five jobs"
 MAX_TOKENS = 8191
 TOP_EMPLOYEES = 3

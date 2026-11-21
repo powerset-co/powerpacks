@@ -309,10 +309,7 @@ class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
         return mod
 
     def test_defaults_use_luna_without_reasoning(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("POWERPACKS_LLM_FILTER_MODEL", None)
-            os.environ.pop("POWERPACKS_LLM_FILTER_REASONING_EFFORT", None)
-            mod = self.load_module()
+        mod = self.load_module()
 
         self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
         self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "none")

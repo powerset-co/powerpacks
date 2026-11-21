@@ -30,6 +30,7 @@ SHARED_DIR = ROOT / "packs/search/primitives/shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 from openai_client import make_async_openai_client  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.search.primitives.deep_search.location_scope import (  # noqa: E402
     METRO_VOCABULARY,
     _norm as _normalize_location_value,
@@ -238,19 +239,7 @@ def _load_prompt(name: str, prompts_dir: Path | None = None) -> str:
     raise FileNotFoundError(f"Missing prompt: {path}")
 
 
-# Default models per extractor (matching app defaults)
-EXTRACTOR_MODELS = {
-    "temporal": "gpt-4.1",
-    "company": "gpt-5.4",
-    "location": "gpt-4.1",
-    "education": "gpt-4.1",
-    "seniority": "gpt-4.1",
-    "social": "gpt-4.1",
-    "role": "gpt-4.1",
-    "trait_generation": "gpt-4.1",
-    "company_adjacency": "gpt-5.4",
-    "interaction": "gpt-4.1-nano",
-}
+EXTRACTOR_MODELS = models.SEARCH_EXTRACTORS
 
 INTERACTION_FIELDS = (
     "operator_interaction_min", "operator_interaction_max",
@@ -385,7 +374,7 @@ async def _extract(
     reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     """Run one extractor via OpenAI chat completion."""
-    model = model or EXTRACTOR_MODELS.get(name, "gpt-4o-mini")
+    model = model or EXTRACTOR_MODELS[name]
     # Trait generation uses a specific user prompt format
     if name == "trait_generation":
         user_content = f'Generate traits for this query:\n\n"{query}"\n\nReturn JSON with: {{"traits": [{{"value": "...", "temporal": "current|past|all", "meaning": "role|experience|location|education|company|investor|general"}}], "has_domain_intent": true/false, "person_name": "..."/null}}'
