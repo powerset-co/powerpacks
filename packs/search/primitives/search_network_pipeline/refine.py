@@ -16,9 +16,11 @@ import tempfile
 import duckdb
 
 from packs.indexing.lib.io import write_json
+from packs.search.primitives.hydrate_people.hydrate_people import fetch_api_person_rows
 from packs.search.primitives.deep_search.results_web.model import original_quick_step, refine_interrupted, select_quick_step
+from packs.search.primitives.lib.powerpacks_contracts import normalize_hydrated_context
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
-from packs.search.primitives.persist_search_results.results_io import hydrated_profiles, now_iso, read_jsonl
+from packs.search.primitives.persist_search_results.results_io import hydrated_profiles, now_iso, read_jsonl, step_output
 from packs.shared import models
 from packs.search.primitives.shared.openai_client import _usage_row as usage_row, make_openai_client
 from packs.search.primitives.search_network_pipeline.refine_prompt import build_prompt, candidate_xml, cohort_summary
@@ -118,6 +120,7 @@ def _table_rows(inputs):
                                    "total_years_experience": profile.get("years_of_experience")})
         matched = set(profile.get("matched_position_indexes") or [])
         for index, position in enumerate(positions):
+            index = position.get("position_index", index)
             row = {key: position.get(key) for key in TABLES["positions"]}
             row.update({key: _lower(row[key]) for key in LOWER})
             row.update({key: [_lower(item) for item in row[key] or []] for key in LOWER_LISTS})
@@ -151,15 +154,22 @@ def _sql_rows(inputs, sql):
         return ordered
 
 
-def _pool(project, ledger, current, *, screened):
+def _pool(project, ledger, current, *, screened, run_dir, env_file):
     """The rows showing and each one's hydrated profile, the judge's and the SQL tables' input.
     `screened` drops the first step's rows the page hides: under the 0.3 cut or with a zero trait."""
-    profiles = hydrated_profiles(json.loads((project / ledger["state"]).read_text()))
+    state = json.loads((project / ledger["state"]).read_text())
+    profiles = hydrated_profiles(state)
     if not profiles:
         raise ValueError("quick run has no hydrated profiles")
     rows = read_jsonl(project / current["jsonl"])
     if screened:
         rows = [row for row in rows if float(row["final_score"]) >= MIN_INITIAL_SCORE and not _has_zero_trait_score(row.get("trait_scores"))]
+    if step_output(state, "execute_role_search").get("set_id"):
+        full = {person["id"]: normalize_hydrated_context(person) for person in
+                fetch_api_person_rows([row["person_id"] for row in rows], env_file, cache_dir=run_dir / "people")}
+        for row in rows:
+            pid = row["person_id"]
+            profiles[pid] = dict(full[pid], total_interactions=profiles[pid].get("total_interactions"))
     inputs = []
     for row in rows:
         profile = dict(profiles[row["person_id"]], person_id=row["person_id"], base_score=float(row["final_score"]))
@@ -194,7 +204,8 @@ def _judge_step(rows, inputs, query, criteria, model, env):
     return kept, votes.most_common(1)[0][0] if votes else "rerank", sum(cost for _, _, cost in scored)
 
 
-def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str], sql: str | None = None):
+def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, env: dict[str, str], sql: str | None = None,
+           env_file: Path | None = None):
     """Go back to a saved step (`use`), or add one from the rows showing: by SQL, else by the judge."""
     run_dir = run_dir.expanduser().resolve()
     if run_dir.parent.name != "search" or run_dir.parent.parent.name != ".powerpacks":
@@ -216,12 +227,12 @@ def rerank(run_dir: Path, *, criteria: str | None, use: str | None, model: str, 
         return _save(payload, steps, step, result_path, card, catalog_path, catalog, run_id, use)
     ledger = json.loads((run_dir / "pipeline.ledger.json").read_text())
     current = next(step for step in steps if step["id"] == parent)
-    rows, inputs = _pool(project, ledger, current, screened=parent == "s1" and sql is None)
+    if sql is None and not env.get("OPENAI_API_KEY"):
+        raise ValueError("OPENAI_API_KEY is required")
+    rows, inputs = _pool(project, ledger, current, screened=parent == "s1" and sql is None, run_dir=run_dir, env_file=env_file)
     if sql is not None:
         kept, query_type, cost = _sql_step(rows, inputs, sql)
     else:
-        if not env.get("OPENAI_API_KEY"):
-            raise ValueError("OPENAI_API_KEY is required")
         card.update(status="running", refine_pid=os.getpid(), updated_at=now_iso())
         write_json(catalog_path, catalog)
         try:

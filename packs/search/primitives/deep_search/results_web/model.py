@@ -5,6 +5,7 @@ Flow: `load_catalog(root)` reads the compact catalog written when searches save.
 every run in memory.
 
 Changelog:
+  2026-11-21: `PersonProfile` is one person's full profile for the drawer; `set_run` says whose rows are light.
   2026-11-16: `load_search` reads the current step only; nothing asked for another one.
   2026-11-09: SearchResult exposes `steps` and `current_step`.
   2026-11-09: quick runs carry `steps` and `current_step`; `record_quick_search`
@@ -84,6 +85,7 @@ class Position:
     headcount: int
     stage: str
     funding: float
+    position_index: int
     logo_url: str = ""
 
 
@@ -123,6 +125,16 @@ class PondCandidate:
     cross_encoder_passed: bool | None = None
     cross_encoder_status: str = ""
     headline: str = ""
+
+
+@dataclass(frozen=True)
+class PersonProfile:
+    """What the drawer adds to a row once opened: a set run's rows carry only current and matched roles."""
+
+    headline: str
+    summary: str
+    positions: tuple[Position, ...]
+    education: tuple[Education, ...]
 
 
 @dataclass(frozen=True)
@@ -480,7 +492,7 @@ def _list(value: Any) -> list[Any]:
 
 def _positions(value: Any) -> tuple[Position, ...]:
     positions = []
-    for raw in _list(value):
+    for index, raw in enumerate(_list(value)):
         domain = _text(raw.get("company_domain"))
         positions.append(Position(
             title=_text(raw.get("position_title")),
@@ -494,6 +506,7 @@ def _positions(value: Any) -> tuple[Position, ...]:
             stage=_text(raw.get("company_stage")),
             funding=_number(raw.get("company_funding_total")),
             logo_url=_text(raw.get("company_logo_url") or raw.get("logo_url")),
+            position_index=int(raw.get("position_index", index)),
         ))
     return tuple(positions)
 
@@ -508,7 +521,19 @@ def _education(value: Any) -> tuple[Education, ...]:
     ) for raw in _list(value))
 
 
-def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandidate, ...]:
+def person_profile(context: dict[str, Any]) -> PersonProfile:
+    """One person's full profile as POST /v2/hydrate returns it."""
+    return PersonProfile(headline=_text(context.get("headline")), summary=_text(context.get("summary")),
+                         positions=_positions(context.get("positions")), education=_education(context.get("education")))
+
+
+def set_run(root: Path, run_id: str) -> bool:
+    """A search of a Powerset set: its rows hold only what the list shows."""
+    ledger = _payload(root.parent / "search" / run_id / "pipeline.ledger.json")
+    return ledger is not None and ledger.get("mode") != "local_duckdb"
+
+
+def _pond_candidates(root: Path, iteration: dict[str, Any], *, set_run: bool = False) -> tuple[PondCandidate, ...]:
     artifacts = ((iteration.get("arm") or {}).get("artifacts") or {})
     result_path = _artifact_path(root, artifacts.get("jsonl"))
     profile_path = _artifact_path(root, artifacts.get("profiles_path"))
@@ -541,11 +566,11 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
             reasoning=_text(row.get("overall_reasoning")),
             vertical_sources=sources,
             matched_positions=matched,
-            summary=_text(profile.get("summary")),
+            summary="" if set_run else _text(profile.get("summary")),
             headline=_text(row.get("headline") or profile.get("headline")),
             profile_location=_text(profile.get("location")),
             positions=_positions(profile.get("positions")),
-            education=_education(profile.get("education")),
+            education=() if set_run else _education(profile.get("education")),
             source_channel=_text(row.get("source_channel")),
             source_operator=_text(row.get("source_operator")),
             cross_encoder_score=_optional_number(row.get("cross_encoder_score")),
@@ -561,6 +586,7 @@ def _pond_candidates(root: Path, iteration: dict[str, Any]) -> tuple[PondCandida
 def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
                       ) -> tuple[Iteration, ...]:
     iterations: list[Iteration] = []
+    light = set_run(root, run_id)
     candidate_cache: dict[tuple[str, str], tuple[PondCandidate, ...]] = {}
     for raw in payload.get("iterations") or []:
         pond_n = int(raw.get("pond_n") or 0)
@@ -568,7 +594,7 @@ def _parse_iterations(root: Path, run_id: str, payload: dict[str, Any],
         cache_key = (_text(artifacts.get("jsonl")), _text(artifacts.get("profiles_path")))
         candidates = candidate_cache.get(cache_key)
         if candidates is None:
-            candidates = _pond_candidates(root, raw)
+            candidates = _pond_candidates(root, raw, set_run=light)
             candidate_cache[cache_key] = candidates
         iterations.append(Iteration(
             pond_n=pond_n,
@@ -777,7 +803,7 @@ def load_bad(root: Path, run_id: str) -> tuple[PondCandidate, ...] | None | str:
     bad = (_payload(root / run_id / "results.json") or {}).get("bad_results") or {}
     rows, error = _artifact_path(root, bad.get("jsonl")), _artifact_path(root, bad.get("error"))
     if rows is not None and rows.exists():
-        return _pond_candidates(root, {"arm": {"artifacts": bad}})
+        return _pond_candidates(root, {"arm": {"artifacts": bad}}, set_run=True)
     if error is not None and error.exists():
         return error.read_text()
     # Still downloading while its process lives; one that died without rows or an error stopped.

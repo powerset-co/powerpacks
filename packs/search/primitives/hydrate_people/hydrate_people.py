@@ -252,7 +252,7 @@ def matched_indexes(profile: dict[str, Any], meta: dict[str, Any]) -> list[int]:
             continue
         pos_id = position_identifier(pos)
         if pos_id and pos_id in ids:
-            indexes.append(idx)
+            indexes.append(pos.get("position_index", idx))
     if indexes:
         return indexes
     title = str(meta.get("position_title") or "").strip().lower()
@@ -268,7 +268,7 @@ def matched_indexes(profile: dict[str, Any], meta: dict[str, Any]) -> list[int]:
             continue
         if company_id and pos_company and company_id != pos_company:
             continue
-        indexes.append(idx)
+        indexes.append(pos.get("position_index", idx))
     return indexes
 
 
@@ -636,28 +636,21 @@ def load_env_file(path: Path | None) -> None:
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def fetch_api_person_rows(person_ids: list[str], env_file: Path | None) -> list[dict[str, Any]]:
+def fetch_api_person_rows(person_ids: list[str], env_file: Path | None, *, cache_dir: Path | None = None) -> list[dict[str, Any]]:
     """A set's people as POST /v2/hydrate returns them, shaped like a persons row."""
-    rows = []
-    for batch in chunked(person_ids, 500):
+    contexts = {}
+    if cache_dir is not None:
+        contexts = {pid: read_json(cache_dir / f"{pid}.json") for pid in person_ids if (cache_dir / f"{pid}.json").is_file()}
+    for batch in chunked([pid for pid in person_ids if pid not in contexts], 500):
         profiles = powerset_api.call(env_file, "/v2/hydrate", {"person_ids": batch}).get("profiles") or {}
-        rows += [{"id": person_id, "hydrated_context": context, "inferred_birth_year": context.get("inferred_birth_year")}
-                 for person_id, context in profiles.items() if isinstance(context, dict)]
-    return rows
-
-
-def api_source_attribution(person_ids: list[str], env_file: Path | None, set_id: str | None) -> dict[str, dict[str, Any]]:
-    """Who in the set knows each person, and through what, strongest first (POST /v2/sets/{id}/person-attribution)."""
-    if not set_id or not person_ids:
-        return {}
-    out = {}
-    for person_id, row in powerset_api.person_attribution(env_file, set_id, person_ids).items():
-        channels = [source["channel"] for source in sorted(row.get("sources") or [], key=lambda source: -int(source.get("total_interactions") or 0))
-                    if source.get("total_interactions")]
-        operators = [operator["operator_name"] for operator in row.get("operators") or [] if operator.get("operator_name")]
-        out[person_id] = {"operators": operators, "channels": channels, "total_interactions": int(row.get("total_interactions") or 0),
-                          "primary_operator": operators[0] if operators else None, "primary_channel": channels[0] if channels else None}
-    return out
+        for person_id, context in profiles.items():
+            if not isinstance(context, dict):
+                continue
+            contexts[person_id] = context
+            if cache_dir is not None:
+                write_json(cache_dir / f"{person_id}.json", context)
+    return [{**contexts[pid], "id": pid, "hydrated_context": contexts[pid]}
+            for pid in person_ids if pid in contexts]
 
 
 def _profile_table(conn: Any) -> str:
@@ -792,7 +785,7 @@ def llm_profile_view(profile: dict[str, Any]) -> dict[str, Any]:
     for idx, pos in enumerate(positions):
         if not isinstance(pos, dict):
             continue
-        if pos.get("is_current") or idx in matched:
+        if pos.get("is_current") or pos.get("position_index", idx) in matched:
             selected.append(pos)
     if not selected and positions:
         selected = [positions[0]]
@@ -862,23 +855,31 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
 
     env_file = Path(args.env_file) if args.env_file else None
     rows = fetch_local_person_rows(requested, env_file=env_file, db_path=args.local_db, workers=args.local_workers, batch_size=args.local_batch_size)
+    attribution_error = None
     if rows is None:
-        # A search the API ranked was downloaded with every profile in it; that file is the people.
+        # Ranked results already carry the fields needed by the list.
         results_path = step_output(state, "execute_role_search").get("results_path")
         if results_path:
             from packs.search.primitives.cloud_search.cloud_search import person_rows
             wanted = set(requested)
             rows = [row for row in person_rows(Path(results_path)) if row["id"] in wanted]
-            try:  # who knows them is all that is still asked of the API; without it the rows show no sources
-                source_attribution = api_source_attribution(requested, env_file, step_output(state, "execute_role_search").get("set_id"))
-            except (Exception, SystemExit) as error:
-                print(f"hydrate: network attribution lookup failed ({type(error).__name__}: {error}); the rows show no sources",
-                      file=sys.stderr, flush=True)
-                source_attribution = {}
         else:
             rows = fetch_api_person_rows(requested, env_file)
-            source_attribution = api_source_attribution(requested, env_file, step_output(state, "execute_role_search").get("set_id"))
-        interaction_counts = {person_id: row["total_interactions"] for person_id, row in source_attribution.items() if row["total_interactions"]}
+        source_attribution = dict(step_output(state, "hydrate_people").get("person_attribution") or {})
+        missing = [pid for pid in requested if pid not in source_attribution]
+        set_id = step_output(state, "execute_role_search").get("set_id")
+        if set_id and missing:
+            try:
+                fetched = powerset_api.person_attribution(env_file, set_id, missing)
+                source_attribution.update({pid: fetched.get(pid, {"person_id": pid, "sources": [], "operators": [],
+                                                                 "total_interactions": 0}) for pid in missing})
+            except (Exception, SystemExit) as error:
+                if not results_path:  # JD judging needs interaction totals.
+                    raise
+                attribution_error = f"{type(error).__name__}: {error}"
+                print(f"hydrate: network attribution lookup failed ({attribution_error}); the rows show no sources",
+                      file=sys.stderr, flush=True)
+        interaction_counts = {pid: int(row.get("total_interactions") or 0) for pid, row in source_attribution.items()}
         source = {"type": "powerset_api", "backend": "powerset_api", "env_file": str(env_file) if env_file else None}
     else:
         interaction_counts = {}
@@ -896,12 +897,6 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         if interaction_counts.get(str(row.get("id"))):
             row["total_interactions"] = interaction_counts[str(row.get("id"))]
         profile = normalize_hydrated_context(row)
-        attribution = source_attribution.get(str(profile.get("person_id")))
-        if attribution:
-            profile["source_operators"] = attribution.get("operators", [])
-            profile["source_channels"] = attribution.get("channels", [])
-            profile["primary_source_operator"] = attribution.get("primary_operator")
-            profile["primary_source_channel"] = attribution.get("primary_channel")
         profiles.append(apply_candidate_metadata(profile, metadata.get(str(profile.get("person_id")))))
     order = {pid: idx for idx, pid in enumerate(requested)}
     profiles.sort(key=lambda profile: order.get(str(profile.get("person_id")), len(order)))
@@ -927,6 +922,8 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         "profiles_compressed": not args.no_compress_profiles,
         "artifacts": artifacts,
         "source": source,
+        "person_attribution": source_attribution,
+        "person_attribution_error": attribution_error,
     }
     elapsed_ms = int((time.time() - started) * 1000)
     if args.write_state:

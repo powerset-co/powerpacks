@@ -249,7 +249,7 @@ def read_results(path: Path) -> list[dict[str, Any]]:
 
 def person_rows(path: Path) -> list[dict[str, Any]]:
     """A downloaded results file's people shaped like persons rows (what hydrate_people normalizes):
-    each API row carries the person's whole profile, so nothing else is fetched for them."""
+    each API row carries the fields needed by the results list."""
     return [{**row, "id": row["person_id"], "hydrated_context": row} for row in read_results(path)]
 
 

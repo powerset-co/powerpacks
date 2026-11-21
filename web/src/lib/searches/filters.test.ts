@@ -129,7 +129,8 @@ describe("toolbar values", () => {
 
 // The cloud results page's search (network-search-api result_text_search.py), on local rows.
 describe("matchesText", () => {
-  const position = (title: string, company: string) => ({
+  const position = (title: string, company: string, position_index = 0) => ({
+    position_index,
     title,
     company,
     company_url: "",
@@ -144,7 +145,7 @@ describe("matchesText", () => {
   })
   const row = resultRow("p-1", "Robin Echo", {
     pond: {
-      positions: [position("Staff Engineer", "Northwind"), position("Intern", "Contoso")],
+      positions: [position("Staff Engineer", "Northwind"), position("Intern", "Contoso", 1)],
       matched_positions: [0],
       vertical_sources: ["role"],
     },
@@ -160,6 +161,20 @@ describe("matchesText", () => {
     expect(matchesText(row, "northwind")).toBe(true)
     expect(matchesText(row, "staff eng")).toBe(true)
     expect(matchesText(row, "contoso")).toBe(false)
+  })
+
+  it("finds matched positions by their original index in a light row", () => {
+    const light = {
+      ...row,
+      row: {
+        ...row.row,
+        positions: [position("Staff Engineer", "Northwind"), position("Founder", "Example Startup", 7)],
+        matched_positions: [7],
+      },
+    }
+    expect(matchesText(light, "founder")).toBe(true)
+    expect(matchesText(light, "example startup")).toBe(true)
+    expect(matchesText(light, "northwind")).toBe(false)
   })
 
   it("skips positions when the person matched on something else, but still matches the name", () => {

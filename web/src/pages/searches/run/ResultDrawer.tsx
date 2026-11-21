@@ -1,7 +1,7 @@
 import { ProxiedLinkedinAvatar, Drawer, DrawerClose } from "@/components/shared"
 import { useDrawerSwap } from "@/hooks/useDrawerSwap"
 import { teamLikeness } from "@/lib/searches/copy"
-import { currentRole, roleLine, shownHeadline } from "@/lib/searches/person"
+import { currentRole, roleLine, shownHeadline, withProfile } from "@/lib/searches/person"
 import type { ResultRow } from "@/lib/searches/ranking"
 
 import { SearchFeedbackDialog } from "../dialogs/SearchFeedbackDialog"
@@ -10,6 +10,7 @@ import { Evidence } from "./Evidence"
 import { JudgeBadges } from "./JudgeBadges"
 import { LinkedInLink } from "./LinkedInLink"
 import { useMutuals } from "../hooks/useMutuals"
+import { usePersonProfile } from "../hooks/useSearchRun"
 import { MutualsLine, MutualsSection } from "./Mutuals"
 import { ConnectedVia } from "./Operators"
 import { RoleLine } from "./ResultRow"
@@ -26,9 +27,10 @@ interface ResultDrawerProps {
   onClose: () => void
 }
 
-// One candidate in the shared drawer: who they are (as the row shows them), the feedback flag and Close, the saved
+// One candidate in the shared drawer: who they are, the feedback flag and Close, the saved
 // overall and the judges' labels, then the evidence, their career, who they came through and
 // their team likeness. Get mutuals (LinkedIn) sits under their location; its people list under the header.
+// The row shows until the person's full profile (headline, about, every role and school) arrives.
 export function ResultDrawer({ result, open, ranked, labels, context, onClose }: ResultDrawerProps) {
   const swap = useDrawerSwap(result?.key ?? null, result, open)
   const shown = swap.content
@@ -56,7 +58,9 @@ interface DrawerBodyProps {
 }
 
 function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProps) {
-  const { row, candidate } = result
+  const { candidate } = result
+  const profile = usePersonProfile(context.runId, result.row.person_id)
+  const row = profile.data ? withProfile(result.row, profile.data.profile) : result.row
   const current = currentRole(row)
   const role = roleLine(current)
   const headline = shownHeadline(row, current)
@@ -91,6 +95,11 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
           <DrawerClose onClose={onClose} />
         </span>
       </div>
+      {profile.error ? (
+        <p role="alert" className="m-0 text-xs text-bad" data-profile-error>
+          {profile.error.message}
+        </p>
+      ) : null}
       <MutualsSection mutuals={mutuals} />
       {ranked ? (
         <div className="review-scores">
@@ -98,7 +107,7 @@ function DrawerBody({ result, ranked, labels, context, onClose }: DrawerBodyProp
           <JudgeBadges candidate={candidate} shown={labels} />
         </div>
       ) : null}
-      <Evidence result={result} ranked={ranked} />
+      <Evidence result={{ ...result, row }} ranked={ranked} />
       <Career row={row} />
       <ConnectedVia operators={candidate?.network_attribution?.operators ?? []} />
       {similarity ? (

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from packs.search.primitives.deep_search.results_web.model import load_catalog, load_search, record_quick_search
 from packs.search.primitives.lib.usage_pricing import load_prices, row_cost_usd
+from packs.search.primitives.hydrate_people import hydrate_people
 from packs.search.primitives.search_network_pipeline.refine import _has_zero_trait_score, rerank
 from packs.search.primitives.search_network_pipeline.refine_prompt import candidate_xml, cohort_summary
 
@@ -334,6 +335,59 @@ class RefineTest(unittest.TestCase):
         self.assertIn("Engineer 8 (past, matched)", xml)
         self.assertNotIn("Engineer 4 (past)", xml)
         self.assertEqual(cohort_summary([profile]), 'Total candidates: 1, unique matched titles: 1\n- "Engineer 8" at Example Labs (1 person)')
+
+    def test_set_refine_hydrates_full_profiles_once_and_preserves_rows(self):
+        state = json.loads(self.state.read_text())
+        state["steps"].append({"id": "execute_role_search", "output": {"set_id": "s1"}})
+        self.state.write_text(json.dumps(state))
+        full = [json.loads(line) for line in self.profiles.read_text().splitlines()]
+        for row in self.rows:
+            row["matched_position_indexes"] = [1]
+        self.jsonl.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
+        light = [dict(profile, positions=[dict(profile["positions"][0], position_index=0)], education=[], summary=None)
+                 for profile in full]
+        self.profiles.write_text("".join(json.dumps(profile) + "\n" for profile in light))
+        responses = {profile["person_id"]: profile for profile in full}
+        with patch.object(hydrate_people.powerset_api, "call", return_value={"profiles": responses}) as fetch:
+            rerank(self.run, criteria="historical roles and education", use=None, model="unused", env={}, env_file=self.env_file,
+                   sql="SELECT p.person_id FROM positions p JOIN education e USING (person_id) "
+                       "WHERE p.position_title = 'Intern' AND p.is_matched ORDER BY p.person_id")
+            fetch.assert_called_once()
+            self.assertEqual(fetch.call_args.args[0], self.env_file)
+            self.assertEqual(fetch.call_args.args[1], "/v2/hydrate")
+            self.assertEqual(fetch.call_args.args[2], {"person_ids": self.ids})
+            self.assertEqual(self.step_rows(), self.rows[:7])
+            self.assertTrue(all((self.run / "people" / f"{pid}.json").is_file() for pid in self.ids))
+            with patch("packs.search.primitives.search_network_pipeline.refine._judge_step") as judge:
+                judge.side_effect = lambda rows, inputs, *args: (rows, "rerank", 0)
+                rerank(self.run, criteria="again", use=None, model="unused", env={"OPENAI_API_KEY": "mock"})
+                inputs = judge.call_args.args[1]
+                self.assertEqual(len(inputs), 7)
+                for profile in inputs:
+                    self.assertEqual(len(profile["positions"]), 2)
+                    self.assertTrue(profile["education"])
+                    self.assertEqual(profile["matched_position_indexes"], [1])
+                    self.assertEqual(profile["base_score"], self.rows[self.ids.index(profile["person_id"])]["final_score"])
+            fetch.assert_called_once()
+
+    def test_set_judge_checks_key_before_hydrating_and_only_fetches_shown_rows(self):
+        state = json.loads(self.state.read_text())
+        state["steps"].append({"id": "execute_role_search", "output": {"set_id": "s1"}})
+        self.state.write_text(json.dumps(state))
+        full = {profile["person_id"]: profile for profile in map(json.loads, self.profiles.read_text().splitlines())}
+        before = self.snapshot()
+        with patch.object(hydrate_people.powerset_api, "call") as fetch:
+            with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY is required"):
+                rerank(self.run, criteria="test", use=None, model="unused", env={})
+            fetch.assert_not_called()
+            self.assertEqual(self.snapshot(), before)
+        with patch.object(hydrate_people.powerset_api, "call", side_effect=lambda env, path, body:
+                          {"profiles": {pid: full[pid] for pid in body["person_ids"]}}) as fetch, \
+                patch("packs.search.primitives.search_network_pipeline.refine._judge_step") as judge:
+            judge.side_effect = lambda rows, inputs, *args: (rows, "rerank", 0)
+            rerank(self.run, criteria="test", use=None, model="unused", env={"OPENAI_API_KEY": "mock"})
+            self.assertEqual(fetch.call_args.args[2], {"person_ids": self.ids[:6]})
+            self.assertEqual(len(list((self.run / "people").glob("*.json"))), 6)
 
     def test_sql_filters_sorts_and_fails_without_the_judge(self):
         output, _ = self.cli("--criteria", "under 35", "--sql", "SELECT person_id FROM candidates WHERE inferred_age < 35")

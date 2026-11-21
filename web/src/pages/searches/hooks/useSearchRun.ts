@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 
-import { fetchBadResults, fetchSearchRun } from "@/lib/api/searches"
+import { fetchBadResults, fetchPerson, fetchSearchRun } from "@/lib/api/searches"
 
 export function searchRunKey(runId: string | null) {
   return ["searches", "run", runId] as const
@@ -31,5 +31,17 @@ export function useBadResults(runId: string, asked: boolean) {
     enabled: asked,
     staleTime: Infinity,
     refetchInterval: (query) => (query.state.data?.status === "loading" ? POLL_MS : false),
+  })
+}
+
+/** One person's full profile for the drawer, read once per run and person: reopening them reads
+ *  it from the cache. A failure shows at once; opening them again asks again. */
+export function usePersonProfile(runId: string, personId: string) {
+  return useQuery({
+    queryKey: ["searches", "person", runId, personId] as const,
+    queryFn: ({ signal }) => fetchPerson(runId, personId, signal),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
   })
 }

@@ -103,6 +103,7 @@ function row(
         headcount: 120,
         stage: "Series B",
         funding: 40_000_000,
+        position_index: 0,
         logo_url: "https://example.com/example-labs.png",
       },
       {
@@ -116,6 +117,7 @@ function row(
         headcount: 0,
         stage: "",
         funding: 0,
+        position_index: 1,
         logo_url: "",
       },
     ],
@@ -155,7 +157,7 @@ function qualification(person_id: string, name: string, score: number, passed: b
   })
 }
 
-const JORDAN = rating("p-jordan", "Jordan Bravo", 4.6, { title: "Staff Engineer" })
+export const JORDAN = rating("p-jordan", "Jordan Bravo", 4.6, { title: "Staff Engineer" })
 const CASEY = rating("p-casey", "Casey Delta", 4.1)
 const MORGAN = rating("p-morgan", "Morgan Echo", 2.4)
 const RILEY = qualification("p-riley", "Riley Foxtrot", 0.85, true)

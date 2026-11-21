@@ -300,7 +300,7 @@ def normalize_hydrated_context(row: dict[str, Any]) -> dict[str, Any]:
         inferred_birth_year = int(inferred_birth_year) if inferred_birth_year else None
     except (TypeError, ValueError):
         inferred_birth_year = None
-    inferred_age = date.today().year - inferred_birth_year if inferred_birth_year else None
+    inferred_age = date.today().year - inferred_birth_year if inferred_birth_year else context.get("inferred_age")
 
     city_state_country = ", ".join(str(row.get(k)) for k in ["city", "state", "country"] if row.get(k))
     location = context.get("location") or row.get("location_raw") or city_state_country or None

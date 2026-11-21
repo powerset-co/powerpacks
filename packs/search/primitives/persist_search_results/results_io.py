@@ -218,6 +218,7 @@ def compact_positions(profile: dict[str, Any]) -> tuple[str, str]:
 
 def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = hydrated_profiles(state)
+    attribution = step_output(state, "hydrate_people").get("person_attribution") or {}
     rerank_by_id = rerank_rows(state)
     ce = step_output(state, "llm_rerank_candidates").get("cross_encoder") or {}
     ce_by_id = {row["id"]: row for row in ce.get("scores", [])}
@@ -230,6 +231,13 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
         profile = profiles.get(person_id, {})
         rerank = rerank_by_id.get(person_id, {})
         titles, companies = compact_positions(profile)
+        sources = attribution.get(person_id)
+        operators = profile.get("source_operators") or []
+        channels = profile.get("source_channels") or []
+        if sources is not None:
+            operators = [operator["operator_name"] for operator in sources.get("operators") or [] if operator.get("operator_name")]
+            channels = [source["channel"] for source in sorted(sources.get("sources") or [], key=lambda source: -int(source.get("total_interactions") or 0))
+                        if source.get("total_interactions")]
         rows.append({
             "rank": rank,
             "person_id": person_id,
@@ -248,8 +256,8 @@ def result_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
             "inferred_age": profile.get("inferred_age", ""),
             "current_titles": titles,
             "current_companies": companies,
-            "source_operator": "; ".join(profile.get("source_operators", []) or []),
-            "source_channel": "; ".join(profile.get("source_channels", []) or []),
+            "source_operator": "; ".join(operators),
+            "source_channel": "; ".join(channels),
             "linkedin_url": profile.get("linkedin_url", ""),
             "hydrated": bool(profile),
             "source_run": state.get("task_id", ""),

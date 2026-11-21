@@ -1219,7 +1219,7 @@ def record_quick_run(result: dict[str, Any]) -> None:
     filters=preview_filters(expanded)
     role=payload_filters(expanded)
     filters.update({key: role[key] for key in ("bm25_queries","role_ids","role_tracks") if is_present(role.get(key))})
-    attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"], result.get("env_file"))
+    attribution, attribution_error = quick_run_attribution(l, state, artifacts["jsonl"])
     searched = latest_step(state, "execute_role_search")
     record_quick_search(DEEP_SEARCH_ROOT, lp.parent.name, query=read_json(state)["query"], title=l.get("title"), filters=filters,
                         traits=expanded.get("traits") or [], created_at=l["created_at"],
@@ -1228,22 +1228,14 @@ def record_quick_run(result: dict[str, Any]) -> None:
                         bad_results=searched.get("bad_results"),
                         partial=bool(searched.get("partial")) and result["status"]=="running")
 
-def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str, env_file: str | None) -> tuple[dict[str, Any], str | None]:
-    """Save the same source contract for local and Powerset search results. A failed lookup comes back
-    as its error text, recorded in the run beside the rows: the chat drops stderr, so a line there is lost."""
-    people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
+def quick_run_attribution(ledger: dict[str, Any], state: Path, jsonl: str) -> tuple[dict[str, Any], str | None]:
+    """Local attribution comes from the index; set attribution was fetched during hydration."""
     if ledger.get("mode")=="local_duckdb":
         from packs.search.primitives.deep_search.person_attribution import local_network_attribution
+        people=sorted({json.loads(line)["person_id"] for line in (ROOT/jsonl).read_text().splitlines() if line.strip()})
         return local_network_attribution(Path(ledger["duckdb"]), people), None
-    set_id=latest_step(state,"execute_role_search").get("set_id") or latest_step(state,"resolve_set_operators").get("set_id")
-    if not people or not set_id:
-        return {}, None
-    try:
-        return powerset_api.person_attribution(Path(env_file) if env_file else None, str(set_id), people), None
-    except (Exception, SystemExit) as e:  # a signed-out bearer_token() raises SystemExit
-        error=f"{type(e).__name__}: {e}"
-        print(f"search: network attribution lookup failed ({error}); the rows show no sources", file=sys.stderr, flush=True)
-        return {}, error
+    hydration = latest_step(state, "hydrate_people")
+    return hydration.get("person_attribution") or {}, hydration.get("person_attribution_error")
 
 def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_kwargs) -> None:
     if done(ledger, "llm_rerank_candidates") or ledger["artifacts"].get("query_results_csv"):
@@ -1253,7 +1245,7 @@ def _export_screened(args, lp: Path, ledger: dict[str, Any], state: Path, **run_
     out = require_ok(run(cmd, timeout=args.timeout, **run_kwargs), "persist_search_results")
     ledger["artifacts"].update(collect_artifacts(out))
     save(lp, ledger)
-    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running", "env_file": args.env_file})
+    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running"})
     print(f"search: {out['row_count']} screened, not ranked yet; results page already lists them",
           file=sys.stderr, flush=True)
 
@@ -1264,7 +1256,7 @@ def _export_first(args, lp: Path, ledger: dict[str, Any], state: Path) -> None:
     out = require_ok(run(cmd, env_file=args.env_file, timeout=args.timeout), "persist_search_results")
     ledger.setdefault("artifacts", {}).update(collect_artifacts(out))
     save(lp, ledger)
-    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running", "env_file": args.env_file})
+    record_quick_run({"ledger": str(lp), "state": str(state), "status": "running"})
     print(f"search: the first {out['row_count']} are on the results page; downloading the rest", file=sys.stderr, flush=True)
 
 def cmd_run(args):
@@ -1280,14 +1272,14 @@ def cmd_run(args):
                 raise Failed(f"--payload-json is not a prepared payload: {payload_json}")
             write_json(payload_json, apply_card_edits(prepared, edits, payload_json.parent))
         result=run_pipeline_local(args) if getattr(args,"backend","powerset")=="local" else run_pipeline(args)
-        record_quick_run({**result, "env_file": args.env_file})
+        record_quick_run(result)
         emit(result); return 0
     except Blocked as e: emit(e.payload); return e.code
     except (Exception, SystemExit) as e:  # a signed-out bearer_token() raises SystemExit
         lp = ledger_path_for(Path(args.state) if args.state else None, Path(args.ledger) if args.ledger else None)
         ledger = load_ledger(lp)
         if ledger["artifacts"].get("jsonl"):
-            record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed", "env_file": args.env_file})
+            record_quick_run({"ledger": str(lp), "state": ledger["state"], "status": "failed"})
         emit({"primitive":"search_network_pipeline","status":"failed","error":str(e)}); return 1
 
 def _expand_query(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any], Path]:
@@ -1416,7 +1408,7 @@ def cmd_status(args):
 def cmd_rerank(args):
     try:
         emit(rerank(Path(args.run_dir), criteria=args.criteria, use=args.use, model=args.model,
-                    env=_run_env(env_file=args.env_file), sql=args.sql))
+                    env=_run_env(env_file=args.env_file), env_file=ROOT / args.env_file, sql=args.sql))
         return 0
     except Exception as error:
         emit({"primitive": "search_network_pipeline", "status": "failed", "error": str(error)})

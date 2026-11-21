@@ -1,6 +1,7 @@
 """Pin the Searches JSON routes and their TypeScript dataclass fields.
 
 Changelog:
+  2026-11-21: /api/search/person: a set run's person from <run>/people/ or one POST /v2/hydrate, a local run's row.
   2026-11-09: the chat card's edits save as <run>/card-edits.json under .powerpacks/search.
   2026-09-26: pin nullability, the group and pin-decision vocabularies, and the payloads.
   2026-09-26: cover catalog-only reads, one run, errors, and client fields.
@@ -26,7 +27,8 @@ from packs.search.primitives.deep_search.results_web.api import search_api
 from packs.search.primitives.deep_search.results_web import server as results_server
 from packs.search.primitives.deep_search.results_web.server import _send, search_routes
 from packs.search.primitives.deep_search.results_web.snapshot import export_snapshot, validate_snapshot
-from test_deep_search_catalog import _write_run
+from packs.shared import powerset_api
+from test_deep_search_catalog import CANDIDATE, _write_run
 
 TYPES = Path(__file__).resolve().parents[1] / "web/src/types/searches.ts"
 DATACLASSES = {
@@ -34,7 +36,7 @@ DATACLASSES = {
         "SearchCard", "SearchResult", "SearchStep", "Pond", "PondCandidate", "TraitScore", "Position",
         "Education", "Candidate", "CandidatePond", "CandidateGroup", "MoveLikelihood",
         "CandidateJudgment", "PinJudgment", "PersonAttribution", "NetworkSource",
-        "NetworkOperator", "GmailAccountDetail", "TeamMember", "TeamSimilarity",
+        "NetworkOperator", "GmailAccountDetail", "TeamMember", "TeamSimilarity", "PersonProfile",
     )
 }
 
@@ -52,6 +54,19 @@ def _union(name: str) -> set[str]:
     union = re.search(rf"^export type {name} =(.*?)$", source, re.M)
     assert union is not None, name
     return set(re.findall(r'"(\w+)"', union.group(1)))
+
+
+def _get(http_server: ThreadingHTTPServer, path: str) -> tuple[int, dict[str, object]]:
+    client, server = socket.socketpair()
+    with client, server:
+        client.sendall(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
+        http_server.RequestHandlerClass(server, ("localhost", 0), http_server)
+        server.shutdown(socket.SHUT_WR)
+        response = b""
+        while chunk := client.recv(65536):
+            response += chunk
+    head, body = response.split(b"\r\n\r\n", 1)
+    return int(head.split(b" ", 2)[1]), json.loads(body)
 
 
 class SearchJsonContractTest(unittest.TestCase):
@@ -78,16 +93,7 @@ class SearchJsonContractTest(unittest.TestCase):
         self.api = api
 
     def get(self, path: str) -> tuple[int, dict[str, object]]:
-        client, server = socket.socketpair()
-        with client, server:
-            client.sendall(f"GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n".encode())
-            self.server.RequestHandlerClass(server, ("localhost", 0), self.server)
-            server.shutdown(socket.SHUT_WR)
-            response = b""
-            while chunk := client.recv(65536):
-                response += chunk
-        head, body = response.split(b"\r\n\r\n", 1)
-        return int(head.split(b" ", 2)[1]), json.loads(body)
+        return _get(self.server, path)
 
     def test_catalog_reads_only_the_index(self) -> None:
         with mock.patch.object(model, "_payload", wraps=model._payload) as reads:
@@ -188,6 +194,96 @@ class SearchJsonContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PersonRouteTest(unittest.TestCase):
+    """GET /searches/api/search/person: one person's full profile for the drawer."""
+
+    CONTEXT = {"headline": "Builds payment systems", "summary": "Ten years of payments.",
+               "positions": [{"position_title": "Staff Engineer", "company_name": "Example Labs", "is_current": True},
+                             {"position_title": "Founder", "company_name": "Example Startup"}],
+               "education": [{"school_name": "Example University", "degree": "BS"}]}
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.data = Path(temp.name) / ".powerpacks"
+        root = self.data / "deep-search"
+        _write_run(root, "jordan-role", title="Backend Engineer", company="Example Labs",
+                   created_at="2026-09-26T00:00:00Z", status="completed",
+                   found_by=[{"run": "jordan-role", "pond": 1, "query": "Backend Engineer query"}])
+        api = search_api(search_routes(root, base="/searches"))
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                if not api.get(self, urllib.parse.urlparse(self.path)):
+                    _send(self, b"not found", "text/plain", status=404)
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler, bind_and_activate=False)
+        self.addCleanup(self.server.server_close)
+
+    def get(self, path: str) -> tuple[int, dict[str, object]]:
+        return _get(self.server, path)
+
+    def set_run(self, run_id: str) -> Path:
+        run = self.data / "search" / run_id
+        run.mkdir(parents=True)
+        (run / "pipeline.ledger.json").write_text(json.dumps({"state": "state.json"}))
+        return run
+
+    def test_a_set_runs_person_is_fetched_once_then_read_from_the_run(self) -> None:
+        run = self.set_run("jordan-role")
+        with mock.patch.object(powerset_api, "call", return_value={"profiles": {"p-jordan": self.CONTEXT}}) as call:
+            first = self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-jordan")
+            again = self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-jordan")
+        self.assertEqual(first, again)
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args.args[1:], ("/v2/hydrate", {"person_ids": ["p-jordan"]}))
+        self.assertEqual(json.loads((run / "people/p-jordan.json").read_text()), self.CONTEXT)
+        status, payload = first
+        self.assertEqual(status, 200)
+        profile = payload["profile"]
+        self.assertEqual((profile["headline"], profile["summary"]), ("Builds payment systems", "Ten years of payments."))
+        self.assertEqual([(position["title"], position["position_index"]) for position in profile["positions"]],
+                         [("Staff Engineer", 0), ("Founder", 1)])
+        self.assertEqual(profile["education"][0]["school"], "Example University")
+        self.assertEqual(set(_interfaces()["PersonPayload"]), set(payload))
+
+    def test_a_set_runs_failure_is_the_reason(self) -> None:
+        self.set_run("jordan-role")
+        with mock.patch.object(powerset_api, "call", side_effect=OSError("timed out")):
+            status, payload = self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-jordan")
+        self.assertEqual((status, payload), (502, {"error": "Couldn't reach Powerset: timed out"}))
+        with mock.patch.object(powerset_api, "call", side_effect=SystemExit("not signed in")):
+            self.assertEqual(self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-jordan"),
+                             (401, {"error": "Sign in to Powerset again"}))
+        with mock.patch.object(powerset_api, "call", return_value={"profiles": {}}):
+            self.assertEqual(self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-gone"),
+                             (404, {"error": "No profile for this person"}))
+        self.assertFalse((self.data / "search/jordan-role/people").exists())
+
+    def test_another_runs_person_is_its_stored_row(self) -> None:
+        for ledger in (None, {"mode": "local_duckdb"}):
+            if ledger is not None:
+                self.set_run("jordan-role").joinpath("pipeline.ledger.json").write_text(json.dumps(ledger))
+            with self.subTest(ledger=ledger), mock.patch.object(powerset_api, "call") as call:
+                status, payload = self.get(f"/searches/api/search/person?run_id=jordan-role&person_id={CANDIDATE}")
+                missing = self.get("/searches/api/search/person?run_id=jordan-role&person_id=p-nobody")
+                call.assert_not_called()
+                self.assertEqual(status, 200)
+                self.assertEqual(set(payload["profile"]), {"headline", "summary", "positions", "education"})
+                self.assertEqual(missing[0], 404)
+
+    def test_refuses_names_that_leave_the_run(self) -> None:
+        self.set_run("jordan-role")
+        with mock.patch.object(powerset_api, "call") as call:
+            for query in ("run_id=jordan-role&person_id=..", "run_id=jordan-role&person_id=a%2Fb",
+                          "run_id=jordan-role", "run_id=..&person_id=p-jordan"):
+                self.assertEqual(self.get(f"/searches/api/search/person?{query}")[0], 400, query)
+        call.assert_not_called()
 
 
 class CardEditsTest(unittest.TestCase):

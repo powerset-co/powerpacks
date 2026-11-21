@@ -81,7 +81,7 @@ export function matchesText(row: ResultRow, text: string): boolean {
   const sources = person.vertical_sources
   if (sources.length && !sources.some((source) => POSITION_SOURCES.has(source))) return false
   return person.matched_positions.some((index) => {
-    const position = person.positions[index]
+    const position = person.positions.find((position) => position.position_index === index)
     return position ? `${position.title}\n${position.company}`.toLowerCase().includes(needle) : false
   })
 }

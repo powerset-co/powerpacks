@@ -49,6 +49,7 @@ export interface TraitScore {
 }
 
 export interface Position {
+  position_index: number
   title: string
   company: string
   company_url: string
@@ -255,6 +256,19 @@ export interface SearchResult {
 export interface BadResultsPayload {
   status: "loading" | "ready" | "failed"
   candidates: PondCandidate[]
+}
+
+/** One person's full profile, fetched when the drawer opens: a set run's rows carry only their
+ *  current and matched roles. */
+export interface PersonProfile {
+  headline: string
+  summary: string
+  positions: Position[]
+  education: Education[]
+}
+
+export interface PersonPayload {
+  profile: PersonProfile
 }
 
 export interface CatalogPayload {
