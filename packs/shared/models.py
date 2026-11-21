@@ -1,6 +1,6 @@
 """Every model Powerpacks calls and the reasoning effort it is asked for, by job.
 
-This is the one place a model name is written. Code takes its default from here; a command's
+This is the one place a model name is written. Code imports it from here and gives it no local name; a command's
 `--model` / `--reasoning-effort` flag still changes it for one run. Nothing here is read from the
 environment or `.env`.
 
@@ -74,7 +74,7 @@ INDEX_AGES = "gpt-5.1"                  # infer_ages
 INDEX_CEO_FOUNDERS = "gpt-5.1"          # detect_ceo_founders
 
 # ── Deep Context ───────────────────────────────────────────────────────────────────────────────
-DEEP_CONTEXT_SYNTHESIS = "gpt-6-luna"   # facts from message bundles
+DEEP_CONTEXT_SYNTHESIS = "gpt-6-luna"   # facts from message bundles; as good as gpt-5.2 here, far cheaper
 DEEP_CONTEXT_IDENTITY = "gpt-6-luna"
 DEEP_CONTEXT_DECISIONS = "gpt-6-luna"   # worth, labels and screens on the Decisions API
 DEEP_CONTEXT_DEDUPE = "gpt-6.1-sol"     # are these two people the same person

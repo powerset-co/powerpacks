@@ -27,9 +27,9 @@ from openai import (
     AsyncOpenAI,
 )
 
+from packs.shared import models
 from packs.indexing.lib.llm_config import (
     CHAT_MODEL_PRICES_PER_1K_USD,
-    DEFAULT_MODEL,
     is_reasoning_model,
     openai_price_multiplier,
     openai_service_tier,
@@ -145,7 +145,7 @@ def usage_tokens(response: Any) -> dict[str, int]:
     }
 
 
-def estimate_cost_usd(input_tokens: int, output_tokens: int, model: str = DEFAULT_MODEL) -> float:
+def estimate_cost_usd(input_tokens: int, output_tokens: int, model: str = models.INDEX_COMPANY_ALONE) -> float:
     """USD estimate using the shared pricing table + active service-tier multiplier.
 
     Responses bills reasoning tokens as output tokens, so callers should fold

@@ -10,6 +10,7 @@ from unittest import mock
 import duckdb
 import pytest
 
+from packs.shared import models
 from packs.search.primitives.expand_search_request import parallel_extractors, title_selection
 from packs.search.primitives.search_network_pipeline import search_network_pipeline as pipeline
 from packs.search.primitives.shared import openai_client
@@ -164,7 +165,7 @@ def test_picker_uses_api_input_top_100_role_model_and_records_usage(tmp_path, mo
                                                                   if adjacent else {})))
     assert result.keywords == ["Chief of Staff"]
     request = create.call_args.kwargs
-    assert request["model"] == (model or title_selection.EXTRACTOR_MODELS["role"])
+    assert request["model"] == (model or models.SEARCH_EXTRACTORS["role"])
     if model:
         assert request["reasoning_effort"] == "high"
     else:

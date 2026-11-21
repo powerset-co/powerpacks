@@ -40,7 +40,6 @@ except ImportError:  # pragma: no cover - package execution
     from .pond_prompts import load_pond_prompt
     from . import precedents
 
-DEFAULT_MODEL = models.JD_DECOMPOSE
 DEFAULT_REASONING_EFFORT = None
 
 SYSTEM = load_pond_prompt({"pond_prompt_family": "general"}, "pond-1")
@@ -114,7 +113,7 @@ def query_request(
 
 
 def generate_queries(
-    *, jd: str, model: str = DEFAULT_MODEL,
+    *, jd: str, model: str = models.JD_DECOMPOSE,
     reasoning_effort: str | None = DEFAULT_REASONING_EFFORT,
     system_prompt: str | None = None,
     api_key: str | None = None, client: Any | None = None,
@@ -161,7 +160,7 @@ def main() -> None:
     g.add_argument("--jd-file", help="Path to a file containing the JD text")
     ap.add_argument("--system-file", default=None,
                     help="Use this reviewed system prompt instead of the general pond-1 prompt")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--model", default=models.JD_DECOMPOSE)
     ap.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
                     help="Reasoning effort for supported query-generation models")
     ap.add_argument("--api-key", default=None)

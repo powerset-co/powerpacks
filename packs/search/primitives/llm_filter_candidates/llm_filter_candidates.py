@@ -74,8 +74,6 @@ Candidates to filter:
 Score each candidate for relevance."""
 
 
-DEFAULT_MODEL = models.SEARCH_FILTER
-DEFAULT_REASONING_EFFORT = models.SEARCH_FILTER_EFFORT
 DEFAULT_API_BASE = None  # openai_client resolves it from the environment
 DEFAULT_THRESHOLD = 0.3
 DEFAULT_BATCH_SIZE = 2
@@ -727,8 +725,8 @@ def cmd_filter(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Filter hydrated candidates with a conservative LLM pre-screen")
     parser.add_argument("--state", required=True)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    parser.add_argument("--model", default=models.SEARCH_FILTER)
+    parser.add_argument("--reasoning-effort", default=models.SEARCH_FILTER_EFFORT)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=120)

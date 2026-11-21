@@ -21,7 +21,6 @@ from packs.search.primitives.deep_search.results_web.team import (
 )
 from packs.search.primitives.deep_search.team_department import Department
 
-MODEL = models.EMBEDDING
 METHOD = "Titles + descriptions + company names · five jobs"
 MAX_TOKENS = 8191
 TOP_EMPLOYEES = 3
@@ -39,7 +38,7 @@ def prepare_team(domain: str, env_file: Path, run_dir: Path, *, jd: str, as_of: 
         employees, metadata = fetch_embedded_employees(domain, env_file, department=department.value)
         if metadata["company_id_source"] != "coresignal_company" or not metadata["company_id"]:
             raise ValueError("employee roster did not resolve a CoreSignal company")
-        if metadata["embedding_model"] != MODEL:
+        if metadata["embedding_model"] != models.EMBEDDING:
             raise ValueError("employee embedding model differs from candidate model")
         fields = ("provider_employee_id", "full_name", "linkedin_url", "title", "location",
                   "started_on", "department", "embedding_status", "embedding")
@@ -113,7 +112,7 @@ def embedding_input(positions: list[dict]) -> tuple[str, str]:
     if not text:
         return "", ""
     text = ENCODING.decode(ENCODING.encode(text)[:MAX_TOKENS])
-    digest = hashlib.sha256((MODEL + "\n" + text).encode()).hexdigest()
+    digest = hashlib.sha256((models.EMBEDDING + "\n" + text).encode()).hexdigest()
     return digest, text
 
 
@@ -133,11 +132,11 @@ def embed_candidates(people: list[dict], run_dir: Path) -> dict[str, list[float]
         try:
             for start in range(0, len(missing), EMBED_BATCH):
                 batch = missing[start:start + EMBED_BATCH]
-                response = client.embeddings.create(model=MODEL, input=[text for _, text in batch])
+                response = client.embeddings.create(model=models.EMBEDDING, input=[text for _, text in batch])
                 for item in response.data:
                     digest = batch[item.index][0]
                     (cache / f"{digest}.json").write_text(json.dumps({
-                        "model": MODEL, "embedding": item.embedding}) + "\n")
+                        "model": models.EMBEDDING, "embedding": item.embedding}) + "\n")
         finally:
             client.close()
     return {digest: json.loads((cache / f"{digest}.json").read_text())["embedding"]

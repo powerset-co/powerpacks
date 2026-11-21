@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from packs.shared import models
 from packs.search.primitives.deep_search import search_harness as harness
 from packs.search.primitives.llm_rerank_candidates import llm_rerank_candidates as reranker
 from packs.search.primitives.persist_search_results import results_io
@@ -87,7 +88,7 @@ class TerraPipelineTests(unittest.TestCase):
                 {"id": "llm_filter_candidates", "status": "completed", "output": {
                     "passed_candidate_ids": ["yes", "no"], "passed_count": 2}},
             ]}))
-            native = {"status": "ok", "model": reranker.terra.MODEL, "score_type": reranker.terra.SCORE_TYPE,
+            native = {"status": "ok", "model": models.JD_CAPABILITY, "score_type": reranker.terra.SCORE_TYPE,
                 "scores": [{"id": "yes", "score": 4, "evidence": "Relevant work", "basis": "direct"},
                            {"id": "no", "score": 2, "evidence": "Different work", "basis": "mismatch"}]}
             structured = "Title: Storage Engineer\nHiring company: Example Systems\n\nResponsibilities\n- Own storage.\n"
@@ -114,7 +115,7 @@ class TerraPipelineTests(unittest.TestCase):
             self.assertEqual([r["cross_encoder_score_1_to_5"] for r in rows], [4, 2])
             self.assertEqual([harness._candidate_judgment_eligible(r) for r in rows], [True, False])
             self.assertEqual([float(r["final_score"]) for r in rows], [.8, .4])
-            self.assertTrue(all(r["cross_encoder_model"] == reranker.terra.MODEL for r in rows))
+            self.assertTrue(all(r["cross_encoder_model"] == models.JD_CAPABILITY for r in rows))
             saved = json.loads(state_path.read_text())["steps"][-1]["output"]
             self.assertEqual(saved["model"], "gpt-5.6-luna")
             self.assertEqual(saved["reasoning_effort"], "low")

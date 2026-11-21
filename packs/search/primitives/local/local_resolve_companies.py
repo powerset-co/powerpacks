@@ -35,6 +35,7 @@ from search_common import (  # noqa: E402
 )
 from search_embeddings import embedding  # noqa: E402
 from ce_rerank import ce_rerank_companies  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.ingestion.primitives.deep_context_v2 import decisions  # noqa: E402
 
 
@@ -118,7 +119,7 @@ async def matching_companies(description: str, rows: list[dict[str, Any]], cache
     requests: dict[str, dict[str, Any]] = {}
     for row in rows:
         text = row.get("semantic_text") or row.get("description") or row.get("company_name") or ""
-        request = {"model": decisions.MODEL, "questions": [question],
+        request = {"model": models.DEEP_CONTEXT_DECISIONS, "questions": [question],
                    "input": json.dumps({"company": text}, ensure_ascii=False)}
         digest = decisions.request_digest(COMPANY_QUESTION_VERSION, request)
         digests.append(digest)

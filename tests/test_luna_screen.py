@@ -11,6 +11,7 @@ from unittest import mock
 
 import httpx
 
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2 import decisions
 from packs.search.primitives.llm_rerank_candidates import luna_screen
 
@@ -84,7 +85,7 @@ class LunaScreenTests(unittest.TestCase):
             self.assertEqual(json.loads(job["text"])["job"], JD)
             self.assertIn("profile", json.loads(candidate["text"]))
             self.assertEqual(body["prompt_cache_options"], {"mode": "explicit"})
-            self.assertEqual((body["model"], body["questions"]), (decisions.MODEL, [luna_screen.QUESTION]))
+            self.assertEqual((body["model"], body["questions"]), (models.DEEP_CONTEXT_DECISIONS, [luna_screen.QUESTION]))
             jobs.add(job["text"])
         self.assertEqual(len(jobs), 1)
 

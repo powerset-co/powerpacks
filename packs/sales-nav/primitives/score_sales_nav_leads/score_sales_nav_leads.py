@@ -29,7 +29,6 @@ from packs.shared import models  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 
 DEFAULT_API_BASE = openai_base_url()
-DEFAULT_MODEL = models.SALES_NAV_SCORE
 DEFAULT_CONCURRENCY = int(os.environ.get("SALES_NAV_SCORE_CONCURRENCY", "50"))
 DEFAULT_THRESHOLD = float(os.environ.get("SALES_NAV_SCORE_THRESHOLD", "0.7"))
 
@@ -387,7 +386,7 @@ def main() -> int:
     parser.add_argument("--state", required=True)
     parser.add_argument("--criteria", required=True)
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=models.SALES_NAV_SCORE)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)

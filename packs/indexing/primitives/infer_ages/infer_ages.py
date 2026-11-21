@@ -30,7 +30,6 @@ from packs.indexing.lib.io import read_jsonl, write_json  # noqa: E402
 from packs.shared import models  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 
-DEFAULT_MODEL = models.INDEX_AGES
 DEFAULT_CONCURRENCY = 50
 CHECKPOINT_EVERY = 200
 MIN_BIRTH_YEAR = 1940
@@ -280,7 +279,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flattened", required=True, help="Path to flattened_people.jsonl")
     parser.add_argument("--output", required=True, help="Path to inferred_ages.jsonl")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--model", default=models.INDEX_AGES)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")

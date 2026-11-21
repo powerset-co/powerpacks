@@ -25,7 +25,7 @@ from typing import Awaitable
 
 import tiktoken
 
-from packs.indexing.lib.llm_config import DEFAULT_SYNTHESIS_MODEL
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageChannel
 from packs.ingestion.primitives.deep_context_v2.db import queries
 from packs.ingestion.primitives.deep_context_v2.db.owner import OwnerProfile, owner_background_block, read_owner
@@ -36,7 +36,6 @@ from packs.ingestion.primitives.deep_context_v2.openai import OpenAIResponsesCal
 from packs.ingestion.primitives.deep_context_v2.synthesize import prompt as prompting
 from packs.ingestion.primitives.deep_context_v2.synthesize.facts import SynthesizedFacts, collapse
 
-MODEL = DEFAULT_SYNTHESIS_MODEL
 REASONING_EFFORT = "medium"  # the pinned default; the resolved config may carry the one env override
 CHUNK_CHARS = 9000           # one batch = up to this many characters of rendered messages
 MAX_BATCHES = 20             # a very long history is cut here; newest messages win
@@ -91,7 +90,7 @@ class Synthesize(Node):
         super().__init__(conn, data_root)
         self.limit = limit
         # Resolved once; the same effort goes into the request, the fingerprint and the row.
-        self.config = OpenAIResponsesConfig.resolve(model=MODEL, effort=REASONING_EFFORT, timeout=120, max_retries=3)
+        self.config = OpenAIResponsesConfig.resolve(model=models.DEEP_CONTEXT_SYNTHESIS, effort=REASONING_EFFORT, timeout=120, max_retries=3)
         owner = read_owner(conn)
         self.prompt = system_prompt(owner)
         self.email_prompt = system_prompt(owner, email=True)

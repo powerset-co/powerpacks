@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest import mock
+from packs.shared import models
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -311,8 +312,8 @@ class LlmFilterLunaDefaultsTests(unittest.IsolatedAsyncioTestCase):
     def test_defaults_use_luna_without_reasoning(self) -> None:
         mod = self.load_module()
 
-        self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
-        self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "none")
+        self.assertEqual(models.SEARCH_FILTER, "gpt-5.6-luna")
+        self.assertEqual(models.SEARCH_FILTER_EFFORT, "none")
 
     async def test_luna_omits_temperature_and_disables_reasoning(self) -> None:
         mod = self.load_module()

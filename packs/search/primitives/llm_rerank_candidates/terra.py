@@ -14,8 +14,6 @@ from packs.search.primitives.llm_rerank_candidates.cross_encoder import profile_
 from packs.search.primitives.shared.openai_client import make_async_openai_client
 from packs.shared import models
 
-MODEL = models.JD_CAPABILITY
-REASONING_EFFORT = models.JD_CAPABILITY_EFFORT
 MAX_COMPLETION_TOKENS = 2500
 SCORE_TYPE = "ordinal_rating_1_to_5"
 PROMPT_VERSION = "luna-capability-concise-20260917"
@@ -69,7 +67,7 @@ def build_request(*, jd: str, profile: dict, as_of: str) -> dict:
         raise ValueError("Luna requires a cleaned JD")
     passage = json.dumps(_profile_evidence(profile), ensure_ascii=False, separators=(",", ":"))
     return {
-        "model": MODEL, "reasoning_effort": REASONING_EFFORT, "service_tier": "flex",
+        "model": models.JD_CAPABILITY, "reasoning_effort": models.JD_CAPABILITY_EFFORT, "service_tier": "flex",
         "max_completion_tokens": MAX_COMPLETION_TOKENS, "store": False,
         "messages": cached_messages(system_prompt(as_of), f"<Job>\n{jd}\n</Job>\n",
                                     f"<Profile>\n{passage}\n</Profile>"),
@@ -99,7 +97,7 @@ async def score_candidates(*, jd: str, profiles: dict[str, dict], output_dir: Pa
         raise ValueError("Luna concurrency must be positive")
     prompt_hash = hashlib.sha256(system_prompt(as_of).encode()).hexdigest()
     result = {
-        "status": "ok" if profiles else "empty", "model": MODEL, "revision": prompt_hash,
+        "status": "ok" if profiles else "empty", "model": models.JD_CAPABILITY, "revision": prompt_hash,
         "prompt_version": PROMPT_VERSION, "assessment_date": as_of,
         "score_type": SCORE_TYPE, "scores": [], "artifacts": [],
         "requests": 0, "cached_candidates": 0,

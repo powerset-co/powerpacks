@@ -83,8 +83,6 @@ from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E
 
 
 DEFAULT_API_BASE = None  # openai_client resolves it from the environment
-DEFAULT_MODEL = models.SEARCH_RERANK
-DEFAULT_REASONING_EFFORT = models.SEARCH_RERANK_EFFORT
 DEFAULT_CONCURRENCY = int(os.environ.get("LLM_RERANK_CONCURRENCY", os.environ.get("SEARCH_V2_RERANK_MAX_CONCURRENT", "400")))
 DEFAULT_SECONDS_PER_WAVE = int(os.environ.get("LLM_RERANK_SECONDS_PER_WAVE", "30"))
 
@@ -1133,7 +1131,7 @@ async def _rerank_with_terra(items: list[RerankItem], *, jd: str, title: str,
     results = [RerankResult(
         id=item.id, score=by_id[item.id]["score"] / 5,
         verdict="pass" if by_id[item.id]["score"] >= 3 else "fail",
-        reason=by_id[item.id]["evidence"], model=terra.MODEL,
+        reason=by_id[item.id]["evidence"], model=models.JD_CAPABILITY,
         elapsed_ms=0, input=item.payload,
     ) for item in items]
     return results, scores
@@ -1153,7 +1151,7 @@ async def _rerank_with_luna(items: list[RerankItem], *, jd: str, title: str,
     results = [RerankResult(
         id=item.id, score=by_id[item.id]["score"],
         verdict="pass" if by_id[item.id]["passed"] else "fail",
-        reason=by_id[item.id]["evidence"], model=luna_screen.MODEL,
+        reason=by_id[item.id]["evidence"], model=models.DEEP_CONTEXT_DECISIONS,
         elapsed_ms=0, input=item.payload,
     ) for item in items]
     return results, scores
@@ -1183,8 +1181,8 @@ def main() -> int:
     parser.add_argument("--system-file",
                         help="Reviewed rerank system prompt; the exact prompt is snapshotted and hashed")
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
+    parser.add_argument("--model", default=models.SEARCH_RERANK)
+    parser.add_argument("--reasoning-effort", default=models.SEARCH_RERANK_EFFORT)
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
     parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--timeout", type=int, default=120)
@@ -1219,8 +1217,8 @@ def main() -> int:
             capability_request_sha256 = capability_contract.request_sha256(
                 jd=raw_jd, title=args.job_title, company_name=args.job_company,
                 evaluation_query=args.evaluation_query or "", judge=args.capability_judge)
-            args.model = judge.MODEL
-            args.reasoning_effort = "none" if args.capability_judge == "luna" else terra.REASONING_EFFORT
+            args.model = (models.DEEP_CONTEXT_DECISIONS if args.capability_judge == "luna" else models.JD_CAPABILITY)
+            args.reasoning_effort = "none" if args.capability_judge == "luna" else models.JD_CAPABILITY_EFFORT
             args.concurrency = min(args.concurrency, 32)
             system_prompt = terra.system_prompt(as_of)
             if args.capability_judge == "luna":
@@ -1339,7 +1337,7 @@ def main() -> int:
     else:
         results = []
         if args.jd_file:
-            ce_result = {"status": "empty", "model": judge.MODEL, "score_type": judge.SCORE_TYPE,
+            ce_result = {"status": "empty", "model": (models.DEEP_CONTEXT_DECISIONS if args.capability_judge == "luna" else models.JD_CAPABILITY), "score_type": judge.SCORE_TYPE,
                          "scores": []}
     elapsed = time.monotonic() - started
     elapsed_ms = int(elapsed * 1000)

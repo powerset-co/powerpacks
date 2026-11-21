@@ -71,8 +71,6 @@ from usage_pricing import load_prices, row_cost_usd  # noqa: E402
 from packs.indexing.lib.openai_stream import drain_pool  # noqa: E402
 from packs.shared import models  # noqa: E402
 from packs.search.primitives.shared.human_ratings import QUALIFICATION_SCORE_TYPE, score_1_to_5  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates import terra  # noqa: E402
-from packs.search.primitives.llm_rerank_candidates import luna_screen  # noqa: E402
 from packs.search.primitives.deep_search.candidate_judges import (
     JUDGE_CONFIG, candidate_judge_request, parse_candidate_judge,
 )
@@ -1206,7 +1204,7 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
                           "finish_reason": getattr(response.choices[0], "finish_reason", None),
                           "usage": response_usage(response)}
                 _write_json(checkpoint, record)
-            provenance = {"candidate_index": index, "kind": "judge", "model": pin_confidence.PIN_JUDGE_MODEL,
+            provenance = {"candidate_index": index, "kind": "judge", "model": models.JD_PIN,
                           "input_sha": input_sha, "checkpoint": str(checkpoint), "cached": cached,
                           "usage": record.get("usage", {})}
             try:
@@ -1235,7 +1233,7 @@ def _annotate_pin_confidence(*, candidates: Sequence[Mapping[str, Any]],
                     if url in (payload or {}):
                         rows[row_index]["taste_score"] = payload[url]
                 return
-            judgment = {"model": pin_confidence.PIN_JUDGE_MODEL, "decision": None, "reason": "", "status": "ok"}
+            judgment = {"model": models.JD_PIN, "decision": None, "reason": "", "status": "ok"}
             if payload is None:
                 judgment["status"] = "error"
             else:
@@ -1402,7 +1400,7 @@ def _record_team_usage(run_dir: Path, pond_n: int, team: dict[str, Any]) -> None
     if team.get("embedding_usage_tokens") and not recorded:
         append_usage_row({
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "model": team_similarity.MODEL,
+            "model": models.EMBEDDING,
             "stage": f"search_harness.pond_{pond_n:02d}.team_similarity.employees",
             "prompt_tokens": team["embedding_usage_tokens"],
             "cached_tokens": 0, "cache_write_tokens": 0,
@@ -1465,8 +1463,8 @@ def run_pond(*, run_dir: Path, env_file: str, backend: str | None = None,
     command = [
         sys.executable, str(PIPELINE), "run", "--ledger", str(pending["ledger"]),
         "--env-file", env_file, "--execute-approved",
-        "--model", luna_screen.MODEL if capability_judge == "luna" else terra.MODEL,
-        "--reasoning-effort", "none" if capability_judge == "luna" else terra.REASONING_EFFORT,
+        "--model", models.DEEP_CONTEXT_DECISIONS if capability_judge == "luna" else models.JD_CAPABILITY,
+        "--reasoning-effort", "none" if capability_judge == "luna" else models.JD_CAPABILITY_EFFORT,
         "--jd-file", str(run_dir / "jd.txt"), "--job-title", results["title"],
         "--job-company", results["company"],
         "--capability-judge", capability_judge,

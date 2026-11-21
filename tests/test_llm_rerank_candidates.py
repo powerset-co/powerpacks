@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from packs.shared import models
 from packs.search.primitives.llm_rerank_candidates import llm_rerank_candidates as reranker
 from packs.shared.csv_io import CsvIO
 
@@ -640,8 +641,8 @@ class PromptContractTests(unittest.TestCase):
         sys.modules["llm_rerank_candidates_defaults"] = mod
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-        self.assertEqual(mod.DEFAULT_MODEL, "gpt-5.6-luna")
-        self.assertEqual(mod.DEFAULT_REASONING_EFFORT, "medium")
+        self.assertEqual(models.SEARCH_RERANK, "gpt-5.6-luna")
+        self.assertEqual(models.SEARCH_RERANK_EFFORT, "medium")
 
     def test_prompt_calibrates_inference_without_domain_examples(self) -> None:
         import importlib.util

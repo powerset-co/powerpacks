@@ -32,7 +32,6 @@ from packs.shared.endpoints import openai_base_url
 from packs.ingestion.primitives.deep_context_v2.openai import DEFAULT_OPENAI_CONCURRENCY, load_env
 from packs.search.primitives.shared.openai_client import append_usage_row
 
-MODEL = models.DEEP_CONTEXT_DECISIONS
 INPUT_PRICE_PER_MILLION = 0.10
 TIMEOUT_SECONDS = 120
 MAX_RETRIES = 3  # the SDK retries transient statuses and honours Retry-After
@@ -127,7 +126,7 @@ def _log_usage(request: dict[str, Any], response: dict[str, Any], stage: str, la
     details = usage.get("input_tokens_details") or {}  # cache reads and writes, both inside input_tokens
     append_usage_row({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "model": MODEL,
+        "model": models.DEEP_CONTEXT_DECISIONS,
         "stage": stage,
         "prompt_tokens": tokens,
         "cached_tokens": int(details.get("cached_tokens") or 0),

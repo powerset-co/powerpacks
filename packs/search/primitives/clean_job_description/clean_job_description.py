@@ -20,8 +20,6 @@ from typing import Any, Mapping
 from packs.search.primitives.shared.openai_client import make_openai_client
 from packs.shared import models
 
-MODEL = models.JD_CLEAN
-REASONING_EFFORT = models.JD_CLEAN_EFFORT
 SERVICE_TIER = "flex"
 MAX_COMPLETION_TOKENS = 8192
 _PROMPT = Path(__file__).resolve().parents[2] / "prompts" / "jd-cleaning.txt"
@@ -111,8 +109,8 @@ def build_request(*, jd: str, title: str, company_name: str) -> dict[str, Any]:
         f"<job_description>\n{jd}\n</job_description>"
     )
     return {
-        "model": MODEL,
-        "reasoning_effort": REASONING_EFFORT,
+        "model": models.JD_CLEAN,
+        "reasoning_effort": models.JD_CLEAN_EFFORT,
         "service_tier": SERVICE_TIER,
         "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "store": False,
@@ -143,7 +141,7 @@ def _response_record(response: Any, request_hash: str, jd: str) -> dict[str, Any
     return {
         "request_sha256": request_hash,
         "source_sha256": hashlib.sha256(jd.encode()).hexdigest(),
-        "model": str(getattr(response, "model", None) or MODEL),
+        "model": str(getattr(response, "model", None) or models.JD_CLEAN),
         "service_tier": str(getattr(response, "service_tier", None) or SERVICE_TIER),
         "finish_reason": getattr(choice, "finish_reason", None),
         "refusal": getattr(message, "refusal", None),
