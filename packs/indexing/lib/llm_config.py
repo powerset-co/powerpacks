@@ -11,20 +11,21 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from packs.shared import models
 from packs.indexing.lib.openai_usage_tiers import (
     openai_usage_tier_profile,
 )
 
 # Default model for company enrichment — matches prod combined_enrichment.py.
-DEFAULT_MODEL = "gpt-5.2"
-DEFAULT_IDENTITY_MODEL = "gpt-6-luna"
+DEFAULT_MODEL = models.INDEX_COMPANY_ALONE
+DEFAULT_IDENTITY_MODEL = models.DEEP_CONTEXT_IDENTITY
 # Role enrichment model — gpt-5.2 has structured output bugs with the
 # 180-item role_ids enum (picks random values like investment_banker for
 # Instructor). gpt-5.1 classifies correctly.
-DEFAULT_ROLE_MODEL = "gpt-5.1"
+DEFAULT_ROLE_MODEL = models.INDEX_ROLE
 # Deep-context synthesis reads message bundles at volume; gpt-6-luna extracts
 # as well as gpt-5.2 on that job at a fraction of the price.
-DEFAULT_SYNTHESIS_MODEL = "gpt-6-luna"
+DEFAULT_SYNTHESIS_MODEL = models.DEEP_CONTEXT_SYNTHESIS
 # Prod parity (combined_enrichment.py): reasoning calls cap at 2000.
 DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60

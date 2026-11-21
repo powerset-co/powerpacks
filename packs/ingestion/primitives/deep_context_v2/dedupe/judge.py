@@ -18,6 +18,7 @@ from typing import Any
 
 import jsonschema
 
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2.collect.bundle import CollectionBundle, MessageDirection, MessageEntry
 from packs.ingestion.primitives.deep_context_v2.db.queries_dedupe import Identifier
 from packs.ingestion.primitives.deep_context_v2.db.schema import IdentifierKind
@@ -30,7 +31,7 @@ _HERE = Path(__file__).parent
 SYSTEM_PROMPT: str = assets.text(_HERE, "identity_merge_system.txt")
 SCHEMA: dict[str, Any] = assets.json_file(_HERE, "identity_merge_schema.txt")
 SCHEMA_NAME = "identity_merge"
-MODEL = "gpt-6.1-sol"
+MODEL = models.DEEP_CONTEXT_DEDUPE
 REASONING_EFFORT = "high"
 PROMPT_VERSION = "dedupe-2026-10-07-aliases"  # recorded in each verdict's signature; a pair is never judged again
 SAMPLE_MESSAGES = 4      # per direction, newest first

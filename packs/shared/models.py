@@ -1,4 +1,4 @@
-"""Every model search calls and the reasoning effort it is asked for, by job.
+"""Every model Powerpacks calls and the reasoning effort it is asked for, by job.
 
 This is the one place a model name is written. Code takes its default from here; a command's
 `--model` / `--reasoning-effort` flag still changes it for one run. Nothing here is read from the
@@ -62,3 +62,24 @@ JD_DECIDE_EFFORT = "medium"
 
 # ── Sales Navigator ────────────────────────────────────────────────────────────────────────────
 SALES_NAV_SCORE = "gpt-4o-mini"
+
+# ── The search index build (cloud) ─────────────────────────────────────────────────────────────
+# Each of these keys a paid cache: changing one classifies every person or company again.
+# The build still honors POWERPACKS_ROLE_OPENAI_MODEL, POWERPACKS_COMPANY_OPENAI_MODEL and
+# POWERPACKS_OPENAI_EMBEDDING_MODEL when the cloud run sets them.
+INDEX_ROLE = "gpt-5.1"                  # gpt-5.2 picks wrong values from the 180-role list
+INDEX_COMPANY = "gpt-5.1"               # company enrichment inside the build
+INDEX_COMPANY_ALONE = "gpt-5.2"         # enrich_companies_checkpointed run by itself
+INDEX_AGES = "gpt-5.1"                  # infer_ages
+INDEX_CEO_FOUNDERS = "gpt-5.1"          # detect_ceo_founders
+
+# ── Deep Context ───────────────────────────────────────────────────────────────────────────────
+DEEP_CONTEXT_SYNTHESIS = "gpt-6-luna"   # facts from message bundles
+DEEP_CONTEXT_IDENTITY = "gpt-6-luna"
+DEEP_CONTEXT_DECISIONS = "gpt-6-luna"   # worth, labels and screens on the Decisions API
+DEEP_CONTEXT_DEDUPE = "gpt-6.1-sol"     # are these two people the same person
+DEEP_CONTEXT_LINKEDIN = "gpt-6.1-sol"   # is this LinkedIn profile this person (sol_identity)
+
+# ── Imports and scheduled tasks ────────────────────────────────────────────────────────────────
+TWITTER_EXPERTS = "gpt-4o-mini"         # the Twitter import's expert evaluation
+SCHEDULED_TASK_CLAUDE = "claude-opus-5-5"

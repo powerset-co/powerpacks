@@ -10,6 +10,7 @@ import jinja2
 
 import jsonschema
 
+from packs.shared import models
 from packs.ingestion.primitives.deep_context_v2.db.schema import Origin, Verdict
 from packs.ingestion.primitives.deep_context_v2.enrich.family import Family, family_evidence
 from packs.ingestion.primitives.deep_context_v2.enrich.profiles import Profile
@@ -22,7 +23,7 @@ _HERE = Path(__file__).parent
 SYSTEM_PROMPT: str = assets.text(_HERE, "linkedin_reconcile_system.txt")
 SCHEMA: dict[str, Any] = assets.json_file(_HERE, "linkedin_reconcile_schema.txt")
 SCHEMA_NAME = "linkedin_reconcile"
-MODEL = "gpt-6.1-sol"
+MODEL = models.DEEP_CONTEXT_LINKEDIN
 REASONING_EFFORT = "medium"
 TEMPLATE: jinja2.Template = assets.template(_HERE, "identity_prompt.j2")
 

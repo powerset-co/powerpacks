@@ -26,12 +26,13 @@ from typing import Any, Callable
 import tiktoken
 from openai import AsyncOpenAI
 
+from packs.shared import models
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int
 from packs.shared.endpoints import openai_base_url
 from packs.ingestion.primitives.deep_context_v2.openai import DEFAULT_OPENAI_CONCURRENCY, load_env
 from packs.search.primitives.shared.openai_client import append_usage_row
 
-MODEL = "gpt-6-luna"
+MODEL = models.DEEP_CONTEXT_DECISIONS
 INPUT_PRICE_PER_MILLION = 0.10
 TIMEOUT_SECONDS = 120
 MAX_RETRIES = 3  # the SDK retries transient statuses and honours Retry-After

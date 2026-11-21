@@ -32,11 +32,12 @@ from packs.indexing.lib.artifact_io import (  # noqa: E402
     write_parquet_rows,
 )
 from packs.indexing.lib.io import read_json, read_jsonl, write_json  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 from packs.indexing.lib.openai_usage_tiers import env_or_profile_int  # noqa: E402
 
 DEFAULT_DIMENSION = 1536
-DEFAULT_MODEL = "text-embedding-3-small"
+DEFAULT_MODEL = models.EMBEDDING
 DEFAULT_COST_PER_1K_TOKENS = 0.00002
 DEFAULT_OPENAI_TIMEOUT_SECONDS = 60
 DEFAULT_OPENAI_CONCURRENCY = 256

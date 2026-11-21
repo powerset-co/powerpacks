@@ -47,6 +47,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.shared import models  # noqa: E402
 from packs.ingestion.primitives.common.jsonio import emit  # noqa: E402
 
 Runner = Literal["codex", "claude"]
@@ -74,7 +75,7 @@ CODEX_APP_DB = CODEX_HOME / "sqlite" / "codex-dev.db"
 CODEX_THREADS_DB = CODEX_HOME / "state_5.sqlite"
 
 CLAUDE_APP = "Claude"
-CLAUDE_MODEL = "claude-opus-5-5"
+CLAUDE_MODEL = models.SCHEDULED_TASK_CLAUDE
 CLAUDE_TASK = Path.home() / ".claude" / "scheduled-tasks" / TASK_ID / "SKILL.md"
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 CLAUDE_SESSIONS = Path.home() / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
