@@ -4,6 +4,7 @@ import { body, failure } from "@/lib/api/http"
 import type {
   BadResultsPayload,
   CatalogPayload,
+  PersonPayload,
   SearchRunPayload,
   SearchScope,
   SetDetail,
@@ -32,6 +33,18 @@ export async function fetchBadResults(runId: string, signal?: AbortSignal): Prom
   const response = await fetch(`${API}/api/bad.json?run_id=${encodeURIComponent(runId)}`, { signal })
   if (!response.ok) throw await failure(response, "Couldn't load bad results.")
   return body<BadResultsPayload>(response)
+}
+
+/** One person's full profile, for the drawer. */
+export async function fetchPerson(
+  runId: string,
+  personId: string,
+  signal?: AbortSignal,
+): Promise<PersonPayload> {
+  const query = `run_id=${encodeURIComponent(runId)}&person_id=${encodeURIComponent(personId)}`
+  const response = await fetch(`${API}/api/search/person?${query}`, { signal })
+  if (!response.ok) throw await failure(response, "Couldn't load this profile.")
+  return body<PersonPayload>(response)
 }
 
 export async function fetchTags(runId: string): Promise<TagsPayload> {

@@ -1,4 +1,4 @@
-import type { Candidate, PondCandidate, Position } from "@/types/searches"
+import type { Candidate, PersonProfile, PondCandidate, Position } from "@/types/searches"
 
 export interface CurrentRole {
   title: string
@@ -20,6 +20,16 @@ export function currentRole(row: PondCandidate): CurrentRole {
     ? row.positions.find((position) => position.company === row.company && position.logo_url)
     : undefined
   return { title: row.title, company: row.company, logo: atCompany?.logo_url ?? "" }
+}
+
+/** The row with the person's full profile: every role and school, the headline and about. A role
+ *  keeps the logo its row had (POST /v2/hydrate sends none). */
+export function withProfile(row: PondCandidate, profile: PersonProfile): PondCandidate {
+  const logos = new Map(row.positions.map((position) => [position.position_index, position.logo_url]))
+  const positions = profile.positions.map((position) =>
+    position.logo_url ? position : { ...position, logo_url: logos.get(position.position_index) ?? "" },
+  )
+  return { ...row, ...profile, positions }
 }
 
 /** "Title · Company", or whichever of the two is known. */

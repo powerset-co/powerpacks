@@ -45,24 +45,26 @@ export function Career({ row }: { row: PondCandidate }) {
   )
 }
 
-// rendering.py _position_item: the roles the search matched on are marked.
+// rendering.py _position_item: the roles the search matched on are marked, by each role's index in
+// the full profile (a set run's row keeps only some of them).
 function Positions({ positions, matched }: PositionsProps) {
   return (
     <ol className="career" data-positions>
-      {positions.map((position, index) => {
+      {positions.map((position) => {
         const note = companyNote(position)
         const end = position.is_current ? "Present" : monthYear(position.end_date)
+        const isMatched = matched.includes(position.position_index)
         return (
           <li
-            key={`${position.company}:${position.start_date}:${index}`}
-            data-matched={matched.includes(index)}
+            key={`${position.company}:${position.start_date}:${position.position_index}`}
+            data-matched={isMatched}
             className="career-role"
           >
             <CompanyLogo company={position.company} src={position.logo_url || undefined} size={24} />
             <div className="career-text">
               <span className="career-head">
                 <b>{position.title}</b>
-                {matched.includes(index) ? <em className="career-chip">Matched</em> : null}
+                {isMatched ? <em className="career-chip">Matched</em> : null}
                 {position.is_current ? <em className="career-chip current">Current</em> : null}
               </span>
               <span className="career-org">

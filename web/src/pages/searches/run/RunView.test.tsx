@@ -6,6 +6,7 @@ import type * as AgentStore from "@/lib/agent/store"
 import { EMPTY_AGENT, type AgentState } from "@/lib/agent/store"
 import type { FeedbackOutcome } from "@/lib/searches/feedback"
 import {
+  JORDAN,
   ORIGINAL_STEP_RUN,
   QUICK_RUN,
   RANKED_NAMES,
@@ -14,7 +15,7 @@ import {
   STEPPED_RUN,
 } from "@/testing/searches-fixture"
 import type { Entry } from "@/types/agent"
-import type { FeedbackRecord, SearchRunPayload, Tagged } from "@/types/searches"
+import type { FeedbackRecord, PersonProfile, SearchRunPayload, Tagged } from "@/types/searches"
 
 import type { Feedback } from "../hooks/useFeedback"
 import { searchRunKey, useSearchRun } from "../hooks/useSearchRun"
@@ -83,17 +84,28 @@ beforeEach(() => {
   )
 })
 afterEach(() => {
+  personAnswer = () => new Promise<Response>(() => undefined)
+  personCalls = []
   cleanup()
   vi.unstubAllGlobals()
   sessionStorage.clear()
 })
+
+// A person's profile request answers what the test gives it; by default it never answers, so the
+// drawer shows the row.
+let personAnswer: (url: string) => Promise<Response> = () => new Promise<Response>(() => undefined)
+let personCalls: string[] = []
 
 /** GET /searches/tags answers `initial`; each POST /searches/tags is recorded and accepted. */
 function tagServer(initial: Tagged | null) {
   const saves: unknown[] = []
   vi.stubGlobal(
     "fetch",
-    vi.fn((_url: string, init?: RequestInit) => {
+    vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes("/api/search/person")) {
+        personCalls.push(url)
+        return personAnswer(url)
+      }
       if (init?.body instanceof URLSearchParams) {
         const tagged: unknown = JSON.parse(init.body.get("tagged") ?? "null")
         saves.push(tagged)
@@ -461,6 +473,88 @@ describe("RunView", () => {
     fireEvent.click(main("p-casey"))
     expect(drawerOpen()).toBe("false")
     expect(screen.queryByRole("toolbar", { name: "Review" })).toBeNull()
+  })
+
+  it("fetches a person's full profile once when the drawer first opens them", async () => {
+    const [current, past] = JORDAN.positions
+    if (!current || !past) throw new Error("fixture has two positions")
+    const profile: PersonProfile = {
+      headline: "Builds payment systems",
+      summary: "Ten years of payments infrastructure.",
+      positions: [
+        { ...current, logo_url: "" },
+        { ...past, title: "Intern", company: "Contoso", position_index: 1 },
+        { ...past, title: "Founder", company: "Example Startup", position_index: 2 },
+      ],
+      education: [
+        { school: "Sample College", degree: "MS", field_of_study: "", start_year: 0, end_year: 2016 },
+      ],
+    }
+    personAnswer = () => Promise.resolve(new Response(JSON.stringify({ profile })))
+    renderEveryPond()
+    // The list paints from the rows alone.
+    expect(rowNames().length).toBeGreaterThan(0)
+    expect(personCalls).toEqual([])
+    fireEvent.click(main("p-jordan"))
+    const panel = within(drawer() ?? document.body)
+    expect(panel.getByText("Example University")).toBeTruthy()
+    await waitFor(() => expect(panel.getByText("Ten years of payments infrastructure.")).toBeTruthy())
+    expect(personCalls).toEqual([`/searches/api/search/person?run_id=${RUN_ID}&person_id=p-jordan`])
+    expect(panel.getByText("Builds payment systems")).toBeTruthy()
+    expect(panel.getByText("Sample College")).toBeTruthy()
+    expect(panel.queryByText("Example University")).toBeNull()
+    const roles = [...(drawer()?.querySelectorAll<HTMLElement>("[data-positions] li") ?? [])]
+    expect(roles.map((role) => role.querySelector("b")?.textContent)).toEqual([
+      "Staff Engineer",
+      "Intern",
+      "Founder",
+    ])
+    expect(roles.map((role) => role.dataset.matched)).toEqual(["true", "false", "false"])
+    // The row's logo stays on its role.
+    expect(roles[0]?.querySelector("img")?.getAttribute("src")).toBe(current.logo_url)
+
+    fireEvent.click(main("p-jordan"))
+    expect(drawerOpen()).toBe("false")
+    fireEvent.click(main("p-jordan"))
+    expect(within(drawer() ?? document.body).getByText("Ten years of payments infrastructure.")).toBeTruthy()
+    expect(personCalls).toHaveLength(1)
+  })
+
+  it("shows the person a fast switch landed on, whichever answer comes last", async () => {
+    const answers = new Map<string, (summary: string) => void>()
+    personAnswer = (url) =>
+      new Promise<Response>((resolve) => {
+        const person = new URL(url, "http://localhost").searchParams.get("person_id") ?? ""
+        answers.set(person, (summary) =>
+          resolve(
+            new Response(
+              JSON.stringify({ profile: { headline: "", summary, positions: [], education: [] } }),
+            ),
+          ),
+        )
+      })
+    renderEveryPond()
+    fireEvent.click(main("p-jordan"))
+    fireEvent.click(main("p-casey"))
+    expect(drawerName()).toBe("Casey Delta")
+    const panel = within(drawer() ?? document.body)
+    answers.get("p-casey")?.("Casey's profile.")
+    await waitFor(() => expect(panel.getByText("Casey's profile.")).toBeTruthy())
+    answers.get("p-jordan")?.("Jordan's profile.")
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)))
+    expect(panel.getByText("Casey's profile.")).toBeTruthy()
+    expect(panel.queryByText("Jordan's profile.")).toBeNull()
+  })
+
+  it("says why the profile didn't load and keeps the row's fields", async () => {
+    personAnswer = () =>
+      Promise.resolve(new Response(JSON.stringify({ error: "Couldn't reach Powerset" }), { status: 502 }))
+    renderEveryPond()
+    fireEvent.click(main("p-jordan"))
+    const panel = within(drawer() ?? document.body)
+    await waitFor(() => expect(panel.getByRole("alert").textContent).toBe("Couldn't reach Powerset"))
+    expect(panel.getByText("Example University")).toBeTruthy()
+    expect(panel.getAllByText("Staff Engineer").length).toBeGreaterThan(0)
   })
 
   it("follows j/k with the drawer open and closes on Escape", () => {

@@ -258,6 +258,19 @@ export interface BadResultsPayload {
   candidates: PondCandidate[]
 }
 
+/** One person's full profile, fetched when the drawer opens: a set run's rows carry only their
+ *  current and matched roles. */
+export interface PersonProfile {
+  headline: string
+  summary: string
+  positions: Position[]
+  education: Education[]
+}
+
+export interface PersonPayload {
+  profile: PersonProfile
+}
+
 export interface CatalogPayload {
   searches: SearchCard[]
 }
