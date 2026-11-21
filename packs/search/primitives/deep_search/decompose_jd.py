@@ -104,8 +104,7 @@ def query_request(
         "messages": build_messages(jd, system_prompt, precedent_cards=precedent_cards),
         "response_format": {"type": "json_object"},
     }
-    normalized_model = str(model or "").lower().split("/")[-1]
-    if reasoning_effort and normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+    if reasoning_effort and models.takes_reasoning_effort(model):
         request["reasoning_effort"] = reasoning_effort
     if service_tier:
         request["service_tier"] = service_tier

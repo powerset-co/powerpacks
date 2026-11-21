@@ -396,8 +396,7 @@ async def _extract(
             "response_format": {"type": "json_object"},
             "timeout": 30,
         }
-        normalized_model = str(model or "").lower().split("/")[-1]
-        if normalized_model.startswith(("gpt-5", "o1", "o3", "o4")):
+        if models.takes_reasoning_effort(model):
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
         else:

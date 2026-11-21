@@ -509,9 +509,9 @@ async def call_chat_completion(
         ],
         "response_format": {"type": "json_object"},
     }
-    if supports_custom_temperature(model):
+    if not models.takes_reasoning_effort(model):
         kwargs["temperature"] = 0
-    if reasoning_effort and supports_reasoning_effort(model):
+    if reasoning_effort and models.takes_reasoning_effort(model):
         kwargs["reasoning_effort"] = reasoning_effort
     response = await client.chat.completions.create(**kwargs)
     return {
@@ -644,16 +644,6 @@ def parse_verdict(
             fallback_confidence=confidence,
         )
     return score, verdict, reason, confidence, trait_scores
-
-
-def supports_reasoning_effort(model: str) -> bool:
-    normalized = str(model or "").lower().split("/")[-1]
-    return normalized.startswith(("gpt-5", "o1", "o3", "o4"))
-
-
-def supports_custom_temperature(model: str) -> bool:
-    normalized = str(model or "").lower().split("/")[-1]
-    return not normalized.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 # ---------------------------------------------------------------------------
@@ -1375,7 +1365,7 @@ def main() -> int:
             artifacts["raw_rerank_results_jsonl"] = str(raw_jsonl_path)
         output = {
             "model": args.model,
-            "reasoning_effort": args.reasoning_effort if supports_reasoning_effort(args.model) else None,
+            "reasoning_effort": args.reasoning_effort if models.takes_reasoning_effort(args.model) else None,
             "retrieval_query": retrieval_query,
             "evaluation_query": evaluation_query,
             "evaluation_traits": args.traits,
