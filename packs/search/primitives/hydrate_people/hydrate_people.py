@@ -649,7 +649,7 @@ def fetch_api_person_rows(person_ids: list[str], env_file: Path | None, *, cache
             contexts[person_id] = context
             if cache_dir is not None:
                 write_json(cache_dir / f"{person_id}.json", context)
-    return [{"id": pid, "hydrated_context": contexts[pid], "inferred_birth_year": contexts[pid].get("inferred_birth_year")}
+    return [{**contexts[pid], "id": pid, "hydrated_context": contexts[pid]}
             for pid in person_ids if pid in contexts]
 
 
@@ -871,7 +871,8 @@ def cmd_hydrate(args: argparse.Namespace) -> None:
         if set_id and missing:
             try:
                 fetched = powerset_api.person_attribution(env_file, set_id, missing)
-                source_attribution.update({pid: fetched.get(pid, {}) for pid in missing})
+                source_attribution.update({pid: fetched.get(pid, {"person_id": pid, "sources": [], "operators": [],
+                                                                 "total_interactions": 0}) for pid in missing})
             except (Exception, SystemExit) as error:
                 if not results_path:  # JD judging needs interaction totals.
                     raise

@@ -379,9 +379,9 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                 raise AssertionError("a ranked search's people come from the downloaded file")
             if path.endswith("/person-attribution"):
                 return [{"person_id": pid, "total_interactions": 5, "warmth": "warm",
-                         "operators": [{"operator_id": "op1", "operator_name": "Jordan Bravo"}],
-                         "sources": [{"channel": "gmail", "total_interactions": 2},
-                                     {"channel": "imessage", "total_interactions": 3}]}
+                         "operators": [{"operator_id": "op1", "operator_name": "Jordan Bravo", "channels": ["gmail", "imessage"]}],
+                         "sources": [{"channel": "gmail", "total_interactions": 2, "operator_count": 1},
+                                     {"channel": "imessage", "total_interactions": 3, "operator_count": 1}]}
                         for pid in body["person_ids"]]
             query = dict(pair.split("=") for pair in path.split("?")[1].split("&"))
             if "filter" not in query:
@@ -436,16 +436,58 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             self.assertEqual(hydrate_people.fetch_api_person_rows(ids[:1], None, cache_dir=cache), rows[:1])
             self.assertEqual(len(sent), 3)
 
+    def test_set_refine_keeps_follower_and_connection_counts_from_fetched_profiles(self):
+        from packs.search.primitives.deep_search.results_web.model import record_quick_search
+        from packs.search.primitives.search_network_pipeline.refine import rerank
+
+        row = self._person("p1", .9, "Runs storage", "Storage Engineer")
+        counts = {"linkedin_followers": 1200, "linkedin_connections": 800, "x_twitter_followers": 600}
+        profile = dict(row, **counts, final_score=.1, matched_position_indexes=[])
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory).resolve()
+            run = project / ".powerpacks/search/fixture"
+            run.mkdir(parents=True)
+            jsonl, profiles, state = run / "query_results.jsonl", run / "profiles.jsonl", run / "task.json"
+            results_io.write_jsonl(jsonl, [row])
+            results_io.write_jsonl(profiles, [row])
+            results_io.write_json(state, {"steps": [
+                {"id": "execute_role_search", "output": {"set_id": "s1"}},
+                {"id": "hydrate_people", "output": {"profiles_path": str(profiles)}}]})
+            results_io.write_json(run / "pipeline.ledger.json", {"state": str(state)})
+            record_quick_search(project / ".powerpacks/deep-search", "fixture", query="engineers", filters={}, traits=[],
+                                created_at="2026-11-21", jsonl=str(jsonl), profiles_path=str(profiles), status="completed")
+            with mock.patch.object(hydrate_people.powerset_api, "call", return_value={"profiles": {"p1": profile}}) as fetch:
+                for _ in range(2):
+                    output = rerank(run, criteria="counts", use=None, model="unused", env={}, sql=
+                                    "SELECT person_id FROM candidates WHERE linkedin_followers >= 1200 "
+                                    "AND linkedin_connections >= 800 AND x_twitter_followers >= 600")
+                    self.assertEqual(output["step"]["shown"], 1)
+                    saved = run / f"query_results.{output['step']['id']}.jsonl"
+                    self.assertEqual(results_io.read_jsonl(saved), [row])
+                    fetched = hydrate_people.fetch_api_person_rows(["p1"], None, cache_dir=run / "people")
+                    normalized = hydrate_people.normalize_hydrated_context(fetched[0])
+                    self.assertEqual({key: normalized[key] for key in counts}, counts)
+                fetch.assert_called_once_with(None, "/v2/hydrate", {"person_ids": ["p1"]})
+
     def test_a_ranked_search_reads_only_the_downloaded_files_good_first_then_bad(self) -> None:
         """With --rerank the API filters, ranks and saves to a conversation. The best 500 good results
         are downloaded first and are the run's people at once; --rerank-rest replaces them with all
         of them, and the bad ones are another process's download. Good and bad become the same
         artifacts through the same functions, so the page reads one shape."""
-        from packs.search.primitives.deep_search.results_web.model import _pond_candidates
+        from packs.search.primitives.deep_search.results_web.model import _pond_candidates, load_search, record_quick_search
+        from packs.search.primitives.deep_search.results_web.rendering import render_search_body
 
         good = [self._person(f"g{i}", round(0.9 - i / 1000, 3), "Runs storage", "Storage Engineer") for i in range(501)]
         bad = [self._person("b1", 0.1, "Sells storage", "Account Executive")]
         sent = []
+        api = self._api(good, bad, sent)
+
+        def omit_one_attribution(env_file, path, body=None, **kwargs):
+            response = api(env_file, path, body, **kwargs)
+            if path.endswith("/person-attribution"):
+                return [row for row in response if row["person_id"] != "g0"]
+            return response
+
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory) / "state.json"
             state.write_text(json.dumps({"task_id": "t", "query": "storage engineers", "steps": [
@@ -453,7 +495,7 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             args = dict(state=str(state), env_file=None, set_id="s1", limit=0, timeout=60, write_state=True, rerank=True)
             hydrate = SimpleNamespace(state=str(state), env_file=None, limit=0, dry_run=False, local_db=None, local_workers=None,
                                       local_batch_size=None, no_compress_profiles=False, dump_profiles=False, write_state=True)
-            with mock.patch("packs.shared.powerset_api.call", side_effect=self._api(good, bad, sent)), \
+            with mock.patch("packs.shared.powerset_api.call", side_effect=omit_one_attribution), \
                     mock.patch.object(cloud_search.time, "sleep"), \
                     mock.patch.object(cloud_search.subprocess, "Popen") as background:
                 background.return_value.pid = 4242
@@ -473,7 +515,8 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                         csv_rows = list(results_io.CsvIO.dict_reader(handle))
                     self.assertEqual([row["person_id"] for row in csv_rows], [row["person_id"] for row in exported])
                     self.assertTrue(all(row["source_operator"] == "Jordan Bravo" and row["source_channel"] == "imessage; gmail"
-                                        for row in csv_rows))
+                                        for row in csv_rows[1:]))
+                    self.assertEqual((csv_rows[0]["source_operator"], csv_rows[0]["source_channel"]), ("", ""))
                 profiles = json.loads(state.read_text())["steps"][-1]["output"]["profiles_path"]
                 jsonl = Path(directory) / "good.jsonl"
                 results_io.write_jsonl(jsonl, rows)
@@ -486,13 +529,21 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             shown_good = _pond_candidates(root, {"arm": {"artifacts": {"jsonl": str(jsonl), "profiles_path": profiles}}})
             shown_bad = _pond_candidates(root, {"arm": {"artifacts": out["bad_results"]}})
             self.assertEqual(cloud_search.read_results(Path(out["results_path"])), good)
+            attribution = json.loads(state.read_text())["steps"][-1]["output"]["person_attribution"]
+            record_quick_search(root, "fixture", query="storage engineers", filters={}, traits=[], created_at="2026-11-21",
+                                jsonl=str(jsonl), profiles_path=profiles, status="completed", person_attribution=attribution)
+            search = load_search(root, "fixture")
+            self.assertEqual(attribution["g0"], {"person_id": "g0", "sources": [], "operators": [], "total_interactions": 0})
+            self.assertEqual(search.candidate("g0").network_attribution.sources, ())
+            self.assertEqual(search.candidate("g0").network_attribution.operators, ())
+            self.assertIn("Person g0", render_search_body(search))
         results = "/v2/conversations/c1/results?"
         attributed = [body["person_ids"] for path, body in sent if "attribution" in path]
         self.assertEqual([len(ids) for ids in attributed], [500, 1])
         self.assertEqual([pid for ids in attributed for pid in ids], [row["person_id"] for row in good])
         for exported in (first_rows, rows):
             self.assertTrue(all(row["source_operator"] == "Jordan Bravo" and row["source_channel"] == "imessage; gmail"
-                                for row in exported))
+                                for row in exported[1:]))
         self.assertEqual([path for path, _ in sent if "attribution" not in path], [
             "/v2/conversations", "/v2/search/execute",
             results + "filter=good&limit=500&offset=0",
