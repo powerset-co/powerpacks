@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.68.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.1...powerpacks-v3.68.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* **search:** a query that names only a field ("people with semiconductor experience") gets a role ([#1256](https://github.com/powerset-co/powerpacks/issues/1256)) ([81b5cfb](https://github.com/powerset-co/powerpacks/commit/81b5cfb78ea85bd788b8b9920cb0630c9f8823ab))
+
 ## [3.68.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.0...powerpacks-v3.68.1) (2026-11-20)
 
 
