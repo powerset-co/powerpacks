@@ -280,8 +280,8 @@ def _person_details(pond_candidate: PondCandidate) -> str:
     matched = pond_candidate.matched_positions
     matched_note = (f"<span class='matched-note'>matched: [{', '.join(str(i) for i in matched)}]</span>"
                     if matched else "")
-    experience = "".join(_position_item(position, index, matched=index in matched)
-                         for index, position in enumerate(pond_candidate.positions))
+    experience = "".join(_position_item(position, position.position_index, matched=position.position_index in matched)
+                         for position in pond_candidate.positions)
     experience = (f"<div class='details-section'><p class='details-label'>Work Experience"
                   f"{matched_note}</p><div class='details-list'>{experience}</div></div>"
                   if experience else "")

@@ -49,6 +49,7 @@ export interface TraitScore {
 }
 
 export interface Position {
+  position_index: number
   title: string
   company: string
   company_url: string

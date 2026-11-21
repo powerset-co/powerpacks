@@ -105,7 +105,7 @@ class PersonLookupTests(unittest.TestCase):
             api.assert_called_once()
             self.assertEqual(api.call_args.args[1], "/v2/set-contacts/s1?search=Jordan%20Bravo&page_size=200")
             # The results-page registration must not fetch attribution from another endpoint.
-            pipeline.quick_run_attribution({}, Path(output["state"]), output["artifacts"]["jsonl"], None)
+            pipeline.quick_run_attribution({}, Path(output["state"]), output["artifacts"]["jsonl"])
             api.assert_called_once()
 
     def test_local_cli_runs_prepared_payload_without_a_powerset_account(self):

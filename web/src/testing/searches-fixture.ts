@@ -103,6 +103,7 @@ function row(
         headcount: 120,
         stage: "Series B",
         funding: 40_000_000,
+        position_index: 0,
         logo_url: "https://example.com/example-labs.png",
       },
       {
@@ -116,6 +117,7 @@ function row(
         headcount: 0,
         stage: "",
         funding: 0,
+        position_index: 1,
         logo_url: "",
       },
     ],

@@ -32,6 +32,49 @@ from packs.search.primitives.deep_search.results_web.server import make_handler
 
 
 class ResultsWebTest(unittest.TestCase):
+    def test_set_rows_keep_original_position_indexes_without_summary_or_education(self):
+        from packs.search.primitives.deep_search.results_web.model import load_bad
+        from packs.search.primitives.persist_search_results.results_io import compact_positions
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / ".powerpacks/deep-search"
+            artifacts = self._pond_artifacts(base, "light", score=.8, title="Staff Engineer", company="Example Labs", query="engineers")["arm"]["artifacts"]
+            profiles_path = base / artifacts["profiles_path"]
+            with gzip.open(profiles_path, "rt") as handle:
+                profiles = [json.loads(line) for line in handle]
+            for profile in profiles:
+                profile["positions"] = [
+                    {"position_index": 0, "position_title": "Engineer", "company_name": "Example Labs", "is_current": False,
+                     "start_date": "2024-01-01", "end_date": "2025-01-01"},
+                    {"position_index": 7, "position_title": "Founder", "company_name": "Example Startup", "is_current": False,
+                     "start_date": "2017-01-01", "end_date": "2020-01-01"}]
+            with gzip.open(profiles_path, "wt") as handle:
+                handle.writelines(json.dumps(profile) + "\n" for profile in profiles)
+            rows_path = base / artifacts["jsonl"]
+            rows = [dict(json.loads(line), matched_position_indexes=[7]) for line in rows_path.read_text().splitlines()]
+            rows_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            record_quick_search(root, "light", query="engineers", filters={}, traits=[], created_at="2026-11-21",
+                                jsonl=artifacts["jsonl"], profiles_path=artifacts["profiles_path"], status="completed",
+                                bad_results=artifacts)
+            ledger = root.parent / "search/light/pipeline.ledger.json"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text("{}")
+            search = load_search(root, "light")
+            candidate = search.ponds[0].candidates[0]
+            self.assertEqual(candidate.summary, "")
+            self.assertEqual(candidate.education, ())
+            self.assertEqual(candidate.matched_positions, (7,))
+            self.assertEqual([position.position_index for position in candidate.positions], [0, 7])
+            self.assertEqual(candidate.positions[1].title, "Founder")
+            self.assertIn("Founder<b class='matched-chip'>Matched</b>", render_search_body(search))
+            self.assertEqual(load_bad(root, "light")[0].education, ())
+            self.assertEqual(compact_positions(profiles[0]), ("Engineer", "Example Labs"))
+            ledger.write_text(json.dumps({"mode": "local_duckdb"}))
+            local = load_search(root, "light").ponds[0].candidates[0]
+            self.assertTrue(local.summary)
+            self.assertTrue(local.education)
+
     def test_work_history_only_uses_original_description(self):
         from packs.search.primitives.deep_search.results_web.model import _positions
         rows = _positions([

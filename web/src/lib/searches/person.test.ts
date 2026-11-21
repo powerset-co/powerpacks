@@ -7,6 +7,7 @@ import { currentRole, roleLine, shownHeadline } from "./person"
 
 function position(fields: Partial<Position>): Position {
   return {
+    position_index: 0,
     title: "",
     company: "",
     company_url: "",

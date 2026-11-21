@@ -378,7 +378,11 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             if path == "/v2/hydrate":
                 raise AssertionError("a ranked search's people come from the downloaded file")
             if path.endswith("/person-attribution"):
-                return []
+                return [{"person_id": pid, "total_interactions": 5, "warmth": "warm",
+                         "operators": [{"operator_id": "op1", "operator_name": "Jordan Bravo"}],
+                         "sources": [{"channel": "gmail", "total_interactions": 2},
+                                     {"channel": "imessage", "total_interactions": 3}]}
+                        for pid in body["person_ids"]]
             query = dict(pair.split("=") for pair in path.split("?")[1].split("&"))
             if "filter" not in query:
                 raise AssertionError("nothing polls the saved count")
@@ -395,6 +399,42 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                 "matched_position_indexes": [0], "vertical_sources": ["role"],
                 "positions": [{"position_title": title, "company_name": "Example Labs", "is_current": True}],
                 "education": [{"school_name": "Example University"}]}
+
+    def test_light_rows_keep_age_role_and_original_match_indexes(self):
+        raw = {"id": "p1", "hydrated_context": {"name": "Jordan Bravo", "inferred_age": 37,
+               "matched_position_indexes": [7], "positions": [
+                   {"position_index": 0, "position_title": "Engineer", "company_name": "Example Labs",
+                    "start_date": "2024-01-01", "end_date": "2025-01-01"},
+                   {"position_index": 7, "position_title": "Founder", "company_name": "Example Startup",
+                    "start_date": "2017-01-01", "end_date": "2020-01-01"}]}}
+        profile = hydrate_people.normalize_hydrated_context(raw)
+        self.assertEqual(profile["inferred_age"], 37)
+        self.assertEqual(profile["matched_position_indexes"], [7])
+        self.assertEqual(hydrate_people.matched_indexes(profile, {"position_title": "Founder"}), [7])
+        self.assertEqual(hydrate_people.llm_profile_view(profile)["positions"], [raw["hydrated_context"]["positions"][1]])
+        self.assertEqual(results_io.compact_positions(profile), ("Engineer", "Example Labs"))
+
+    def test_full_profile_cache_batches_and_resumes_from_saved_people(self):
+        ids = [f"p{index}" for index in range(501)]
+        sent = []
+
+        def api(env_file, path, body):
+            sent.append(body["person_ids"])
+            if len(sent) == 2:
+                raise RuntimeError("interrupted")
+            return {"profiles": {pid: {"name": "Jordan Bravo", "positions": [{"position_title": "Engineer"}],
+                                       "education": [{"school_name": "Example College"}]} for pid in body["person_ids"]}}
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(hydrate_people.powerset_api, "call", side_effect=api):
+            cache = Path(directory) / "people"
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                hydrate_people.fetch_api_person_rows(ids, None, cache_dir=cache)
+            self.assertEqual(len(list(cache.glob("*.json"))), 500)
+            rows = hydrate_people.fetch_api_person_rows(ids, None, cache_dir=cache)
+            self.assertEqual([row["id"] for row in rows], ids)
+            self.assertEqual(sent, [ids[:500], ids[500:], ids[500:]])
+            self.assertEqual(hydrate_people.fetch_api_person_rows(ids[:1], None, cache_dir=cache), rows[:1])
+            self.assertEqual(len(sent), 3)
 
     def test_a_ranked_search_reads_only_the_downloaded_files_good_first_then_bad(self) -> None:
         """With --rerank the API filters, ranks and saves to a conversation. The best 500 good results
@@ -420,10 +460,20 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
                 first = cloud_search.run(SimpleNamespace(**args, rerank_rest=False))
                 hydrate_people.cmd_hydrate(hydrate)
                 first_rows = results_io.result_rows(json.loads(state.read_text()))
+                results_io.write_csv(Path(directory) / "partial.csv", first_rows)
+                first_attribution = json.loads(state.read_text())["steps"][-1]["output"]["person_attribution"]
+                self.assertEqual(len(first_attribution), 500)
                 self.assertEqual(background.call_count, 0)
                 out = cloud_search.run(SimpleNamespace(**args, rerank_rest=True))
                 hydrate_people.cmd_hydrate(hydrate)
                 rows = results_io.result_rows(json.loads(state.read_text()))
+                results_io.write_csv(Path(directory) / "final.csv", rows)
+                for name, exported in (("partial.csv", first_rows), ("final.csv", rows)):
+                    with (Path(directory) / name).open() as handle:
+                        csv_rows = list(results_io.CsvIO.dict_reader(handle))
+                    self.assertEqual([row["person_id"] for row in csv_rows], [row["person_id"] for row in exported])
+                    self.assertTrue(all(row["source_operator"] == "Jordan Bravo" and row["source_channel"] == "imessage; gmail"
+                                        for row in csv_rows))
                 profiles = json.loads(state.read_text())["steps"][-1]["output"]["profiles_path"]
                 jsonl = Path(directory) / "good.jsonl"
                 results_io.write_jsonl(jsonl, rows)
@@ -437,6 +487,12 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
             shown_bad = _pond_candidates(root, {"arm": {"artifacts": out["bad_results"]}})
             self.assertEqual(cloud_search.read_results(Path(out["results_path"])), good)
         results = "/v2/conversations/c1/results?"
+        attributed = [body["person_ids"] for path, body in sent if "attribution" in path]
+        self.assertEqual([len(ids) for ids in attributed], [500, 1])
+        self.assertEqual([pid for ids in attributed for pid in ids], [row["person_id"] for row in good])
+        for exported in (first_rows, rows):
+            self.assertTrue(all(row["source_operator"] == "Jordan Bravo" and row["source_channel"] == "imessage; gmail"
+                                for row in exported))
         self.assertEqual([path for path, _ in sent if "attribution" not in path], [
             "/v2/conversations", "/v2/search/execute",
             results + "filter=good&limit=500&offset=0",
@@ -604,8 +660,9 @@ from packs.search.primitives.search_network_pipeline import search_network_pipel
         self.assertEqual([path for path, _ in sent], ["/v2/search/execute", "/v2/hydrate", "/v2/sets/s1/person-attribution"])
         self.assertEqual(steps["execute_role_search"]["candidate_ids"], ["p1"])
         self.assertEqual(steps["hydrate_people"]["source"]["backend"], "powerset_api")
-        self.assertEqual((profile["name"], profile["total_interactions"], profile["source_channels"]),
-                         ("Avery Stone", 3, ["gmail"]))
+        self.assertEqual((profile["name"], profile["total_interactions"]), ("Avery Stone", 3))
+        self.assertEqual(steps["hydrate_people"]["person_attribution"]["p1"],
+                         responses["/v2/sets/s1/person-attribution"][0])
 
 
 class PlaceReviewTests(unittest.TestCase):

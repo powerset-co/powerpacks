@@ -1472,6 +1472,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             state.write_text(json.dumps({"query": "founders", "steps": [
                 {"id": "expand_search_request", "output": {"role_search_filters": {}}},
                 {"id": "execute_role_search", "output": {"set_id": "s1"}},
+                {"id": "hydrate_people", "output": {"person_attribution": known}},
             ]}))
             for slug, mode, expected in (("founders", None, known), ("founders-local", "local_duckdb", known)):
                 run = root / ".powerpacks/search" / slug
@@ -1492,10 +1493,10 @@ class PreviewFilterKeysTests(unittest.TestCase):
                         fetch.assert_not_called()
                         local_fetch.assert_called_once_with(Path("local.duckdb"), ["p1"])
                     else:
-                        fetch.assert_called_once_with(Path(".env"), "s1", ["p1"])
+                        fetch.assert_not_called()
                         local_fetch.assert_not_called()
 
-    def test_a_failed_attribution_lookup_is_recorded_in_the_run(self):
+    def test_a_failed_hydration_attribution_lookup_is_recorded_in_the_run(self):
         """The chat drops the pipeline's stderr, so a failed attribution lookup must land in results.json."""
         module = load_pipeline_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -1511,6 +1512,7 @@ class PreviewFilterKeysTests(unittest.TestCase):
             state.write_text(json.dumps({"query": "founders", "steps": [
                 {"id": "expand_search_request", "output": {"role_search_filters": {}}},
                 {"id": "execute_role_search", "output": {"set_id": "s1"}},
+                {"id": "hydrate_people", "output": {"person_attribution_error": "RuntimeError: unavailable"}},
             ]}))
             run = root / ".powerpacks/search/founders"
             run.mkdir(parents=True)
@@ -1519,12 +1521,13 @@ class PreviewFilterKeysTests(unittest.TestCase):
                 "created_at": "2026-10-16T00:00:00Z", "steps": {},
                 "artifacts": {"jsonl": ".powerpacks/runs/artifacts/founders/rows.jsonl",
                               "profiles_path": ".powerpacks/runs/artifacts/founders/profiles.jsonl"}}))
-            with mock.patch.object(module.powerset_api, "person_attribution", side_effect=RuntimeError("pooler down")):
+            with mock.patch.object(module.powerset_api, "person_attribution") as fetch:
                 module.record_quick_run({"ledger": str(ledger), "state": ".powerpacks/runs/founders.json",
                                          "status": "completed", "env_file": ".env"})
+                fetch.assert_not_called()
             saved = json.loads((root / ".powerpacks/deep-search/founders/results.json").read_text())
             self.assertNotIn("person_attribution", saved)
-            self.assertEqual(saved["person_attribution_error"], "RuntimeError: pooler down")
+            self.assertEqual(saved["person_attribution_error"], "RuntimeError: unavailable")
 
     def test_powerset_preview_carries_the_same_keys(self):
         module = load_pipeline_module()
