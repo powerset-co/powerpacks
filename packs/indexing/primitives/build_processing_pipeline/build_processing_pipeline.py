@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.indexing.lib.artifact_io import artifact_id_set, iter_artifact_rows, write_parquet_rows  # noqa: E402
 from packs.indexing.lib.artifacts import (  # noqa: E402
     build_company_corpus,
@@ -110,7 +111,7 @@ EMBEDDING_MODEL_PRICES_PER_1K_USD = {
 DEFAULT_ROLE_OUTPUT_TOKENS = 250
 DEFAULT_COMPANY_OUTPUT_TOKENS = 350
 DEFAULT_EMBEDDING_API_BATCH_SIZE = 128
-DEFAULT_CHAT_MODEL = "gpt-5.1"
+DEFAULT_CHAT_MODEL = models.INDEX_COMPANY
 
 
 def run_dir(output_dir: Path) -> Path:
@@ -1387,7 +1388,7 @@ def _run_embedding_stage(
             allow_paid=allow_paid,
             api_key=ledger.get("embedding_openai_api_key"),
             base_url=ledger.get("embedding_openai_base_url"),
-            model=ledger.get("embedding_openai_model") or "text-embedding-3-small",
+            model=ledger.get("embedding_openai_model") or models.EMBEDDING,
             concurrency=embedding_concurrency(ledger),
             dimension=1536,
             api_batch_size=128,
@@ -1915,7 +1916,7 @@ def step_detect_ceo_founders(ledger: dict[str, Any], ps: dict[str, Path]) -> tup
     result = detect_ceo_founders.run(Namespace(
         flattened=str(ps["flattened"]),
         output=str(ps["founder_enrichment"]),
-        model=ledger.get("role_openai_model") or "gpt-5.1",
+        model=ledger.get("role_openai_model") or models.INDEX_ROLE,
         confidence_threshold=0.7,
         concurrency=openai_concurrency(ledger),
         limit=None,
@@ -1936,7 +1937,7 @@ def step_infer_ages(ledger: dict[str, Any], ps: dict[str, Path]) -> tuple[dict[s
     result = infer_ages.run(Namespace(
         flattened=str(ps["flattened"]),
         output=str(ps["inferred_ages"]),
-        model=ledger.get("role_openai_model") or "gpt-5.1",
+        model=ledger.get("role_openai_model") or models.INDEX_ROLE,
         concurrency=openai_concurrency(ledger),
         limit=None,
         dry_run=False,

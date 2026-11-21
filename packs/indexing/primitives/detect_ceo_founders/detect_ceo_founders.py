@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
 from openai import AsyncOpenAI  # noqa: E402
+from packs.shared import models  # noqa: E402
 from packs.indexing.lib.io import read_jsonl, write_json  # noqa: E402
 from packs.shared.endpoints import openai_base_url  # noqa: E402
 
@@ -35,7 +36,7 @@ CEO_CTO_RE = re.compile(
 )
 FOUNDER_RE = re.compile(r"\bfounder\b|\bfounding\b|\bco.?found", re.IGNORECASE)
 
-DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MODEL = models.INDEX_CEO_FOUNDERS
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 DEFAULT_CONCURRENCY = 30
 CHECKPOINT_EVERY = 200

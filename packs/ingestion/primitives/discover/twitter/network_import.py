@@ -92,6 +92,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from packs.shared import models  # noqa: E402
 from packs.ingestion.primitives.common.gates import (  # noqa: E402
     exit_code_for_status,
     needs_approval_payload,
@@ -685,7 +686,7 @@ class TwitterInput:
     verdicts: str = "enrich,maybe"
     max_pages: int = 1
     skip_moe: bool = False
-    moe_model: str = "gpt-4o-mini"
+    moe_model: str = models.TWITTER_EXPERTS
     moe_experts: str = "all"
     moe_workers: int = 6
     linkedin_workers: int = 10
@@ -819,7 +820,7 @@ def step_moe_evaluate(cfg: TwitterInput, out_dir: Path) -> dict[str, Any]:
         raise PipelineFailed(f"Unknown MOE experts: {', '.join(unknown)}")
     contexts = [candidate_context(i, row) for i, row in enumerate(rows)]
     batches = split_batches(contexts, MOE_BATCH_SIZE)
-    model = str(cfg.moe_model or "gpt-4o-mini")
+    model = str(cfg.moe_model or models.TWITTER_EXPERTS)
     max_workers = max(1, min(int(cfg.moe_workers or 6), len(expert_names) * max(1, len(batches))))
     by_handle: dict[str, dict[str, dict[str, Any]]] = {row.get("handle", ""): {} for row in rows}
     raw_usage: list[dict[str, Any]] = []
@@ -1363,7 +1364,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-pages", type=int, default=1, help="Maximum RapidAPI follower pages to crawl")
     run.add_argument("--min-score", type=int, default=20, help="Minimum heuristic score for enrichment candidates")
     run.add_argument("--verdicts", default="enrich,maybe", help="MOE verdicts to carry into LinkedIn resolution")
-    run.add_argument("--moe-model", default="gpt-4o-mini", help="OpenAI model for MOE expert evaluation")
+    run.add_argument("--moe-model", default=models.TWITTER_EXPERTS, help="OpenAI model for MOE expert evaluation")
     run.add_argument("--moe-experts", default="all", help="Comma-separated experts or all")
     run.add_argument("--moe-workers", type=int, default=6, help="Parallel MOE expert request workers")
     run.add_argument("--linkedin-workers", type=int, default=10, help="Parallel Powerset-gateway LinkedIn validation workers")
