@@ -96,6 +96,12 @@ class ParseLastJsonTests(unittest.TestCase):
 
 
 class DiscoverContactsPipelineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # A sync registers the archive's tools in the person's own agents; never from a test.
+        patcher = mock.patch.object(discover_gmail_sync, "register_msgvault_mcp", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_child_commands_do_not_inherit_interactive_stdin(self) -> None:
         proc = mock.Mock()
         proc.stdout = io.StringIO('{"status": "ok"}\n')

@@ -54,6 +54,7 @@ from packs.ingestion.primitives.common.paths import DEFAULT_MSGVAULT_DB  # noqa:
 from packs.ingestion.primitives.common.proc import emit_progress, run_cmd  # noqa: E402
 from packs.ingestion.primitives.setup.automations.gmail_token import count_messages  # noqa: E402
 from packs.ingestion.primitives.setup.automations.msgvault_home import grant_gmail_drafts, pace_gmail_sync  # noqa: E402
+from packs.ingestion.primitives.setup.automations.msgvault_mcp import register_msgvault_mcp  # noqa: E402
 
 
 MSGVAULT_REAUTH_ERROR_MARKERS = (
@@ -325,6 +326,8 @@ def sync_msgvault_account(
     pace_gmail_sync(db_home)
     # Every Gmail mailbox may hold reply drafts the chat writes (the chat asks before each one).
     grant_gmail_drafts(db_home)
+    # The person's own Codex and Claude Code get the archive's tools too.
+    register_msgvault_mcp(db_home)
     if watcher:
         watcher.start()
     try:

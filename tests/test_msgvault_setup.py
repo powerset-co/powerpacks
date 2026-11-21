@@ -20,6 +20,7 @@ from packs.ingestion.primitives.setup.automations import (  # noqa: E402
     accounts,
     gcloud_project,
     msgvault_home,
+    msgvault_mcp,
     oauth_browser,
     shell,
 )
@@ -108,6 +109,74 @@ class MsgvaultSetupTests(unittest.TestCase):
                 config.read_text(encoding="utf-8"),
                 '[oauth]\nclient_secrets = "x.json"\n\n[sync]\nrate_limit_qps = 0\n',
             )
+
+    def test_the_persons_codex_gets_the_archive_server_once_and_a_working_entry_is_kept(self):
+        import tomllib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            command = [sys.executable, "--home", "/archive", "mcp"]
+            config = Path(tmp) / ".codex" / "config.toml"
+            self.assertFalse(msgvault_mcp.register_codex(command, config))  # no Codex on this machine
+            self.assertFalse(config.parent.exists())
+            config.parent.mkdir()
+            config.write_text(
+                'model = "m"\n\n[mcp_servers.msgvault]\ncommand = "/gone/msgvault"\nargs = ["mcp"]\n\n'
+                '[mcp_servers.msgvault.env]\nA = "1"\n\n[mcp_servers.other]\nurl = "https://example.com"\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(msgvault_mcp.register_codex(command, config))  # the old command is gone
+            written = config.read_text(encoding="utf-8")
+            self.assertEqual(
+                tomllib.loads(written),
+                {
+                    "model": "m",
+                    "mcp_servers": {
+                        "other": {"url": "https://example.com"},
+                        "msgvault": {"command": sys.executable, "args": ["--home", "/archive", "mcp"]},
+                    },
+                },
+            )
+            self.assertFalse(msgvault_mcp.register_codex(["/another/msgvault", "mcp"], config))
+            self.assertEqual(config.read_text(encoding="utf-8"), written)
+
+    def test_the_persons_claude_code_gets_the_archive_server_unless_it_has_a_working_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            command = [sys.executable, "--home", "/archive", "mcp"]
+            settings = Path(tmp) / ".claude.json"
+            ran: list[list[str]] = []
+
+            def fake_run(cmd, **_kwargs):
+                ran.append(cmd)
+                return shell.CommandResult(ok=True, returncode=0)
+
+            with mock.patch.object(msgvault_mcp, "run_command", side_effect=fake_run):
+                with mock.patch.object(msgvault_mcp.shutil, "which", return_value=None):
+                    self.assertFalse(msgvault_mcp.register_claude(command, settings))  # no Claude Code
+                with mock.patch.object(msgvault_mcp.shutil, "which", side_effect=lambda name: None if name.startswith("/gone") else name):
+                    self.assertTrue(msgvault_mcp.register_claude(command, settings))
+                    add = ["claude", "mcp", "add", "--scope", "user", "msgvault", "--", *command]
+                    self.assertEqual(ran, [add])
+                    settings.write_text(json.dumps({"mcpServers": {"msgvault": {"command": "/gone/msgvault"}}}))
+                    self.assertTrue(msgvault_mcp.register_claude(command, settings))
+                    self.assertEqual(ran[1:], [["claude", "mcp", "remove", "--scope", "user", "msgvault"], add])
+                    settings.write_text(json.dumps({"mcpServers": {"msgvault": {"command": sys.executable}}}))
+                    self.assertFalse(msgvault_mcp.register_claude(command, settings))
+                    self.assertEqual(len(ran), 3)
+
+    def test_no_agent_is_touched_before_there_is_an_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(msgvault_mcp, "register_codex") as codex, \
+                 mock.patch.object(msgvault_mcp, "register_claude") as claude, \
+                 mock.patch.object(msgvault_mcp.shutil, "which", return_value="/app/msgvault"):
+                self.assertEqual(msgvault_mcp.register_msgvault_mcp(Path(tmp)), [])
+                codex.assert_not_called()
+                claude.assert_not_called()
+                (Path(tmp) / "msgvault.db").touch()
+                codex.return_value, claude.return_value = True, False
+                self.assertEqual(msgvault_mcp.register_msgvault_mcp(Path(tmp)), ["codex"])
+                codex.assert_called_once_with(
+                    ["/app/msgvault", "--home", tmp, "mcp"], Path.home() / ".codex" / "config.toml"
+                )
 
     def test_every_gmail_mailbox_gets_a_drafts_grant_once_and_an_existing_block_is_kept(self):
         import sqlite3
