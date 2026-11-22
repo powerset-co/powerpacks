@@ -59,12 +59,15 @@ SEARCH_ARGS = {
     "company_ids", "company_names", "past_company_ids", "past_company_names",
     "seniority_ids", "function_ids", "geography_ids", "geography_names", "headcount_ids",
     "industry_id", "title", "title_ids", "keywords", "count", "start_offset",
+    "school_ids", "school_names", "years_of_experience_ids",
 }
 PLAN_METADATA_KEYS = {
     "id", "label", "name", "description", "reason", "notes", "args", "search_args", "tool_args",
     "queries", "searches", "steps", "criteria", "score_criteria",
 }
 LOCAL_UNSUPPORTED = ("past_company_ids", "headcount_ids", "industry_id")
+# Local-session filters the API's search does not take yet; dropped from cloud calls.
+CLOUD_UNSUPPORTED = ("school_ids", "school_names", "years_of_experience_ids")
 
 
 def now() -> str:
@@ -250,7 +253,7 @@ def cloud_call(route: str, body: dict[str, Any]) -> dict[str, Any]:
 
 def cloud_searches(plan_args: list[dict[str, Any]]) -> list[dict[str, Any]]:
     with ThreadPoolExecutor(max_workers=CLOUD_WORKERS) as pool:
-        return list(pool.map(lambda args: cloud_call("/search", args), plan_args))
+        return list(pool.map(lambda args: cloud_call("/search", {k: v for k, v in args.items() if k not in CLOUD_UNSUPPORTED}), plan_args))
 
 
 # ── Local: the user's own LinkedIn session ──────────────────────────────────────
@@ -268,6 +271,9 @@ def local_namespace(args: dict[str, Any], title_ids: list[dict[str, Any]]) -> Si
         region_name=list(args.get("geography_names") or []) or None,
         seniority=[str(s) for s in args.get("seniority_ids") or []] or None,
         function=[str(f) for f in args.get("function_ids") or []] or None,
+        school_id=[int(s) for s in args.get("school_ids") or []] or None,
+        school_name=[str((args.get("school_names") or {}).get(str(s), "")) for s in args.get("school_ids") or []] or None,
+        years_experience=[str(y) for y in args.get("years_of_experience_ids") or []] or None,
         keywords=args.get("keywords") or None,
         start=int(args.get("start_offset") or 0),
         count=int(args.get("count") or DEFAULT_COUNT),
@@ -543,6 +549,11 @@ def filters_description(args: dict[str, Any]) -> str:
         parts.append("seniority=" + ",".join(li.SENIORITY_LEVELS.get(str(s), str(s)) for s in args["seniority_ids"]))
     if args.get("function_ids"):
         parts.append("functions=" + ",".join(li.FUNCTIONS.get(str(f), str(f)) for f in args["function_ids"]))
+    if args.get("school_ids"):
+        schools = {str(k): v for k, v in (args.get("school_names") or {}).items()}
+        parts.append("school=" + ",".join(schools.get(str(s), str(s)) for s in args["school_ids"]))
+    if args.get("years_of_experience_ids"):
+        parts.append("experience=" + ",".join(li.YEARS_OF_EXPERIENCE.get(str(y), str(y)) for y in args["years_of_experience_ids"]))
     if args.get("geography_ids"):
         geo_names = list(args.get("geography_names") or [])
         parts.append("geo=" + ",".join(geo_names[i] if i < len(geo_names) and geo_names[i] else str(g) for i, g in enumerate(args["geography_ids"])))

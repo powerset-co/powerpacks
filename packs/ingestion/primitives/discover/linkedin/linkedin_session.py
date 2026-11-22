@@ -73,6 +73,8 @@ DEGREE_LABELS = {"F": "1st degree connections", "S": "2nd degree connections", "
 SENIORITY_LEVELS = {"100": "In Training", "110": "Entry Level", "120": "Senior", "130": "Strategic",
                     "200": "Entry Level Manager", "210": "Experienced Manager", "220": "Director",
                     "300": "Vice President", "310": "CXO", "320": "Owner / Partner"}
+YEARS_OF_EXPERIENCE = {"1": "Less than 1 year", "2": "1 to 2 years", "3": "3 to 5 years", "4": "6 to 10 years",
+                       "5": "More than 10 years"}
 FUNCTIONS = {"1": "Accounting", "2": "Administrative", "3": "Arts and Design", "4": "Business Development",
              "5": "Community and Social Services", "6": "Consulting", "7": "Education", "8": "Engineering",
              "9": "Entrepreneurship", "10": "Finance", "11": "Healthcare Services", "12": "Human Resources",
@@ -284,6 +286,11 @@ def title_filter(titles: list[tuple[int, str]]) -> str:
     return f"(type:CURRENT_TITLE,values:List({values}))"
 
 
+def school_filter(schools: list[tuple[int, str]]) -> str:
+    values = ",".join(f"(id:{school_id},text:{_q(name or str(school_id))},selectionType:INCLUDED)" for school_id, name in schools)
+    return f"(type:SCHOOL,values:List({values}))"
+
+
 def region_filter(regions: list[tuple[str, str]]) -> str:
     values = ",".join(f"(id:{_q(geo_id)},text:{_q(name or geo_id)},selectionType:INCLUDED)" for geo_id, name in regions)
     return f"(type:REGION,values:List({values}))"
@@ -388,6 +395,10 @@ def search_url_for(args: argparse.Namespace) -> tuple[str, list[str]]:
         filters.append(enum_filter("SENIORITY_LEVEL", SENIORITY_LEVELS, args.seniority))
     if args.function:
         filters.append(enum_filter("FUNCTION", FUNCTIONS, args.function))
+    if getattr(args, "school_id", None):
+        filters.append(school_filter(list(zip(args.school_id, (args.school_name or []) + [""] * len(args.school_id)))))
+    if getattr(args, "years_experience", None):
+        filters.append(enum_filter("YEARS_OF_EXPERIENCE", YEARS_OF_EXPERIENCE, args.years_experience))
     return lead_search_url(filters, start=args.start, count=args.count, keywords=args.keywords), filters
 
 
@@ -450,6 +461,9 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--region-name", action="append")
     search.add_argument("--seniority", action="append", help=f"one of {', '.join(f'{k}={v}' for k, v in SENIORITY_LEVELS.items())}")
     search.add_argument("--function", action="append", help="Sales Navigator function id, 1-26 (8=Engineering, 25=Sales)")
+    search.add_argument("--school-id", type=int, action="append", help="LinkedIn school organization id (1792=Stanford)")
+    search.add_argument("--school-name", action="append")
+    search.add_argument("--years-experience", action="append", help=f"one of {', '.join(f'{k}={v}' for k, v in YEARS_OF_EXPERIENCE.items())}")
     search.add_argument("--keywords")
     search.add_argument("--start", type=int, default=0)
     search.add_argument("--count", type=int, default=PAGE_SIZE)

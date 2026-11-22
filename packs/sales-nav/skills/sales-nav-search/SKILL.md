@@ -125,6 +125,10 @@ compact summaries in chat, and never paste lead payloads into commands.
 `headcount_ids`, `industry_id`, `title_ids` (from resolve; `title` text also works and is resolved
 for you), `keywords`, `count` (25 max), `start_offset`. The local session cannot do
 `past_company_ids`, `headcount_ids` or `industry_id` and reports them in `unsupported_filters`.
+Local only: `school_ids` + `school_names` (LinkedIn school org id, 1792 Stanford) and
+`years_of_experience_ids` (1 under 1 year, 2 1-2, 3 3-5, 4 6-10, 5 10+); cloud calls drop them.
+Students and recent grads = school + `seniority_ids` `["100"]` (In Training), and school +
+`years_of_experience_ids` `["1","2"]` + `seniority_ids` `["110"]`.
 
 Seniority: 100 In Training, 110 Entry, 120 Senior, 130 Strategic, 200 Manager, 210 Senior Manager,
 220 Director, 300 VP, 310 CXO, 320 Owner/Partner. Leaders = 220,300,310,320; executives = 310,320.
