@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.69.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.2...powerpacks-v3.69.0) (2026-11-21)
+
+
+### Features
+
+* **search:** a set search's drawer loads the full profile on open; who-knows-them is fetched once ([#1265](https://github.com/powerset-co/powerpacks/issues/1265)) ([a6ea7a7](https://github.com/powerset-co/powerpacks/commit/a6ea7a776d5f238bad82cdd19354837e29fd4d6d))
+
+
+### Bug Fixes
+
+* **search:** gpt-6 models get their reasoning effort; one check decides it ([#1263](https://github.com/powerset-co/powerpacks/issues/1263)) ([f1d13a0](https://github.com/powerset-co/powerpacks/commit/f1d13a0cae08cbe7dc2183119b05c27b440038d8))
+
 ## [3.68.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.1...powerpacks-v3.68.2) (2026-11-21)
 
 
