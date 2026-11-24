@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.69.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.69.0...powerpacks-v3.69.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **people:** Delete reaches search at once; remote assist may delete named people ([#1266](https://github.com/powerset-co/powerpacks/issues/1266)) ([14cfe49](https://github.com/powerset-co/powerpacks/commit/14cfe49e26f62e8b44403576538f6eabf13f207a))
+
+
+### Reverts
+
+* **people:** family no longer gets warmth 4.0 ([#1267](https://github.com/powerset-co/powerpacks/issues/1267)) ([9e3a4bb](https://github.com/powerset-co/powerpacks/commit/9e3a4bbe222671e050f42bf3aac6ae0c124cc0c2))
+
 ## [3.69.0](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.68.2...powerpacks-v3.69.0) (2026-11-21)
 
 
