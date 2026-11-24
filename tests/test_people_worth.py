@@ -421,6 +421,52 @@ class PeopleWorthTests(StoreTests):
         self.assertEqual([row.parent_id for row in self.people.load()], [])
 
 
+    def test_delete_takes_the_person_out_of_search_and_syncs_the_cloud(self) -> None:
+        """Delete reaches search at once: the person leaves the local index (and, through the sync, the cloud);
+        a person a shown family still has stays."""
+        from unittest import mock
+
+        import duckdb
+
+        from packs.indexing.lib.drop_people import INDEX_RELATIVE
+        imported = json.dumps({"linkedin_url": "https://www.linkedin.com/in/Riley-Echo/"})
+        queries.upsert_candidates(self.conn, [("candidate:linkedin:42", "Riley Echo", 0, imported, NOW),
+                                              ("candidate:linkedin:43", "Sam Fox", 0,
+                                               json.dumps({"linkedin_url": "https://www.linkedin.com/in/sam-fox"}), NOW)])
+        self._parent("li:42", "candidate:linkedin:42")
+        self._parent("li:43", "candidate:linkedin:43")
+        self.conn.executemany("INSERT INTO candidate_sources VALUES (?, 'linkedin')",
+                              [("candidate:linkedin:42",), ("candidate:linkedin:43",)])
+        self.conn.commit()
+        index = self.root / INDEX_RELATIVE
+        index.parent.mkdir(parents=True, exist_ok=True)
+        with duckdb.connect(str(index)) as conn:
+            conn.execute("CREATE TABLE local_person_profiles (id VARCHAR, person_id VARCHAR, public_identifier VARCHAR)")
+            conn.execute("CREATE TABLE local_people_positions (id VARCHAR, person_id VARCHAR)")
+            conn.execute("CREATE TABLE local_companies (id VARCHAR)")
+            conn.execute("INSERT INTO local_person_profiles VALUES ('r', 'r', 'riley-echo'), ('s', 's', 'sam-fox')")
+            conn.execute("INSERT INTO local_people_positions VALUES ('r-0', 'r'), ('s-0', 's')")
+            conn.execute("INSERT INTO local_companies VALUES ('co')")
+
+        with mock.patch("packs.ingestion.primitives.share.web.model.sync_to_cloud") as sync, \
+                mock.patch("packs.ingestion.primitives.share.web.model.threading.Thread") as thread:
+            thread.side_effect = lambda target, args, daemon: mock.Mock(start=lambda: target(*args))
+            self.assertEqual(self.post("/api/people/delete", {"ids": ["li:42"]}), (200, {"deleted": 1}))
+        with duckdb.connect(str(index), read_only=True) as conn:
+            self.assertEqual(conn.execute("SELECT public_identifier FROM local_person_profiles").fetchall(), [("sam-fox",)])
+            self.assertEqual(conn.execute("SELECT id FROM local_people_positions").fetchall(), [("s-0",)])
+            self.assertEqual(conn.execute("SELECT id FROM local_companies").fetchall(), [("co",)])
+        sync.assert_called_once_with(self.root.parent)
+        # Nothing left to take out: a second delete leaves the index and the cloud alone.
+        with mock.patch("packs.ingestion.primitives.share.web.model.sync_to_cloud") as sync:
+            self.post("/api/people/delete", {"ids": ["p:a"]})
+        sync.assert_not_called()
+        # A slug a shown family still has is not taken out.
+        self.conn.execute(f"INSERT INTO families ({', '.join(FAMILY_COLUMNS)}) VALUES ({', '.join('?' * len(FAMILY_COLUMNS))})",
+                          ("p:z", "Riley-Echo", *[""] * 8, "{}", ""))
+        self.assertEqual(queries_share.deleted_slugs(self.conn), set())
+
+
 class DeletedImportTests(StoreTests):
     def test_an_import_keeps_a_deleted_family_hidden(self) -> None:
         from packs.ingestion.primitives.deep_context_v2.db import queries_share

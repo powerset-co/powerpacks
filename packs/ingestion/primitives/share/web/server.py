@@ -5,7 +5,8 @@ POST /api/people/relationship records a human relationship choice, preserved by 
 POST /api/people/name {parent_id, name} records the human's name for the person, preserved by refresh.
 POST /api/people/tags writes the human's boolean labels, preserving their notes.
 Both return the updated People rows under `rows`.
-POST /api/people/delete {ids} hides each family for good (deleted_parents; no row is removed); returns `deleted`, the count.
+POST /api/people/delete {ids} hides each family for good (deleted_parents; no row is removed) and takes its person out of
+search (the local index now, the cloud on the sync it starts); returns `deleted`, the count.
 GET `/api/people/logbook` reads build status; POST builds the selected parents' local raw archive.
 GET `/api/people/logbook/entries`, `/entry?slug=` and `/conversation?slug=&path=` read it.
 GET `/api/people/page?offset=&limit=&tab=&q=&sort=&dir=&filter.<facet>=&show=` is the page's list: one slice in the
