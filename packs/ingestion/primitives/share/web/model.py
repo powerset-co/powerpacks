@@ -37,7 +37,6 @@ from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABEL
 from packs.ingestion.primitives.share.store import split_tags
 from packs.ingestion.schemas.linkedin_profile_normalizer import normalize_linkedin_profile
 from packs.ingestion.schemas.people_schema import parse_interaction_counts
-from packs.ingestion.schemas.share_schema import FAMILY
 
 # A people.csv channel name -> the channel the page shows (one icon per family).
 CHANNEL_FAMILIES = {
@@ -326,10 +325,6 @@ class SharePeople:
         # A store from before the table (schema 8) has it empty: realize fills it once from what the store holds.
         if conn.execute("SELECT 1 FROM families LIMIT 1").fetchone() is None:
             Realize(conn, data_root).fill()
-        # Rows derived before family was the top warmth (queries_share.labels_by_parent) catch up here.
-        with conn:
-            conn.execute("UPDATE families SET warmth = ? WHERE relationship_kind = ? AND warmth < ?",
-                         (queries_share.FAMILY_WARMTH, FAMILY, queries_share.FAMILY_WARMTH))
 
     def delete(self, parent_ids: tuple[str, ...]) -> None:
         """Hide each family from the page for good; `load` leaves deleted families out."""

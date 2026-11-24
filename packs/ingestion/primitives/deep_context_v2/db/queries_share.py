@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from packs.ingestion.primitives.deep_context_v2.db.queries import _batches
 from packs.ingestion.schemas.share_schema import FAMILY, ROMANTIC_PARTNER
 
-FAMILY_WARMTH = 4.0  # the top warmth level (questions.py SCORE_QUESTIONS)
-
 # Row shapes, in column order, for the writers below.
 TagRow = tuple[str, str, str, str]                      # candidate_id, tags, note, updated_at
 LabelRow = tuple[str, str, str, str, str, str, str]     # candidate_id, public_identifier, full_name, worth, flag, labels_json, updated_at
@@ -124,11 +122,6 @@ def labels_by_parent(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) ->
             flag = kind if kind in (FAMILY, ROMANTIC_PARTNER) else ""
             labels_json = json.dumps(cells)
         source = "human" if kind is not None else "machine" if row["relationship_kind"] else ""
-        # The owner's family is the top warmth, whatever the messages show: a parent outranks a daily group chat.
-        if (kind if kind is not None else row["relationship_kind"]) == FAMILY:
-            cells = json.loads(labels_json)
-            cells["warmth"] = FAMILY_WARMTH
-            labels_json = json.dumps(cells)
         found[parent_id] = Labels(row["candidate_id"], row["public_identifier"], names.get(parent_id, row["full_name"]),
                                   row["worth"], flag, labels_json, row["updated_at"], source)
     return found
