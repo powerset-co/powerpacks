@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from packs.ingestion.primitives.deep_context_v2.db.queries import _batches
 from packs.ingestion.schemas.share_schema import FAMILY, ROMANTIC_PARTNER
+from packs.ingestion.schemas.people_schema import extract_public_identifier
 
 # Row shapes, in column order, for the writers below.
 TagRow = tuple[str, str, str, str]                      # candidate_id, tags, note, updated_at
@@ -156,6 +157,16 @@ def delete_parents(conn: sqlite3.Connection, parent_ids: tuple[str, ...], now: s
 
 def deleted_parents(conn: sqlite3.Connection) -> set[str]:
     return {row["parent_id"] for row in conn.execute("SELECT parent_id FROM deleted_parents")}
+
+
+def deleted_slugs(conn: sqlite3.Connection) -> set[str]:
+    """The LinkedIn slugs of the deleted families that no shown family has: the people search leaves out."""
+    deleted = {extract_public_identifier(row["profile_key"]) for row in conn.execute(
+        "SELECT profile_key FROM current_profile WHERE profile_key IS NOT NULL "
+        "AND parent_id IN (SELECT parent_id FROM deleted_parents)")}
+    shown = {row["slug"] for row in conn.execute(
+        "SELECT lower(public_identifier) AS slug FROM families WHERE COALESCE(public_identifier, '') != ''")}
+    return deleted - shown - {""}
 
 
 def families(conn: sqlite3.Connection, parents: tuple[str, ...] = ()) -> dict[str, sqlite3.Row]:

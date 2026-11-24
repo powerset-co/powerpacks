@@ -10,6 +10,7 @@ filters, search and sort in SQL; the row carries only what a facet or a column r
 and the dossier stay per-person.
 
 Changelog:
+  2026-11-24: Delete also takes the family's person out of the local search index and syncs that to the cloud.
   2026-11-03: the row is derived once per change and stored on families; `page` filters, sorts and slices in SQL.
   2026-10-23: the roster is the families table realize writes; no in-memory rows, no rebuild per request.
   2026-10-07: v2. A row is a family on its parent id; the roster is realize's rows.
@@ -20,10 +21,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from dataclasses import asdict, astuple, dataclass, fields
 from pathlib import Path
 from typing import Any
 
+from packs.indexing.lib.drop_people import INDEX_RELATIVE, drop_people
 from packs.ingestion.primitives.common.jsonio import parse_json_object
 from packs.ingestion.primitives.deep_context_v2.db import queries_review, queries_share
 from packs.ingestion.primitives.deep_context_v2.db.queries_share import Labels, Tags
@@ -32,6 +35,7 @@ from packs.ingestion.primitives.deep_context_v2.enrich.profiles import profile_f
 from packs.ingestion.primitives.deep_context_v2.realize.realize import Realize
 from packs.ingestion.primitives.deep_context_v2.review import payloads
 from packs.ingestion.primitives.deep_context_v2.review.queue import load_card
+from packs.ingestion.primitives.refresh.daily import sync_to_cloud
 from packs.ingestion.primitives.share.labels import ACTIVE_P
 from packs.ingestion.primitives.share.questions import CHOICE_LABELS, NOUL_LABELS
 from packs.ingestion.primitives.share.store import split_tags
@@ -327,8 +331,11 @@ class SharePeople:
             Realize(conn, data_root).fill()
 
     def delete(self, parent_ids: tuple[str, ...]) -> None:
-        """Hide each family from the page for good; `load` leaves deleted families out."""
+        """Hide each family from the page for good; `load` leaves deleted families out. Search leaves them out
+        at once: they go from the local index, and a Powerset team install syncs that to the cloud."""
         queries_share.delete_parents(self.conn, parent_ids, now_iso())
+        if drop_people(self.data_root / INDEX_RELATIVE, queries_share.deleted_slugs(self.conn)):
+            threading.Thread(target=sync_to_cloud, args=(self.data_root.parent,), daemon=True).start()
 
     def _derive(self, parents: tuple[str, ...]) -> tuple[SharePerson, ...]:
         """The People row of every family, or with `parents` only those: realize's columns joined with the
