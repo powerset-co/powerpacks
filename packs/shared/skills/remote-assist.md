@@ -52,6 +52,12 @@ the app shows.
 
 - Never delete data, and never overwrite paid artifacts (saved Luna answers, facts,
   dossiers). Preserve local data, configuration, credentials and checkpoints.
+  Deleting a person on the People page is not deleting data: it hides their family
+  and keeps every row (undo is documented in the deep-context skill). When the request
+  names the people to delete, find their `parent_id`s with `GET /api/people/rows` on the
+  app's server and send one `POST /api/people/delete` `{"ids": [...]}`, then report
+  the names deleted. If a name matches more than one family, delete only the ones the
+  request clearly means and list the rest.
 - Never send local data out yourself: no uploads, external messages or posts made by
   you, and no logs, store contents, contact details or credentials pasted into your
   report. Your final report is relayed to the requesting teammate; keep it free of
