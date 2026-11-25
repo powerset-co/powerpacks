@@ -22,6 +22,9 @@ the newest end. The CSV is rewritten only when there are new people, so the Moda
 import reruns only then.
 
 Changelog:
+  2026-11-25: an export's rows are parsed from its text, not split into lines first: a position
+      with a line break inside its quotes kept its words but lost the break ("Head of GrowthAdvisor"),
+      and a U+2028 inside one split the row.
   2026-11-13: the browser reads LinkedIn's paged API (connections_browser.js); every page is written
       to the CSV as it lands and connections.json records how far down it got (`offset`), so a run
       that dies keeps what it read and the next run goes on from there. A stall is judged on all
@@ -44,8 +47,10 @@ Changelog:
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import re
 import tempfile
 import urllib.request
 import zipfile
@@ -95,13 +100,15 @@ EXPORT_SECONDS = 180
 
 
 def _export_rows(text: str) -> list[dict[str, str]]:
-    """Rows of a connections export; LinkedIn's own file opens with a Notes preamble."""
-    lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line.startswith("First Name,"))
-    return list(CsvIO.dict_reader(lines[start:]))
+    """Rows of a connections export; LinkedIn's own file opens with a Notes preamble. The rows are
+    parsed from the text itself, so a quoted field keeps its line breaks."""
+    header = re.search(r"^First Name,", text, re.MULTILINE)
+    if header is None:
+        raise ValueError("no 'First Name,' header row in the connections export")
+    return list(CsvIO.dict_reader(io.StringIO(text[header.start():], newline="")))
 
 
-def _read_export(path: Path) -> list[dict[str, str]]:
+def read_export(path: Path) -> list[dict[str, str]]:
     return _export_rows(path.read_text(encoding="utf-8-sig")) if path.is_file() else []
 
 
@@ -216,7 +223,7 @@ class LinkedInConnections:
         """Read new connections; `on_count(read, total)` follows the read as it scrolls. `outcome`
         says how it ended: read, partial (LinkedIn shows more), limit, stalled, export_requested,
         or export_imported."""
-        existing = _read_export(self.csv_path)
+        existing = read_export(self.csv_path)
         known = {extract_public_identifier(row["URL"]) for row in existing} - {""}
         previous = read_json(self.record_path, {}) or {}
         if previous.get("stopped") == "stalled":

@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections, save_pictures
+from packs.ingestion.primitives.discover.linkedin.connections import LinkedInConnections, read_export, save_pictures
 from packs.ingestion.primitives.setup.automations.shell import CommandResult, run_streaming_command
 
 MODULE = "packs.ingestion.primitives.discover.linkedin.connections"
@@ -222,6 +222,18 @@ class LinkedInConnectionsTests(unittest.TestCase):
         result = self.scrape({"status": "needs_user_action", "message": "Log in to LinkedIn in the Chrome window Powerpacks opened."})
         self.assertEqual(result["status"], "needs_user_action")
         self.assertEqual(self.csv.read_text(encoding="utf-8"), EXPORT)
+
+    def test_a_line_break_inside_a_quoted_position_survives_a_top_up(self):
+        self.csv.parent.mkdir(parents=True)
+        self.csv.write_text(
+            'Notes:\n"When exporting your connection data, you may notice that some of the email addresses are missing."\n\n'
+            "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+            'Old,Friend,https://www.linkedin.com/in/old,,Bar,"Head of Growth\nAdvisor",01 Jan 2023\n'
+            'Sep,Char,https://www.linkedin.com/in/sep,,Baz,"Engineer\u2028Builder",05 May 2022\n', encoding="utf-8")
+        self.scrape({"status": "ok", "total": 3, "stopped": "known", "loads": 1, "owner_slug": "",
+                     "connections": [{"name": "New Person", "slug": "new", "headline": "CTO", "connected_on": "24 Nov 2026"}]})
+        rows = read_export(self.csv)
+        self.assertEqual([row["Position"] for row in rows], ["CTO", "Head of Growth\nAdvisor", "Engineer\u2028Builder"])
 
     def test_browser_error_fails_without_writing(self):
         result = self.scrape({"status": "error", "message": "chrome is not installed"})
