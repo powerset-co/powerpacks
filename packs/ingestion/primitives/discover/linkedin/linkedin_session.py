@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import csv
 import json
 import os
 import re
@@ -44,6 +43,7 @@ from typing import Any
 from urllib.parse import quote
 
 from packs.ingestion.primitives.common.jsonio import emit, now_iso, read_json, write_json
+from packs.ingestion.primitives.discover.linkedin.connections import read_export
 from packs.ingestion.primitives.setup.automations.oauth_browser import ensure_chromium
 from packs.ingestion.primitives.setup.automations.shell import command_error, parse_json_fragment, run_streaming_command
 from packs.ingestion.schemas.people_schema import extract_public_identifier
@@ -156,9 +156,8 @@ def first_degree_slugs(csv_path: Path = CONNECTIONS_CSV) -> set[str]:
     """The user's connections, and the user (connections.json keeps the signed-in profile as owner_url)."""
     record = read_json(csv_path.with_name("connections.json"), {}) or {}
     slugs = {slug_of(str(record.get("owner_url") or ""))}
-    if csv_path.is_file():
-        with csv_path.open(newline="", encoding="utf-8") as handle:
-            slugs |= {slug_of(row.get("URL") or "") for row in csv.DictReader(handle)}
+    # LinkedIn's own export opens with a Notes preamble; read_export skips it.
+    slugs |= {slug_of(row.get("URL") or "") for row in read_export(csv_path)}
     return slugs - {""}
 
 

@@ -74,6 +74,15 @@ class MutualsTests(unittest.TestCase):
         self.assertEqual(len(browser.plans), 1)
 
     @with_folder
+    def test_linkedins_own_export_is_skipped_too(self, folder, profile):
+        # LinkedIn's download opens with a Notes preamble above the header row.
+        (folder / "Connections.csv").write_text(
+            'Notes:\n"When exporting your connection data, you may notice that some of the email addresses are missing."\n\n'
+            "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+            "A,B,https://www.linkedin.com/in/friend,,Acme,Engineer,24 Nov 2026\n")
+        self.assertEqual(ls.first_degree_slugs(folder / "Connections.csv"), {"friend"})
+
+    @with_folder
     def test_a_connection_is_looked_up_when_asked(self, folder, profile):
         (folder / "Connections.csv").write_text("First Name,Last Name,URL\nA,B,https://www.linkedin.com/in/friend\n")
         browser = FakeBrowser(lambda r: {"status": 200, "text": PROFILE_URN} if r["name"].startswith("profile")
