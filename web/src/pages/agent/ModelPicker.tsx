@@ -3,7 +3,7 @@ import { Check, ChevronRight } from "lucide-react"
 import { useState, type ReactNode } from "react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { frontier } from "@/lib/agent/models"
+import { frontier, resolveChoice } from "@/lib/agent/models"
 import { setEffort, setModel, useAgent } from "@/lib/agent/store"
 import { fetchDefaults, fetchModels, type CodexModel } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
@@ -84,19 +84,9 @@ export function ModelPicker() {
         Models: {errorText(models.error)}
       </span>
     )
-  const picked =
-    list.find((model) => model.id === agent.model) ??
-    list.find((model) => model.id === defaults.data?.model) ??
-    list.find((model) => model.isDefault) ??
-    list[0]
-  if (!picked) return null
-  // No effort picked: a turn runs at the default effort, whichever model is picked.
-  const offered = (id: string | null | undefined) => picked.efforts.some((option) => option.id === id)
-  const effort = offered(agent.effort)
-    ? agent.effort
-    : offered(defaults.data?.effort)
-      ? defaults.data?.effort
-      : picked.defaultEffort
+  const choice = resolveChoice(list, agent, defaults.data)
+  if (!choice) return null
+  const { model: picked, effort } = choice
   const front = frontier(list)
   const shown = front.includes(picked) ? front : [...front, picked]
   const more = list.filter((model) => !shown.includes(model))
