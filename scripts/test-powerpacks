@@ -50,6 +50,7 @@ exec "$UV_BIN" run --project . python -m unittest \
   tests.test_luna_signals \
   tests.test_signals_refresh \
   tests.test_agent_messages \
+  tests.test_relay_ask \
   tests.test_asks_loop \
   tests.test_remote_assist \
   tests.test_install_coordinator \
