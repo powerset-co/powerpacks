@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.69.2](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.69.1...powerpacks-v3.69.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **chat:** a turn runs the model the picker shows, never an unlisted default ([#1270](https://github.com/powerset-co/powerpacks/issues/1270)) ([6571e75](https://github.com/powerset-co/powerpacks/commit/6571e75de4f32bb034ffc3e28e1524c3111fad08))
+
 ## [3.69.1](https://github.com/powerset-co/powerpacks/compare/powerpacks-v3.69.0...powerpacks-v3.69.1) (2026-11-24)
 
 
