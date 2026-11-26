@@ -5,6 +5,14 @@ import { EMPTY_AGENT, reduce, type AgentState } from "./store"
 const RUNNING: AgentState = { ...EMPTY_AGENT, threadId: "t1", running: true, turnId: "u1" }
 
 describe("reduce", () => {
+  it("shows a failed turn's error once, though Codex reports it twice", () => {
+    const message = "The 'gpt-6.2-astra' model is not supported"
+    const errored = reduce(RUNNING, { type: "error", threadId: "t1", message, willRetry: false })
+    const ended = reduce(errored, { type: "turnCompleted", threadId: "t1", error: message })
+    expect(ended.entries.map((entry) => entry.kind)).toEqual(["error"])
+    expect(ended.running).toBe(false)
+  })
+
   it("streams a message into its entry", () => {
     const started = reduce(RUNNING, {
       type: "item",

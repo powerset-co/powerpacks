@@ -5,6 +5,8 @@ import { useEffect, useSyncExternalStore } from "react"
 
 import {
   answerApproval,
+  fetchDefaults,
+  fetchModels,
   interruptTurn,
   onAgentEvent,
   onApproval,
@@ -13,8 +15,10 @@ import {
   runShellCommand,
   startThread,
   startTurn,
+  type TurnChoice,
 } from "@/lib/api/codex"
 import { errorText } from "@/lib/api/http"
+import { resolveChoice } from "@/lib/agent/models"
 import { runNote } from "@/lib/agent/preparedSearch"
 import { readStored, writeStored } from "@/lib/storage"
 import type { AgentEvent, Approval, ApprovalChoice, Entry } from "@/types/agent"
@@ -74,6 +78,10 @@ function appendDelta(entry: Entry, field: "text" | "output", delta: string): Ent
 }
 
 function failed(state: AgentState, text: string): AgentState {
+  const last = state.entries.at(-1)
+  // Codex reports a failed turn twice (an error, then the turn's end): show it once.
+  if (last?.kind === "error" && last.text === text)
+    return { ...state, running: false, loading: false, turnId: null }
   return {
     ...state,
     running: false,
@@ -200,6 +208,19 @@ export function useAgent(): AgentState {
   return useSyncExternalStore(subscribe, () => state)
 }
 
+/** The model and effort the picker shows, so a turn never runs a model the account can't use
+ *  (say the user's own Codex default); the raw pick when the list can't be read. */
+async function turnChoice(): Promise<TurnChoice> {
+  const pick = { model: state.model, effort: state.effort }
+  try {
+    const [list, defaults] = await Promise.all([fetchModels(), fetchDefaults()])
+    const choice = resolveChoice(list, pick, defaults)
+    return choice ? { model: choice.model.id, effort: choice.effort } : pick
+  } catch {
+    return pick
+  }
+}
+
 export async function send(message: string): Promise<void> {
   wire()
   // A chat opened from a saved search names its folder, so Codex reads it and the chat keeps it.
@@ -213,7 +234,7 @@ export async function send(message: string): Promise<void> {
     set({ ...state, threadId })
     remember(OPEN_CHAT_KEY, threadId)
     if (state.searchRun) writeStored("local", `search-thread:${state.searchRun}`, threadId)
-    await startTurn(threadId, text, state.fullAccess, { model: state.model, effort: state.effort })
+    await startTurn(threadId, text, state.fullAccess, await turnChoice())
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
   }
