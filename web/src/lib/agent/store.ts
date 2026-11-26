@@ -208,17 +208,11 @@ export function useAgent(): AgentState {
   return useSyncExternalStore(subscribe, () => state)
 }
 
-/** The model and effort the picker shows, so a turn never runs a model the account can't use
- *  (say the user's own Codex default); the raw pick when the list can't be read. */
-async function turnChoice(): Promise<TurnChoice> {
-  const pick = { model: state.model, effort: state.effort }
-  try {
-    const [list, defaults] = await Promise.all([fetchModels(), fetchDefaults()])
-    const choice = resolveChoice(list, pick, defaults)
-    return choice ? { model: choice.model.id, effort: choice.effort } : pick
-  } catch {
-    return pick
-  }
+/** What the model picker shows: every turn runs exactly that model and effort. */
+async function pickerChoice(): Promise<TurnChoice> {
+  const [list, defaults] = await Promise.all([fetchModels(), fetchDefaults()])
+  const choice = resolveChoice(list, state, defaults)
+  return { model: choice?.model.id ?? null, effort: choice?.effort ?? null }
 }
 
 export async function send(message: string): Promise<void> {
@@ -234,7 +228,7 @@ export async function send(message: string): Promise<void> {
     set({ ...state, threadId })
     remember(OPEN_CHAT_KEY, threadId)
     if (state.searchRun) writeStored("local", `search-thread:${state.searchRun}`, threadId)
-    await startTurn(threadId, text, state.fullAccess, await turnChoice())
+    await startTurn(threadId, text, state.fullAccess, await pickerChoice())
   } catch (error: unknown) {
     set(failed(state, errorText(error)))
   }
