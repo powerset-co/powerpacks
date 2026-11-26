@@ -189,6 +189,7 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
 
             self.assertEqual(payload["status"], "failed")
             self.assertEqual(payload["error_code"], "gmail_reauthorization_required")
+            self.assertEqual(len(calls), 1)
             self.assertEqual(payload["account_email"], "me@example.com")
             self.assertIn("me@example.com", payload["error"])
             self.assertIn("--force-auth", payload["reauthorize_command"])
@@ -199,6 +200,50 @@ class DiscoverContactsPipelineTests(unittest.TestCase):
             self.assertIn("--noresume", calls[0])
             self.assertNotIn("add-account", calls[0])
 
+
+    def test_gmail_sync_runs_again_once_the_network_is_back(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "msgvault.db"
+            calls: list[list[str]] = []
+            dropped = ('sync failed: list messages: Get "https://gmail.googleapis.com/gmail/v1/users/me/messages":'
+                       ' dial tcp: lookup gmail.googleapis.com: no such host')
+
+            def fake_run_cmd(cmd, timeout=None, **_kwargs):
+                calls.append(list(cmd))
+                if len(calls) == 1:
+                    return 1, {}, dropped
+                return 0, {"status": "completed", "messages_added": 12}, ""
+
+            with mock.patch.object(discover_gmail_sync.shutil, "which", return_value="/usr/bin/msgvault"), \
+                 mock.patch.object(discover_gmail_sync, "run_cmd", side_effect=fake_run_cmd), \
+                 mock.patch.object(discover_gmail_sync, "wait_for_network") as waited:
+                payload = discover_gmail_sync.sync_msgvault_account(
+                    "me@example.com", str(db), "-category:social", sync_after_override="2025-11-15")
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["messages_added"], 12)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0], calls[1])
+            waited.assert_called_once()
+
+    def test_gmail_sync_gives_up_when_reruns_store_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db = Path(td) / "msgvault.db"
+            calls: list[list[str]] = []
+
+            def fake_run_cmd(cmd, timeout=None, **_kwargs):
+                calls.append(list(cmd))
+                return 1, {}, "sync failed: fetch messages: read tcp 10.0.0.2:51234->142.250.72.10:443: read: connection reset by peer"
+
+            with mock.patch.object(discover_gmail_sync.shutil, "which", return_value="/usr/bin/msgvault"), \
+                 mock.patch.object(discover_gmail_sync, "run_cmd", side_effect=fake_run_cmd), \
+                 mock.patch.object(discover_gmail_sync, "wait_for_network") as waited:
+                payload = discover_gmail_sync.sync_msgvault_account("me@example.com", str(db), "")
+
+            self.assertEqual(payload["status"], "failed")
+            self.assertEqual(len(calls), discover_gmail_sync.RECONNECT_RUNS_WITHOUT_PROGRESS)
+            self.assertEqual(waited.call_count, discover_gmail_sync.RECONNECT_RUNS_WITHOUT_PROGRESS - 1)
+            self.assertNotIn("error_code", payload)
     def test_gmail_cli_returns_nonzero_when_discovery_fails(self) -> None:
         fake_store = mock.Mock()
         fake_store.run.return_value = discover_gmail.GmailDiscoveryFailed()

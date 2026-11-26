@@ -223,10 +223,16 @@ fn run(app: &AppHandle, boot: &Boot) -> Result<(), String> {
     }
     crash::after_launch(&root, &version);
 
-    // Setup runs on the user's click, never by itself.
+    // Setup runs on the user's click, never by itself. The one exception is a run that was cut
+    // off (the app quit, the Mac restarted): it continues from its step, as the quit dialog says.
     let setup = onboard::setup(&root);
     match setup {
         Setup::New => onboard::record_install(&root, &paths::project_python(&root))?,
+        Setup::Stopped => {
+            if let Err(error) = onboard::start(&root, onboard::Answer::default()) {
+                boot.line(app, format!("Setup could not continue: {error}"));
+            }
+        }
         Setup::Paused | Setup::Done => {}
     }
     show_page(
